@@ -227,12 +227,13 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
     }
   });
 
-  it('includes tracked shared modules, excludes nonmodules and runnable keys, and checks helper-only drift', async () => {
+  it('includes tracked shared modules and documents, excludes other files and runnable keys, and checks shared-only drift', async () => {
     const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
       const pack = join(repoRoot, '.archon/workflows/author-pack');
       mkdirSync(join(pack, '.shared/nested'), { recursive: true });
       mkdirSync(join(pack, '.shared/__pycache__'), { recursive: true });
+      mkdirSync(join(pack, '.shared/policy'), { recursive: true });
       mkdirSync(join(pack, 'release/scripts/group/deeper'), { recursive: true });
       writeFileSync(join(pack, 'release/release.yaml'), 'name: release\n');
       writeFileSync(join(pack, 'release/scripts/group/main.ts'), 'console.log("ok");\n');
@@ -242,6 +243,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       writeFileSync(join(pack, '.shared/nested/helper.js'), 'export const value = 2;\n');
       writeFileSync(join(pack, '.shared/__pycache__/helper.pyc'), 'bytecode');
       writeFileSync(join(pack, '.shared/data.json'), '{}');
+      writeFileSync(join(pack, '.shared/policy/rule.md'), 'Rule.\n');
       runGit(repoRoot, ['add', '.archon/workflows/author-pack']);
       expect(runScript(repoRoot)).toEqual({ exitCode: 0, stderr: '' });
       const generated: { BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> } = await import(
@@ -252,16 +254,23 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
         '.shared/__init__.py': '',
         '.shared/nested/helper.ts': 'export const value = 1;\n',
         '.shared/nested/helper.js': 'export const value = 2;\n',
+        '.shared/policy/rule.md': 'Rule.\n',
         'release/scripts/group/main.ts': 'console.log("ok");\n',
       });
       expect(Object.keys(bundle.scripts)).toEqual([
         '__archon_pack__bundled:author-pack:release::main',
       ]);
       expect(runScript(repoRoot, ['--check'])).toEqual({ exitCode: 0, stderr: '' });
-      writeFileSync(join(pack, '.shared/nested/helper.ts'), 'export const value = 3;\n');
-      const drift = runScript(repoRoot, ['--check']);
-      expect(drift.exitCode).toBe(2);
-      expect(drift.stderr).toContain('is stale');
+      for (const [path, original, edited] of [
+        ['.shared/policy/rule.md', 'Rule.\n', 'Another rule.\n'],
+        ['.shared/nested/helper.ts', 'export const value = 1;\n', 'export const value = 3;\n'],
+      ] as const) {
+        writeFileSync(join(pack, path), edited);
+        const drift = runScript(repoRoot, ['--check']);
+        expect(drift.exitCode).toBe(2);
+        expect(drift.stderr).toContain('is stale');
+        writeFileSync(join(pack, path), original);
+      }
     } finally {
       await removeTempTree(repoRoot);
     }
@@ -298,7 +307,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
         runGit(repoRoot, ['add', '.archon/workflows/author-pack']);
         const result = runScript(repoRoot);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain('Shared module symlinks are not supported');
+        expect(result.stderr).toContain('Shared file symlinks are not supported');
         expect(result.stderr).toContain(linked);
         expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
       } finally {

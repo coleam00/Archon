@@ -245,6 +245,9 @@ class InMemoryStore implements IWorkflowStore {
   listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
     throw new Error('Unexpected listStateRevisions');
   };
+  listStateDocuments: IWorkflowStore['listStateDocuments'] = async () => {
+    throw new Error('Unexpected listStateDocuments');
+  };
   pruneStateRevisions: IWorkflowStore['pruneStateRevisions'] = async () => {
     throw new Error('Unexpected pruneStateRevisions');
   };
@@ -4992,7 +4995,7 @@ nodes:
     );
 
     expect(r.success).toBe(false);
-    // The ambiguous running child is NOT autonomously cancelled (CLAUDE.md lifecycle rule).
+    // The ambiguous running child is NOT autonomously cancelled (AGENTS.md "Do not guess lifecycle ownership").
     expect((await store.getWorkflowRun(child.id))?.status).toBe('running');
     const nodeFailed = [...store.events]
       .reverse()

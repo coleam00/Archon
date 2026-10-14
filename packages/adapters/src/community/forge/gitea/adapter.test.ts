@@ -119,6 +119,10 @@ mock.module('@archon/core', () => ({
 import { GiteaAdapter } from './adapter';
 import type { WebhookEvent } from './types';
 
+function utf8(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
+
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
 
@@ -414,7 +418,7 @@ describe('GiteaAdapter', () => {
       const adapter = createSelfFilterAdapter();
       const payload = createCommentPayload('@archon fix this', 'archon');
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_own_comment');
       // Bot's own comments should be silently dropped - no lock acquired, no processing
@@ -425,7 +429,7 @@ describe('GiteaAdapter', () => {
       const adapter = createSelfFilterAdapter('Archon'); // Mixed case config
       const payload = createCommentPayload('@archon test', 'archon'); // Lowercase author
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       // Bot's own comments should be silently dropped regardless of case
       expect(mockAcquireLock).not.toHaveBeenCalled();
@@ -437,7 +441,7 @@ describe('GiteaAdapter', () => {
 
       // handleWebhook will error on DB operations, but self-filtering runs first
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -453,7 +457,7 @@ describe('GiteaAdapter', () => {
         'Wirasm'
       );
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_marked_comment');
       // Marked comments should be silently dropped
@@ -467,7 +471,7 @@ describe('GiteaAdapter', () => {
 
       // Will error on DB operations, but self-filtering runs first
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -481,7 +485,7 @@ describe('GiteaAdapter', () => {
 
       // Should not crash on undefined user
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked, but no TypeError from undefined user
       }
@@ -569,49 +573,60 @@ describe('GiteaAdapter', () => {
   });
 
   describe('signature verification', () => {
-    test('should verify valid signature', () => {
-      const crypto = require('crypto');
-      const secret = 'test-secret';
-      const payload = '{"test": "data"}';
-      // Gitea uses raw hex, no sha256= prefix
-      const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    const secret = 'test-secret';
+    // A bot-authored comment stops right after verification and parsing, so the
+    // log line proves the payload was accepted without reaching the database.
+    const body = JSON.stringify({
+      action: 'created',
+      issue: { number: 1, title: 't', body: '', user: { login: 'u' }, labels: [], state: 'open' },
+      comment: { body: 'hi', user: { login: 'archon' } },
+      repository: {
+        owner: { login: 'o' },
+        name: 'r',
+        full_name: 'o/r',
+        html_url: 'https://gitea.example.com/o/r',
+        default_branch: 'main',
+      },
+      sender: { login: 'archon' },
+    });
+    const sign = (bytes: Uint8Array): string =>
+      createHmac('sha256', secret).update(bytes).digest('hex');
+    const signedAdapter = (): GiteaAdapter =>
+      new GiteaAdapter('https://gitea.example.com', 'token', secret, mockLockManager);
 
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        secret,
-        mockLockManager
-      );
-
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature(payload, signature);
-      expect(result).toBe(true);
+    beforeEach(() => {
+      mockLogger.debug.mockClear();
+      mockLogger.error.mockClear();
     });
 
-    test('should reject invalid signature', () => {
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'test-secret',
-        mockLockManager
-      );
+    test('accepts a correctly signed body that starts with a UTF-8 BOM', async () => {
+      const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...utf8(body)]);
 
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature('{"test": "data"}', 'invalid-signature');
-      expect(result).toBe(false);
+      await signedAdapter().handleWebhook(bytes, sign(bytes));
+
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_own_comment');
+      expect(mockLogger.error).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'invalid_webhook_signature'
+      );
     });
 
-    test('should reject signature with different length', () => {
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'test-secret',
-        mockLockManager
-      );
+    test('rejects a body altered after signing', async () => {
+      const bytes = utf8(body);
+      const signature = sign(bytes);
+      const tampered = utf8(body.replace('"hi"', '"ho"'));
 
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature('{"test": "data"}', 'short');
-      expect(result).toBe(false);
+      await signedAdapter().handleWebhook(tampered, signature);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.anything(), 'invalid_webhook_signature');
+      expect(mockLogger.debug).not.toHaveBeenCalledWith('ignoring_own_comment');
+    });
+
+    test('rejects a signature of a different length', async () => {
+      await signedAdapter().handleWebhook(utf8(body), 'short');
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.anything(), 'signature_length_mismatch');
+      expect(mockLogger.debug).not.toHaveBeenCalledWith('ignoring_own_comment');
     });
   });
 
@@ -799,7 +814,7 @@ describe('GiteaAdapter', () => {
       const signature = createHmac('sha256', 'fake-webhook-secret').update(payload).digest('hex');
 
       try {
-        await adapter.handleWebhook(payload, signature);
+        await adapter.handleWebhook(utf8(payload), signature);
       } finally {
         fetchSpy.mockRestore();
       }
@@ -1061,7 +1076,7 @@ describe('GiteaAdapter', () => {
 
       // DB mocks throw, but user resolution runs before DB calls
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -1100,7 +1115,7 @@ describe('GiteaAdapter', () => {
       });
 
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected
       }
@@ -1145,7 +1160,7 @@ describe('GiteaAdapter', () => {
 
       // Should not throw even though user resolution fails
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked, but not from user resolution
       }
@@ -1200,7 +1215,7 @@ describe('GiteaAdapter', () => {
           sender: { login: 'senderuser' },
         });
 
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
         if (message.startsWith('/'))
           expect(mockLogger.debug).toHaveBeenCalledWith('slash_command_processing');
@@ -1260,7 +1275,7 @@ describe('GiteaAdapter', () => {
         // sender omitted entirely
       });
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       expect(mockFindOrCreateUserByPlatformIdentity).not.toHaveBeenCalled();
       expect(mockHandleMessage).toHaveBeenCalledWith(

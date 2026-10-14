@@ -2,6 +2,9 @@ import { expect } from 'bun:test';
 import { fileURLToPath } from 'node:url';
 import { createSqlStateDocumentStore } from './state-documents';
 import type { IDatabase } from './adapters/types';
+import type { StateScope } from '@archon/workflows/state-document-store';
+
+const processScope: StateScope = { kind: 'project', key: 'process/race' };
 
 export async function assertStateProcessRaces(
   db: IDatabase,
@@ -17,7 +20,7 @@ export async function assertStateProcessRaces(
     const store = createSqlStateDocumentStore(() => db);
     let code = 0;
     try {
-      const input = { project: 'process', name: op, writer: { kind: 'operator', identity: value } };
+      const input = { scope: { kind: 'project', key: 'process/race' }, name: op, writer: { kind: 'surface', via: 'cli' } };
       if (op === 'put') await store.putStateDocument({ ...input, ifRevision: 0, value: Number(value) });
       else await store.patchStateDocument({ ...input, ops: [{ op: 'append', path: '/seen', value: Number(value) }] });
     } catch (error) {
@@ -51,7 +54,7 @@ export async function assertStateProcessRaces(
   };
   const store = createSqlStateDocumentStore(() => db);
   expect(await race('patch')).toEqual(Array(8).fill(0));
-  const rows = await store.listStateRevisions('process', 'patch');
+  const rows = await store.listStateRevisions(processScope, 'patch');
   expect(rows.map(row => row.revision)).toEqual([8, 7, 6, 5, 4, 3, 2, 1]);
   const value = rows[0]?.value;
   if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.seen))
@@ -60,7 +63,7 @@ export async function assertStateProcessRaces(
   const puts = await race('put');
   expect(puts.filter(code => code === 0)).toHaveLength(1);
   expect(puts.filter(code => code === 3)).toHaveLength(7);
-  expect(await store.listStateRevisions('process', 'put')).toHaveLength(1);
+  expect(await store.listStateRevisions(processScope, 'put')).toHaveLength(1);
 }
 
 /**
@@ -74,7 +77,7 @@ export async function assertPatchSurvivesInterleavedWrites(
   other: IDatabase
 ): Promise<void> {
   const writerB = createSqlStateDocumentStore(() => other);
-  const document = { project: 'interleave', name: 'ledger' };
+  const document = { scope: { kind: 'project', key: 'interleave/race' } as const, name: 'ledger' };
   const started: Promise<unknown>[] = [];
   const interleave =
     (query: IDatabase['query']): IDatabase['query'] =>
@@ -83,7 +86,7 @@ export async function assertPatchSurvivesInterleavedWrites(
       if (started.length < 6 && sql.endsWith('ORDER BY revision DESC LIMIT 1')) {
         const write = writerB.patchStateDocument({
           ...document,
-          writer: { kind: 'operator', identity: 'b' },
+          writer: { kind: 'surface', via: 'cli' },
           ops: [{ op: 'append', path: '/seen', value: `b${started.length}` }],
         });
         started.push(write);
@@ -99,11 +102,11 @@ export async function assertPatchSurvivesInterleavedWrites(
   const store = createSqlStateDocumentStore(() => interleaved);
   await store.patchStateDocument({
     ...document,
-    writer: { kind: 'operator', identity: 'a' },
+    writer: { kind: 'surface', via: 'cli' },
     ops: [{ op: 'append', path: '/seen', value: 'a' }],
   });
   await Promise.all(started);
-  const rows = await store.listStateRevisions(document.project, document.name);
+  const rows = await store.listStateRevisions(document.scope, document.name);
   expect(rows).toHaveLength(started.length + 1);
   const value = rows[0]?.value;
   if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.seen))

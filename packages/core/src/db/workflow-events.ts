@@ -48,20 +48,6 @@ function getLog(): ReturnType<typeof createLogger> {
 export type { WorkflowEventRow } from '../schemas/workflow-event';
 
 /**
- * Format a Date for a `created_at` comparison param to match how each dialect
- * STORES it. SQLite stores `datetime('now')` → "YYYY-MM-DD HH:MM:SS" as TEXT and
- * compares lexicographically, so the cursor MUST use that exact shape — an ISO
- * string ("…T…Z") sorts wrong (the space at index 10 is below 'T'), so
- * `created_at >= cursor` would silently match nothing. Postgres has a native
- * timestamptz and accepts the ISO string.
- */
-function toDbDateParam(d: Date): string {
-  return getDatabaseType() === 'sqlite'
-    ? d.toISOString().replace('T', ' ').slice(0, 19) // "YYYY-MM-DD HH:MM:SS"
-    : d.toISOString();
-}
-
-/**
  * Parse a row's `data` JSON defensively. A single malformed row must not abort a
  * whole batch — for the dashboard poller that would freeze the cursor and stop
  * all live updates (the same query keeps re-throwing). Bad data degrades to `{}`.
@@ -91,8 +77,8 @@ type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult
 
 /**
  * Insert one workflow-event row via `query` and THROW on failure. This is the
- * single source of truth for the event columns and dialect UUID; the
- * fire-and-forget createWorkflowEvent wraps it in try/catch, while callers that
+ * single source of truth for the event columns and dialect UUID; the autocommit
+ * writers below queue it in run order, while callers that
  * need the write to be atomic with another mutation (the approval-gate CAS in
  * db/workflows.ts, #2146) pass a transaction-scoped query so a failed event
  * write rolls back the enclosing UPDATE instead of stranding a resolved gate
@@ -123,7 +109,7 @@ export async function insertWorkflowEvent(
  */
 export async function createWorkflowEvent(data: ObservabilityEventInput): Promise<void> {
   try {
-    await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+    await persistWorkflowEvent(data);
   } catch (error) {
     getLog().error(
       {
@@ -142,9 +128,33 @@ export async function createWorkflowEvent(data: ObservabilityEventInput): Promis
   }
 }
 
+/**
+ * Tail of each run's pending autocommit event writes. On PostgreSQL each `pool.query`
+ * can run on its own connection, so two writes issued back to back commit, and draw
+ * `created_at` and `event_order`, in whichever order their backends finish. Chaining a
+ * run's writes makes them commit in the order they were issued. The tail is taken when
+ * the writer is called, not after an await, or the race moves into the queue.
+ * Ordering holds within one process. Transactional `insertWorkflowEvent` callers
+ * commit with their own mutation and do not join the chain.
+ */
+const runWriteTails = new Map<string, Promise<unknown>>();
+
+function inRunOrder<T>(runId: string, write: () => Promise<T>): Promise<T> {
+  const result = (runWriteTails.get(runId) ?? Promise.resolve()).then(write);
+  const release = (): void => {
+    if (runWriteTails.get(runId) === tail) runWriteTails.delete(runId);
+  };
+  // A failed write rejects its own caller but must not block the run's later writes.
+  const tail = result.then(release, release);
+  runWriteTails.set(runId, tail);
+  return result;
+}
+
 /** Persist a correctness-critical event and propagate storage errors to the caller. */
-export async function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
-  await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+export function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+  return inRunOrder(data.workflow_run_id, () =>
+    insertWorkflowEvent((sql, params) => pool.query(sql, params), data)
+  );
 }
 
 /**
@@ -162,19 +172,21 @@ export async function persistWorkflowEventIfRunning(
   const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   const statusPredicate =
     options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
-  const result = await pool.query(
-    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+  const result = await inRunOrder(data.workflow_run_id, () =>
+    pool.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
      SELECT $1, $2, $3, $4, $5, $6
      FROM remote_agent_workflow_runs
      WHERE id = $2 AND ${statusPredicate}${lockClause}`,
-    [
-      getDialect().generateUuid(),
-      data.workflow_run_id,
-      data.event_type,
-      data.step_index ?? null,
-      data.step_name ?? null,
-      JSON.stringify(data.data ?? {}),
-    ]
+      [
+        getDialect().generateUuid(),
+        data.workflow_run_id,
+        data.event_type,
+        data.step_index ?? null,
+        data.step_name ?? null,
+        JSON.stringify(data.data ?? {}),
+      ]
+    )
   );
   return { persisted: result.rowCount > 0 };
 }
@@ -252,82 +264,6 @@ export async function listProviderEvents(
     rows.map(row => ({ ...row, created_at: toHydratedTimestamp(row.created_at).toISOString() })),
     query
   );
-}
-
-/**
- * List recent events for a workflow run since a given timestamp.
- */
-export async function listRecentEvents(
-  workflowRunId: string,
-  since?: Date
-): Promise<WorkflowEventRow[]> {
-  try {
-    if (since) {
-      const result = await pool.query<WorkflowEventRow>(
-        `SELECT * FROM remote_agent_workflow_events
-         WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        [workflowRunId, toDbDateParam(since)]
-      );
-      return [...result.rows].map(row => ({
-        ...row,
-        data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
-      }));
-    }
-    return await listWorkflowEvents(workflowRunId);
-  } catch (error) {
-    getLog().error(
-      { err: error as Error, runId: workflowRunId },
-      'db.workflow_events_list_recent_failed'
-    );
-    throw new Error(`Failed to list recent workflow events: ${(error as Error).message}`);
-  }
-}
-
-/**
- * List workflow events across ALL runs created at or after `after`, oldest first,
- * capped at `limit`. Used by the dashboard event poller to tail events written by
- * any process (incl. out-of-process CLI runs) and replay them to the SSE dashboard.
- *
- * `>=` (not `>`) so events sharing the boundary timestamp are not skipped — SQLite's
- * `datetime('now')` is 1-second resolution, so ties are common; the caller dedupes by
- * id at the boundary and tolerates harmless duplicates (the dashboard reacts to events
- * by refetching, which is idempotent).
- *
- * `eventTypes` (when given) filters to those event types in SQL. The poller passes the
- * small set of dashboard-relevant types, which keeps high-frequency `tool_*` rows out of
- * the result — so a single 1-second bucket realistically never exceeds `limit`, and the
- * boundary `>=` + seen-set paging can't stall on overflow.
- */
-export async function listWorkflowEventsSince(
-  after: Date,
-  limit: number,
-  eventTypes?: readonly string[]
-): Promise<WorkflowEventRow[]> {
-  try {
-    const params: unknown[] = [toDbDateParam(after)];
-    let typeClause = '';
-    if (eventTypes && eventTypes.length > 0) {
-      const placeholders = eventTypes.map((_, i) => `$${String(i + 2)}`).join(', ');
-      typeClause = ` AND event_type IN (${placeholders})`;
-      params.push(...eventTypes);
-    }
-    params.push(limit);
-    const limitParam = `$${String(params.length)}`;
-    const result = await pool.query<WorkflowEventRow>(
-      `SELECT * FROM remote_agent_workflow_events
-       WHERE created_at >= $1${typeClause}
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC
-       LIMIT ${limitParam}`,
-      params
-    );
-    return [...result.rows].map(parseEventRow);
-  } catch (error) {
-    getLog().error({ err: error as Error }, 'db.workflow_events_list_since_failed');
-    throw new Error(
-      `Failed to list workflow events since ${after.toISOString()}: ${(error as Error).message}`
-    );
-  }
 }
 
 interface NodeLifecycleEvent {

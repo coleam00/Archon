@@ -21,6 +21,7 @@
   },
   "include": [
     "*.ts",
+    "fixtures/*.ts",
     "../packages/workflows/src/defaults/text-imports.d.ts",
     "../packages/core/src/sql-text-imports.d.ts"
   ]

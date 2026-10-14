@@ -39,7 +39,6 @@ describe('toRunEvent — node transitions', () => {
         event_type: 'node_completed',
         data: {
           duration_ms: 11370,
-          node_output: '1717',
           cost_usd: 0.1399,
           stop_reason: 'end_turn',
           num_turns: 1,
@@ -50,17 +49,9 @@ describe('toRunEvent — node transitions', () => {
     if (e.kind !== 'node_transition') throw new Error('unreachable');
     expect(e.transition).toBe('completed');
     expect(e.durationMs).toBe(11370); // was always null when reading `duration`
-    expect(e.outputPreview).toBe('1717');
     expect(e.costUsd).toBe(0.1399);
     expect(e.stopReason).toBe('end_turn');
     expect(e.numTurns).toBe(1);
-  });
-
-  test('node_completed truncates a long output preview to 300 chars', () => {
-    const long = 'x'.repeat(500);
-    const e = toRunEvent(raw({ event_type: 'node_completed', data: { node_output: long } }));
-    if (e.kind !== 'node_transition') throw new Error('unreachable');
-    expect(e.outputPreview).toHaveLength(300);
   });
 
   test('node_started has null duration and null enrichment', () => {
@@ -68,7 +59,6 @@ describe('toRunEvent — node transitions', () => {
     if (e.kind !== 'node_transition') throw new Error('unreachable');
     expect(e.transition).toBe('started');
     expect(e.durationMs).toBeNull();
-    expect(e.outputPreview).toBeNull();
     expect(e.costUsd).toBeNull();
   });
 
@@ -96,7 +86,7 @@ describe('toRunEvent — node transitions', () => {
     const e = toRunEvent(
       raw({
         event_type: 'node_skipped_prior_success',
-        data: { reason: 'prior_success', node_output: '1516' },
+        data: { reason: 'prior_success' },
       })
     );
     expect(e.kind).toBe('node_transition');
@@ -112,7 +102,6 @@ describe('toRunEvent — node transitions', () => {
     // Must NOT fall through to the `?? 'skipped'` default.
     expect(e.transition).toBe('failed');
     expect(e.skipReason).toBeNull();
-    expect(e.outputPreview).toBeNull();
   });
 
   test('nodeName prefers data.name, falling back to step_name', () => {

@@ -188,14 +188,7 @@ export async function validateAndResolveIsolation(
           { err, conversationId: conversation.id, isolationEnvId: result.env.id },
           'isolation_link_failed'
         );
-        try {
-          await createIsolationStore().updateStatus(result.env.id, 'destroyed');
-        } catch (rollbackError) {
-          getLog().error(
-            { err: toError(rollbackError), isolationEnvId: result.env.id },
-            'isolation_rollback_failed'
-          );
-        }
+        await getResolver().releaseUnlinked(result);
         throw err;
       }
       // Send contextual messages

@@ -9,6 +9,7 @@ import { WorkflowEventBridge } from '../adapters/web/workflow-bridge';
 import { DASHBOARD_STREAM, SSETransport } from '../adapters/web/transport';
 import { DASHBOARD_SSE_PATH } from '../../../web/src/experiments/console/lib/sse-endpoints';
 import { validationErrorHook } from './openapi-defaults';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ const mockListConversations = mock(
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'postgresql',
+  getSchemaVersion: mock(async () => null),
   loadConfig: mock(async () => ({})),
   ProjectRegistrationError: class ProjectRegistrationError extends Error {},
   inspectProjectBaseBranch: mock(async () => ({
@@ -177,7 +179,7 @@ function makeApp(
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, webAdapter ?? mockWebAdapter, mockLockManager);
   return app;
@@ -319,12 +321,10 @@ describe('server-side /api/* gate', () => {
     expect(res.status).toBe(200);
   });
 
-  test('gate on → /api/health is never blocked by the gate (healthcheck allowlist)', async () => {
+  test('gate on → /api/health is never blocked by the gate', async () => {
     apiGateEnabled = true;
-    // /api/health is registered in startServer, not registerApiRoutes, so it 404s
-    // in this app — but the assertion that matters is it is NOT a 401 (the gate let it through).
     const res = await makeApp().request('/api/health');
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(200);
   });
 
   test('gate on + Better Auth session → protected route passes', async () => {

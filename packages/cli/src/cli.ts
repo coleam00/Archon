@@ -575,14 +575,14 @@ async function main(): Promise<number> {
 
     switch (command) {
       case 'state': {
-        const { stateCommand } = await loadRoute(() => import('./commands/state'), {
-          database: true,
-        });
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
-        const { getDatabaseType } = await import('@archon/core/db/connection');
+        const database = await usesDatabaseStore();
+        const { stateCommand } = await loadRoute(() => import('./commands/state'), { database });
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
+        const storeKind = database
+          ? (await import('@archon/core/db/connection')).getDatabaseType()
+          : 'files';
         return await stateCommand(
-          createSqlWorkflowHost(createCliWorkflowDeps()),
+          await createCliWorkflowHost(),
           subcommand,
           positionals.slice(2),
           {
@@ -591,8 +591,12 @@ async function main(): Promise<number> {
               ? { ifRevision: values['if-revision'] }
               : {}),
             ...(typeof values.limit === 'string' ? { limit: values.limit } : {}),
+            ...(typeof values.prefix === 'string' ? { prefix: values.prefix } : {}),
+            ...(typeof values.project === 'string' ? { project: values.project } : {}),
+            ...(values.install === true ? { install: true } : {}),
+            ...(values.raw === true ? { raw: true } : {}),
           },
-          { storeKind: getDatabaseType() }
+          { storeKind }
         );
       }
       case 'trigger': {
@@ -1060,7 +1064,8 @@ async function main(): Promise<number> {
               approveComment,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1079,7 +1084,8 @@ async function main(): Promise<number> {
               rejectReason,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1105,7 +1111,8 @@ async function main(): Promise<number> {
               respondText,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }

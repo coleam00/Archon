@@ -153,7 +153,7 @@ describe('per-run gate deferral — real SQLite', () => {
         const approval = (await getWorkflowRun(id))?.metadata.approval;
         if (!isApprovalContext(approval)) throw new Error('Missing paid loop gate');
         expect(approval.nodeId).toBe(nodeIds[index]);
-        await approveWorkflow(id, undefined, { kind: 'operator' });
+        await approveWorkflow(id, undefined, { kind: 'operator' }, { via: 'cli' });
         winner = nodeIds[index + 1];
         winnerPaused = admissionBarrier();
         await coldResume();
@@ -213,7 +213,7 @@ describe('per-run gate deferral — real SQLite', () => {
             );
             suspensionVisible = events.rowCount === 1;
             if (outcome === 'failed delivery') throw new Error('Transport unavailable');
-            await approveWorkflow(id, undefined, { kind: 'operator' });
+            await approveWorkflow(id, undefined, { kind: 'operator' }, { via: 'cli' });
             if (outcome === 'failed delivery after decision')
               throw new Error('Transport failed after decision');
           },
@@ -361,7 +361,7 @@ describe('per-run gate deferral — real SQLite', () => {
     if (!isApprovalContext(approval)) throw new Error('Missing early gate');
     expect(approval.nodeId).toBe('start');
     expect(approval.bodyGateId).toBeUndefined();
-    await approveWorkflow(id, undefined, { kind: 'operator' });
+    await approveWorkflow(id, undefined, { kind: 'operator' }, { via: 'cli' });
     const snapshot = await store.getDagResumeSnapshot(id);
     expect(snapshot.completedNodeOutputs.has('group.start')).toBe(true);
     expect(snapshot.completedNodeOutputs.has('group.review')).toBe(false);
@@ -446,7 +446,7 @@ describe('per-run gate deferral — real SQLite', () => {
     };
     await resume();
     expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(1);
-    await approveWorkflow(id, undefined, { kind: 'operator' });
+    await approveWorkflow(id, undefined, { kind: 'operator' }, { via: 'cli' });
     await resume();
     expect((await getWorkflowRun(id))?.status).toBe('completed');
     expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(1);
@@ -523,9 +523,12 @@ describe('per-run gate deferral — real SQLite', () => {
           [id]
         )
       ).toMatchObject({ rowCount: 0 });
-      await (action === 'approve' ? approveWorkflow : rejectWorkflow)(id, 'first decision', {
-        kind: 'operator',
-      });
+      await (action === 'approve' ? approveWorkflow : rejectWorkflow)(
+        id,
+        'first decision',
+        { kind: 'operator' },
+        { via: 'cli' }
+      );
       await closeDatabase();
       resetDatabase();
       await resume();
@@ -533,7 +536,7 @@ describe('per-run gate deferral — real SQLite', () => {
       const second = (await getWorkflowRun(id))?.metadata?.approval;
       if (!isApprovalContext(second)) throw new Error('Missing second gate');
       expect(second.nodeId).not.toBe(first.nodeId);
-      await approveWorkflow(id, 'second decision', { kind: 'operator' });
+      await approveWorkflow(id, 'second decision', { kind: 'operator' }, { via: 'cli' });
       await resume();
       expect((await getWorkflowRun(id))?.status).toBe('completed');
       expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(2);
@@ -590,7 +593,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const first = { nodeId: 'first', message: 'Review first', type: 'approval' as const };
     const second = { ...first, nodeId: 'second' };
     await pauseWorkflowRun(run.id, first);
-    await approveWorkflow(run.id, undefined, { kind: 'operator' });
+    await approveWorkflow(run.id, undefined, { kind: 'operator' }, { via: 'cli' });
     expect(await failPausedApproval(run.id, first, 'late send error')).toEqual({ failed: false });
     await resumeWorkflowRun(run.id);
     await pauseWorkflowRun(run.id, second);
@@ -623,7 +626,12 @@ describe('per-run gate deferral — real SQLite', () => {
             'SELECT id FROM remote_agent_workflow_runs WHERE conversation_id = $1',
             [conversationId]
           );
-          await approveWorkflow(runs.rows[0].id, 'immediate decision', { kind: 'operator' });
+          await approveWorkflow(
+            runs.rows[0].id,
+            'immediate decision',
+            { kind: 'operator' },
+            { via: 'cli' }
+          );
         }
       },
       getPlatformType: () => 'test',

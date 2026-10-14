@@ -259,7 +259,12 @@ const mockWaitForRunAttention = mock(
   (
     _store: import('@archon/workflows/store').IWorkflowStore,
     _runId: string,
-    _opts?: { onAttached?: (observedStatus: string) => void | Promise<void> }
+    _opts?: {
+      onAttached?: (
+        observedStatus: string,
+        ownerLiveness?: import('@archon/core/services/run-attention-watch').UnknownOwnerLiveness
+      ) => void | Promise<void>;
+    }
   ): Promise<unknown> => Promise.resolve({ kind: 'not_found', runId: 'unset' })
 );
 mock.module('@archon/core/services/run-attention-watch', () => ({
@@ -332,6 +337,7 @@ mock.module('@archon/isolation', () => ({
           provenance: 'created',
           adopted: false,
           creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          branchCreated: true,
         },
       })
     ),
@@ -11647,7 +11653,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'not good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'not good',
+          },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },
@@ -11700,6 +11711,8 @@ describe('workflowRejectCommand', () => {
           decisions: [{ id: 'approve' }, { id: 'reject' }],
           decisionsAuthored: true,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
       },
       [
@@ -11715,7 +11728,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'Rejected' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'Rejected',
+          },
         },
       ],
       undefined
@@ -11808,6 +11826,8 @@ describe('workflowRejectCommand', () => {
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         rejection_reason: 'needs work',
         rejection_count: 1,
@@ -11816,7 +11836,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'needs work' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs work',
+          },
         },
       ],
       undefined
@@ -11916,7 +11941,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'still bad' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still bad',
+          },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },
@@ -12167,6 +12197,101 @@ describe('workflowRespondCommand', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
   });
+
+  it.each([
+    ['approve', false],
+    ['reject', false],
+    ['approve', true],
+    ['reject', true],
+  ] as const)('refuses undeclared %s through commands (detach=%s)', async (decision, detach) => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const run = {
+      id: 'run-undeclared',
+      workflow_name: 'guided',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/repo',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Choose',
+          decisions: [{ id: 'accept' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(run);
+    const resolve = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+    const cancel = workflowDb.resolveAndCancelApprovalGate as ReturnType<typeof mock>;
+    resolve.mockClear();
+    cancel.mockClear();
+    const host = createTestWorkflowHost();
+    const dedicated = decision === 'approve' ? workflowApproveCommand : workflowRejectCommand;
+    for (const respond of [
+      () => dedicated(host, run.id, 'feedback', false, undefined, detach),
+      () => workflowRespondCommand(host, run.id, decision, 'feedback', false, undefined, detach),
+    ]) {
+      await expect(respond()).rejects.toThrow(
+        `does not declare decision '${decision}'. Declared decisions: accept, revise.`
+      );
+      expect(run.status).toBe('paused');
+      expect(resolve).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['approve', false],
+    ['reject', false],
+    ['revise', false],
+    ['approve', true],
+    ['reject', true],
+    ['revise', true],
+  ] as const)(
+    'refuses a stale --occurrence for %s before acknowledging anything (detach=%s)',
+    async (decision, detach) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const run = {
+        id: 'run-stale-occurrence',
+        workflow_name: 'guided',
+        status: 'paused',
+        user_message: 'go',
+        working_path: '/repo',
+        codebase_id: null,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'gate',
+            pauseId: 'pause-two',
+            message: 'Choose',
+            decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          },
+        },
+      };
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(run);
+      const resolve = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+      const cancel = workflowDb.resolveAndCancelApprovalGate as ReturnType<typeof mock>;
+      resolve.mockClear();
+      cancel.mockClear();
+      await expect(
+        workflowRespondCommand(
+          createTestWorkflowHost(),
+          run.id,
+          decision,
+          'feedback',
+          false,
+          undefined,
+          detach,
+          'pause-one'
+        )
+      ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
+      expect(resolve).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+    }
+  );
 
   it("delegates 'approve' to the exact same resolution as workflowApproveCommand", async () => {
     const workflowDb = await import('@archon/core/db/workflows');
@@ -14667,6 +14792,36 @@ describe('workflowWaitCommand', () => {
 
     expect(String(stderrSpy.mock.calls[0]?.[0])).toBe(
       `Waiting on run ${FULL_ID} — currently paused.\n`
+    );
+    stderrSpy.mockRestore();
+  });
+
+  it('says when the owner cannot be checked from this host', async () => {
+    const stderrSpy = spyOnStderr();
+    const recordedOwner = { host: 'build-2', pid: 4242, uid: 501 };
+    const announceUnknown: Parameters<
+      typeof mockWaitForRunAttention.mockImplementation
+    >[0] = async (_store, _runId, opts) => {
+      await opts?.onAttached?.('running', { kind: 'unknown', recordedOwner });
+      return terminal('completed');
+    };
+    mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
+    mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
+
+    await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, true, '/repo');
+    await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, undefined, '/repo');
+
+    expect(JSON.parse(String(stderrSpy.mock.calls[0]?.[0]))).toEqual({
+      ok: true,
+      action: 'wait',
+      runId: FULL_ID,
+      result: 'waiting',
+      observedStatus: 'running',
+      ownerLiveness: 'unknown',
+      recordedOwner,
+    });
+    expect(String(stderrSpy.mock.calls[1]?.[0])).toBe(
+      `Waiting on run ${FULL_ID} — currently running. Its owner ran on host build-2 (uid 501), whose endpoint this host cannot reach, so whether it is still alive is unknown.\n`
     );
     stderrSpy.mockRestore();
   });

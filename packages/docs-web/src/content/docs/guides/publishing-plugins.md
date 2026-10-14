@@ -96,8 +96,12 @@ they may contain credentials or user messages.
 Native tool specifications travel with the session; their handlers run in the host
 through `_archon/tool_call`. Calls after settlement or cancellation are rejected.
 `serveProvider` passes a structured log sink to its `create(log)` factory. Await that
-sink with `{ level, msg, bindings }` to forward metadata through `_archon/log` to the
-host's `provider.<id>` logger. Never put credentials, tokens, or message text in log
+sink with `{ level, msg, bindings }` to send metadata through `_archon/log`.
+The host logs `provider.plugin.log` at the supplied severity through `provider.<id>`,
+using its own descriptor id. Set `bindings.failureClass` to one of the contract's failure
+classes on any record the operator should see; the host forwards that value and nothing
+else, and drops a record without a valid class. `msg`, plugin module identity, and all
+other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before
 it writes. Stderr remains withheld.
 

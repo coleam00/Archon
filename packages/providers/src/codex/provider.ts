@@ -732,9 +732,9 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
       default:
         break;
     }
-    // The lifecycle contract covers starts observed before the parent's turn/completed
-    // and their descendants. After that, the parent model cannot initiate new work;
-    // later starts belong to already-live work, so an empty observed set can settle.
+    // While observed work remains live, starts on this parent turn and recognized
+    // descendant threads are still accepted after parent completion. An empty set ends
+    // observation; it does not establish that Codex cannot report another start later.
     if (parentCompleted && liveTasks.size === 0) {
       if (pendingFailure) yield pendingFailure;
       return;

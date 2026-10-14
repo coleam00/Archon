@@ -2085,6 +2085,42 @@ describe('dryRunWorkflow', () => {
     ).toEqual(['previous: [] feedback: []', 'previous: [https://example.test/pr/1] feedback: []']);
   });
 
+  test('gives a command body the output of an include it reads (#3972)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-include-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'check-ci.md'), 'Check CI for [$pr.output]');
+    writeFileSync(join(cwd, '.archon', 'commands', 'retry-ci.md'), 'Retry CI for [$pr.output]');
+    const block = makeTestWorkflow({
+      name: 'open-pr',
+      nodes: [{ id: 'open', prompt: 'open the pr' }],
+    });
+    const parent = makeTestWorkflow({
+      name: 'deliver',
+      nodes: [
+        { id: 'pr', include: 'open-pr' },
+        { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+        {
+          id: 'retry',
+          depends_on: ['pr'],
+          loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+        },
+      ],
+    });
+    const workflow = makeTestComposedWorkflow([block, parent], 'deliver');
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { pr__open: 'PR-42', check: 'ok', retry: 'DONE' },
+    });
+
+    const resolved = (nodeId: string) =>
+      result.trace.find(entry => entry.nodeId === nodeId)?.resolvedText;
+    expect(resolved('check')).toBe('Check CI for [PR-42]');
+    expect(resolved('retry')).toBe('Retry CI for [PR-42]');
+  });
+
   test('runs a nested body command file through every enclosing loop scope (#3954)', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-nested-loop-command-'));
     temporaryDirectories.push(cwd);
@@ -3067,4 +3103,48 @@ test('dry-run nested conditions enforce the same declared contract as live outpu
   const typo = await run('typo');
   expect(typo.outcome).toBe('failed');
   expect(typo.trace.find(node => node.nodeId === 'read')?.reason).toContain("field 'typo'");
+});
+
+describe('dryRunWorkflow — substituted values are previewed verbatim (#4046)', () => {
+  const quoted =
+    "Check $gate.output.decision, read $gate.output, use $INPUTS.plan, keep $& and it's done.";
+
+  test('previews the run message exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-message',
+        nodes: [{ id: 'summarize', prompt: 'Summarize this request: $ARGUMENTS' }],
+      }),
+      userMessage: quoted,
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe(`Summarize this request: ${quoted}`);
+  });
+
+  test('previews a previous-iteration output exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-prior',
+        nodes: [
+          {
+            id: 'grp',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'draft', prompt: 'Prior: [$LOOP_PREV.draft.output]' }],
+            },
+          },
+        ],
+      }),
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { draft: quoted },
+    });
+
+    const drafts = result.trace.filter(entry => entry.nodeId === 'draft');
+    expect(drafts.map(entry => entry.resolvedText)).toEqual(['Prior: []', `Prior: [${quoted}]`]);
+  });
 });

@@ -8,6 +8,7 @@
 
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { GitHubAdapter } from '@archon/adapters';
+import type { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { createLogger } from '@archon/paths';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type {
@@ -25,6 +26,11 @@ function getLog(): ReturnType<typeof createLogger> {
 // GitHub caps deliveries at 25 MB; leave headroom without changing API body limits.
 export const MAX_WEBHOOK_BODY_BYTES = 32 * 1024 * 1024;
 
+type BoundedBody =
+  | { kind: 'ok'; bytes: Uint8Array }
+  | { kind: 'too_large' }
+  | { kind: 'read_failed'; error: unknown };
+
 type SignedBody =
   | { kind: 'ok'; body: string }
   | { kind: 'invalid_utf8' }
@@ -41,7 +47,7 @@ async function cancelOversizedBody(
   }
 }
 
-async function readSignedBody(request: Request): Promise<SignedBody> {
+async function readBoundedBody(request: Request): Promise<BoundedBody> {
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isSafeInteger(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
     if (request.body) await cancelOversizedBody(request.body);
@@ -75,11 +81,17 @@ async function readSignedBody(request: Request): Promise<SignedBody> {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  return { kind: 'ok', bytes };
+}
+
+async function readSignedBody(request: Request): Promise<SignedBody> {
+  const body = await readBoundedBody(request);
+  if (body.kind !== 'ok') return body;
   try {
     // Signatures cover bytes: preserve the BOM and reject lossy UTF-8 decoding.
     return {
       kind: 'ok',
-      body: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes),
+      body: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body.bytes),
     };
   } catch {
     return { kind: 'invalid_utf8' };
@@ -95,19 +107,18 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
     const deliveryId = c.req.header('x-github-delivery');
 
     try {
-      const payload = await readSignedBody(c.req.raw);
-      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
-
       const signature = c.req.header('x-hub-signature-256');
       if (!signature) {
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
-      // Receipt acceptance is durable; it does not mean the workflow completed.
-      // GitHub requires explicit redelivery/reconciliation after a failed delivery.
+      // Conversation handling runs asynchronously without a durable receipt;
+      // HTTP 200 does not guarantee that processing will succeed or survive a restart.
       const result = await github.receiveWebhook(payload.body, signature, deliveryId, eventType);
       if (result === 'invalid_signature') return c.json({ error: 'Invalid signature' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
@@ -115,6 +126,36 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       return c.text('OK', 200);
     } catch (error) {
       getLog().error({ err: error as Error, eventType, deliveryId }, 'webhook_endpoint_error');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
+}
+
+/** The slice of GiteaAdapter the webhook route depends on. */
+export type GiteaWebhookTarget = Pick<GiteaAdapter, 'handleWebhook'>;
+
+export function registerGiteaWebhookRoute(app: OpenAPIHono, gitea: GiteaWebhookTarget): void {
+  app.post('/webhooks/gitea', async c => {
+    const eventType = c.req.header('x-gitea-event');
+
+    try {
+      const signature = c.req.header('x-gitea-signature');
+      if (!signature) {
+        return c.json({ error: 'Missing signature header' }, 400);
+      }
+
+      const payload = await readBoundedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
+      if (payload.kind === 'read_failed') throw payload.error;
+
+      // Process async (fire-and-forget for fast webhook response)
+      gitea.handleWebhook(payload.bytes, signature).catch((error: unknown) => {
+        getLog().error({ err: error, eventType }, 'gitea_webhook_processing_error');
+      });
+
+      return c.text('OK', 200);
+    } catch (error) {
+      getLog().error({ err: error, eventType }, 'gitea_webhook_endpoint_error');
       return c.json({ error: 'Internal server error' }, 500);
     }
   });
@@ -138,10 +179,10 @@ export function registerWebhookSourceRoutes(
   app.post('/webhooks/sources/:sourceInstanceId', async c => {
     const sourceInstanceId = c.req.param('sourceInstanceId');
     try {
-      const body = await readSignedBody(c.req.raw);
-      if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (!sources.hasSource(sourceInstanceId))
         return c.json({ error: 'Unknown webhook source' }, 404);
+      const body = await readSignedBody(c.req.raw);
+      if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (body.kind === 'read_failed') throw body.error;
       if (body.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
       const result = await sources.receive(sourceInstanceId, {

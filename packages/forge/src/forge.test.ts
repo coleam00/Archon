@@ -98,4 +98,55 @@ describe('authored forge bindings', () => {
       })
     ).not.toThrow();
   });
+
+  test('maps who changed a label and who wrote a comment', () => {
+    const bindingSchema = createForgeInputBindingSchema(z.string());
+    const subject = {
+      kind: 'issue',
+      ref: { repo: { host: 'github.com', path: 'org/repo' }, number: 7 },
+    } as const;
+    const octo = { host: 'github.com', id: '42', login: 'octo' };
+    const field = (name: string) => bindingSchema.parse({ source: 'field', field: name });
+    const labelled = {
+      kind: 'label.changed',
+      action: 'added',
+      subject,
+      label: { name: 'archon-triage', id: null },
+      actor: octo,
+    } as const;
+    expect(
+      mapForgeInputs({ id: field('label.actor.id'), login: field('label.actor.login') }, labelled)
+    ).toEqual({ ok: true, inputs: { id: '42', login: 'octo' } });
+    expect(
+      mapForgeInputs({ id: field('label.actor.id') }, { ...labelled, actor: null })
+    ).toMatchObject({ ok: false, field: 'label.actor.id' });
+    const commented = {
+      kind: 'comment.changed',
+      action: 'created',
+      subject,
+      comment: { id: '900', author: octo },
+    } as const;
+    expect(
+      matchForgeEvent(
+        { kind: 'comment.changed', actions: ['created'], subject: { kind: 'issue', number: 7 } },
+        commented
+      )
+    ).toBe(true);
+    expect(
+      mapForgeInputs(
+        {
+          number: field('subject.number'),
+          comment: field('comment.id'),
+          author: field('comment.author.login'),
+        },
+        commented
+      )
+    ).toEqual({ ok: true, inputs: { number: 7, comment: '900', author: 'octo' } });
+    expect(() =>
+      createForgeBindingSchema(z.string()).parse({
+        selector: { kind: 'comment.changed', actions: ['created'] },
+        inputs: { actor: { source: 'field', field: 'label.actor.login' } },
+      })
+    ).toThrow();
+  });
 });

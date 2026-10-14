@@ -17,6 +17,11 @@ const OPS = [
   'workitem.view',
   'workitem.create',
   'workitem.labels.set',
+  'workitem.label.add',
+  'workitem.comment.upsert',
+  'workitem.close',
+  'workitem.label.remove',
+  'workitem.list',
   'repo.labels.list',
   'repo.label.ensure',
   'pr.view',
@@ -52,6 +57,9 @@ else {
     operationId: string;
     op: string;
     ref?: PluginRef;
+    subject?: { kind: 'issue' | 'pr'; ref: PluginRef };
+    label?: string;
+    reason?: string;
     selector?: { kind: string; ref?: PluginRef };
     repo?: PluginRef['repo'];
     headRepo?: PluginRef['repo'];
@@ -75,6 +83,7 @@ else {
     }[];
   };
   const ref = input.ref ??
+    input.subject?.ref ??
     input.selector?.ref ?? { repo: { host: 'forge.example', path: 'a/b' }, number: 1 };
   const repo = input.repo ?? ref.repo;
   // A create answers with the pull request the request asked for; every other
@@ -110,8 +119,24 @@ else {
     },
   });
 
+  const subject = {
+    ref,
+    kind: input.subject?.kind ?? 'issue',
+    url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
+    state: 'open',
+  };
+  const listed = (items: unknown[]): unknown => ({
+    operationId: input.operationId,
+    ok: true,
+    result: { op: input.op, value: { repo, label: input.label, items } },
+  });
+
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
+    if (input.op === 'workitem.label.add') return answer(ref, { workitem: subject, labels: [] });
+    if (input.op === 'workitem.label.remove')
+      return answer(ref, { workitem: subject, labels: [input.name] });
+    if (input.op === 'workitem.list') return listed([{ ...subject, state: 'closed' }]);
     if (input.op === 'pr.merge')
       return answer(ref, {
         ...mergeValue(),
@@ -125,6 +150,13 @@ else {
       return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
+    if (input.op === 'workitem.comment.upsert')
+      return answer(ref, {
+        workitem: subject,
+        comment: { ...comment, bodyDigest: digest('something else') },
+      });
+    if (input.op === 'workitem.close')
+      return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: 'not_planned' });
     return answer(ref, { pr, bodyDigest: digest('something else') });
   };
 
@@ -159,6 +191,12 @@ else {
         },
         labels: input.labels,
       });
+    if (input.op === 'workitem.label.add')
+      return answer(ref, { workitem: subject, labels: ['other', input.name] });
+    if (input.op === 'workitem.label.remove')
+      return answer(ref, { workitem: subject, labels: ['other'] });
+    if (input.op === 'workitem.list')
+      return listed([subject, { ...subject, ref: { ...ref, number: ref.number + 1 }, kind: 'pr' }]);
     if (input.op === 'repo.label.ensure')
       return answer(repo, {
         label: {
@@ -209,6 +247,9 @@ else {
     if (input.op === 'pr.create') return answer(repo, { pr });
     if (input.op === 'pr.ready' || input.op === 'pr.draft') return answer(ref, { pr });
     if (input.op === 'comment.upsert') return answer(ref, { comment });
+    if (input.op === 'workitem.comment.upsert') return answer(ref, { workitem: subject, comment });
+    if (input.op === 'workitem.close')
+      return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason });
     return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
   };
 
@@ -226,6 +267,17 @@ else {
           },
         },
       })
+    );
+  } else if (mode === 'wrong-kind') {
+    process.stdout.write(
+      JSON.stringify(
+        answer(ref, {
+          workitem: { ...subject, kind: subject.kind === 'pr' ? 'issue' : 'pr' },
+          ...(input.op === 'workitem.comment.upsert'
+            ? { comment }
+            : { labels: input.op === 'workitem.label.add' ? [input.name] : [] }),
+        })
+      )
     );
   } else if (mode === 'wrong-target') {
     process.stdout.write(

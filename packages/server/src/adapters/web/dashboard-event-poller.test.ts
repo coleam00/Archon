@@ -1,19 +1,22 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import {
+  WORKFLOW_EVENT_TYPES,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+} from '@archon/workflows/store';
 
-// Mock the global events query the poller tails. Must be registered before the
-// poller module is imported so its `listWorkflowEventsSince` binding is the mock.
-const mockListSince = mock(
-  (_after: Date, _limit: number, _types?: readonly string[]): Promise<WorkflowEventRow[]> =>
-    Promise.resolve([])
-);
-mock.module('@archon/core/db/workflow-events', () => ({
-  listWorkflowEventsSince: mockListSince,
-}));
+const mockLog = {
+  error: mock((_obj: object, _msg: string) => undefined),
+  warn: mock((_obj: object, _msg: string) => undefined),
+  info: mock((_obj: object, _msg: string) => undefined),
+};
+const realPaths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({ ...realPaths, createLogger: () => mockLog }));
 
-import { DashboardEventPoller } from './dashboard-event-poller';
-import type { DashboardTransport } from './dashboard-event-poller';
-import { DASHBOARD_SOURCE_EVENT_TYPES, mapWorkflowEventRow } from './workflow-bridge';
+const { DashboardEventPoller } = await import('./dashboard-event-poller');
+const { DASHBOARD_SOURCE_EVENT_TYPES, mapWorkflowEventRow } = await import('./workflow-bridge');
+import type { DashboardEventFeed, DashboardTransport } from './dashboard-event-poller';
 
 function row(over: Partial<WorkflowEventRow>): WorkflowEventRow {
   return {
@@ -30,17 +33,75 @@ function row(over: Partial<WorkflowEventRow>): WorkflowEventRow {
 
 interface FakeTransport extends DashboardTransport {
   emitted: Array<{ conv: string; event: string }>;
+  open: boolean;
 }
-function makeTransport(hasStream = true): FakeTransport {
-  const emitted: Array<{ conv: string; event: string }> = [];
-  return {
-    emitted,
-    hasActiveStream: () => hasStream,
-    emitWorkflowEvent: (conv, event) => emitted.push({ conv, event }),
+function makeTransport(open = true): FakeTransport {
+  const transport: FakeTransport = {
+    emitted: [],
+    open,
+    hasActiveStream: () => transport.open,
+    emitWorkflowEvent: (conv, event) => transport.emitted.push({ conv, event }),
   };
+  return transport;
 }
 
+const cursorAt = (order: number): WorkflowEventCursor =>
+  `test:${String(order)}` as WorkflowEventCursor;
+const orderOf = (cursor: WorkflowEventCursor): number => Number(cursor.slice('test:'.length));
+
+/**
+ * An in-memory commit-ordered feed with the SQL store's paging contract: a page
+ * scans `limit` rows, filters by type afterwards, and `next` covers every scanned row.
+ */
+function makeFeed(): DashboardEventFeed & {
+  rows: WorkflowEventRow[];
+  write(...rows: WorkflowEventRow[]): void;
+  reads: number;
+  requestedTypes: unknown[];
+} {
+  const feed = {
+    rows: [] as WorkflowEventRow[],
+    reads: 0,
+    requestedTypes: [] as unknown[],
+    write(...rows: WorkflowEventRow[]): void {
+      feed.rows.push(...rows);
+    },
+    getWorkflowEventHead: async (): Promise<WorkflowEventCursor> => cursorAt(feed.rows.length),
+    readWorkflowEventsAfter: async (
+      after: WorkflowEventCursor,
+      { limit, eventTypes }: Parameters<DashboardEventFeed['readWorkflowEventsAfter']>[1]
+    ): Promise<WorkflowEventPage> => {
+      feed.reads += 1;
+      feed.requestedTypes.push(eventTypes);
+      const from = orderOf(after);
+      const scanned = feed.rows.slice(from, from + limit).map((event, i) => ({
+        cursor: cursorAt(from + i + 1),
+        event,
+      }));
+      return {
+        events: scanned.filter(
+          ({ event }) => eventTypes === undefined || eventTypes.some(t => t === event.event_type)
+        ),
+        next: scanned.at(-1)?.cursor ?? after,
+      };
+    },
+  };
+  return feed;
+}
+
+const emittedIds = (t: FakeTransport): string[] =>
+  t.emitted.map(({ event }) => (JSON.parse(event) as { runId: string }).runId);
+
 describe('mapWorkflowEventRow', () => {
+  test.each([...WORKFLOW_EVENT_TYPES])(
+    'source membership matches row mapping for %s',
+    eventType => {
+      expect(DASHBOARD_SOURCE_EVENT_TYPES.includes(eventType)).toBe(
+        mapWorkflowEventRow(row({ event_type: eventType })) !== null
+      );
+    }
+  );
+
   test('workflow_started → workflow_status running', () => {
     const out = mapWorkflowEventRow(
       row({ event_type: 'workflow_started', data: { workflow_name: 'wf' } })
@@ -190,88 +251,146 @@ describe('mapWorkflowEventRow', () => {
 
 describe('DashboardEventPoller', () => {
   beforeEach(() => {
-    mockListSince.mockReset();
-    mockListSince.mockResolvedValue([]);
+    mockLog.error.mockClear();
+    mockLog.warn.mockClear();
   });
 
-  test('emits a mapped dashboard event for a new row', async () => {
-    const t = makeTransport(true);
-    mockListSince.mockResolvedValueOnce([
-      row({ id: 'e1', workflow_run_id: 'r1', event_type: 'workflow_started' }),
-    ]);
-    const poller = new DashboardEventPoller();
-    poller.start(t, 1e9);
+  test('emits events written after start once, in commit order, and never replays history', async () => {
+    const feed = makeFeed();
+    feed.write(row({ workflow_run_id: 'before-start', event_type: 'workflow_started' }));
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+
+    feed.write(
+      row({ workflow_run_id: 'r1', event_type: 'workflow_started' }),
+      row({ workflow_run_id: 'r1', event_type: 'provider_event' }),
+      row({ workflow_run_id: 'r2', event_type: 'node_started' })
+    );
+    await poller.drainNow();
+    feed.write(row({ workflow_run_id: 'r3', event_type: 'workflow_completed' }));
+    await poller.drainNow();
     await poller.drainNow();
     poller.stop();
 
-    expect(t.emitted).toHaveLength(1);
-    expect(t.emitted[0].conv).toBe('__dashboard__');
-    expect(JSON.parse(t.emitted[0].event).runId).toBe('r1');
+    expect(t.emitted.every(({ conv }) => conv === '__dashboard__')).toBe(true);
+    expect(emittedIds(t)).toEqual(['r1', 'r2', 'r3']);
+    expect(feed.requestedTypes.length).toBeGreaterThan(0);
+    expect(feed.requestedTypes.every(types => types === DASHBOARD_SOURCE_EVENT_TYPES)).toBe(true);
   });
 
-  test('advances the cursor across seconds and only re-dedupes the newest second', async () => {
-    const t = makeTransport(true);
-    const poller = new DashboardEventPoller();
-    poller.start(t, 1e9); // boot cursor = now
+  test('a page of only filtered-out rows does not end the drain', async () => {
+    const feed = makeFeed();
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
 
-    // Use timestamps AFTER boot (real events are created after the server starts),
-    // so maxTs advances. t2/t3 share the boundary second; t4 is a later second.
-    const base = Date.now() + 10_000;
-    const at = (sec: number): string => new Date(base + sec * 1000).toISOString();
-
-    // Drain 1: events at two distinct seconds → cursor advances to the later one.
-    mockListSince.mockResolvedValueOnce([
-      row({ id: 'e1', event_type: 'workflow_started', created_at: at(1) }),
-      row({ id: 'e2', event_type: 'node_completed', created_at: at(2) }),
-    ]);
-    await poller.drainNow(); // emits e1, e2; boundary = {e2}
-
-    // Drain 2: e2 re-returned (boundary → skipped), a late same-second e3 (emitted),
-    // and e4 at a new second (emitted).
-    mockListSince.mockResolvedValueOnce([
-      row({ id: 'e2', event_type: 'node_completed', created_at: at(2) }),
-      row({ id: 'e3', event_type: 'node_started', created_at: at(2) }),
-      row({ id: 'e4', event_type: 'workflow_completed', created_at: at(3) }),
-    ]);
+    feed.write(
+      ...Array.from({ length: 500 }, () => row({ event_type: 'provider_event' })),
+      row({ workflow_run_id: 'after-filtered-page', event_type: 'workflow_completed' })
+    );
     await poller.drainNow();
     poller.stop();
 
-    // e1, e2, e3, e4 each emitted exactly once — e2 not re-emitted.
-    expect(t.emitted).toHaveLength(4);
+    expect(emittedIds(t)).toEqual(['after-filtered-page']);
+  });
+
+  test('with no dashboard stream open, the cursor follows the head', async () => {
+    const feed = makeFeed();
+    const t = makeTransport(false);
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+
+    feed.write(row({ workflow_run_id: 'idle-gap', event_type: 'workflow_started' }));
+    await poller.drainNow();
+    expect(feed.reads).toBe(0);
+
+    t.open = true;
+    feed.write(row({ workflow_run_id: 'live', event_type: 'workflow_started' }));
+    await poller.drainNow();
+    poller.stop();
+
+    expect(emittedIds(t)).toEqual(['live']);
+  });
+
+  test('a client connecting during the idle head read still receives what commits after it', async () => {
+    const feed = makeFeed();
+    const t = makeTransport(false);
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+
+    const head = feed.getWorkflowEventHead;
+    feed.getWorkflowEventHead = async () => {
+      t.open = true;
+      feed.write(row({ workflow_run_id: 'during-connect', event_type: 'workflow_started' }));
+      return head();
+    };
+    await poller.drainNow();
+    poller.stop();
+
+    expect(emittedIds(t)).toEqual(['during-connect']);
+  });
+
+  test('a failed head read at start does not fail startup or replay history', async () => {
+    const feed = makeFeed();
+    feed.write(row({ workflow_run_id: 'before-start', event_type: 'workflow_started' }));
+    const head = feed.getWorkflowEventHead;
+    feed.getWorkflowEventHead = () => Promise.reject(new Error('store down'));
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+    expect(mockLog.warn).toHaveBeenCalledTimes(1);
+
+    feed.getWorkflowEventHead = head;
+    await poller.drainNow();
+    feed.write(row({ workflow_run_id: 'live', event_type: 'workflow_started' }));
+    await poller.drainNow();
+    poller.stop();
+
+    expect(emittedIds(t)).toEqual(['live']);
   });
 
   test('coalesces a burst of drainNow calls into one trailing drain', async () => {
-    const t = makeTransport(true);
-    const poller = new DashboardEventPoller();
-    poller.start(t, 1e9);
+    const feed = makeFeed();
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
 
-    let resolveFirst!: (rows: WorkflowEventRow[]) => void;
-    mockListSince.mockImplementationOnce(
-      () => new Promise<WorkflowEventRow[]>(res => (resolveFirst = res))
-    );
-    mockListSince.mockResolvedValue([]); // subsequent drains: nothing new
+    const read = feed.readWorkflowEventsAfter;
+    let release!: () => void;
+    const released = new Promise<void>(resolve => (release = resolve));
+    let blocked = false;
+    feed.readWorkflowEventsAfter = async (...args) => {
+      if (!blocked) {
+        blocked = true;
+        await released;
+      }
+      return read(...args);
+    };
 
-    const p1 = poller.drainNow(); // starts draining (listSince pending)
-    const p2 = poller.drainNow(); // draining → redrainRequested
-    const p3 = poller.drainNow(); // still draining → redrainRequested (no extra pass)
-    resolveFirst([]); // first drainOnce completes → one coalesced follow-up runs
-    await Promise.all([p1, p2, p3]);
+    const burst = [poller.drainNow(), poller.drainNow(), poller.drainNow()];
+    release();
+    await Promise.all(burst);
     poller.stop();
 
-    // drainOnce queried twice: the initial pass + ONE trailing pass (not three).
-    expect(mockListSince).toHaveBeenCalledTimes(2);
+    // An empty feed takes one read per pass: the initial pass + ONE trailing pass.
+    expect(feed.reads).toBe(2);
   });
 
-  test('skips the query and emits nothing when no dashboard client is connected', async () => {
-    const t = makeTransport(false);
-    mockListSince.mockResolvedValueOnce([row({ id: 'e1' })]);
-    const poller = new DashboardEventPoller();
-    poller.start(t, 1e9);
+  test('escalates store failures from warn to error after the threshold', async () => {
+    const feed = makeFeed();
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+    feed.readWorkflowEventsAfter = () => Promise.reject(new Error('store down'));
+
+    for (let i = 0; i < 4; i++) await poller.drainNow();
+    expect(mockLog.warn).toHaveBeenCalledTimes(4);
+    expect(mockLog.error).not.toHaveBeenCalled();
 
     await poller.drainNow();
     poller.stop();
-
-    expect(t.emitted).toHaveLength(0);
-    expect(mockListSince).not.toHaveBeenCalled();
+    expect(mockLog.error).toHaveBeenCalledTimes(1);
+    expect(mockLog.error.mock.calls[0][1]).toBe('dashboard_poller.drain_failing_persistently');
   });
 });

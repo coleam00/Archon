@@ -13,71 +13,29 @@
  * the repository already has. Publishing uses the selected forge source.
  */
 
-import {
-  forgeSource,
-  invokeForge,
-  readWorkItemLabels,
-  readRepositoryLabels,
-  record,
-  type QualifiedPr,
-} from '../../.shared/forge.ts';
+import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
-
-type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
-type Complexity = 'small' | 'risky' | 'large';
-type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
-
-// Exactly one state label per item. A READY item's label names the route the run
-// takes on it: archon-ready delivers (a new pull request, or the open one it
-// continues), archon-plan plans then delivers, and archon-issue investigates then
-// delivers.
-const STATE_LABEL: Record<Exclude<Contract, 'READY'>, string> = {
-  NEEDS_CONTRACT_WORK: 'archon-needs-contract',
-  BLOCKED: 'archon-blocked',
-  NO_ACTION: 'archon-close',
-};
-const ROUTE_LABEL: Record<Route, string> = {
-  deliver: 'archon-ready',
-  continue: 'archon-ready',
-  plan: 'archon-plan',
-  investigate: 'archon-issue',
-};
-const COMPLEXITY_LABEL: Record<Complexity, string> = {
-  small: 'archon-small',
-  risky: 'archon-risky',
-  large: 'archon-large',
-};
-const PACK_LABELS: Record<string, { color: string; description: string }> = {
-  'archon-ready': { color: '0E8A16', description: 'Triage: ready to deliver' },
-  'archon-plan': { color: '1D76DB', description: 'Triage: ready; a plan comes before delivery' },
-  'archon-issue': {
-    color: 'C5DEF5',
-    description: 'Triage: ready; an investigation comes before delivery',
-  },
-  'archon-needs-contract': {
-    color: 'D93F0B',
-    description: "Triage: one of the contract's six elements is missing",
-  },
-  'archon-blocked': {
-    color: 'B60205',
-    description: 'Triage: a prerequisite or human decision must land first',
-  },
-  'archon-close': {
-    color: '6A737D',
-    description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
-  },
-  'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
-  'archon-risky': {
-    color: 'FBCA04',
-    description: 'Triage: touches auth, data, a destructive path, or a compatibility boundary',
-  },
-  'archon-large': {
-    color: 'F9D0C4',
-    description: 'Triage: several packages or schemas, or an unsettled shape',
-  },
-};
+import {
+  type Contract,
+  isOwnedLabel,
+  OWNED_LABEL_NAMES,
+  type PackLabel,
+  type Route,
+  ROUTE_LABEL,
+  SIZE_LABEL,
+  type Size,
+  STATE_LABEL,
+  TYPE_LABEL,
+  type WorkType,
+  writeLabels,
+} from '../../.shared/labels.ts';
 
 type Item = QualifiedPr;
+/** One of triage's judged fields: a value and the one-line reason for it. */
+interface Field<Value extends string> {
+  readonly value: Value;
+  readonly reason: string;
+}
 interface Edits {
   readonly title: string;
   readonly body: string;
@@ -98,109 +56,6 @@ function isQualifiedUrl(value: string): boolean {
   }
 }
 
-function gh(...args: string[]): string {
-  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  if (result.exitCode !== 0) {
-    throw new Error(`gh ${args.slice(0, 3).join(' ')} failed: ${result.stderr.toString().trim()}`);
-  }
-  return result.stdout.toString();
-}
-
-function existingLabels(repository: string): Set<string> {
-  const rows = JSON.parse(
-    gh('label', 'list', '--repo', repository, '--limit', '500', '--json', 'name')
-  ) as { name: string }[];
-  return new Set(rows.map(row => row.name));
-}
-
-/** The item's current labels, after proving the number names the issue the prompt declared. */
-function readIssue(item: Item): Set<string> {
-  const issue = JSON.parse(
-    gh('api', '--hostname', item.repo.host, `repos/${item.repo.path}/issues/${String(item.number)}`)
-  ) as {
-    number?: unknown;
-    html_url?: unknown;
-    pull_request?: unknown;
-    labels?: { name: string }[];
-  };
-  const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
-  if (
-    issue.number !== item.number ||
-    (typeof issue.html_url === 'string' ? issue.html_url : '').toLowerCase() !==
-      url.toLowerCase() ||
-    'pull_request' in issue
-  ) {
-    throw new Error(`tracker identity mismatch: ${url} is not the issue the verdict names`);
-  }
-  return new Set((issue.labels ?? []).map(row => row.name));
-}
-
-function apply(item: Item, wanted: string[], area: string[]): string[] {
-  if (forgeSource() === 'forge') {
-    const current = readWorkItemLabels(item);
-    const present = new Set(readRepositoryLabels(item.repo));
-    for (const name of wanted) {
-      if (!present.has(name))
-        invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
-    }
-    const intended = [...new Set([...wanted, ...area.filter(name => present.has(name))])].sort();
-    const labels = [
-      ...new Set([...current.filter(name => !Object.hasOwn(PACK_LABELS, name)), ...intended]),
-    ].sort();
-    const result = invokeForge('workitem.labels.set', { ref: item, labels });
-    const observedLabels = result?.labels;
-    if (
-      result?.outcome !== 'applied' ||
-      !Array.isArray(observedLabels) ||
-      observedLabels.length !== labels.length ||
-      !labels.every(name => observedLabels.includes(name))
-    )
-      throw new Error('forge label-set read-back disagrees');
-    return intended;
-  }
-  const repository = `${item.repo.host}/${item.repo.path}`;
-  const current = readIssue(item);
-  const present = existingLabels(repository);
-  for (const name of wanted) {
-    if (!present.has(name)) {
-      const { color, description } = PACK_LABELS[name];
-      gh(
-        'label',
-        'create',
-        name,
-        '--repo',
-        repository,
-        '--color',
-        color,
-        '--description',
-        description
-      );
-    }
-  }
-  const areaPresent = area.filter(name => present.has(name));
-  const stale = [...current]
-    .filter(name => Object.hasOwn(PACK_LABELS, name) && !wanted.includes(name))
-    .sort();
-  const toAdd = [...new Set([...wanted, ...areaPresent])].filter(name => !current.has(name)).sort();
-  // Narrow add and remove operations, never a whole-set write, so labels an
-  // operator adds concurrently survive.
-  if (toAdd.length > 0 || stale.length > 0) {
-    const args = ['issue', 'edit', String(item.number), '--repo', repository];
-    for (const name of toAdd) args.push('--add-label', name);
-    for (const name of stale) args.push('--remove-label', name);
-    gh(...args);
-  }
-  const after = readIssue(item);
-  const missing = [...wanted, ...areaPresent].filter(name => !after.has(name));
-  const lingering = stale.filter(name => after.has(name));
-  if (missing.length > 0 || lingering.length > 0) {
-    throw new Error(
-      `label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)}`
-    );
-  }
-  return [...new Set([...wanted, ...areaPresent])].sort();
-}
-
 /** One branch of the triage decision, as the node's schema admits it. */
 type Decision =
   | { contract: 'READY'; route: Exclude<Route, 'continue'> }
@@ -217,7 +72,12 @@ function main(): void {
   const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
   const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
   const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
-  const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
+  const type = bound(process.env.INPUTS_TYPE) as Field<WorkType>;
+  const size = bound(process.env.INPUTS_SIZE) as Field<Size>;
+  // Passed through for the caller; no label mirrors these three.
+  const complexity = bound(process.env.INPUTS_COMPLEXITY) as Field<string>;
+  const importance = bound(process.env.INPUTS_IMPORTANCE) as Field<string>;
+  const urgency = bound(process.env.INPUTS_URGENCY) as Field<string>;
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
@@ -260,33 +120,39 @@ function main(): void {
     invalid('area_labels must be label names');
     return;
   }
-  if (area.some(name => Object.hasOwn(PACK_LABELS, name))) {
-    // The state and size labels are derived below; a pack label smuggled in as an
-    // area label would be added beside the derived state or removed as stale.
+  if (area.some(isOwnedLabel)) {
+    // The state, type and size labels are derived below; a pack label smuggled in
+    // as an area label would be added beside the derived ones or removed as stale.
     invalid('area_labels may not name a pack label; those derive from the verdict');
     return;
   }
 
-  let labels = [
+  const wanted: PackLabel[] = [
     decision.contract === 'READY' ? ROUTE_LABEL[decision.route] : STATE_LABEL[decision.contract],
+    TYPE_LABEL[type.value],
   ];
   // Size only matters on an item that can still be worked; a close verdict carries none.
-  if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
+  if (contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size.value]);
 
-  let published = false;
-  if (publish && item !== undefined) {
-    labels = apply(item, labels, area);
-    published = true;
-  } else {
-    labels = [...new Set([...labels, ...area])].sort();
-  }
+  const published = publish && item !== undefined;
+  const labels = published
+    ? writeLabels(
+        item,
+        [...wanted, ...area],
+        OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name))
+      )
+    : [...new Set([...wanted, ...area])].sort();
 
   emit({
     contract,
     route,
     pull_request: pullRequest,
     ready: contract === 'READY',
+    type,
+    size,
     complexity,
+    importance,
+    urgency,
     labels,
     published,
     proposed_edits: { title: edits.title, body: edits.body },

@@ -9,7 +9,8 @@ import {
   type NodeSkipReason,
   type SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { DASHBOARD_STREAM, type SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
@@ -209,10 +210,8 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-const ROW_WORKFLOW_STATUS: Record<
-  string,
-  'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
-> = {
+type RowWorkflowStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
   workflow_started: 'running',
   run_attention_changed: 'running',
   wait_started: 'paused',
@@ -220,10 +219,11 @@ const ROW_WORKFLOW_STATUS: Record<
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
-};
+} satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
-const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skipped'> = {
+type RowNodeStatus = 'running' | 'completed' | 'failed' | 'skipped';
+const ROW_NODE_STATUS: Partial<Record<string, RowNodeStatus>> = {
   node_started: 'running',
   node_suspended: 'running',
   loop_iteration_started: 'running',
@@ -233,7 +233,12 @@ const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skip
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
   node_skipped_prior_success: 'completed',
-};
+} satisfies Partial<Record<WorkflowEventType, RowNodeStatus>>;
+
+const ROW_APPROVAL_STATUS: Partial<Record<string, 'paused' | 'running'>> = {
+  approval_requested: 'paused',
+  approval_received: 'running',
+} satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
 interface WorkflowStatusSsePayload {
@@ -250,17 +255,14 @@ interface WorkflowStatusSsePayload {
 }
 
 /**
- * The persisted event types the dashboard poller should query — exactly the ones
- * `mapWorkflowEventRow` maps. Filtering to these in SQL keeps high-frequency
- * `provider_event` rows out of the poller's result, so a single 1-second bucket realistically never
- * exceeds the drain limit (the boundary paging can't stall on overflow).
+ * The persisted event types the dashboard poller reads from the store feed —
+ * exactly the ones `mapWorkflowEventRow` maps, so high-frequency `provider_event`
+ * rows never reach the poller.
  */
-export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
-  ...Object.keys(ROW_WORKFLOW_STATUS),
-  ...Object.keys(ROW_NODE_STATUS),
-  'approval_requested',
-  'approval_received',
-];
+export const DASHBOARD_SOURCE_EVENT_TYPES: readonly WorkflowEventType[] =
+  WORKFLOW_EVENT_TYPES.filter(
+    type => type in ROW_WORKFLOW_STATUS || type in ROW_NODE_STATUS || type in ROW_APPROVAL_STATUS
+  );
 
 /**
  * Map a persisted workflow_events DB row to a dashboard SSE event string (or null
@@ -292,30 +294,21 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
     return JSON.stringify(payload);
   }
 
-  if (row.event_type === 'approval_requested') {
+  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
+  if (approvalStatus) {
     const payload: WorkflowStatusSsePayload = {
       type: 'workflow_status',
       runId,
       workflowName: '',
-      status: 'paused',
+      status: approvalStatus,
       timestamp,
-      approval: {
-        nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
-        message: dataStr(data, 'message') ?? '',
-      },
-    };
-    return JSON.stringify(payload);
-  }
-
-  // Decision recorded → the run leaves the paused gate; trigger a refetch so the
-  // approval banner clears. The real next status arrives via the refetch.
-  if (row.event_type === 'approval_received') {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: '',
-      status: 'running',
-      timestamp,
+      approval:
+        approvalStatus === 'paused'
+          ? {
+              nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
+              message: dataStr(data, 'message') ?? '',
+            }
+          : undefined,
     };
     return JSON.stringify(payload);
   }

@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { checkResultSchema, type ForgeEvent } from './events';
+import {
+  checkResultSchema,
+  commentChangedEventSchema,
+  issueLifecycleEventSchema,
+  labelChangedEventSchema,
+  prLifecycleEventSchema,
+  type ForgeEvent,
+} from './events';
 import { repoRefSchema, type RepoRef } from './identity';
 
 type ForgeFieldValue = string | number | boolean;
@@ -20,6 +27,11 @@ export const forgeEventFieldSchema = z.enum([
   'pr.base.branch',
   'label.name',
   'label.id',
+  'label.actor.id',
+  'label.actor.login',
+  'comment.id',
+  'comment.author.id',
+  'comment.author.login',
   'check.revision',
   'check.unit.kind',
   'check.unit.id',
@@ -84,29 +96,20 @@ const selectorIdentitySchema = z.object({
 });
 const rawForgeEventSelectorSchema = z.discriminatedUnion('kind', [
   selectorIdentitySchema.extend({
-    kind: z.literal('issue.lifecycle'),
-    actions: z.array(z.enum(['opened', 'edited', 'closed', 'reopened'])).min(1),
+    kind: issueLifecycleEventSchema.shape.kind,
+    actions: z.array(issueLifecycleEventSchema.shape.action).min(1),
   }),
   selectorIdentitySchema.extend({
-    kind: z.literal('pr.lifecycle'),
-    actions: z
-      .array(
-        z.enum([
-          'opened',
-          'edited',
-          'head_updated',
-          'ready',
-          'drafted',
-          'closed',
-          'reopened',
-          'merged',
-        ])
-      )
-      .min(1),
+    kind: prLifecycleEventSchema.shape.kind,
+    actions: z.array(prLifecycleEventSchema.shape.action).min(1),
   }),
   selectorIdentitySchema.extend({
-    kind: z.literal('label.changed'),
-    actions: z.array(z.enum(['added', 'removed'])).min(1),
+    kind: labelChangedEventSchema.shape.kind,
+    actions: z.array(labelChangedEventSchema.shape.action).min(1),
+  }),
+  selectorIdentitySchema.extend({
+    kind: commentChangedEventSchema.shape.kind,
+    actions: z.array(commentChangedEventSchema.shape.action).min(1),
   }),
   selectorIdentitySchema.extend({
     kind: z.literal('check.changed'),
@@ -146,6 +149,19 @@ const fieldsByKind = {
     'subject.number',
     'label.name',
     'label.id',
+    'label.actor.id',
+    'label.actor.login',
+  ]),
+  'comment.changed': new Set<ForgeEventField>([
+    'event.kind',
+    'event.action',
+    'repository.host',
+    'repository.path',
+    'subject.kind',
+    'subject.number',
+    'comment.id',
+    'comment.author.id',
+    'comment.author.login',
   ]),
   'check.changed': new Set<ForgeEventField>([
     'event.kind',
@@ -236,6 +252,7 @@ function eventRepo(event: ForgeEvent): RepoRef {
     case 'pr.lifecycle':
       return event.pr.repo;
     case 'label.changed':
+    case 'comment.changed':
       return event.subject.ref.repo;
     case 'check.changed':
       return event.repo;
@@ -249,6 +266,7 @@ function eventSubject(event: ForgeEvent): { kind: 'issue' | 'pr'; number: number
     case 'pr.lifecycle':
       return { kind: 'pr', number: event.pr.number };
     case 'label.changed':
+    case 'comment.changed':
       return { kind: event.subject.kind, number: event.subject.ref.number };
     case 'check.changed':
       return undefined;
@@ -289,6 +307,18 @@ function fieldValue(event: ForgeEvent, field: ForgeEventField): ForgeFieldValue 
       return event.kind === 'label.changed' ? event.label.name : undefined;
     case 'label.id':
       return event.kind === 'label.changed' ? (event.label.id ?? undefined) : undefined;
+    case 'label.actor.id':
+      return event.kind === 'label.changed' ? event.actor?.id : undefined;
+    case 'label.actor.login':
+      return event.kind === 'label.changed' ? (event.actor?.login ?? undefined) : undefined;
+    case 'comment.id':
+      return event.kind === 'comment.changed' ? event.comment.id : undefined;
+    case 'comment.author.id':
+      return event.kind === 'comment.changed' ? event.comment.author?.id : undefined;
+    case 'comment.author.login':
+      return event.kind === 'comment.changed'
+        ? (event.comment.author?.login ?? undefined)
+        : undefined;
     case 'check.revision':
       return event.kind === 'check.changed' ? event.revision : undefined;
     case 'check.unit.kind':

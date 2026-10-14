@@ -18,6 +18,7 @@ import {
   toRepoPath,
   validateCloneUrl,
   type CloneCredentials,
+  githubTokenCredentials,
   getDefaultRemote,
   findRepoRoot,
   inspectRemoteBranches,
@@ -82,7 +83,7 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   {
     hostPattern: 'github.com',
     resolveToken: resolveGitHubTokenFromEnv,
-    buildCredentials: tokenAsUsername,
+    buildCredentials: githubTokenCredentials,
   },
   {
     hostPattern: 'gitlab.com',
@@ -488,16 +489,6 @@ export async function cloneRepository(
 
   // Resolve authentication without putting it into the repository URL.
   const credentials = resolveForgeAuth(workingUrl);
-
-  // Remove the empty source/ directory before cloning (git clone requires non-existent target)
-  try {
-    await rm(targetPath, { recursive: true });
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw error;
-    }
-  }
 
   const cloneResult = await cloneGitRepository(
     workingUrl,

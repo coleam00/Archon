@@ -55,7 +55,7 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Every approve surface
-   also continues the run: the `/workflow approve <run-id>` slash command, the
+   also continues a non-container run: the `/workflow approve <run-id>` slash command, the
    CLI, the Web UI approve button, the in-thread **Approve** button posted by the
    Slack adapter, and a chat agent resolving the gate on your behalf after you
    tell it to.
@@ -95,7 +95,7 @@ children as they finish.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `approval.message` | string | Yes | The message shown to the user when the workflow pauses |
-| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. Must include `approve`; IDs must be unique. Cannot be combined with `on_reject` |
+| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. IDs must be unique; `approve` and `reject` are optional. Cannot be combined with `on_reject` |
 | `approval.decisions[].id` | string | Yes | Exact wire value: lowercase letters and digits separated by single hyphens, such as `needs-revision`. No spaces |
 | `approval.decisions[].label` | string | No | Nonempty display label; selection always sends the ID |
 | `approval.capture_response` | boolean | No | For legacy gates, when `true`, the user's approval comment is stored as `$<node-id>.output` for downstream nodes. Default: `false` |
@@ -107,8 +107,8 @@ pair. The legacy `capture_response` and `on_reject` behavior described below rem
 available. Explicit decisions produce structured output, `{decision, text}`;
 `capture_response` does not change that output. Every declared decision completes
 the gate and lets the authored graph determine what happens next. An ID such as `cancel` does not cancel by itself; wire it to a
-`cancel:` node when that is the intended outcome. There is no per-decision
-required-text rule.
+`cancel:` node when that is the intended outcome. The engine has no per-decision required-text rule. In the console, `approve`
+accepts an optional comment; every other decision requires text before confirmation.
 
 Approval nodes do not support AI-specific fields (`model`, `provider`, `context`,
 `output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`,
@@ -129,6 +129,11 @@ rejected gate, route its declared decision to your own rework node, or use legac
 
 ### Declared decisions
 
+Only the authored ids are accepted. This applies to every response surface,
+including CLI `respond`/`approve`/`reject` and the HTTP routes. `approve` and
+`reject` work only when included in the list. An undeclared decision is refused
+with the allowed ids; the run stays paused and no resolution or resume is recorded.
+
 The displayed label is presentation. Use the exact ID to respond:
 
 ```text
@@ -142,30 +147,54 @@ its transport limits; otherwise it posts respond commands. The CLI equivalent is
 archon workflow respond <run-id> revise "Please add tests"
 ```
 
-Text is optional and passes through to `$gate-name.output.text`. The selected ID
+Text is optional in the engine, CLI and HTTP API and passes through to
+`$gate-name.output.text`. The console requires text for every decision other than
+`approve`, including custom decisions such as `accept` or `revise`. The selected ID
 is available as `$gate-name.output.decision`. Use these fields to wire the next
 step. CLI run detail lists the available IDs and commands; the console displays
 the labels and sends the IDs. Older gates without `decisions` retain the legacy
 commands and output described below.
 
-### Explicit Commands (all platforms)
+### Explicit chat commands
 
+For authored decisions, select an exact declared ID and optionally include text:
+
+```text
+/workflow respond <run-id> accept Looks good, proceed
+/workflow respond <run-id> revise Please add tests
 ```
+
+The selected ID and text become `$gate-name.output.decision` and
+`$gate-name.output.text`. Only IDs in that gate's list are accepted.
+
+For default gates without authored decisions, use the binary commands:
+
+```text
 /workflow approve <run-id> looks good
 /workflow reject <run-id> needs changes
 ```
 
-Both resolve the gate **and** continue the run — approving no longer needs a
-follow-up message.
+These commands resolve the default gate and continue a non-container run or cancel
+it according to its rejection rules. Slack uses `/archon-workflow` in place of `/workflow`.
+
+For both authored and default gates, a chat decision that requires further execution
+leaves a container run resumable. Continue it with `archon workflow resume <run-id>`
+from the CLI in the same project; chat cannot resume its container. This also applies
+when the chat agent records the decision for you.
 
 ### Asking the chat agent
 
-You can also just say what you want in the conversation. The agent reads the open
-gate along with your message and decides:
+You can also say what you want in the conversation. The agent reads the open
+gate and your full message. For an authored gate, it selects a declared ID only
+when your message clearly expresses that decision, then uses `respond` with your
+words as text. The output is `{decision, text}`. A question or ambiguous message
+leaves the gate open.
 
-```
+For a default gate, the agent uses approve or reject:
+
+```text
 User: "looks good, ship it"
-→ agent approves the gate; the run continues
+→ agent approves the gate; a non-container run continues
 
 User: "no, stop — why is it editing the schema?"
 → agent rejects the gate with your words as the reason
@@ -174,27 +203,32 @@ User: "what would that change?"
 → agent answers you; the gate stays open and nothing is resolved
 ```
 
-The agent passes your own words through as the approval comment or the rejection
-reason, so a gate with `capture_response: true` still receives what you typed.
+On default gates, your words become the approval comment or rejection reason.
+A default gate with `capture_response: true` receives the approval comment as
+its node output.
 
 :::caution[Behaviour change]
-Archon used to record **any** message that did not start with `/` as an approval —
-including an objection, which was stored as the approval comment while the run
-carried on doing the thing you objected to. Typing at a gate no longer approves by
-itself. If your message is ambiguous the agent asks instead of guessing, and
-nothing is resolved until you are explicit.
+Archon used to record **any** message that did not start with `/` as an approval,
+including objections. Typing at a gate no longer approves by itself. If your
+message is ambiguous the agent asks instead of guessing.
 
-Two consequences worth knowing:
-
-- Providers without native tool support (Codex, OpenCode, Copilot) resolve the
-  gate by running `archon workflow approve|reject <run-id>` for you instead.
-- If you want a decision recorded with no interpretation at all, use the slash
-  commands above — they are deterministic.
+Providers without native tool support use
+`archon workflow respond <run-id> <decision> [text]` for authored gates, or
+`archon workflow approve|reject` for default gates. When the agent cannot resolve the gate from the conversation, it
+provides an explicit command for you to run. Use the chat commands above to
+record a decision without model interpretation.
 :::
 
 ### CLI
 
-The CLI is non-interactive — use explicit commands:
+The CLI is non-interactive. For authored gates, use a declared ID:
+
+```bash
+archon workflow respond <run-id> accept "Looks good, proceed"
+archon workflow respond <run-id> revise "Please add tests"
+```
+
+For default gates:
 
 ```bash
 # Approve (resumes the workflow immediately)
@@ -207,6 +241,9 @@ bun run cli workflow approve <run-id> --comment "Looks good, proceed"
 bun run cli workflow reject <run-id>
 bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 ```
+
+`approve` and `reject` also work on authored gates that declare those IDs. They
+record the declared decision and text; the authored graph determines what follows.
 
 ### Interactive-loop gates: bare approve finalizes
 
@@ -227,8 +264,10 @@ for the full semantics, `signal_completes`, and the AI-approver steering pattern
 ### Web UI
 
 Open the paused run from the console run list. Its run detail shows the pending
-approval, context, and decision controls. **Continue** accepts an optional
-comment. **Reject** opens a feedback field and requires text before submission.
+approval, context, and decision controls. Gates with authored decisions show
+only those decisions with the author's labels, including the label for `approve`
+when declared. Gates without authored decisions show **Continue**, which accepts
+an optional comment. **Reject** opens a feedback field and requires text before submission.
 When the gate continues execution, Web-dispatched and headless CLI runs can
 resume automatically; the gate's rejection rules can instead cancel the run.
 
@@ -238,7 +277,8 @@ resume automatically; the gate's rejection rules can instead cancel the run.
 **Cross-platform caveat**: Web-dispatched and headless CLI runs can auto-resume
 after a Web UI decision. A run with a Slack, Telegram, or GitHub parent records
 the decision but does not auto-resume. Use `archon workflow resume <run-id>` or
-resume it from the originating conversation to continue the same run.
+resume it from the originating conversation to continue the same run. Container
+runs require the CLI resume command in the same project.
 
 ### REST API
 

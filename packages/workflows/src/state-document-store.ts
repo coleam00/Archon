@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { recordSurfaceSchema } from './schemas/record-surface';
 
 export const STATE_DOCUMENT_LIMIT = 64 * 1024;
 export const stateDocumentNameSchema = z
@@ -39,17 +40,32 @@ export const statePatchOpSchema = z.discriminatedUnion('op', [
 ]);
 export type StatePatchOp = z.infer<typeof statePatchOpSchema>;
 const statePatchOpsSchema = z.array(statePatchOpSchema).min(1);
+// A write inside a run names its run and node; any other write names only the surface
+// it came through. Neither records who acted or whether a person or an agent did.
 export const stateWriterSchema = z.discriminatedUnion('kind', [
   z
     .object({ kind: z.literal('run'), runId: z.string().min(1), nodePath: z.string().min(1) })
     .strict(),
-  z.object({ kind: z.literal('operator'), identity: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('surface'), via: recordSurfaceSchema }).strict(),
 ]);
 export type StateWriter = z.infer<typeof stateWriterSchema>;
+export const stateRevisionNumberSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER - 1);
 export const stateOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('put') }).strict(),
   z.object({ op: z.literal('delete') }).strict(),
-  z.object({ op: z.literal('patch'), ops: statePatchOpsSchema }).strict(),
+  // `ifRevision` is present when the patch was computed from that revision, absent when
+  // it applied to whatever revision was latest.
+  z
+    .object({
+      op: z.literal('patch'),
+      ops: statePatchOpsSchema,
+      ifRevision: stateRevisionNumberSchema.optional(),
+    })
+    .strict(),
 ]);
 export const stateRevisionSchema = z.object({
   name: stateDocumentNameSchema,
@@ -60,13 +76,33 @@ export const stateRevisionSchema = z.object({
   createdAt: z.iso.datetime({ offset: true }),
 });
 export type StateRevision = z.infer<typeof stateRevisionSchema>;
-export const stateRevisionNumberSchema = z
-  .number()
-  .int()
-  .nonnegative()
-  .max(Number.MAX_SAFE_INTEGER - 1);
+/**
+ * Where a document lives. Every project key has at least two segments (`owner/repo`,
+ * `_folder/<slug>`, `_cwd/<name>`), so the one-segment install key cannot collide with one.
+ */
+export const stateProjectKeySchema = z.string().regex(/^[^/]+(?:\/[^/]+)+$/u);
+export const stateScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('project'), key: stateProjectKeySchema }).strict(),
+  z.object({ kind: z.literal('install') }).strict(),
+]);
+export type StateScope = z.infer<typeof stateScopeSchema>;
+const INSTALL_SCOPE_KEY = '_install';
+/** The storage key a store files a scope's documents under. */
+export function stateScopeKey(scope: StateScope): string {
+  const parsed = stateScopeSchema.parse(scope);
+  return parsed.kind === 'install' ? INSTALL_SCOPE_KEY : parsed.key;
+}
+export const stateNamePrefixSchema = z.string().regex(/^[a-z0-9._/-]{0,200}$/u);
+export const stateDocumentSummarySchema = z.object({
+  name: stateDocumentNameSchema,
+  revision: z.number().int().positive(),
+  updatedAt: z.iso.datetime({ offset: true }),
+  writer: stateWriterSchema,
+  deleted: z.boolean(),
+});
+export type StateDocumentSummary = z.infer<typeof stateDocumentSummarySchema>;
 export const stateWriteScopeSchema = z.object({
-  project: z.string().min(1),
+  scope: stateScopeSchema,
   name: stateDocumentNameSchema,
   writer: stateWriterSchema,
 });
@@ -76,6 +112,7 @@ export const statePutSchema = stateWriteScopeSchema.extend({
 });
 export const statePatchSchema = stateWriteScopeSchema.extend({
   ops: statePatchOpsSchema,
+  ifRevision: stateRevisionNumberSchema.optional(),
 });
 export const stateDeleteSchema = stateWriteScopeSchema.extend({
   ifRevision: stateRevisionNumberSchema.optional(),
@@ -228,15 +265,31 @@ export function applyStatePatch(
   return result;
 }
 
+/** The operation a patch records: its ops, plus the revision it named, if any. */
+export function statePatchOperation(
+  input: z.infer<typeof statePatchSchema>
+): Extract<StateRevision['operation'], { op: 'patch' }> {
+  return {
+    op: 'patch',
+    ops: input.ops,
+    ...(input.ifRevision !== undefined ? { ifRevision: input.ifRevision } : {}),
+  };
+}
+
 export interface IStateDocumentStore {
-  getStateDocument(project: string, name: string): Promise<StateRevision | null>;
+  getStateDocument(scope: StateScope, name: string): Promise<StateRevision | null>;
   putStateDocument(input: z.infer<typeof statePutSchema>): Promise<StateRevision>;
   patchStateDocument(input: z.infer<typeof statePatchSchema>): Promise<StateRevision>;
   deleteStateDocument(input: z.infer<typeof stateDeleteSchema>): Promise<StateRevision>;
   listStateRevisions(
-    project: string,
+    scope: StateScope,
     name: string,
     options?: { limit?: number }
   ): Promise<StateRevision[]>;
+  /** Names with their latest revision, ordered by name; never values. */
+  listStateDocuments(
+    scope: StateScope,
+    options?: { prefix?: string }
+  ): Promise<StateDocumentSummary[]>;
   pruneStateRevisions(olderThanDays: number): Promise<{ count: number }>;
 }

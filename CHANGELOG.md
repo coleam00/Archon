@@ -23,7 +23,11 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 - Any service that signs webhooks with the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC scheme can now start a workflow run, through a bundled source plugin you configure with a signing-secret environment variable and trigger bindings. Archon checks the signature over the exact received bytes and a timestamp within 300 seconds before it records anything; an unsigned, tampered or stale delivery gets HTTP 401 and leaves no record. A retried delivery with the same `webhook-id` and body starts nothing new, and reusing a `webhook-id` with different content gets HTTP 409. The delivery body can only fill the inputs a binding maps from it with JSON Pointers, and only inputs the workflow declares; the binding alone chooses the workflow, checkout, isolation, host, resource and run-as user. See [Start workflows from any signed webhook](https://archon.diy/guides/workflow-triggers/#start-workflows-from-any-signed-webhook). (#3975, #3980)
 
+- A pack can ship `.md` documents in its `.shared/` directory. They are bundled with the pack's modules, so a binary install has them too, and a script finds them relative to its own location. See [Share code within a pack](https://archon.diy/guides/script-nodes/#share-code-within-a-pack). (#4100)
+
 ### Changed
+
+- SDLC triage reads the project's `.archon/sdlc/policy/triage.md` and falls back to a default the pack ships. Under the default, triage closes an item without a person only when it duplicates an open item or a merged change already delivered it; any other item that looks closable, such as an obsolete or out-of-scope one, is `BLOCKED` for a maintainer. Copy the default from the pack's `.shared/policy/triage.md` to change it. (#4100)
 
 - Slack is available as an optional Socket Mode chat plugin: `archon plugin install coleam00/Archon/plugins/chat-slack`. Restart the server after installing. In the plugin, `/archon connect github` now points to the Web UI or `archon auth github`; the bundled Slack adapter remains available during the transition. (#3646)
 
@@ -84,6 +88,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Fixed
 
+- On a database shared by several machines, `archon workflow wait` no longer reports `owner_lost` for a run that another machine, or another user on this machine, is executing. It reports on its `waiting` line that the owner's liveness is unknown and keeps waiting on the run's stored state. (#4079)
 - The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)
 - Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
 - Workflow nodes whose output only mentions a credit balance or session limit no longer fail as out of credit. Quota failures now come only from the provider's typed failure, and the node error includes the reset time when reported and tells the operator to resume once the limit reopens. (#3619)

@@ -14,7 +14,7 @@ Their explicit task, constraints, and scope take precedence over the target and 
 
 ## Make one routing decision
 
-Begin by reading, where the project has them, its `architecture.md` and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Treat direction as the team's current recorded judgment, not timeless law: call out evidence that it has become stale rather than silently routing against an old decision.
+Begin by reading, where the project has them, its `architecture.md` and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `triage.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. Treat direction as the team's current recorded judgment, not timeless law: call out evidence that it has become stale rather than silently routing against an old decision.
 
 When the target names a tracker item, retrieve its body and only the history that can change the requested outcome, constraints, current status, or an earlier decision. Stop following links once they no longer affect the route. If required source material is inaccessible, do not reconstruct it from hints: record what is missing and declare `BLOCKED` until the input can be grounded.
 
@@ -43,18 +43,22 @@ Declare exactly one contract verdict:
 
 - `READY` — the six elements are present and agree with each other and with current direction, the outcome is not already true on the current base, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
 - `NEEDS_CONTRACT_WORK` — one of the six elements is materially missing, ambiguous, or contradictory. Propose the contract that would make the item ready (below) and stop.
-- `BLOCKED` — the contract is clear, but something must happen first: a prerequisite that has its own owner, an owner-level product decision, source material that cannot be reached, or direction that looks stale and needs a maintainer's judgment. Name what it waits on in `blocked_reason`, and list the fully qualified URLs of the items it waits on in `blocked_by` when they exist; an external decision may have none. Never invent a reference.
-- `NO_ACTION` — the item should be closed: the outcome is already delivered on the current base, another tracker item owns the same outcome, the item is obsolete or superseded, or current direction explicitly rejects it. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
+- `BLOCKED` — the contract is clear, but something must happen first: a prerequisite that has its own owner, an owner-level product decision, source material that cannot be reached, direction that looks stale and needs a maintainer's judgment, or a close the triage policy leaves to a maintainer. Name what it waits on in `blocked_reason`, and list the fully qualified URLs of the items it waits on in `blocked_by` when they exist; an external decision may have none. Never invent a reference.
+- `NO_ACTION` — the item should be closed, and the triage policy allows that close without a person: the outcome is already delivered on the current base, another tracker item owns the same outcome, the item is obsolete or superseded, or current direction explicitly rejects it. An item that looks closable for a reason the policy leaves to a maintainer is `BLOCKED` instead, with `blocked_reason` naming the maintainer's decision and why the item looks closable. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
 
 Only a `READY` item carries an engineering route, and a `READY` item always carries one. Every other verdict carries no route: the verdict is the reason, and the route you would have chosen belongs in the assessment for the human, not in the declared fields.
 
-## Judge complexity
+## Judge the item's fields
 
-Declare one `complexity` value on the item as written, so the delivery tail can compare its own read of the diff against yours:
+Declare five fields on the item as written, each one value and a one-line `reason` grounded in what you read. Judge them against the project's own documents and the code, not the item's own claims: an issue that calls itself urgent is evidence to weigh, not the answer.
 
-- `small` — bounded: one package or surface, no schema or destructive path, a handful of files, invariants stated.
-- `risky` — touches authentication, persisted data, a destructive path, a compatibility boundary, or crosses packages in a way a reviewer must think about.
-- `large` — several packages or schemas, or a shape decision the item does not settle.
+- `type` — what kind of work the item asks for: `bug` (something that worked or is documented to work is broken), `feature` (new behavior), `refactor` (the same behavior, better structure), `maintenance` (dependencies, tooling, CI, upkeep), `docs` (documentation only), or `question` (a person must answer; no change is asked for yet).
+- `size` — how much changes: `s` a few files on one surface, `m` several files or two surfaces, `l` several packages, schemas, or surfaces.
+- `complexity` — how many unknowns and how much design risk, separate from size: `low` the change is clear, `medium` it touches authentication, persisted data, a destructive path, or a compatibility boundary, or crosses packages in a way a reviewer must think about, `high` it holds a shape decision the item does not settle. A one-line change to authentication is `s` and `medium` or `high`.
+- `importance` — how much the outcome matters against the project's direction: `low`, `medium`, or `high`. This is not priority.
+- `urgency` — how time-sensitive it is: `now` for a regression, a security issue, or work that blocks other work or a release; `soon` when it should land before the next release; otherwise `none`.
+
+Never derive a priority; the queue that picks the item orders it from these fields.
 
 ## Choose one route
 
@@ -63,11 +67,11 @@ Declare one `complexity` value on the item as written, so the delivery tail can 
 - `deliver` — the current evidence already forms an implementation-ready work order: the relevant behavior and boundary are verified, acceptance and scope are clear enough to start without asking a human, and delivery will not inherit an untested assumption.
 - `continue` — an open pull request already carries this outcome, because the operator names one to continue or you find one: the run finishes that pull request instead of opening another. Name it in `pull_request`. A pull request from a fork whose author did not allow maintainer edits cannot be continued by this run: that item is `BLOCKED` on it.
 
-Never route from labels or issue type alone. A bug can need planning; a feature can need investigation; a tiny request can still rest on a false premise. Cost is not the criterion — uncertainty is.
+Never route from labels or issue type alone. A bug can need planning; a feature can need investigation; a tiny request can still rest on a false premise. Cost is not the criterion — uncertainty is. `type` and `size` do not choose among `investigate`, `plan`, and `deliver`.
 
 ## Labels
 
-The workflow derives the pack's own labels from your declared fields, exactly one state label per item and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (use `archon forge repo.labels.list` with the qualified repository when `ARCHON_SDLC_FORGE=forge`, otherwise `gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
+The workflow derives the pack's own labels from your declared fields, exactly one state label and one type label per item, and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (use `archon forge repo.labels.list` with the qualified repository when `ARCHON_SDLC_FORGE=forge`, otherwise `gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
 
 When the target is a tracker issue, declare `item` as its qualified repository (`repo: {host, path}`) and number so the workflow can address it; the workflow verifies that identity against the tracker before it writes. Otherwise declare `item: {repo: {host: "", path: ""}, number: 0}`.
 
@@ -75,7 +79,7 @@ When the target is a tracker issue, declare `item` as its qualified repository (
 
 Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item title>` for a tracker issue, otherwise `# Triage: <the request in a few words>`. Cite code by repository-relative path and line; the checkout you read is temporary and its absolute path is dead once the run ends. Sections:
 
-- **Source and outcome** — what was requested, the affected behavior, and which source material was considered.
+- **Source and outcome** — what was requested, the affected behavior, which source material was considered, and which triage policy applied: the project's `.archon/sdlc/policy/triage.md` or the pack's default.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
 - **Assumptions checked** — each load-bearing claim or prescribed solution you confirmed, refuted, or could not establish.
 - **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found. When the verdict is `READY`, quote the source's invariants, acceptance items, and any solution steering here, each item as the source words it. Later steps plan, implement, and review against this section, and an item you only count or summarize is one they cannot check.
@@ -97,7 +101,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
   - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;
   - `NO_ACTION` alone.
-- `complexity` — exactly one of `small`, `risky`, or `large`.
+- `type`, `size`, `complexity`, `importance`, `urgency` — each `{ "value", "reason" }`, the value from its list above and the reason one non-empty line.
 - `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.
 - `summary` — a few sentences naming the verdict, the current truth that decided the route, and pointing to `$ARTIFACTS_DIR/triage.md`.

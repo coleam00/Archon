@@ -2,7 +2,11 @@
 # delivery node stays skipped, and the real outcome reports needs_contract.
 triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" } }
-  complexity: risky
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: m, reason: "stub: size" }
+  complexity: { value: medium, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   summary: "stub: no acceptance stated; proposed contract in triage.md"

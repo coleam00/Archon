@@ -71,27 +71,28 @@ describe('bunTestEnv', () => {
   });
 });
 
-describe('every bun test entry point preloads the telemetry opt-out', () => {
-  it('the repo root and every package with tests preload scripts/test-telemetry-off.ts', async () => {
+describe('every bun test entry point preloads the test environment', () => {
+  it('the repo root and every package with tests preload scripts/test-preload.ts', async () => {
     const { readdir, readFile } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
     const { join } = await import('node:path');
     const repoRoot = join(import.meta.dir, '..');
-    const configs = [{ dir: repoRoot, preload: './scripts/test-telemetry-off.ts' }];
+    const configs = [{ dir: repoRoot, preload: './scripts/test-preload.ts' }];
     for (const name of await readdir(join(repoRoot, 'packages'))) {
       const dir = join(repoRoot, 'packages', name);
       const manifest = join(dir, 'package.json');
       if (!existsSync(manifest)) continue;
       const declaration = JSON.parse(await readFile(manifest, 'utf8'));
       if (declaration.scripts?.test !== 'bun run ../../scripts/package-tests.ts') continue;
-      configs.push({ dir, preload: '../../scripts/test-telemetry-off.ts' });
+      configs.push({ dir, preload: '../../scripts/test-preload.ts' });
     }
     expect(configs.some(({ dir }) => dir === join(repoRoot, 'packages', 'core'))).toBe(true);
     const missing: string[] = [];
     for (const { dir, preload } of configs) {
       const bunfig = join(dir, 'bunfig.toml');
       // Bun reads bunfig.toml from the cwd only; a package without this preload lets
-      // a direct `bun test <file>` there send live events with the embedded key.
+      // a direct `bun test <file>` there send live events with the embedded key and run
+      // against the operator's real ARCHON_HOME.
       if (!existsSync(bunfig) || !(await readFile(bunfig, 'utf8')).includes(`"${preload}"`))
         missing.push(dir.slice(repoRoot.length + 1) || '.');
     }

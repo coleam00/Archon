@@ -241,4 +241,61 @@ describe('GitHub source plugin', () => {
       ],
     });
   });
+
+  test('delivers a label change with who made it, and a created comment with its author', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'promote',
+          selector: { kind: 'label.changed', actions: ['added'] },
+          inputMapping: {
+            number: { source: 'field', field: 'subject.number' },
+            labeller: { source: 'field', field: 'label.actor.login' },
+            labellerId: { source: 'field', field: 'label.actor.id' },
+          },
+        }),
+        binding({
+          bindingId: 'wake',
+          selector: { kind: 'comment.changed', actions: ['created'] },
+          inputMapping: {
+            number: { source: 'field', field: 'subject.number' },
+            author: { source: 'field', field: 'comment.author.login' },
+          },
+        }),
+      ]),
+      recorded.intake
+    );
+    const labelled = JSON.stringify({
+      action: 'labeled',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 4242, login: 'maintainer' },
+      issue: { number: 8, state: 'open' },
+      label: { id: 1, name: 'archon-triage' },
+    });
+    const commented = JSON.stringify({
+      action: 'created',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 5, login: 'reporter' },
+      issue: { number: 8 },
+      comment: { id: 900, user: { id: 5, login: 'reporter' }, body: 'more detail' },
+    });
+
+    await github.receiveWebhook(labelled, sign(labelled), 'delivery-label', 'issues');
+    await github.receiveWebhook(commented, sign(commented), 'delivery-comment', 'issue_comment');
+
+    expect(recorded.calls[0]).toMatchObject({
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'promote',
+          eventInputs: { number: 8, labeller: 'maintainer', labellerId: '4242' },
+        },
+      ],
+    });
+    expect(recorded.calls[1]).toMatchObject({
+      outcome: 'matched',
+      bindings: [{ bindingId: 'wake', eventInputs: { number: 8, author: 'reporter' } }],
+    });
+  });
 });

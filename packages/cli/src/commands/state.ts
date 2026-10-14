@@ -1,10 +1,8 @@
-import { relative } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
   canonicalizeProjectPath,
-  getArchonWorkspacesPath,
-  getProjectStoragePaths,
-  resolveProjectStorageKey,
+  projectKeyForCodebase,
+  projectKeyForStorageRoot,
   resolveRunStorageRoot,
 } from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -13,24 +11,37 @@ import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 import {
   stateDocumentNameSchema,
+  stateNamePrefixSchema,
+  stateProjectKeySchema,
   stateRevisionNumberSchema,
   statePatchSchema,
   stateValueSchema,
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StatePatchError,
+  type StateScope,
   type StateWriter,
 } from '@archon/workflows/state-document-store';
-import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine } from '../utils/stdout';
 
 export class StateProjectResolutionError extends Error {}
 export class StateStoreMismatchError extends Error {}
+/** `get --raw` on a document whose value is not a string. */
+export class StateValueNotTextError extends Error {}
 export interface StateCommandOptions {
   cwd: string;
   ifRevision?: string;
   limit?: string;
+  prefix?: string;
+  /** Workspace-relative project key (`owner/repo`); outside a run only. */
+  project?: string;
+  install?: boolean;
+  raw?: boolean;
 }
+
+// Scripts branch on these, never on message text.
+const EXIT = { usage: 1, conflict: 3, invalid: 4, storeMismatch: 5 } as const;
+const commands = ['get', 'put', 'patch', 'log', 'delete', 'list'] as const;
 
 // Windows CI: `Bun.stdin.text()` on a piped stdin stayed pending without holding the
 // event loop open, so the CLI exited 0 having written nothing. The Node stream keeps
@@ -50,6 +61,7 @@ export async function stateCommand(
     env?: NodeJS.ProcessEnv;
     readInput?: () => Promise<string>;
     write?: typeof writeJsonLine;
+    writeRaw?: (text: string) => Promise<void>;
     storeKind?: string;
   } = {}
 ): Promise<number> {
@@ -57,15 +69,33 @@ export async function stateCommand(
   const write = dependencies.write ?? writeJsonLine;
   const store = host.deps.store;
   const readInput = dependencies.readInput ?? readStdin;
+  const writeRaw =
+    dependencies.writeRaw ??
+    (async (text: string): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(text, error => (error ? reject(error) : resolve()));
+      });
+    });
   try {
-    if (!subcommand || !['get', 'put', 'patch', 'log', 'delete'].includes(subcommand))
-      throw new Error('Expected state get|put|patch|log|delete');
-    if (args.length !== 1) throw new Error('Expected one document name');
-    if (options.ifRevision !== undefined && !['put', 'delete'].includes(subcommand))
-      throw new Error('--if-revision is only valid for put or delete');
-    if (options.limit !== undefined && subcommand !== 'log')
+    const command = commands.find(candidate => candidate === subcommand);
+    if (!command) throw new Error(`Expected state ${commands.join('|')}`);
+    if (args.length !== (command === 'list' ? 0 : 1))
+      throw new Error(
+        command === 'list' ? 'state list takes no document name' : 'Expected one document name'
+      );
+    if (options.ifRevision !== undefined && !['put', 'patch', 'delete'].includes(command))
+      throw new Error('--if-revision is only valid for put, patch or delete');
+    if (options.limit !== undefined && command !== 'log')
       throw new Error('--limit is only valid for log');
-    const name = stateDocumentNameSchema.parse(args[0]);
+    if (options.prefix !== undefined && command !== 'list')
+      throw new Error('--prefix is only valid for list');
+    if (options.raw && !['get', 'put'].includes(command))
+      throw new Error('--raw is only valid for get or put');
+    if (options.install && options.project !== undefined)
+      throw new Error('Use --install or --project, not both');
+    const name = command === 'list' ? '' : stateDocumentNameSchema.parse(args[0]);
+    const prefix =
+      options.prefix === undefined ? undefined : stateNamePrefixSchema.parse(options.prefix);
     const integer = (text: string): number => {
       if (!/^(0|[1-9][0-9]*)$/u.test(text)) throw new Error('Expected a nonnegative integer');
       return stateRevisionNumberSchema.parse(Number(text));
@@ -76,9 +106,12 @@ export async function stateCommand(
       options.limit === undefined
         ? undefined
         : z.number().int().positive().parse(integer(options.limit));
-    let root: string;
+    let projectKey: string | undefined;
     let writer: StateWriter;
     if (env.WORKFLOW_ID) {
+      // Inside a run a node reaches its own project or, explicitly, the install scope.
+      if (options.project !== undefined)
+        throw new Error('--project is only valid outside a run; a run writes to its own project');
       const run = await store.getWorkflowRun(env.WORKFLOW_ID);
       if (!run)
         throw new StateStoreMismatchError(
@@ -86,9 +119,9 @@ export async function stateCommand(
         );
       const codebase = run.codebase_id ? await store.getCodebase(run.codebase_id) : null;
       const resolved = resolveRunStorageRoot(run, codebase);
-      if (!resolved)
+      if (resolved) projectKey = projectKeyForStorageRoot(resolved);
+      else if (!options.install)
         throw new StateProjectResolutionError('The run has no resolvable project root');
-      root = resolved;
       let supplied: unknown = null;
       try {
         supplied = JSON.parse(env.ARCHON_NODE_EXECUTION || 'null');
@@ -104,6 +137,10 @@ export async function stateCommand(
       if (identity.runId !== run.id)
         throw new Error('ARCHON_NODE_EXECUTION does not match WORKFLOW_ID');
       writer = { kind: 'run', runId: run.id, nodePath: identity.path };
+    } else if (options.project !== undefined || options.install) {
+      if (env.ARCHON_NODE_EXECUTION) throw new Error('ARCHON_NODE_EXECUTION requires WORKFLOW_ID');
+      if (options.project !== undefined) projectKey = stateProjectKeySchema.parse(options.project);
+      writer = { kind: 'surface', via: 'cli' };
     } else {
       if (env.ARCHON_NODE_EXECUTION) throw new Error('ARCHON_NODE_EXECUTION requires WORKFLOW_ID');
       // Folder registration stores the canonical path (#2927), so look up the same
@@ -116,33 +153,40 @@ export async function stateCommand(
         if (!codebase)
           throw new StateProjectResolutionError('Registered project is missing from the store');
       }
-      root = getProjectStoragePaths(resolveProjectStorageKey(codebase, repoRoot ?? cwd)).root;
-      const identity = resolveCliUserId(env);
-      if (!identity) throw new Error('Set ARCHON_USER_ID (or USER) for operator attribution');
-      writer = { kind: 'operator', identity };
+      projectKey = projectKeyForCodebase(codebase, repoRoot ?? cwd);
+      writer = { kind: 'surface', via: 'cli' };
     }
-    const project = relative(getArchonWorkspacesPath(), root).split('\\').join('/');
-    const input = { project, name, writer };
+    const scope: StateScope = options.install
+      ? { kind: 'install' }
+      : { kind: 'project', key: stateProjectKeySchema.parse(projectKey) };
+    const input = { scope, name, writer };
     let output: unknown;
-    switch (subcommand) {
+    switch (command) {
       case 'get': {
-        const row = await store.getStateDocument(project, name);
+        const row = await store.getStateDocument(scope, name);
+        if (options.raw) {
+          if (typeof row?.value !== 'string')
+            throw new StateValueNotTextError(`State document '${name}' has no text value`);
+          await writeRaw(row.value);
+          return 0;
+        }
         if (row) {
-          output = { name, revision: row.revision, value: row.value };
+          output = { scope, name, revision: row.revision, value: row.value };
           break;
         }
         // A deleted document's tombstone is the revision a recreating put must name.
-        const [tombstone] = await store.listStateRevisions(project, name, { limit: 1 });
+        const [tombstone] = await store.listStateRevisions(scope, name, { limit: 1 });
         output = tombstone
-          ? { name, revision: tombstone.revision, value: null, deleted: true }
-          : { name, revision: 0, value: null };
+          ? { scope, name, revision: tombstone.revision, value: null, deleted: true }
+          : { scope, name, revision: 0, value: null };
         break;
       }
       case 'put': {
         if (ifRevision === undefined) throw new Error('put requires --if-revision');
-        const value = stateValueSchema.parse(JSON.parse(await readInput()) as unknown);
+        const source = await readInput();
+        const value = options.raw ? source : stateValueSchema.parse(JSON.parse(source) as unknown);
         if (value === null) throw new StatePatchError(name, 0, 'Use delete for a tombstone');
-        output = await store.putStateDocument({ ...input, value, ifRevision });
+        output = { scope, ...(await store.putStateDocument({ ...input, value, ifRevision })) };
         break;
       }
       case 'patch': {
@@ -161,21 +205,41 @@ export async function stateCommand(
             0,
             'Invalid patch; expected {ops:[set|remove|append]} with JSON Pointer paths'
           );
-        output = await store.patchStateDocument({ ...input, ops: parsed.data.ops });
+        output = {
+          scope,
+          ...(await store.patchStateDocument({
+            ...input,
+            ops: parsed.data.ops,
+            ...(ifRevision !== undefined ? { ifRevision } : {}),
+          })),
+        };
         break;
       }
       case 'delete':
-        output = await store.deleteStateDocument({
-          ...input,
-          ...(ifRevision !== undefined ? { ifRevision } : {}),
-        });
+        output = {
+          scope,
+          ...(await store.deleteStateDocument({
+            ...input,
+            ...(ifRevision !== undefined ? { ifRevision } : {}),
+          })),
+        };
         break;
       case 'log':
-        output = await store.listStateRevisions(
-          project,
+        output = {
+          scope,
           name,
-          limit === undefined ? {} : { limit }
-        );
+          revisions: await store.listStateRevisions(
+            scope,
+            name,
+            limit === undefined ? {} : { limit }
+          ),
+        };
+        break;
+      case 'list':
+        output = {
+          scope,
+          documents: await store.listStateDocuments(scope, prefix === undefined ? {} : { prefix }),
+        };
         break;
     }
     await write(output);
@@ -183,10 +247,14 @@ export async function stateCommand(
   } catch (error) {
     const code =
       error instanceof StateRevisionConflictError
-        ? 3
-        : error instanceof StateDocumentTooLargeError || error instanceof StatePatchError
-          ? 4
-          : 1;
+        ? EXIT.conflict
+        : error instanceof StateDocumentTooLargeError ||
+            error instanceof StatePatchError ||
+            error instanceof StateValueNotTextError
+          ? EXIT.invalid
+          : error instanceof StateStoreMismatchError
+            ? EXIT.storeMismatch
+            : EXIT.usage;
     await write({
       ok: false,
       error:

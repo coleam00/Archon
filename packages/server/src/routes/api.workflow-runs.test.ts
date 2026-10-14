@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
 import {
@@ -21,12 +22,12 @@ import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { ConversationLockManager, RunActor, User } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ProviderEventQuery,
   ProviderEventRecord,
@@ -34,6 +35,7 @@ import type {
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
   workflowRunSchema as apiWorkflowRunSchema,
@@ -640,7 +642,7 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return { app, mockWebAdapter };
@@ -1617,6 +1619,35 @@ describe('GET /api/workflows/runs/:runId', () => {
     mockGetConversationById.mockReset();
   });
 
+  const approvalContexts: ApprovalContext[] = [
+    { nodeId: 'gate', message: 'Choose' },
+    {
+      nodeId: 'gate',
+      message: 'Choose',
+      decisionsAuthored: true,
+      decisions: [
+        { id: 'accept', label: 'Accept plan' },
+        { id: 'revise', label: 'Revise plan' },
+      ],
+    },
+  ];
+
+  test.each(approvalContexts)(
+    'projects engine-owned decisions without changing persisted metadata: %j',
+    async approval => {
+      const run = { ...MOCK_RUNNING_RUN, status: 'paused' as const, metadata: { approval } };
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => []);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      const body = z.object({ run: apiWorkflowRunSchema }).parse(await response.json());
+      expect(body.run.metadata.approval?.decisions).toEqual(getApprovalDecisions(approval));
+      expect(run.metadata.approval).toEqual(approval);
+      if (!('decisions' in approval)) expect(run.metadata.approval).not.toHaveProperty('decisions');
+    }
+  );
+
   test('returns run with events for a known runId', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListWorkflowEvents.mockImplementationOnce(async () => MOCK_EVENTS);
@@ -1963,6 +1994,29 @@ describe('GET /api/workflows/runs/:runId', () => {
 describe('GET /api/dashboard/runs', () => {
   beforeEach(() => {
     mockListDashboardRuns.mockReset();
+  });
+
+  test('projects legacy decisions on dashboard runs from the engine owner', async () => {
+    const approval = { nodeId: 'gate', message: 'Choose' };
+    mockListDashboardRuns.mockImplementationOnce(async () =>
+      makeDashboardRunsResult({
+        runs: [
+          makeDashboardWorkflowRun({
+            ...MOCK_RUNNING_RUN,
+            status: 'paused',
+            metadata: { approval },
+          }),
+        ],
+      })
+    );
+    const { app } = makeApp();
+    const response = await app.request('/api/dashboard/runs');
+    expect(response.status).toBe(200);
+    const body = z
+      .object({ runs: z.array(apiDashboardWorkflowRunSchema) })
+      .parse(await response.json());
+    expect(body.runs[0]?.metadata.approval?.decisions).toEqual(getApprovalDecisions({}));
+    expect(approval).not.toHaveProperty('decisions');
   });
 
   test('returns paginated runs with total and counts', async () => {
@@ -3193,7 +3247,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'needs work' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs work',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3245,6 +3304,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
           resolved: 'rejected',
+          answeredVia: 'api',
+          answeredAt: expect.any(String),
         },
         rejection_reason: 'needs more tests',
         rejection_count: 1,
@@ -3253,7 +3314,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'needs more tests' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs more tests',
+          },
         },
       ],
       undefined
@@ -3294,7 +3360,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'still bad' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still bad',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3316,6 +3387,47 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
     mockResolveAndCancelApprovalGate.mockClear();
     mockCreateWorkflowEvent.mockReset();
   });
+
+  test.each([
+    ['approve', 'approve'],
+    ['reject', 'reject'],
+    ['respond', 'approve'],
+    ['respond', 'reject'],
+  ])(
+    'refuses an undeclared decision at /%s (%s) without writes or resume',
+    async (route, decision) => {
+      mockHandleMessage.mockClear();
+      const run = {
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review-gate',
+            message: 'Choose',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      };
+      mockGetWorkflowRun.mockResolvedValue(run);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}/${route}`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain(`does not declare decision '${decision}'`);
+      expect(body.error).toContain('accept, revise');
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(run.status).toBe('paused');
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    }
+  );
 
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockResolvedValue(null);
@@ -3480,19 +3592,53 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
           },
         },
       });
-      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
       const { app } = makeApp();
       const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
         method: 'POST',
         body: JSON.stringify({ decision, text: 'feedback', expectedGate }),
         headers: { 'Content-Type': 'application/json' },
       });
-      expect(response.status).toBe(500);
-      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+      // Refused before any write, as a conflict naming the occurrence the run is at now.
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toContain(
+        "It is now awaiting occurrence 'pause-after'."
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
       expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
       expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  test('a stale occurrence is a 409, not an undeclared-decision 400, when the new gate lacks the decision', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'next-gate',
+          pauseId: 'pause-after',
+          message: 'Something else',
+          decisions: [{ id: 'approve' }, { id: 'accept' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+      method: 'POST',
+      body: JSON.stringify({
+        decision: 'revise',
+        text: 'feedback',
+        expectedGate: { nodeId: 'review-gate', pauseId: 'pause-before' },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      "It is now awaiting occurrence 'pause-after'."
+    );
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 
   test("'approve' produces the exact same resolution as POST .../approve", async () => {
     mockGetWorkflowRun.mockResolvedValue({
@@ -3865,7 +4011,7 @@ describe('approve/reject auto-resume', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'no' },
+          data: { via: 'api', occurrence: expect.any(String), decision: 'rejected', reason: 'no' },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },

@@ -47,7 +47,6 @@ import {
   persistWorkflowEvent,
   persistWorkflowEventIfRunning,
   listWorkflowEvents,
-  listRecentEvents,
   listActiveWorkflowNodeIds,
   listEventsForRuns,
   getDagResumeSnapshot,
@@ -212,6 +211,37 @@ describe('workflow-events', () => {
         })
       ).rejects.toThrow('disk full');
     });
+
+    test("waits for the run's previous write, which may fail, but not for other runs", async () => {
+      let failFirst: (error: Error) => void = () => {};
+      mockQuery.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            failFirst = reject;
+          })
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const write = (runId: string, step: string): Promise<void> =>
+        persistWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'node_started',
+          step_name: step,
+        });
+      const queriedSteps = (): unknown[] =>
+        mockQuery.mock.calls.map(([, params]) => (Array.isArray(params) ? params[4] : undefined));
+
+      const first = write('run-a', 'first');
+      const later = write('run-a', 'later');
+      const otherRun = write('run-b', 'other');
+      await otherRun;
+      expect(queriedSteps()).toEqual(['first', 'other']);
+
+      failFirst(new Error('connection lost'));
+      await expect(first).rejects.toThrow('connection lost');
+      await later;
+      expect(queriedSteps()).toEqual(['first', 'other', 'later']);
+    });
   });
 
   describe('listWorkflowEvents', () => {
@@ -246,57 +276,6 @@ describe('workflow-events', () => {
 
       await expect(listWorkflowEvents('run-456')).rejects.toThrow(
         'Failed to list workflow events: timeout'
-      );
-    });
-  });
-
-  describe('listRecentEvents', () => {
-    test('returns events filtered by since parameter', async () => {
-      const events: WorkflowEventRow[] = [mockEvent];
-      mockQuery.mockResolvedValueOnce(createQueryResult(events));
-
-      const since = new Date('2025-01-01T00:00:00.000Z');
-      const result = await listRecentEvents('run-456', since);
-
-      expect(result).toEqual(events);
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_workflow_events
-         WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        ['run-456', since.toISOString()]
-      );
-    });
-
-    test('delegates to listWorkflowEvents without since parameter', async () => {
-      const events: WorkflowEventRow[] = [mockEvent];
-      mockQuery.mockResolvedValueOnce(createQueryResult(events));
-
-      const result = await listRecentEvents('run-456');
-
-      expect(result).toEqual(events);
-      // Should use the same query as listWorkflowEvents (no created_at filter)
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id = $1
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        ['run-456']
-      );
-    });
-
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const since = new Date('2025-06-01T00:00:00.000Z');
-      const result = await listRecentEvents('run-456', since);
-
-      expect(result).toEqual([]);
-    });
-
-    test('throws wrapped error on query failure', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
-
-      await expect(listRecentEvents('run-456', new Date())).rejects.toThrow(
-        'Failed to list recent workflow events: connection lost'
       );
     });
   });

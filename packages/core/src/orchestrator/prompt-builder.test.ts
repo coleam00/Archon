@@ -356,6 +356,68 @@ describe('formatPausedGateSection', () => {
     message: 'Approve the plan above.',
   });
 
+  test.each([true, false])(
+    'authored guidance uses declared responses (agentCanResolve: %s)',
+    agentCanResolve => {
+      const gate = pausedRun({
+        type: 'approval',
+        nodeId: 'review',
+        message: 'Choose a direction',
+        decisionsAuthored: true,
+        decisions: [
+          { id: 'accept', label: 'Accept plan' },
+          { id: 'revise', label: 'Revise plan' },
+        ],
+      });
+      const section = formatPausedGateSection({ ...gate, agentCanResolve });
+      expect(section).toContain('Accept plan');
+      expect(section).toContain('Revise plan');
+      expect(section).toContain('respond run-abc accept');
+      expect(section).toContain('respond run-abc revise');
+      expect(section).not.toContain('approve run-abc');
+      expect(section).not.toContain('reject run-abc');
+      expect(section).not.toContain('APPROVED');
+      expect(section).not.toContain('REJECTED');
+      if (agentCanResolve) {
+        expect(section).toContain('verbatim');
+        expect(section).toContain('resolve NOTHING');
+      }
+    }
+  );
+
+  const authoredGate = {
+    type: 'approval',
+    nodeId: 'review',
+    message: 'Choose a direction',
+    decisionsAuthored: true,
+    decisions: [
+      { id: 'accept', label: 'Accept plan' },
+      { id: 'revise', label: 'Revise plan' },
+    ],
+  };
+
+  test('authored container guidance records the decision and directs continuation to the CLI', () => {
+    const section = formatPausedGateSection(pausedRun(authoredGate, { isolation: 'container' }));
+    expect(section).toContain('respond run-abc accept');
+    expect(section).toContain('records the decision but CANNOT continue the run from here');
+    expect(section).toContain('`archon workflow resume run-abc`');
+    expect(section).not.toContain('no separate resume step');
+  });
+
+  test.each([true, false])(
+    'authored commands use the surface spelling (agentCanResolve: %s)',
+    agentCanResolve => {
+      const section = formatPausedGateSection({
+        ...pausedRun(authoredGate),
+        agentCanResolve,
+        surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+      });
+      expect(section).toContain('`/archon-workflow respond run-abc accept [text]`');
+      expect(section).toContain('`/archon-workflow respond run-abc revise [text]`');
+      expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    }
+  );
+
   test('states the gate facts the agent needs to act on', () => {
     const section = formatPausedGateSection(openGate);
 
@@ -491,18 +553,29 @@ describe('formatPausedGateSection', () => {
     expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
   });
 
-  test('falls back to the explicit commands when the approval context is unusable', () => {
+  test('asks for inspection and offers reject when legacy approval context is unusable', () => {
     for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection(pausedRun(approval));
       expect(section).toContain('missing or malformed');
-      expect(section).toContain('/workflow approve run-abc');
-      expect(section).toContain('/workflow reject run-abc');
+      expect(section).toContain('/workflow status run-abc');
+      expect(section).toContain('/workflow reject run-abc <reason>');
+      expect(section).not.toContain('/workflow approve');
     }
+  });
+
+  test('offers only inspection when authored decisions are malformed', () => {
+    const section = formatPausedGateSection(
+      pausedRun({ nodeId: 'review', message: 'Choose', decisionsAuthored: true })
+    );
+    expect(section).toContain('missing or malformed');
+    expect(section).toContain('/workflow status run-abc');
+    expect(section).not.toContain('/workflow approve');
+    expect(section).not.toContain('/workflow reject');
   });
 
   test('does not advertise a gate this build cannot resolve as approvable', () => {
     // A future/corrupt suspend reason reaches the projection as `unreadable`, so the
-    // agent is sent to the explicit commands instead of being told to decide a gate
+    // agent is told to inspect the run instead of being told to decide a gate
     // approveWorkflow would refuse.
     const section = formatPausedGateSection(
       pausedRun({ type: 'from_the_future', nodeId: 'review', message: 'Approve the plan above.' })

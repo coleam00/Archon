@@ -161,7 +161,7 @@ Packaged scripts can import modules from their pack's `.shared/` directory. Keep
 
 ### Share code within a pack
 
-Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules: its files are neither workflows nor named script targets. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules and `.md` documents: its files are neither workflows nor named script targets. Documents ship with the pack in every build, beside the modules, so a script can find one relative to its own location and hand its path to a prompt node through `with:`. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
 
 ```text
 my-pack/

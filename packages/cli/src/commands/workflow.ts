@@ -106,7 +106,10 @@ import {
   resolveCodebaseForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
-import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
+import type {
+  RunWaitResult,
+  UnknownOwnerLiveness,
+} from '@archon/core/services/run-attention-watch';
 import {
   startRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError,
@@ -181,6 +184,7 @@ import type {
   ContinuationMode,
   RunAttention,
   SkipCause,
+  ExecutionOwnerRecord,
 } from '@archon/workflows/schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import {
@@ -197,6 +201,9 @@ import {
   assertApprovable,
   assertRejectable,
   assertRespondable,
+  assertAnswerAdmissible,
+  expectedGateForOccurrence,
+  type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as git from '@archon/git';
@@ -3855,15 +3862,17 @@ async function buildWaitResumeAttempt(
 /**
  * True when a resume attempt lost the run to another owner rather than failing.
  *
- * Both signals mean the row already moved — another host claimed it (the
- * compare-and-swap) or still holds its endpoint — so the winner finishes it and
- * this process should stop quietly instead of reporting a failure.
+ * Both signals mean another process is executing the run — it won the claim (the
+ * compare-and-swap left the row `running`) or still holds its endpoint — so this
+ * process should say so and stop instead of reporting a failure. A claim lost to a
+ * cancel, failure or completion is not that: nothing continues the run, so it stays
+ * an error.
  */
 function isResumeSuperseded(error: unknown): boolean {
   const MAX_CAUSE_DEPTH = 5;
   for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
     if (
-      current instanceof WorkflowNotResumableError ||
+      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
       current instanceof RunLiveOwnerAlreadyOwnedError
     ) {
       return true;
@@ -3932,6 +3941,12 @@ export async function workflowRunCommand(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
           'cli.wait_continuation_superseded'
         );
+        // Without this line an approve that lost the claim to `archon serve` reads as a
+        // resume that stopped mid-dispatch. The --json contract owns its own stdout.
+        const runId = attempt.options.continuationRun?.id;
+        if (runId !== undefined && !options.json) {
+          console.log(`Run ${runId} is already continuing in another process.`);
+        }
         return;
       }
       throw error;
@@ -4483,8 +4498,10 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
 function announceWaitAttached(
   watchedRunId: string,
   observedStatus: WorkflowRunStatus,
-  json?: boolean
+  json?: boolean,
+  ownerLiveness?: UnknownOwnerLiveness
 ): Promise<void> {
+  const recordedOwner = ownerLiveness?.recordedOwner;
   const line = json
     ? JSON.stringify({
         ok: true,
@@ -4492,9 +4509,20 @@ function announceWaitAttached(
         runId: watchedRunId,
         result: 'waiting',
         observedStatus,
+        ...(ownerLiveness ? { ownerLiveness: ownerLiveness.kind } : {}),
+        ...(recordedOwner ? { recordedOwner } : {}),
       })
-    : `Waiting on run ${watchedRunId} — currently ${observedStatus}.`;
+    : `Waiting on run ${watchedRunId} — currently ${observedStatus}.${
+        ownerLiveness ? ` ${describeUnknownOwner(recordedOwner)}` : ''
+      }`;
   return writeStderr(`${line}\n`);
+}
+
+function describeUnknownOwner(owner: ExecutionOwnerRecord | undefined): string {
+  if (!owner)
+    return 'It records no execution owner, so whether its owner is still alive is unknown.';
+  const uid = owner.uid === undefined ? '' : ` (uid ${String(owner.uid)})`;
+  return `Its owner ran on host ${owner.host}${uid}, whose endpoint this host cannot reach, so whether it is still alive is unknown.`;
 }
 
 /**
@@ -4525,7 +4553,8 @@ export async function workflowWaitCommand(
       // No timeout by default: a wait that ends on its own clock would answer a
       // question only the run can answer.
       ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),
-      onAttached: observedStatus => announceWaitAttached(resolvedId, observedStatus, json),
+      onAttached: (observedStatus, ownerLiveness) =>
+        announceWaitAttached(resolvedId, observedStatus, json, ownerLiveness),
     });
   } catch (error) {
     const err = error as Error;
@@ -6023,14 +6052,35 @@ export async function workflowCancelCommand(
 }
 
 /**
+ * The origin a CLI answer records. `--occurrence` refuses the answer unless the run is
+ * still paused at that occurrence, read the way run-attention reports it.
+ */
+async function cliAnswerOrigin(
+  host: WorkflowHost,
+  runId: string,
+  occurrence: string | undefined
+): Promise<GateAnswerOrigin> {
+  if (occurrence === undefined) return { via: 'cli' };
+  const run = await host.deps.store.getWorkflowRun(runId);
+  if (!run) throw new Error(`Workflow run not found: ${runId}`);
+  return cliOriginForRun(run, occurrence);
+}
+
+function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): GateAnswerOrigin {
+  return occurrence === undefined
+    ? { via: 'cli' }
+    : { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
+}
+
+/**
  * Approve a paused workflow run by ID.
  *
  * Human mode records the approval on the still-'paused' run (the resolution
  * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
  * inline. `--json` mode records the approval and returns a structured ack
- * WITHOUT resuming — the run stays paused-and-staged, resumable by a
- * backgrounded `resume`/`run --resume` (inline resume would stream output and
- * break the JSON).
+ * WITHOUT resuming (inline resume would stream output and break the JSON); the
+ * answered gate is then a due continuation that `archon serve` or `workflow wake`
+ * continues.
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -6040,7 +6090,8 @@ export async function workflowApproveCommand(
   comment?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { approveWorkflow } = host.operations;
 
@@ -6055,8 +6106,9 @@ export async function workflowApproveCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
-      // The SAME gate approveWorkflow enforces — not a copy of one branch of it.
-      // A partial copy acks { ok: true } and lets the child die unseen.
+      // The SAME gates approveWorkflow enforces, in the same order — not a copy of
+      // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertApprovable(run);
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
@@ -6074,12 +6126,17 @@ export async function workflowApproveCommand(
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
-  // stdout, which would corrupt the JSON contract). The run becomes resumable
-  // — drive it to completion with a backgrounded `resume`/`run --resume`.
+  // stdout, which would corrupt the JSON contract). The answered gate is a due
+  // continuation, so a continuation host (`archon serve`, `workflow wake`) continues it.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment, { kind: 'operator' });
+      const result = await approveWorkflow(
+        resolvedId,
+        comment,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6095,8 +6152,13 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    approveWorkflow(resolvedId, comment, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    approveWorkflow(
+      resolvedId,
+      comment,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
@@ -6182,7 +6244,8 @@ export async function workflowRejectCommand(
   reason?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { rejectWorkflow } = host.operations;
 
@@ -6197,8 +6260,9 @@ export async function workflowRejectCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
-      // The SAME gate rejectWorkflow enforces — not a copy of one branch of it.
-      // A partial copy acks { ok: true } and lets the child die unseen.
+      // The SAME gates rejectWorkflow enforces, in the same order — not a copy of
+      // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertRejectable(run);
       return run;
     });
@@ -6212,12 +6276,18 @@ export async function workflowRejectCommand(
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
-  // to stdout, corrupting the JSON contract). When `cancelled` is false the run
-  // is resumable for the rework pass — drive it with a backgrounded `resume`.
+  // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
+  // gate is a due continuation that a continuation host picks up, except on a container
+  // run (including its write-back gate), which needs a manual `resume`.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await rejectWorkflow(resolvedId, rejectText, { kind: 'operator' });
+      const result = await rejectWorkflow(
+        resolvedId,
+        rejectText,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6234,8 +6304,13 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    rejectWorkflow(resolvedId, rejectText, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    rejectWorkflow(
+      resolvedId,
+      rejectText,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   if (result.cancelled) {
@@ -6336,12 +6411,15 @@ export async function workflowRespondCommand(
   text?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { respondToWorkflow } = host.operations;
 
-  if (decision === 'approve') return workflowApproveCommand(host, runId, text, json, cwd, detach);
-  if (decision === 'reject') return workflowRejectCommand(host, runId, text, json, cwd, detach);
+  if (decision === 'approve')
+    return workflowApproveCommand(host, runId, text, json, cwd, detach, occurrence);
+  if (decision === 'reject')
+    return workflowRejectCommand(host, runId, text, json, cwd, detach, occurrence);
 
   // --detach: same shape as approve/reject — the parent validates read-only via the
   // SAME gate respondToWorkflow enforces, then hands the whole command to a detached
@@ -6353,6 +6431,7 @@ export async function workflowRespondCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertRespondable(run, decision);
       if (!run.working_path) {
         throw new Error(
@@ -6366,12 +6445,17 @@ export async function workflowRespondCommand(
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
-  // auto-resume, mirroring approve/reject — drive it onward with a backgrounded
-  // `resume`/`run --resume`.
+  // auto-resume, mirroring approve/reject; a continuation host continues the answered gate.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await respondToWorkflow(resolvedId, decision, text, { kind: 'operator' });
+      const result = await respondToWorkflow(
+        resolvedId,
+        decision,
+        text,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6387,8 +6471,14 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    respondToWorkflow(resolvedId, decision, text, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    respondToWorkflow(
+      resolvedId,
+      decision,
+      text,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   if (!result.workingPath) {

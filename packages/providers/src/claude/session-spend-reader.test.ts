@@ -23,7 +23,14 @@ const known = {
   kind: 'known' as const,
   spend: {
     costUsd: 0.01558,
-    modelUsage: { 'claude-haiku-4-5-20251001': { outputTokens: 280 } },
+    modelUsage: {
+      'claude-haiku-4-5-20251001': {
+        inputTokens: 920,
+        outputTokens: 280,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 6630,
+      },
+    },
   },
 };
 function tree(): { root: string; path: string } {
@@ -44,6 +51,18 @@ test('real cost-state fixture conforms to the installed SDK version', () => {
     '0.3.289'
   );
   expect(parseSessionSpend(fixture, sessionId)).toEqual(known);
+});
+
+test('old output-only records remain usable for cost and model selection', () => {
+  expect(
+    parseSessionSpend(
+      JSON.stringify({ ...record, modelUsage: { main: { outputTokens: 280 } } }),
+      sessionId
+    )
+  ).toEqual({
+    kind: 'known',
+    spend: { costUsd: 0.01558, modelUsage: { main: { outputTokens: 280 } } },
+  });
 });
 
 test('only the final cost record counts, with unrelated trailing events allowed', () => {

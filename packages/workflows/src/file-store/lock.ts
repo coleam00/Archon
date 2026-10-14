@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readdir, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  isSameOwner,
+  parseProcessOwner,
+  ProcessOwnerRecordError,
   type ProcessOwner,
 } from '@archon/paths/process-owner';
 import { createLogger } from '@archon/paths/logger';
 
 const log = createLogger('file-store');
 const queues = new Map<string, Promise<void>>();
+/** Tail of the callers still resolving their queue key; see `withFileStoreLock`. */
+let joining: Promise<unknown> = Promise.resolve();
 /** `lock` and `lock.break` paths this module linked but then failed to remove. */
 const stranded = new Set<string>();
 
@@ -27,16 +32,6 @@ export class FileStoreLockHeldError extends Error {
       }. Check the owner before explicitly removing the lock; elapsed time does not prove death.`
     );
     this.name = 'FileStoreLockHeldError';
-  }
-}
-
-export class FileStoreLockRecordError extends Error {
-  constructor(
-    public readonly path: string,
-    cause?: unknown
-  ) {
-    super(`Invalid owner record in file store lock ${path}; inspect it manually.`, { cause });
-    this.name = 'FileStoreLockRecordError';
   }
 }
 
@@ -155,31 +150,13 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
     }
   });
   if (contents === null) return null;
-  let owner: unknown;
+  let record: unknown;
   try {
-    owner = JSON.parse(contents);
+    record = JSON.parse(contents);
   } catch (error) {
-    throw new FileStoreLockRecordError(path, error);
+    throw new ProcessOwnerRecordError(path, error);
   }
-  if (
-    typeof owner !== 'object' ||
-    owner === null ||
-    !('host' in owner) ||
-    typeof owner.host !== 'string' ||
-    !('pid' in owner) ||
-    typeof owner.pid !== 'number' ||
-    !Number.isSafeInteger(owner.pid) ||
-    owner.pid <= 0 ||
-    !('instance' in owner) ||
-    typeof owner.instance !== 'string'
-  ) {
-    throw new FileStoreLockRecordError(path);
-  }
-  return { host: owner.host, pid: owner.pid, instance: owner.instance };
-}
-
-function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
-  return a.host === b.host && a.pid === b.pid && a.instance === b.instance;
+  return parseProcessOwner(record, path);
 }
 
 async function tryLink(source: string, target: string): Promise<boolean> {
@@ -231,7 +208,7 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
         if (Date.now() >= deadline) throw new FileStoreLockHeldError(path, null);
         continue;
       }
-      if (stranded.has(path) && sameOwner(owner, currentProcessOwner)) {
+      if (stranded.has(path) && isSameOwner(owner, currentProcessOwner)) {
         log.warn({ path }, 'file_store.lock_reclaimed');
         await remove(path);
         stranded.delete(path);
@@ -246,14 +223,14 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
           stranded.delete(breaker);
           try {
             const now = await readOwner(path);
-            if (now && sameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
+            if (now && isSameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
           } finally {
             if (!(await discard(breaker))) stranded.add(breaker);
           }
           continue;
         }
         const breakOwner = await readOwner(breaker);
-        if (breakOwner && stranded.has(breaker) && sameOwner(breakOwner, currentProcessOwner)) {
+        if (breakOwner && stranded.has(breaker) && isSameOwner(breakOwner, currentProcessOwner)) {
           log.warn({ path: breaker }, 'file_store.lock_reclaimed');
           await remove(breaker);
           stranded.delete(breaker);
@@ -305,21 +282,56 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
   }
 }
 
+/**
+ * Removes `.lock-*` and `.probe-*` scratch files a process left when it died
+ * between creating and removing them. Each holds its creator's owner record; a
+ * file whose owner is not provably gone, or whose record cannot be read (a live
+ * creator may not have written it yet), stays.
+ */
+async function sweepScratch(root: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch (error) {
+    // The sweep is cleanup; failing to list the store must not fail the operation.
+    log.warn({ path: root, err: error }, 'file_store.scratch_sweep_skipped');
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith('.lock-') && !name.startsWith('.probe-')) continue;
+    const path = join(root, name);
+    try {
+      const owner = await readOwner(path);
+      if (owner && isOwnerProvablyGone(owner)) await discard(path);
+    } catch (error) {
+      log.warn({ path, err: error }, 'file_store.scratch_sweep_skipped');
+    }
+  }
+}
+
 export async function withFileStoreLock<T>(
   root: string,
   operation: () => Promise<T>,
   timeoutMs = 10_000
 ): Promise<T> {
-  const key = await realpath(root);
-  const previous = queues.get(key) ?? Promise.resolve();
   let finish!: () => void;
   const pending = new Promise<void>(resolve => (finish = resolve));
-  queues.set(key, pending);
+  // Concurrent realpath calls settle in any order, so callers resolve their key one at a
+  // time; otherwise a later caller can join the queue first and commit before an earlier one.
+  const joined = joining.then(async () => {
+    const key = await realpath(root);
+    const previous = queues.get(key) ?? Promise.resolve();
+    queues.set(key, pending);
+    return { key, previous };
+  });
+  joining = joined.catch(() => undefined);
+  const { key, previous } = await joined;
   await previous;
   try {
     const release = await acquire(key, timeoutMs);
     let result: T;
     try {
+      await sweepScratch(key);
       result = await operation();
     } catch (error) {
       try {

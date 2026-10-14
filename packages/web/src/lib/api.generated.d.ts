@@ -2315,6 +2315,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -3822,7 +3831,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -3858,7 +3873,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           costUsd:
             | {
@@ -3870,7 +3891,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           stopReason:
             | {
@@ -3882,7 +3909,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           numTurns:
             | {
@@ -3894,7 +3927,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
         };
         /** @enum {string} */
@@ -4910,13 +4949,10 @@ export interface components {
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
-        decisions?: {
-          id: string;
-          label?: string;
-        }[];
-        decisionsAuthored?: boolean;
         /** @enum {string|null} */
         resolved?: 'approved' | 'rejected' | null;
+        answeredVia?: string;
+        answeredAt?: string;
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
@@ -5129,7 +5165,8 @@ export interface components {
                       | 'not_reported'
                       | 'unknown'
                       | 'not_applicable'
-                      | 'invalid';
+                      | 'invalid'
+                      | 'incomplete';
                   };
             };
             /** @enum {string} */
@@ -5173,7 +5210,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             costUsd:
               | {
@@ -5185,7 +5228,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             stopReason:
               | {
@@ -5197,7 +5246,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             numTurns:
               | {
@@ -5209,7 +5264,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -5303,7 +5364,24 @@ export interface components {
               };
         };
         commandSnapshot?: string | null;
-      };
+      } & (
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored: true;
+            decisions: {
+              id: string;
+              label?: string;
+            }[];
+          }
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored?: false;
+            decisions?: {
+              id: string;
+              label?: string;
+            }[];
+          }
+      );
       wait?: components['schemas']['WorkflowWaitContext'];
       stop_reason?: components['schemas']['RunStopReason'];
     } & {

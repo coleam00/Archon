@@ -46,6 +46,8 @@ import {
   resolveProjectStorageKey,
   getProjectStoragePaths,
   resolveRunStorageRoot,
+  projectKeyForStorageRoot,
+  projectKeyForCodebase,
   getRunArtifactsDirForKey,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
@@ -656,6 +658,50 @@ describe('archon-paths', () => {
           '/tmp/scratch'
         )
       ).toEqual({ kind: 'cwd', cwd: '/tmp/scratch' });
+    });
+  });
+
+  describe('project keys', () => {
+    beforeEach(() => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+    });
+
+    test('each storage key kind yields its workspace-relative key', () => {
+      expect(
+        projectKeyForCodebase(
+          { kind: 'repo', name: 'acme/widget', default_cwd: '/repos/widget' },
+          '/repos/widget'
+        )
+      ).toBe('acme/widget');
+      expect(
+        projectKeyForCodebase(
+          { kind: 'folder', name: 'My Ops Folder', default_cwd: '/srv/ops' },
+          '/srv/ops'
+        )
+      ).toBe('_folder/my-ops-folder');
+      expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe('_cwd/scratch-repo');
+    });
+
+    test('a storage root and the codebase it came from give the same key', () => {
+      const codebase = { kind: 'repo', name: 'acme/widget', default_cwd: '/repos/widget' };
+      const root = resolveRunStorageRoot({ output_root: null }, codebase);
+      if (!root) throw new Error('Expected a storage root');
+      expect(projectKeyForStorageRoot(root)).toBe(
+        projectKeyForCodebase(codebase, codebase.default_cwd)
+      );
+    });
+
+    test('a first segment that merely starts with two dots is still a key', () => {
+      expect(projectKeyForStorageRoot(join('/custom/archon', 'workspaces', '..foo', 'bar'))).toBe(
+        '..foo/bar'
+      );
+    });
+
+    test('a root outside the workspaces directory has no key', () => {
+      for (const root of ['/elsewhere/acme/widget', join('/custom/archon', 'workspaces')])
+        expect(() => projectKeyForStorageRoot(root)).toThrow('not inside the workspaces directory');
     });
   });
 

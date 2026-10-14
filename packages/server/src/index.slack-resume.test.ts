@@ -1,18 +1,20 @@
 import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   clearPlatformPolicies,
   retainsWorkspace,
   getRegisteredPlatformPolicies,
 } from '@archon/core/platforms/registry';
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
 
+const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
@@ -226,9 +228,7 @@ mock.module('@archon/core', () => ({
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
-  initializeWorkflowGitHubAppAuth: (): never => {
-    throw new Error('Unexpected App bootstrap');
-  },
+  initializeWorkflowGitHubAppAuth: (): IGitHubAppAuthProvider => installationTokenProvider,
   isPerUserGitHubEnabled: (): boolean => false,
   isPerUserProviderKeysEnabled: (): boolean => false,
   getDatabaseType: (): string => 'sqlite',
@@ -246,9 +246,42 @@ mock.module('@archon/core/config/store-selection', () => ({
   loadStoreSelection: async (): Promise<'database'> => 'database',
 }));
 
+const mockInstallationToken = mock(async (_owner: string, _repo: string) => 'inherited-port-token');
+const installationTokenProvider = {
+  slug: 'test-app',
+  getInstallationToken: mockInstallationToken,
+  getInstallationTokenById: async () => {
+    throw new Error('Unexpected token by id');
+  },
+  getOctokitForInstallation: async () => {
+    throw new Error('Unexpected Octokit');
+  },
+  primeInstallationLookup: () => {},
+  resolveInstallationId: async () => {
+    throw new Error('Unexpected installation lookup');
+  },
+  invalidateToken: () => {},
+  invalidateRepo: () => {},
+} satisfies IGitHubAppAuthProvider;
+
+class MockGitHubAdapter {
+  constructor(private readonly auth: GitHubAuth) {}
+  async start(): Promise<void> {}
+  getPlatformType(): string {
+    return 'github';
+  }
+  getAuthMode(): GitHubAuth['kind'] {
+    return this.auth.kind;
+  }
+  async getInstallationToken(owner: string, repo: string): Promise<string> {
+    if (this.auth.kind !== 'app') throw new Error('Expected App mode');
+    return this.auth.provider.getInstallationToken(owner, repo);
+  }
+}
+
 mock.module('@archon/adapters', () => ({
   TelegramAdapter: DisabledAdapter,
-  GitHubAdapter: DisabledAdapter,
+  GitHubAdapter: MockGitHubAdapter,
   DiscordAdapter: DisabledAdapter,
   SlackAdapter: MockSlackAdapter,
   SlackWorkflowBridge: MockSlackWorkflowBridge,
@@ -294,7 +327,7 @@ class MockWebAdapter implements IWorkflowPlatform {
 }
 
 class MockDashboardEventPoller {
-  start(): void {}
+  async start(): Promise<void> {}
   stop(): void {}
 }
 
@@ -320,6 +353,7 @@ mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
 mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
 mock.module('./routes/webhooks', () => ({
+  registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
   registerWebhookSourceRoutes: (): void => undefined,
 }));
@@ -343,16 +377,13 @@ mock.module('@archon/core/workflows/sql-host', () => ({
     throw new Error('No plugin action expected during boot');
   },
 }));
+mock.module('@archon/core/workflows/store-adapter', () => ({ createWorkflowStore: () => ({}) }));
 
 mock.module('./services/workflow-resume-service', () => ({
   resumeWorkflowRunFromServer: mockResumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler: (): void => undefined,
   stopWorkflowContinuationScheduler: (): void => undefined,
   workflowResumeTargetForRun: mockWorkflowResumeTargetForRun,
-}));
-mock.module('./github-auth-bootstrap', () => ({
-  selectGitHubAuthMode: (): { kind: 'none' } => ({ kind: 'none' }),
-  parseGitCredentialPath: (): undefined => undefined,
 }));
 mock.module('./discord-mention', () => ({ isDiscordMentionRequired: (): boolean => false }));
 mock.module('./auth', () => ({
@@ -372,6 +403,8 @@ mock.module('@archon/git', () => ({
 
 const envKeys = [
   'ARCHON_WEBHOOK_SOURCES',
+  'ARCHON_PORT',
+  'PORT',
   'CLAUDE_USE_GLOBAL_AUTH',
   'CODEX_ACCESS_TOKEN',
   'CODEX_ID_TOKEN',
@@ -380,6 +413,9 @@ const envKeys = [
   'GITEA_URL',
   'GITEA_WEBHOOK_SECRET',
   'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_APP_PRIVATE_KEY_PATH',
+  'WEBHOOK_SECRET',
   'GITHUB_TOKEN',
   'GITLAB_TOKEN',
   'GITLAB_WEBHOOK_SECRET',
@@ -423,6 +459,104 @@ afterAll(async () => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test('server publishes the bound port to credential-helper children', async () => {
+    process.env.ARCHON_PORT = '3090';
+    process.env.PORT = '3000';
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 43210,
+    })) as unknown as typeof Bun.serve);
+    try {
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(process.env.ARCHON_PORT).toBe('43210');
+    } finally {
+      serveSpy.mockRestore();
+      delete process.env.ARCHON_PORT;
+      delete process.env.PORT;
+    }
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'installed Git helper inherits the port published by server startup',
+    async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'server-credential-handoff-')));
+      const repoPath = join(root, 'repo');
+      const env = {
+        ...process.env,
+        ARCHON_HOME: root,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+      };
+      const init = Bun.spawnSync(['git', 'init', repoPath], { env });
+      expect(init.exitCode).toBe(0);
+      const installer = join(
+        import.meta.dir,
+        '../../core/src/github-auth/credential-helper-install.ts'
+      );
+      const install = Bun.spawnSync(
+        [
+          process.execPath,
+          '-e',
+          `import { installCredentialHelper } from ${JSON.stringify(installer)};
+         const result = await installCredentialHelper(${JSON.stringify(repoPath)});
+         if (result.kind === 'failed') throw result.error;`,
+        ],
+        { env }
+      );
+      expect(install.exitCode, install.stderr.toString()).toBe(0);
+      const realServe = Bun.serve.bind(Bun);
+      let listener: ReturnType<typeof Bun.serve> | undefined;
+      const serveSpy = spyOn(Bun, 'serve').mockImplementation((options => {
+        listener = realServe(options);
+        return listener;
+      }) as typeof Bun.serve);
+      process.env.ARCHON_PORT = '3090';
+      process.env.PORT = '3000';
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+      process.env.WEBHOOK_SECRET = 'test-secret';
+      mockInstallationToken.mockClear();
+      try {
+        const { startServer } = await import('./index');
+        await startServer({ port: 0 });
+        expect(listener?.port).not.toBe(3090);
+        const child = Bun.spawn(['git', '-C', repoPath, 'credential', 'fill'], {
+          env: {
+            ...process.env,
+            ARCHON_HOME: root,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_SYSTEM: '/dev/null',
+            GIT_TERMINAL_PROMPT: '0',
+          },
+          stdin: 'pipe',
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
+        child.stdin.end();
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        expect(stdout).toContain('password=inherited-port-token');
+        expect(stderr).toBe('');
+        expect(mockInstallationToken).toHaveBeenCalledTimes(1);
+        expect(mockInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+      } finally {
+        serveSpy.mockRestore();
+        listener?.stop(true);
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+        delete process.env.WEBHOOK_SECRET;
+        delete process.env.ARCHON_PORT;
+        delete process.env.PORT;
+      }
+    }
+  );
+
   test('server registers offline policies with all platform transports skipped', async () => {
     clearPlatformPolicies();
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({

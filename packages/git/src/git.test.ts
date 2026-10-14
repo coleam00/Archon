@@ -2933,15 +2933,18 @@ branch refs/heads/feature/auth
       const result = await git.cloneRepository(
         'https://github.com/owner/repo.git',
         repo('/tmp/target'),
-        { credentials: { username: token, password: '' } }
+        { credentials: { username: 'x-access-token', password: token } }
       );
 
       expect(result.ok).toBe(false);
       expect(JSON.stringify(result)).not.toContain(token);
       expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
-      if (!result.ok && result.error.code === 'unknown') {
-        expect(result.error.message).toContain('***');
-      }
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'helper failed with ***\ncredential rejected: ***' },
+      });
+      expect(mockLogger.error).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(mockLogger.error.mock.calls)).toContain('***');
     });
 
     test('returns not_a_repo error for 404', async () => {
@@ -3217,7 +3220,15 @@ branch refs/heads/feature/auth
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['config', '--global', '--add', 'safe.directory', '/workspace/repo'],
+        [
+          'config',
+          '--global',
+          '--fixed-value',
+          '--replace-all',
+          'safe.directory',
+          '/workspace/repo',
+          '/workspace/repo',
+        ],
         { timeout: 10000 }
       );
     });
@@ -3231,9 +3242,40 @@ branch refs/heads/feature/auth
       // execFileAsync passes args as array, so path with spaces is safe.
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['config', '--global', '--add', 'safe.directory', '/workspace/path with spaces'],
+        [
+          'config',
+          '--global',
+          '--fixed-value',
+          '--replace-all',
+          'safe.directory',
+          '/workspace/path with spaces',
+          '/workspace/path with spaces',
+        ],
         { timeout: 10000 }
       );
+    });
+    test('repeated setup keeps one exact safe-directory entry and preserves other paths', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-directory-')));
+      const configPath = join(root, 'gitconfig');
+      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = configPath;
+      try {
+        await writeFile(configPath, '[safe]\n\tdirectory = /workspace/other\n');
+        const repoPath = repo('/workspace/repo.[1] with spaces');
+        await git.addSafeDirectory(repoPath);
+        await git.addSafeDirectory(repoPath);
+        const { stdout } = await git.execFileAsync('git', [
+          'config',
+          '--global',
+          '--get-all',
+          'safe.directory',
+        ]);
+        expect(stdout.trim().split('\n')).toEqual(['/workspace/other', repoPath]);
+      } finally {
+        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+      }
     });
   });
 

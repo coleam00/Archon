@@ -60,6 +60,11 @@ const forgeOperationDescriptions = {
   'workitem.view': 'Read a qualified work item',
   'workitem.create': 'Create an issue or recover its canonical marker',
   'workitem.labels.set': 'Set and verify the complete issue label set',
+  'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
+  'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
+  'workitem.list': 'List open issues and pull requests that carry one label',
+  'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
+  'workitem.close': 'Close an issue with a reason and verify the result',
   'repo.labels.list': 'List repository label names',
   'repo.label.ensure': 'Explicitly ensure one repository label exists',
   'pr.view': 'Read a pull request by number or by qualified head',
@@ -84,8 +89,15 @@ const forgeOperationDescriptions = {
 const commandHelp: HelpEntry[] = [
   {
     command: 'state',
-    spec: 'state <get|put|patch|log|delete>',
-    description: 'Read and audit durable project JSON documents',
+    spec: 'state <get|put|patch|log|delete|list>',
+    description: 'Read and audit durable project or install JSON documents',
+    scopedFlags: [
+      { spec: '--install', description: 'Use install scope instead of a project' },
+      {
+        spec: '--project <key>',
+        description: 'Outside a run: the project key (owner/repo) instead of the cwd project',
+      },
+    ],
   },
   {
     command: 'forge',
@@ -467,20 +479,20 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'state',
     subcommand: 'get',
-    spec: 'state get <name>',
-    description: 'Read the latest value and revision as JSON',
+    spec: 'state get <name> [--raw]',
+    description: 'Read the latest value and revision as JSON; --raw prints a text value',
   },
   {
     command: 'state',
     subcommand: 'put',
-    spec: 'state put <name> --if-revision <n>',
-    description: 'Replace the value with JSON from stdin; 0 creates it',
+    spec: 'state put <name> --if-revision <n> [--raw]',
+    description: 'Replace the value with JSON (or --raw text) from stdin; 0 creates it',
   },
   {
     command: 'state',
     subcommand: 'patch',
-    spec: 'state patch <name>',
-    description: 'Apply {ops:[...]} from stdin to the latest value',
+    spec: 'state patch <name> [--if-revision <n>]',
+    description: 'Apply {ops:[...]} from stdin to the latest value, or only to revision n',
   },
   {
     command: 'state',
@@ -493,6 +505,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'log',
     spec: 'state log <name> [--limit <n>]',
     description: 'Read revisions newest first, including writers and operations',
+  },
+  {
+    command: 'state',
+    subcommand: 'list',
+    spec: 'state list [--prefix <p>]',
+    description: 'List document names with their latest revision and writer, never values',
   },
   ...Object.entries(forgeOperationDescriptions)
     .filter(([op]) => op !== 'resolve')
@@ -813,6 +831,16 @@ const orderedFlags: FlagHelp[] = [
     owners: [
       { command: 'workflow', subcommand: 'status' },
       { command: 'workflow', subcommand: 'get' },
+    ],
+  },
+  {
+    spec: '--occurrence <id>',
+    description:
+      "For 'workflow approve/reject/respond': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
     ],
   },
   {

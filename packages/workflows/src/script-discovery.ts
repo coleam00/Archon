@@ -302,7 +302,7 @@ async function discoverBundledPackagedScripts(
   const files = (await collectInstalledBundleSources(roots.bundledWorkflows)) ?? [];
   const scripts = new Map<string, ScriptDefinition>();
   for (const file of files) {
-    if (file.kind !== 'script' || file.entry === undefined) continue;
+    if (file.kind !== 'pack-file' || file.entry === undefined) continue;
     scripts.set(file.entry.name, {
       name: file.entry.name,
       path: normalizeSep(file.sourcePath),
