@@ -31,7 +31,7 @@ import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import { registerRepository, registerFolder } from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
@@ -1708,7 +1708,12 @@ async function resolveRunCodebase(
  * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
  */
 function assertResumeWorkingPathExists(workingPath: string): void {
-  if (!existsSync(workingPath)) {
+  try {
+    statSync(workingPath);
+  } catch (error) {
+    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
     throw new Error(
       `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
         'The worktree may have been cleaned up. Start a fresh run with --branch instead.'

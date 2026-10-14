@@ -10058,6 +10058,34 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     }
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'resume --detach reports an unreadable worktree as a filesystem error, not as removed (#4090)',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-unreadable-worktree-'));
+      const workingPath = join(root, 'worktree');
+      mkdirSync(workingPath);
+      chmodSync(root, 0o000);
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        ...pausedRun,
+        status: 'failed',
+        working_path: workingPath,
+      });
+      const child = createDetachedChildFixture();
+      const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+      try {
+        await expect(
+          workflowResumeCommand(createTestWorkflowHost(), 'run-123', undefined, undefined, true)
+        ).rejects.toMatchObject({ code: 'EACCES' });
+        expect(spawnSpy.mock.calls.length).toBe(0);
+      } finally {
+        spawnSpy.mockRestore();
+        chmodSync(root, 0o700);
+        await removeTempTree(root);
+      }
+    }
+  );
+
   it('reject --detach refuses a child_workflow-blocked parent but TOLERATES missing context', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
