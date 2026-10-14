@@ -24,8 +24,8 @@ the number every command below uses.
    still true.
 4. Link the issue the description references by the latest review's contract
    coverage. What it left open, as a JSON list (empty text when no review judged
-   coverage): `$INPUTS.contract_left`. Only an empty list (`[]`) earns a closing
-   keyword (`Closes #N`). Anything else gets a non-closing reference (`Refs #N`)
+   coverage): `$INPUTS.contract_left`. On an empty list (`[]`), and only then,
+   the reference becomes `Closes #N`, replacing a `Refs #N`. Anything else gets a non-closing reference (`Refs #N`)
    in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
    variants), and a short "Left open" section listing each item, or saying no
    review judged coverage. Keep at most one "Left open" section, current, and
