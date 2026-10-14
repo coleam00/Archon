@@ -1,12 +1,19 @@
 // @archon-test-isolated
 import { afterEach, expect, mock, test } from 'bun:test';
 import * as paths from '@archon/paths';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { maintainedProviderPluginId } from '@archon/plugin-manifest';
+import { receiptPath } from '@archon/plugin-manifest/store';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
-import { clearRegistry, getRegisteredProviders } from '@archon/providers';
+import { requireProvider } from '@archon/provider-contract';
+import {
+  claudeDescriptor,
+  clearRegistry,
+  getRegisteredProviders,
+  providerRegistry,
+} from '@archon/providers';
 import { ProcessAgentProvider } from './process-provider';
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
 const { registerHostProviders } = await import('./register-host-providers');
@@ -17,13 +24,44 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = previousHome;
 });
-test('release hosts retain maintained providers in process until P7', async () => {
-  process.env.ARCHON_HOME = roots(await mkdtemp(join(tmpdir(), 'binary-host-providers-')));
+
+test('release hosts register maintained providers only from install receipts', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'binary-host-providers-')));
+  process.env.ARCHON_HOME = home;
+  const pluginsDir = join(home, 'plugins');
+  const id = maintainedProviderPluginId('claude');
+  const file = receiptPath(pluginsDir, id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify({
+      schemaVersion: 1,
+      id,
+      manifest: {
+        schemaVersion: 1,
+        kind: 'provider',
+        name: 'provider-claude',
+        description: 'test',
+        executable: 'archon-provider-claude',
+      },
+      tag: `v${paths.BUNDLED_VERSION}`,
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+      files: [{ path: 'archon-provider-claude', sha256: 'b'.repeat(64) }],
+      descriptor: claudeDescriptor,
+    })
+  );
   clearRegistry();
   await registerHostProviders();
-  for (const id of MAINTAINED_PROVIDER_IDS) {
-    const entry = getRegisteredProviders().find(provider => provider.id === id);
-    expect(entry?.builtIn).toBe(true);
-    expect(entry?.factory()).not.toBeInstanceOf(ProcessAgentProvider);
-  }
+
+  const ids = getRegisteredProviders().map(provider => provider.id);
+  expect(ids.sort()).toEqual(['claude', 'copilot', 'opencode']);
+  const claude = getRegisteredProviders().find(provider => provider.id === 'claude');
+  expect(claude?.builtIn).toBe(true);
+  const runtime = claude?.factory();
+  expect(runtime).toBeInstanceOf(ProcessAgentProvider);
+  expect(runtime).toMatchObject({ argv: [join(pluginsDir, 'archon-provider-claude')] });
+  expect(() => requireProvider(providerRegistry, 'codex')).toThrow(
+    "Provider 'codex' is not installed. Install it with: archon provider install codex"
+  );
 });

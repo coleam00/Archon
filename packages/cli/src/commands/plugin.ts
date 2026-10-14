@@ -55,8 +55,15 @@ import {
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 import { removeUnlocked } from './unlocked-file';
-import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import {
+  assertProviderRegistrationAllowed,
+  claudeDescriptor,
+  codexDescriptor,
+  getRegisteredProviders,
+  piDescriptor,
+} from '@archon/providers';
+import { registerCopilotProvider } from '@archon/providers/community/copilot';
+import { registerOpencodeProvider } from '@archon/providers/community/opencode';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
@@ -301,11 +308,16 @@ async function inspectInstallableProvider(
     throw new Error(providerVersionMismatchMessage(descriptor.id, descriptor.version, version));
   }
   const registration = processProviderRegistration(descriptor, [stagedBinary]);
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  registerOpencodeProvider();
+  registerCopilotProvider();
+  // Maintained ids stay reserved whether this host runs them from source or from receipts.
+  const reserved = [claudeDescriptor, codexDescriptor, piDescriptor]
+    .filter(entry => entry.id !== descriptor.id)
+    .map(entry => processProviderRegistration(entry, [stagedBinary]));
   const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
   const registrations = [
-    ...getRegisteredProviders().filter(provider => !maintained || provider.id !== descriptor.id),
+    ...getRegisteredProviders().filter(provider => !isMaintainedProvider(provider.id)),
+    ...reserved,
     ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
   ];
   assertProviderRegistrationAllowed(registration, registrations);

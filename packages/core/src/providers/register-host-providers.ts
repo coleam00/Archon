@@ -6,22 +6,18 @@ import {
   piDescriptor,
   registerProvider,
 } from '@archon/providers';
-import {
-  registerBuiltinProviders,
-  registerPiProvider,
-  registerOpencodeProvider,
-  registerCopilotProvider,
-} from '@archon/providers/in-process';
+import { registerCopilotProvider } from '@archon/providers/community/copilot';
+import { registerOpencodeProvider } from '@archon/providers/community/opencode';
 import { getVendorCatalog } from '../credentials/catalog';
 import { loadProviderPlugins } from './load-provider-plugins';
 import { processProviderRegistration } from './process-registration';
 
+/**
+ * Release binaries carry no maintained-provider SDK: Claude, Codex and Pi come only
+ * from install receipts. Source checkouts and Docker run all three from their plugin entries.
+ */
 export async function registerHostProviders(): Promise<void> {
-  if (BUNDLED_IS_BINARY) {
-    // Release binaries retain bundled providers until the provider release artifacts ship (P7).
-    registerBuiltinProviders();
-    registerPiProvider();
-  } else {
+  if (!BUNDLED_IS_BINARY) {
     const descriptors = { claude: claudeDescriptor, codex: codexDescriptor, pi: piDescriptor };
     for (const id of MAINTAINED_PROVIDER_IDS) {
       registerProvider(
@@ -36,7 +32,7 @@ export async function registerHostProviders(): Promise<void> {
   registerOpencodeProvider();
   registerCopilotProvider();
   for (const registration of await loadProviderPlugins(getPluginsPath(), {
-    maintained: BUNDLED_IS_BINARY ? 'bundled' : 'source',
+    maintained: BUNDLED_IS_BINARY ? 'installed' : 'source',
   })) {
     registerProvider(registration);
   }

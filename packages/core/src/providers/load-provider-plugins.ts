@@ -12,7 +12,7 @@ import { processProviderRegistration } from './process-registration';
 
 export async function loadProviderPlugins(
   pluginsDir: string,
-  options: { maintained?: 'source' | 'bundled' | 'installed'; version?: string } = {}
+  options: { maintained?: 'source' | 'installed'; version?: string } = {}
 ): Promise<ProviderRegistration[]> {
   const receipts = await readReceipts(pluginsDir).catch((error: unknown) => {
     throw new Error(
@@ -31,7 +31,6 @@ export async function loadProviderPlugins(
           );
           continue;
         }
-        if (options.maintained === 'bundled') continue;
         if (!isMaintainedProviderPlugin(receipt.id, descriptor.id)) {
           throw new Error('maintained provider receipt is not first-party');
         }
