@@ -547,3 +547,108 @@ test('preparation preserves both failures when rejection cannot be persisted', a
     fail.mockRestore();
   }
 });
+
+test('a triggered run pauses at a gate and an attention wait and continues after each answer', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-pause-')));
+  const project = join(await realpath(root), 'project');
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    [
+      'name: portable',
+      'description: Pauses twice after a trigger start',
+      'worktree:',
+      '  enabled: false',
+      'nodes:',
+      '  - id: review',
+      '    approval:',
+      '      message: Approve the draft?',
+      '  - id: ask',
+      '    depends_on: [review]',
+      '    wait:',
+      '      attention: Anything else?',
+      '  - id: after',
+      '    depends_on: [ask]',
+      '    bash: echo after >> after-count',
+      '',
+    ].join('\n')
+  );
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  try {
+    const host = hostForTest();
+    await registerFolder(host.records.codebases, project, 'portable');
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+    if (!user) throw new Error('Expected test identity');
+    await host.deps.store.acceptStartReceipt(
+      acceptance(
+        {
+          bindingId: 'pausing',
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: user.id,
+          resource: 'portable',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'portable',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        'pausing'
+      )
+    );
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    const [runId] = admitted;
+    if (!runId) throw new Error('The trigger admitted no run');
+    await startAdmittedResourceStart({
+      host,
+      hostId: 'host',
+      requestId: runId,
+      createPlatform: () => new HeadlessPlatform(),
+    });
+    expect(await host.deps.store.getWorkflowRun(runId)).toMatchObject({
+      status: 'paused',
+      metadata: { approval: { nodeId: 'review' } },
+    });
+
+    const answerAndContinue = async (answer: string): Promise<void> => {
+      await host.operations.approveWorkflow(runId, answer, { kind: 'operator' }, { via: 'cli' });
+      const run = await host.deps.store.getWorkflowRun(runId);
+      if (!run) throw new Error('The run disappeared');
+      const admission = await host.engine.resume({
+        run,
+        platform: new HeadlessPlatform(),
+        conversationId: `trigger-${runId}`,
+        cwd: project,
+        userMessage: '',
+      });
+      if (!admission.accepted) throw new Error('The answered run was not resumed');
+      await admission.settled;
+    };
+
+    await answerAndContinue('approved');
+    expect(await host.deps.store.getWorkflowRun(runId)).toMatchObject({
+      status: 'paused',
+      metadata: { wait: { kind: 'attention', nodeId: 'ask' } },
+    });
+
+    await answerAndContinue('nothing else');
+    expect((await host.deps.store.getWorkflowRun(runId))?.status).toBe('completed');
+    expect(await readFile(join(project, 'after-count'), 'utf8')).toBe('after\n');
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});

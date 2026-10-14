@@ -890,6 +890,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         resolveAndCancelApprovalGate: (...args) =>
           operationWorkflowDb.resolveAndCancelApprovalGate(...args),
         answerAttentionWait: (...args) => operationWorkflowDb.answerAttentionWait(...args),
+        labelAttentionWait: (...args) => operationWorkflowDb.labelAttentionWait(...args),
         cancelResumableRunsForConversation: (...args) =>
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
         deleteWorkflowNodeSessions: (...args) =>
@@ -9351,9 +9352,6 @@ describe('workflowRunCommand — detach', () => {
   });
 });
 
-// #2707 step 2 / #1991 — an interactive-class workflow dispatched via `--detach` used to
-// hang indefinitely: the detached child paused with nobody watching, exited 0, and nothing
-// ever resumed it. Refused synchronously now, before the fork.
 // ---------------------------------------------------------------------------
 // #2872 — the detached child executes the run its launcher created. Without this
 // the child wrote a SECOND row, so the id the parent acked named nothing.
@@ -9628,111 +9626,6 @@ describe('pendingDurableWait — which pauses this process owns', () => {
     expect(
       pendingDurableWait(run('paused', { approval: { nodeId: 'gate', message: 'ok?' } }))
     ).toBeUndefined();
-  });
-});
-
-describe('workflowRunCommand — detach refuses an interactive-class workflow (#2707 step 2 / #1991)', () => {
-  let consoleSpy: ReturnType<typeof spyOn>;
-
-  beforeEach(async () => {
-    jest.useFakeTimers();
-    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockClear();
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-    consoleSpy.mockRestore();
-  });
-
-  it('refuses before the fork, naming the workflow and its class', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'guided', interactive: true }, 'project')],
-      errors: [],
-    });
-
-    const spawnSpy = spyOn(Bun, 'spawn');
-
-    try {
-      await expect(
-        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'guided', 'hello', {
-          detach: true,
-        })
-      ).rejects.toThrow(/interactive-class/i);
-    } finally {
-      spawnSpy.mockRestore();
-    }
-
-    // Refused before the fork — no child process, no "started" ack.
-    expect(spawnSpy).not.toHaveBeenCalled();
-    const logged: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(logged).not.toContain("Started 'guided' in the background.");
-  });
-
-  it('allows the same workflow to run in the foreground (no --detach)', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'guided', interactive: true }, 'project')],
-      errors: [],
-    });
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-ok',
-    });
-
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'guided', 'hello', {
-      noWorktree: true,
-    });
-
-    expect(executeWorkflow).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not refuse a continuation (--resume --detach) on an already-paused interactive-class run', async () => {
-    // A continuation is exempt from the launch refusal (isContinuation guard) — proven by
-    // asserting the class error never fires, regardless of what (if anything) an
-    // unrelated missing mock throws afterward. Real timers: this test does not exercise
-    // the fake-timer-gated startup window the sibling tests in this block do.
-    jest.useRealTimers();
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { hydrateResumableRun } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'guided', interactive: true }, 'project')],
-      errors: [],
-    });
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      preCreatedRun: { id: 'run-paused', workflow_name: 'guided' },
-      priorCompletedNodes: new Map(),
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-resume',
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-paused',
-      workflow_name: 'guided',
-      working_path: null,
-    });
-    // Real spawn must never actually run — mock it even though this test doesn't assert
-    // on it, since --detach forks if every mock above happens to line up.
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
-
-    try {
-      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'guided', 'hello', {
-        resume: true,
-        detach: true,
-      });
-    } catch (error) {
-      expect((error as Error).message).not.toMatch(/interactive-class/i);
-    } finally {
-      spawnSpy.mockRestore();
-    }
   });
 });
 
@@ -12810,6 +12703,12 @@ describe('workflowRunCommand — progress rendering', () => {
     });
     commitTestEvent({
       workflow_run_id: OWNED_RUN,
+      event_type: 'pause_notice_undelivered',
+      step_name: 'review',
+      data: { nodeId: 'review', platform: 'cli' },
+    });
+    commitTestEvent({
+      workflow_run_id: OWNED_RUN,
       event_type: 'container_stopped',
       step_name: 'container',
       data: { containerId: 'abcdef0123456789' },
@@ -12828,7 +12727,8 @@ describe('workflowRunCommand — progress rendering', () => {
     });
   }
 
-  // Recorded from the emitter renderer this replaced, fed the same run's events.
+  // Recorded from the emitter renderer this replaced, fed the same run's events. The
+  // undelivered pause notice line has no emitter counterpart; it reads its row only.
   const PLAIN_PROGRESS = [
     '[workflow] Transcript: /logs/test-run-id.jsonl',
     '[container] created abcdef012345',
@@ -12842,6 +12742,7 @@ describe('workflowRunCommand — progress rendering', () => {
     '[plan-cmd] Skipped (prior_success)',
     '[review] Completed (500ms)',
     '[review] Waiting for approval: Please review the changes',
+    '[review] Pause notice not delivered; the run is still waiting',
     '[container] stopped abcdef012345',
     '[container] writeback_requested',
   ];

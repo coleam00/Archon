@@ -140,12 +140,7 @@ import type {
   WorkflowWaitContext,
   NodeMcp,
 } from './schemas';
-import {
-  dagNodeSchema,
-  isWorkflowWaitContext,
-  skipCauseSchema,
-  workflowDefinitionSchema,
-} from './schemas';
+import { dagNodeSchema, skipCauseSchema, workflowDefinitionSchema } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
@@ -309,6 +304,12 @@ function createMockStore(): MockWorkflowStore {
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -380,17 +381,11 @@ function createMockStore(): MockWorkflowStore {
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
       async (_id, _waitContext) => {}
     ),
-    failPausedAttentionWait: mock<IWorkflowStore['failPausedAttentionWait']>(
-      async (_id, _waitContext, _error) => ({ failed: true })
-    ),
     clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
       async (id, _waitContext, completion) => ({
         cleared: true,
         nodeEvent: waitCompletionEvents(id, completion).node,
       })
-    ),
-    failPausedApproval: mock<IWorkflowStore['failPausedApproval']>(
-      async (_id, _approvalContext, _error) => ({ failed: true })
     ),
     claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
     releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => {}),
@@ -13353,10 +13348,6 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const blockWorkflow = {
         name: 'materialized-loop-block',
         description: 'Command-backed loop block',
-        // Own class declaration (#2707 step 2): this file natively authors the
-        // interactive-loop pause node, independent of whether a composing parent
-        // also declares it.
-        interactive: true,
         nodes: [
           {
             id: 'gated-loop',
@@ -17485,7 +17476,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(messages.join('\n')).toContain('approve attention-wait <your answer>');
   });
 
-  it('fails an attention pause when its notification cannot be delivered', async () => {
+  it('keeps an attention pause paused when its notification cannot be delivered', async () => {
     const store = createEscalationStore('attention-delivery-failed');
     const platform = createMockPlatform();
     platform.sendMessage.mockImplementation(async () => {
@@ -17513,7 +17504,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
     );
 
     expect(store.getState()).toMatchObject({
-      status: 'failed',
+      status: 'paused',
       metadata: {
         wait: {
           owner: 'node',
@@ -17523,25 +17514,16 @@ describe('executeDagWorkflow -- durable wait node', () => {
         },
       },
     });
-    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workflow_run_id: 'attention-delivery-failed',
-        event_type: 'node_failed',
-        step_name: 'rerun-ci',
-        data: expect.objectContaining({
-          error: "Wait node 'rerun-ci' could not deliver its attention notification",
-        }),
-      })
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'attention-delivery-failed',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'rerun-ci',
+      data: { nodeId: 'rerun-ci', platform: 'test' },
+    });
+    expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'node_failed' })
     );
-    expect(store.failPausedAttentionWait).toHaveBeenCalledWith(
-      'attention-delivery-failed',
-      expect.objectContaining({
-        owner: 'node',
-        nodeId: 'rerun-ci',
-        kind: 'attention',
-      }),
-      "Wait node 'rerun-ci' could not deliver its attention notification"
-    );
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -17725,6 +17707,54 @@ describe('executeDagWorkflow -- durable wait node', () => {
         kind: 'attention',
         form: 'select',
         options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
+  });
+
+  it('resolves label values when the wait pauses', async () => {
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-labels',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-labels-test',
+          nodes: [
+            {
+              id: 'plan',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"cause":"other"}'`,
+              output_format: {
+                type: 'object',
+                properties: { cause: { type: 'string' } },
+                required: ['cause'],
+              },
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['plan'],
+              wait: {
+                attention: 'CI is red. Retry?',
+                labels: { ci: '$plan.output.cause', area: 'delivery' },
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-labels'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-labels',
+      expect.objectContaining({
+        kind: 'attention',
+        labels: { ci: 'other', area: 'delivery' },
       }),
       { kind: 'started', stepName: 'ask' }
     );
@@ -17969,8 +17999,8 @@ describe('executeDagWorkflow -- approval node', () => {
     });
   });
 
-  it('fails the persisted approval gate when its prompt cannot be delivered', async () => {
-    const store = createMockStore();
+  it('keeps the approval gate paused when its prompt cannot be delivered', async () => {
+    const store = createEscalationStore('dag-test-run-id');
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
       if (message.includes('Approval required')) throw new Error('401 unauthorized');
@@ -17999,18 +18029,19 @@ describe('executeDagWorkflow -- approval node', () => {
       })
     );
 
-    // Nobody was told how to approve, so the run must not wait for an approval.
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    // The store fails the gate only on an exact match of the persisted context,
-    // so the caller must pass the paused context, minted pauseId included.
-    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
-    expect(paused?.pauseId).toEqual(expect.any(String));
-    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
-    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-    expect(failed?.data?.error).toBe(
-      "Approval message failed to deliver for node 'review' — cannot pause safely"
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'dag-test-run-id',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'review',
+      data: { nodeId: 'review', platform: 'test' },
+    });
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'approval_requested', step_name: 'review' })
     );
-    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(store.getState().status).toBe('paused');
+    expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -18043,12 +18074,12 @@ describe('executeDagWorkflow -- approval node', () => {
         },
       },
     },
-  ])('fails the persisted $kind gate when its prompt cannot be delivered', async ({ node }) => {
+  ])('keeps the $kind gate paused when its prompt cannot be delivered', async ({ node }) => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Draft.' };
       yield { type: 'result', sessionId: 'undelivered-loop' };
     });
-    const store = createMockStore();
+    const store = createEscalationStore('dag-test-run-id');
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
       if (message.includes('Input required')) throw new Error('401 unauthorized');
@@ -18066,9 +18097,15 @@ describe('executeDagWorkflow -- approval node', () => {
     );
 
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
-    expect(paused?.pauseId).toEqual(expect.any(String));
-    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'dag-test-run-id',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'refine',
+      data: { nodeId: 'refine', platform: 'test' },
+    });
+    expect(store.getState().status).toBe('paused');
+    expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
@@ -20148,142 +20185,126 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ]);
   });
 
-  it.each([
-    'post-body cancel',
-    'between-iteration cancel',
-    'undelivered gate',
-    'completion error',
-  ] as const)('loop_group retains paid usage on %s', async exit => {
-    const store = createMockStore();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-    let status: 'running' | 'cancelled' = 'running';
-    let calls = 0;
-    let gatePaused = false;
-    store.getWorkflowRunStatus.mockImplementation(async () => status);
-    mockSendQueryDag.mockImplementation(async function* () {
-      calls++;
-      yield { type: 'agent_message_chunk', text: 'Paid work.' };
-      yield {
-        type: 'result',
-        sessionId: `paid-${calls}`,
-        cost: 0.05,
-        tokens: { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 },
-      };
-      if (exit === 'post-body cancel' && calls === 2) status = 'cancelled';
-    });
-    store.createWorkflowEvent.mockImplementation(async event => {
-      if (
-        exit === 'between-iteration cancel' &&
-        event.event_type === 'loop_iteration_completed' &&
-        event.step_name === 'grp' &&
-        event.data?.iteration === 2
-      )
-        status = 'cancelled';
-    });
-    store.pauseWorkflowRun.mockImplementation(async (_id, _approval, _metadata, suspension) => {
-      gatePaused = true;
-      if (suspension) await store.createWorkflowEvent(suspension);
-    });
-    platform.sendMessage.mockImplementation(async () => {
-      if (exit === 'undelivered gate' && gatePaused) throw new Error('Transport unavailable');
-    });
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        platform,
-        cwd: testDir,
-        logDir: join(testDir, 'logs'),
-        workflowRun,
-        workflow: {
-          name: 'loop-group-early-exit-usage',
-          nodes: [
-            {
-              id: 'grp',
-              kind: 'loop_group',
-              loop_group: {
-                until: 'DONE',
-                ...(exit === 'completion error' ? { until_bash: 'test -n "$skipped.output"' } : {}),
-                max_iterations: 4,
-                fresh_context: false,
-                interactive: exit === 'undelivered gate',
-                gate_message: 'Review paid work.',
-                nodes: [
-                  { id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+  it.each(['post-body cancel', 'between-iteration cancel', 'completion error'] as const)(
+    'loop_group retains paid usage on %s',
+    async exit => {
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+      let status: 'running' | 'cancelled' = 'running';
+      let calls = 0;
+      store.getWorkflowRunStatus.mockImplementation(async () => status);
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: 'Paid work.' };
+        yield {
+          type: 'result',
+          sessionId: `paid-${calls}`,
+          cost: 0.05,
+          tokens: { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 },
+        };
+        if (exit === 'post-body cancel' && calls === 2) status = 'cancelled';
+      });
+      store.createWorkflowEvent.mockImplementation(async event => {
+        if (
+          exit === 'between-iteration cancel' &&
+          event.event_type === 'loop_iteration_completed' &&
+          event.step_name === 'grp' &&
+          event.data?.iteration === 2
+        )
+          status = 'cancelled';
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          logDir: join(testDir, 'logs'),
+          workflowRun,
+          workflow: {
+            name: 'loop-group-early-exit-usage',
+            nodes: [
+              {
+                id: 'grp',
+                kind: 'loop_group',
+                loop_group: {
+                  until: 'DONE',
                   ...(exit === 'completion error'
-                    ? [
-                        {
-                          id: 'skipped',
-                          kind: 'agent' as const,
-                          source: { kind: 'inline' as const, prompt: 'Skip.' },
-                          depends_on: ['b'],
-                          when: "$b.output == 'never'",
-                        },
-                      ]
-                    : []),
-                ],
+                    ? { until_bash: 'test -n "$skipped.output"' }
+                    : {}),
+                  max_iterations: 4,
+                  fresh_context: false,
+                  nodes: [
+                    { id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+                    ...(exit === 'completion error'
+                      ? [
+                          {
+                            id: 'skipped',
+                            kind: 'agent' as const,
+                            source: { kind: 'inline' as const, prompt: 'Skip.' },
+                            depends_on: ['b'],
+                            when: "$b.output == 'never'",
+                          },
+                        ]
+                      : []),
+                  ],
+                },
               },
-            },
-          ],
-        },
-      })
-    );
-    expect(calls).toBe(exit === 'undelivered gate' || exit === 'completion error' ? 1 : 2);
-    if (exit === 'undelivered gate') {
-      expect(store.failPausedApproval).toHaveBeenCalledTimes(1);
-      expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(
-        store.pauseWorkflowRun.mock.calls[0]?.[1]
+            ],
+          },
+        })
       );
-    }
-    const groupFailure = persistedEvents(store).find(
-      event => event.event_type === 'node_failed' && event.step_name === 'grp'
-    );
-    expect(groupFailure?.data?.failure_kind).toBe(
-      exit === 'undelivered gate' || exit === 'completion error' ? 'unknown' : 'cancelled'
-    );
-    if (exit === 'completion error')
-      expect(groupFailure?.data?.error).toContain("cannot resolve '$skipped.output'");
-    expect(groupFailure?.data?.cost_usd).toBe(0.05 * calls);
-    expect(groupFailure?.data?.spend).toMatchObject({
-      costUsd: { source: 'provider', value: 0.05 * calls },
-      tokens: {
-        source: 'provider',
-        value: {
-          input: 100 * calls,
-          output: 10 * calls,
-          cacheRead: 40 * calls,
-          cacheWrite: 5 * calls,
+      expect(calls).toBe(exit === 'completion error' ? 1 : 2);
+      const groupFailure = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'grp'
+      );
+      expect(groupFailure?.data?.failure_kind).toBe(
+        exit === 'completion error' ? 'unknown' : 'cancelled'
+      );
+      if (exit === 'completion error')
+        expect(groupFailure?.data?.error).toContain("cannot resolve '$skipped.output'");
+      expect(groupFailure?.data?.cost_usd).toBe(0.05 * calls);
+      expect(groupFailure?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.05 * calls },
+        tokens: {
+          source: 'provider',
+          value: {
+            input: 100 * calls,
+            output: 10 * calls,
+            cacheRead: 40 * calls,
+            cacheWrite: 5 * calls,
+          },
         },
-      },
-    });
-    expect(runUsageWrites(store)).toEqual([
-      {
-        total_cost_usd: 0.05 * calls,
-        total_tokens_in: 100 * calls,
-        total_tokens_out: 10 * calls,
-        total_cache_read_tokens: 40 * calls,
-        total_cache_write_tokens: 5 * calls,
-      },
-    ]);
-    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
-    expect(snapshot.costUsd).toBe(0.05 * calls);
-    expect(snapshot.tokens).toEqual({
-      input: 100 * calls,
-      output: 10 * calls,
-      cacheRead: 40 * calls,
-      cacheWrite: 5 * calls,
-    });
-    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
-    const groupRow = rows.find(row => row.type === 'node_error' && row.step === 'grp');
-    expect(groupRow).toBeDefined();
-    expect(groupRow).not.toHaveProperty('cost_usd');
-    expect(groupRow).not.toHaveProperty('tokens');
-    expect(
-      rows
-        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
-        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
-    ).toBeCloseTo(0.05 * calls, 5);
-  });
+      });
+      expect(runUsageWrites(store)).toEqual([
+        {
+          total_cost_usd: 0.05 * calls,
+          total_tokens_in: 100 * calls,
+          total_tokens_out: 10 * calls,
+          total_cache_read_tokens: 40 * calls,
+          total_cache_write_tokens: 5 * calls,
+        },
+      ]);
+      const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
+      expect(snapshot.costUsd).toBe(0.05 * calls);
+      expect(snapshot.tokens).toEqual({
+        input: 100 * calls,
+        output: 10 * calls,
+        cacheRead: 40 * calls,
+        cacheWrite: 5 * calls,
+      });
+      const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+      const groupRow = rows.find(row => row.type === 'node_error' && row.step === 'grp');
+      expect(groupRow).toBeDefined();
+      expect(groupRow).not.toHaveProperty('cost_usd');
+      expect(groupRow).not.toHaveProperty('tokens');
+      expect(
+        rows
+          .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+          .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+      ).toBeCloseTo(0.05 * calls, 5);
+    }
+  );
 
   it('a node cancelled by the user leaves its spend in the transcript', async () => {
     // The abort branch called no logNodeError at all, so a cancelled node produced no
@@ -37828,29 +37849,6 @@ function createEscalationStore(
         };
       }
     ),
-    failPausedAttentionWait: mock<IWorkflowStore['failPausedAttentionWait']>(
-      async (_id, waitContext, error) => {
-        const active = metadata.wait;
-        if (
-          status !== 'paused' ||
-          !isWorkflowWaitContext(active) ||
-          active.kind !== 'attention' ||
-          active.owner !== waitContext.owner ||
-          active.nodeId !== waitContext.nodeId ||
-          active.waitingSince !== waitContext.waitingSince ||
-          (active.owner === 'loop_group' &&
-            waitContext.owner === 'loop_group' &&
-            (active.bodyWaitId !== waitContext.bodyWaitId ||
-              active.iteration !== waitContext.iteration))
-        ) {
-          return { failed: false };
-        }
-        status = 'failed';
-        metadata = { ...metadata, error };
-        return { failed: true };
-      }
-    ),
-    failPausedApproval: mock(async () => ({ failed: true })),
     getState: () => ({ status, metadata }),
   };
 }
@@ -37860,7 +37858,6 @@ function gateTerminatedLoopGroupWorkflow(): WorkflowDefinition {
   return {
     name: 'gate-terminated-loop-group',
     description: 'Design A canonical shape',
-    interactive: true,
     nodes: [
       dagNodeSchema.parse({
         id: 'grp',
@@ -38872,7 +38869,6 @@ describe('executeDagWorkflow -- loop_group output with a pause sink (#4043)', ()
     return {
       name: 'loop-group-output',
       description: 'loop_group output selection',
-      interactive: true,
       nodes: [
         dagNodeSchema.parse({
           id: 'grp',

@@ -134,8 +134,6 @@ import {
   type ResolvedContinuation,
 } from '@archon/workflows/executor';
 import {
-  assertComposedGateDriveable,
-  assertInteractiveClassNotBackgrounded,
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,
 } from '@archon/workflows/utils/workflow-requirements';
@@ -209,6 +207,21 @@ import {
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  attentionProjectForCwd,
+  attentionQueueSource,
+  resolveAttentionProject,
+} from '@archon/core/operations/attention-queue';
+import {
+  countAttentionQueue,
+  listAttentionQueue,
+  parseAttentionLabelPairs,
+  parseAttentionQueueRequest,
+  readAttentionQueueItem,
+  selectAttentionQueue,
+  type AttentionQueueItem,
+  type AttentionQueueScope,
+} from '@archon/workflows/attention-queue';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
@@ -1226,6 +1239,8 @@ function workflowEventLine(
       return typeof row.data.message === 'string'
         ? `[${row.step_name}] Waiting for approval: ${row.data.message}`
         : undefined;
+    case 'pause_notice_undelivered':
+      return `[${row.step_name}] Pause notice not delivered; the run is still waiting`;
     case 'container_created':
     case 'container_stopped':
     case 'container_resumed':
@@ -2334,27 +2349,6 @@ async function runWorkflowWithOwnedSource(
   // codebase lookup does happen here — see the folder-detection probe below —
   // to decide folder-vs-repo branch pinning before forking.
   if (options.detach) {
-    // Interactive-class refusal (#2707 step 2): a detached FRESH launch pauses with
-    // nobody watching and nothing to resume it — the exact #1991 hang. Checked here,
-    // synchronously, before the fork and before any worktree/clone/AI cost, mirroring
-    // the requirements gate immediately above. Two checks, like the orchestrator's
-    // shared background-dispatch gate (dispatchBackgroundWorkflowOwned): the
-    // workflow's own declared class, and a gate that arrived via `include:` in a
-    // workflow that omits `interactive: true` (the class declaration alone cannot see
-    // that case — see assertComposedGateDriveable's doc comment).
-    //
-    // Scoped to a genuinely FRESH dispatch (`!isContinuation`) — refusing this at
-    // "launch" only, per the issue's own wording. A run that has ALREADY proved it can
-    // pause (it paused once) is not launching; `resume <id> --detach` and `run --resume
-    // --detach` are legitimate continuation actions that must keep working, since the
-    // whole point of --detach on those is to drive one gate and let a background
-    // process continue to the next. If it pauses again, it sits paused again —
-    // discoverable via `workflow status`/`runs`, not a silent hang nobody knows exists.
-    if (!isContinuation) {
-      assertInteractiveClassNotBackgrounded(workflow);
-      assertComposedGateDriveable(workflow.nodes);
-    }
-
     const childDestination = await resolveRunDestination(host, options, continuationRun);
     const extraArgs: string[] = [];
     let pinnedBranch: string | undefined;
@@ -4606,6 +4600,210 @@ export async function workflowWaitCommand(
   // 3 keeps "the run is still live" distinguishable from both a real answer (0) and a
   // broken wait (1).
   return result.kind === 'deadline' ? 3 : 0;
+}
+
+export interface WorkflowAttentionOptions {
+  json?: boolean;
+  project?: string;
+  all?: boolean;
+  /** `k=v` filters; every one must match. */
+  labels: readonly string[];
+  sort?: string;
+  countBy?: string;
+}
+
+/**
+ * `workflow attention` skips the CLI's project gate, so `cwd` is the raw working
+ * directory, not its project root. Resolve its codebase the way the gate does, so a
+ * short run id still matches from a project subdirectory.
+ */
+async function resolveAttentionRunId(
+  host: WorkflowHost,
+  runId: string,
+  cwd: string
+): Promise<string> {
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
+}
+
+/** The scope a list or count covers: `--all`, `--project`, or the working directory's project. */
+async function attentionScope(
+  host: WorkflowHost,
+  cwd: string,
+  opts: Pick<WorkflowAttentionOptions, 'project' | 'all'>
+): Promise<AttentionQueueScope> {
+  if (opts.all) return { kind: 'all' };
+  const project =
+    opts.project === undefined
+      ? await attentionProjectForCwd(host.records.codebases, cwd)
+      : await resolveAttentionProject(host.records.codebases, opts.project);
+  return { kind: 'project', project };
+}
+
+function printAttentionItem(item: AttentionQueueItem): void {
+  const paused =
+    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
+  console.log(
+    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`
+  );
+  if (item.fanOut !== null)
+    console.log(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
+  const labels = Object.entries(item.labels);
+  if (labels.length > 0)
+    console.log(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
+  switch (item.kind) {
+    case 'attention':
+      console.log(`    ${item.node}: ${item.message}`);
+      for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
+        console.log(`    ${line}`);
+      break;
+    case 'awaiting_response':
+      console.log(`    gate '${item.node}': ${item.message}`);
+      console.log(
+        `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
+      );
+      break;
+    case 'unreadable':
+      console.log(`    needs a look: ${item.detail}`);
+      break;
+  }
+}
+
+/**
+ * The attention queue as typed JSON for answerers outside Archon: the items in scope,
+ * how many fall under each project or label value, or the one item a run stands for.
+ * Read-only; answering goes through `answer`, `approve`, `reject` or `respond`.
+ */
+export async function workflowAttentionCommand(
+  host: WorkflowHost,
+  cwd: string,
+  runId: string | undefined,
+  opts: WorkflowAttentionOptions
+): Promise<number> {
+  try {
+    const source = attentionQueueSource(host.deps.store, host.records.isolation);
+    if (runId !== undefined) {
+      if (
+        opts.project !== undefined ||
+        opts.all ||
+        opts.labels.length > 0 ||
+        opts.sort !== undefined ||
+        opts.countBy !== undefined
+      )
+        throw new Error(
+          'workflow attention <run-id> takes no --project, --all, --label, --sort or --count-by'
+        );
+      const resolvedId = await resolveAttentionRunId(host, runId, cwd);
+      const item = await readAttentionQueueItem(source, resolvedId);
+      if (item === undefined) {
+        if (opts.json)
+          await writeJsonLine({ ok: false, runId, action: 'attention', error: 'not_found' });
+        else console.log(`Workflow run not found: ${runId}`);
+        return 1;
+      }
+      if (opts.json) {
+        await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
+      } else if (item === null) {
+        console.log(`Run ${resolvedId} needs no attention now.`);
+      } else {
+        printAttentionItem(item);
+      }
+      return 0;
+    }
+
+    const { labels, order, countBy } = parseAttentionQueueRequest(opts);
+    const scope = await attentionScope(host, cwd, opts);
+    const items = await listAttentionQueue(source);
+
+    if (countBy !== undefined) {
+      const counts = countAttentionQueue(items, { scope, labels, countBy });
+      if (opts.json) {
+        await writeJsonLine({ ok: true, action: 'attention', scope, counts });
+        return 0;
+      }
+      const rows =
+        counts.by === 'project'
+          ? counts.counts.map(
+              entry => [entry.count, entry.project?.name ?? '(no project)'] as const
+            )
+          : counts.counts.map(
+              entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
+            );
+      for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
+      if (rows.length === 0) console.log('No runs need attention.');
+      return 0;
+    }
+
+    const selected = selectAttentionQueue(items, { scope, labels, order });
+    if (opts.json) {
+      await writeJsonLine({ ok: true, action: 'attention', scope, items: selected });
+      return 0;
+    }
+    const where = scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`;
+    if (selected.length === 0) {
+      console.log(`No runs need attention in ${where}.`);
+      return 0;
+    }
+    console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
+    for (const item of selected) {
+      printAttentionItem(item);
+      console.log('');
+    }
+    return 0;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId }, 'cli.workflow_attention_failed');
+    if (opts.json) {
+      await writeJsonLine({
+        ok: false,
+        ...(runId ? { runId } : {}),
+        action: 'attention',
+        error: err.message,
+      });
+      return 1;
+    }
+    throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+  }
+}
+
+/**
+ * Merge a label write into the attention wait a run is paused at: `set` pairs replace
+ * the same keys, `unset` keys are removed, nothing else changes. Refused when the run is
+ * no longer at `occurrence`.
+ */
+export async function workflowAttentionLabelCommand(
+  host: WorkflowHost,
+  runId: string,
+  occurrence: string,
+  set: readonly string[],
+  unset: readonly string[],
+  json: boolean | undefined,
+  cwd: string
+): Promise<number> {
+  try {
+    const resolvedId = await resolveAttentionRunId(host, runId, cwd);
+    const result = await host.operations.labelAttentionWait(
+      resolvedId,
+      { occurrence, set: parseAttentionLabelPairs(set), unset },
+      { kind: 'operator' },
+      'cli'
+    );
+    if (json) {
+      await writeJsonLine({ ok: true, action: 'attention_label', ...result });
+    } else {
+      const labels = Object.entries(result.labels).map(([key, value]) => `${key}=${value}`);
+      console.log(
+        `Labeled run ${result.runId} at revision ${String(result.revision)}: ${
+          labels.length > 0 ? labels.join(', ') : 'no labels'
+        }`
+      );
+    }
+    return 0;
+  } catch (error) {
+    if (!json) throw error;
+    await printJsonWriteError(runId, 'attention_label', error);
+    return 1;
+  }
 }
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 500;

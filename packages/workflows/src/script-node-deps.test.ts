@@ -138,6 +138,12 @@ function createMockStore(): IWorkflowStore {
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -237,7 +243,6 @@ function createMockStore(): IWorkflowStore {
     failWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
-    failPausedAttentionWait: mock(() => Promise.resolve({ failed: true })),
     clearWorkflowWaitContext: mock((id: string, _wait: unknown, completion: { stepName: string }) =>
       Promise.resolve({
         cleared: true as const,
@@ -249,7 +254,6 @@ function createMockStore(): IWorkflowStore {
         },
       })
     ),
-    failPausedApproval: mock(() => Promise.resolve({ failed: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),

@@ -230,10 +230,6 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
-    failPausedAttentionWait: (id, wait, error) =>
-      write([id], view => view.failPausedAttentionWait(id, wait, error)),
-    failPausedApproval: (id, approval, error) =>
-      write([id], view => view.failPausedApproval(id, approval, error)),
     resolveApprovalGate: (id, metadata, events, expected) =>
       write([id], view => view.resolveApprovalGate(id, metadata, events, expected)),
     resolveAndCancelApprovalGate: (id, events, cancellation, expected) =>
@@ -331,6 +327,9 @@ export async function createFileWorkflowStore(
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
     answerAttentionWait: (id, answered) =>
       write([id], view => view.answerAttentionWait(id, answered)),
+    labelAttentionWait: (id, labelWrite) =>
+      write([id], view => view.labelAttentionWait(id, labelWrite)),
+    listAttentionQueueRows: () => query('all', view => view.listAttentionQueueRows()),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
     // Cleanup archives logs without hydrating current-state events.

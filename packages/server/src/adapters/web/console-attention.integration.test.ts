@@ -15,10 +15,8 @@ import { MessagePersistence } from './persistence';
 import { SSETransport, DASHBOARD_STREAM } from './transport';
 import { WorkflowEventBridge } from './workflow-bridge';
 
-// Declared approvals are interactive-class and the CLI refuses --detach for them.
-// The attention workflow exercises the detached child; the approval is a foreground control.
 test(
-  'an open dashboard observes a real detached CLI attention wait and a CLI approval',
+  'an open dashboard observes a real detached CLI attention wait and approval',
   async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-console-attention-')));
     const savedHome = process.env.ARCHON_HOME;
@@ -78,9 +76,13 @@ test(
           await (await app.request('/api/runs/attention')).json()
         ).runs
       ).toEqual([]);
-      for (const [name, body, detached] of [
-        ['runtime-attention', 'wait:\n      attention: Rotate then resume', true],
-        ['runtime-approval', 'approval:\n      message: Approve runtime control', false],
+      for (const [name, body, kind] of [
+        ['runtime-attention', 'wait:\n      attention: Rotate then resume', 'attention'],
+        [
+          'runtime-approval',
+          'approval:\n      message: Approve runtime control',
+          'awaiting_response',
+        ],
       ] as const) {
         const project = join(root, name);
         await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
@@ -99,7 +101,7 @@ test(
             project,
             '--folder',
             '--json',
-            ...(detached ? ['--detach'] : []),
+            '--detach',
             'Verify console attention against a scratch install.',
           ],
           {
@@ -116,16 +118,14 @@ test(
           new Response(child.stderr).text(),
         ]);
         expect({ exit, stderr }).toMatchObject({ exit: 0 });
-        if (detached) {
-          const launch: unknown = JSON.parse(stdout);
-          expect(launch).toHaveProperty('runId');
-        }
+        const launch: unknown = JSON.parse(stdout);
+        expect(launch).toHaveProperty('runId');
         const deadline = Date.now() + 15_000;
         while (!observed.has(name) && observerErrors.length === 0 && Date.now() < deadline)
           await Bun.sleep(20);
         expect(observerErrors).toEqual([]);
-        expect(observed.get(name)?.kind).toBe(detached ? 'attention' : 'awaiting_response');
-        if (detached && !observed.get(name)?.occurrence)
+        expect(observed.get(name)?.kind).toBe(kind);
+        if (kind === 'attention' && !observed.get(name)?.occurrence)
           throw new Error('No wait occurrence observed');
       }
     } finally {

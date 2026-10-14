@@ -27,7 +27,11 @@ import type { ConversationLockManager, RunActor, User } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type {
+  ApprovalContext,
+  WorkflowAttentionWaitContext,
+  WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type {
   ProviderEventQuery,
   ProviderEventRecord,
@@ -101,7 +105,7 @@ type ListWorkflowRunsOptions = Parameters<
 const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
-const mockListRunsNeedingAttention = mock(async (): Promise<DashboardWorkflowRun[]> => []);
+const mockListAttentionQueueRows = mock(async (): Promise<DashboardWorkflowRun[]> => []);
 const mockListDashboardRuns = makeListDashboardRunsMock();
 const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
@@ -415,9 +419,11 @@ mock.module('@archon/core/db/codebases', () => ({
   deleteCodebase: mock(async () => {}),
 }));
 
+const mockFindLatestEnvironment = mock(async (): Promise<{ branch_name: string } | null> => null);
 mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
+  findLatestByCodebaseAndWorkingPath: mockFindLatestEnvironment,
 }));
 
 const mockDeleteWorkflowRun = mock(async (_id: string) => {});
@@ -440,11 +446,14 @@ const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload
 const mockAnswerAttentionWait = mock<
   (typeof import('@archon/core/db/workflows'))['answerAttentionWait']
 >(async () => ({ answered: true }));
+const mockLabelAttentionWait = mock<
+  (typeof import('@archon/core/db/workflows'))['labelAttentionWait']
+>(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
-  listRunsNeedingAttention: mockListRunsNeedingAttention,
+  listAttentionQueueRows: mockListAttentionQueueRows,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
@@ -454,6 +463,7 @@ mock.module('@archon/core/db/workflows', () => ({
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
   signalWorkflowWait: mockSignalWorkflowWait,
   answerAttentionWait: mockAnswerAttentionWait,
+  labelAttentionWait: mockLabelAttentionWait,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -4959,7 +4969,7 @@ test('the attention endpoint and detail expose the shared projection with wire d
       },
     },
   };
-  mockListRunsNeedingAttention.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
+  mockListAttentionQueueRows.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
   mockGetWorkflowRun.mockImplementationOnce(async () => run);
   const { app } = makeApp();
   const list = await app.request('/api/runs/attention');
@@ -4980,4 +4990,118 @@ test('the attention endpoint and detail expose the shared projection with wire d
   expect(detail.status).toBe(200);
   const detailBody = (await detail.json()) as { run: unknown };
   expect(apiWorkflowRunSchema.parse(detailBody.run).attention).toEqual(body.runs[0]?.attention);
+});
+
+describe('the attention queue over HTTP', () => {
+  const waitFor = (id: string, labels: Record<string, string>): WorkflowAttentionWaitContext => ({
+    owner: 'node',
+    nodeId: 'ask',
+    kind: 'attention',
+    waitingSince: '2026-10-14T00:00:00.000Z',
+    message: 'CI is red. Retry?',
+    pauseId: `pause-${id}`,
+    form: 'approval',
+    labels,
+  });
+  const attentionRun = (id: string, labels: Record<string, string>): WorkflowRun => ({
+    ...MOCK_RUNNING_RUN,
+    id,
+    status: 'paused',
+    metadata: { wait: waitFor(id, labels) },
+  });
+  const other = attentionRun('run-other', { ci: 'other' });
+  const pr = attentionRun('run-pr', { ci: 'pr' });
+
+  test('lists typed items with the console rows, filtered by label, and counts by label', async () => {
+    mockListAttentionQueueRows.mockImplementation(async () => [
+      makeDashboardWorkflowRun(other),
+      makeDashboardWorkflowRun(pr),
+    ]);
+    mockFindLatestEnvironment.mockImplementation(async () => ({ branch_name: 'fix/ci' }));
+    try {
+      const { app } = makeApp();
+      const list = await app.request('/api/runs/attention?label=ci%3Dother');
+      expect(list.status).toBe(200);
+      const body = runsNeedingAttentionResponseSchema.parse(await list.json());
+      expect(body.items.map(item => item.runId)).toEqual(['run-other']);
+      expect(body.runs.map(run => run.id)).toEqual(['run-other']);
+      expect(body.items[0]).toMatchObject({
+        kind: 'attention',
+        occurrence: 'pause-run-other',
+        form: 'approval',
+        labels: { ci: 'other' },
+        revision: 1,
+        fanOut: null,
+        context: { workingPath: '/tmp/worktrees/feature', branch: 'fix/ci' },
+      });
+
+      const counts = await app.request('/api/runs/attention?countBy=label%3Aci');
+      expect(await counts.json()).toEqual({
+        counts: {
+          by: 'label',
+          key: 'ci',
+          counts: [
+            { value: 'other', count: 1 },
+            { value: 'pr', count: 1 },
+          ],
+        },
+      });
+      const twice = await app.request('/api/runs/attention?label=ci%3Dother&label=ci%3Dpr');
+      expect(twice.status).toBe(400);
+      expect(await twice.json()).toMatchObject({ error: "Label 'ci' is given twice" });
+      expect((await app.request('/api/runs/attention?sort=newest')).status).toBe(400);
+      expect((await app.request('/api/runs/attention?sort=age&countBy=project')).status).toBe(400);
+      expect((await app.request('/api/runs/attention?project=nowhere')).status).toBe(400);
+    } finally {
+      mockListAttentionQueueRows.mockReset();
+      mockFindLatestEnvironment.mockReset();
+    }
+  });
+
+  test('reads one item, and refuses a stale label write with 409', async () => {
+    mockGetWorkflowRun.mockImplementation(async id => (id === other.id ? other : null));
+    try {
+      const { app } = makeApp();
+      const read = await app.request(`/api/runs/${other.id}/attention`);
+      expect(read.status).toBe(200);
+      expect(await read.json()).toMatchObject({
+        item: { runId: other.id, labels: { ci: 'other' } },
+      });
+      expect((await app.request('/api/runs/missing/attention')).status).toBe(404);
+
+      const label = (body: unknown): Promise<Response> =>
+        Promise.resolve(
+          app.request(`/api/runs/${other.id}/attention/labels`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+        );
+      const stale = await label({ occurrence: 'pause-old', set: { class: 'ci-other' } });
+      expect(stale.status).toBe(409);
+      expect(mockLabelAttentionWait).not.toHaveBeenCalled();
+
+      mockLabelAttentionWait.mockImplementationOnce(async () => ({
+        labeled: true,
+        wait: { ...waitFor(other.id, { ci: 'other', class: 'ci-other' }), revision: 2 },
+      }));
+      const written = await label({ occurrence: `pause-${other.id}`, set: { class: 'ci-other' } });
+      expect(written.status).toBe(200);
+      expect(await written.json()).toEqual({
+        runId: other.id,
+        occurrence: `pause-${other.id}`,
+        revision: 2,
+        labels: { ci: 'other', class: 'ci-other' },
+      });
+      expect(mockLabelAttentionWait).toHaveBeenCalledWith(other.id, {
+        pauseId: `pause-${other.id}`,
+        set: { class: 'ci-other' },
+        unset: [],
+        via: 'api',
+      });
+    } finally {
+      mockGetWorkflowRun.mockReset();
+      mockLabelAttentionWait.mockReset();
+    }
+  });
 });

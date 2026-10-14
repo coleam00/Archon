@@ -285,6 +285,15 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  if (et === 'pause_notice_undelivered') {
+    return {
+      ...base,
+      kind: 'system',
+      label: 'Pause notice not delivered; the run is still waiting',
+      detail: readString(data, 'platform'),
+    };
+  }
+
   if (et === 'error') {
     return {
       ...base,

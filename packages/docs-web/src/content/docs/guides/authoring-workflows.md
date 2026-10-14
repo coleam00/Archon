@@ -125,7 +125,6 @@ provider: claude
 model: sonnet
 effort: medium                   # Reasoning depth on any provider that has one
 webSearchMode: live              # Codex only, workflow level only (no per-node form)
-interactive: true                # Web only: run in foreground instead of background
 requires: [github]               # Optional: hard-block invocation unless the triggering
                                  #   user has connected their GitHub identity. Enforced only
                                  #   when per-user GitHub is enabled (App mode + TOKEN_ENCRYPTION_KEY);
@@ -446,7 +445,6 @@ condition-skipped, while a failed gate still blocks the join:
 ```yaml
 name: optional-gate
 description: Run the next step whether the optional gate ran or skipped
-interactive: true
 nodes:
   - id: review
     bash: echo ready
@@ -826,6 +824,8 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
       options:                           # select and multi_select only
         - { id: use-main, label: "Base on main" }
         - { id: use-dev }
+      labels:                            # optional; values may use runtime references
+        about: "$plan.output.topic"
 ```
 
 | Form | Answer accepted | The next node reads |
@@ -839,6 +839,7 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
 - `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. When the producer declares `output_format`, the loader also checks that the field is an array of `{ id, label? }`.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
+- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/guides/attention-queue/) by them.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer names the occurrence it was meant for, so an answer to an earlier pause of the same run is refused. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
@@ -1642,7 +1643,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `interactive`, `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
@@ -1655,14 +1656,6 @@ Two consequences worth knowing:
   ran that file on its own, even when the preceding node used the same provider. Set
   `context: shared` on the entry node if you deliberately want the caller's thread to
   continue into the block.
-
-One safety rule has teeth: if a composed workflow contains an `approval:` node, the workflow
-you **run** must declare `interactive: true` — otherwise the web console refuses to start it
-in the background, naming the block and the gate. A background run cannot present that gate
-inline, and the author who wrote it is looking at a different file. The check applies only
-where it matters: on the CLI and chat platforms the gate is presented normally, and an
-intermediate building block that merely composes a gate-bearing block is never asked — only
-the workflow that owns the run is.
 
 ### How expansion works
 
@@ -2043,7 +2036,6 @@ and three differences are the ones an author actually feels:
 |---|---|---|
 | **The gate** | One run, one id. A human approves the run that composed the block. | Two runs. The human approves the **child** by its own run id; the parent stays paused and auto-resumes when the child finishes. |
 | **Command-body freshness** | The block's `command:` bodies are snapshotted at discovery, so a resumed run survives the file being deleted or edited. | The child re-reads its command bodies live when it starts. |
-| **`interactive:`** | One posture for the whole run — the top-level workflow's. A composed `approval:` node therefore requires `interactive: true` there. | The child has its own posture, independent of the parent's. |
 
 Reach for `include:` when you want one run made of reusable parts — the common case. Reach
 for `workflow:` when a human needs to approve, inspect or abandon one delegated unit
@@ -2114,9 +2106,7 @@ sub-pipeline.**
   pauses **and** the parent pauses "blocked on child". A reviewer approves the **child** by
   its own run id (`/workflow approve <childRunId>` — shown in the pause message). When the
   child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
-  finds the child finished, and threads its output onward. Because the parent pauses at a
-  gate, mark a parent that contains a `workflow:` node with `interactive: true` so it runs
-  in the foreground on the web UI.
+  finds the child finished, and threads its output onward.
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
@@ -2986,38 +2976,15 @@ a different setting and is **not** deprecated.
 
 ### Web Execution Mode
 
-By default, workflows started from the **Web UI** run in the background — execution is
-dispatched to an internal worker conversation and results appear only in the workflow run
-log, not in the chat window.
+Workflows started from the **Web UI** run in the background: execution is dispatched to a
+worker conversation, and the run's output appears in its run view. A workflow that pauses,
+at an approval gate, an interactive loop gate or a `wait: attention` node, pauses durably
+however it was started. The console's [Needs your input](/guides/workflow-triggers/#find-runs-needing-your-input)
+banner lists the paused run with its message and controls, and the CLI answers it by run id.
+The same holds for a `--detach` launch and a trigger start.
 
-Set `interactive: true` to run the workflow in the **foreground** (same as CLI, Slack,
-Telegram, and GitHub): all AI output and approval gate messages stream directly to the
-user's chat window.
-
-```yaml
-name: my-interactive-workflow
-interactive: true   # Web UI: foreground execution (output visible in chat)
-
-nodes:
-  - id: plan
-    prompt: "Create a plan for $USER_MESSAGE"
-  - id: review-gate
-    approval:
-      message: "Does this plan look good?"
-    depends_on: [plan]
-  - id: implement
-    command: implement
-    depends_on: [review-gate]
-```
-
-**When to use `interactive: true`:**
-- Workflows with **approval nodes** — users must see the AI output and respond inline
-- Workflows with **interactive loop nodes** (`loop.interactive: true`) — the loop gate pause requires foreground execution to deliver the gate message and run ID to the user
-- Multi-turn workflows where the user needs to provide feedback at each step
-- Any workflow where the response must appear in the user's active chat thread
-
-**Platforms:** `interactive` only affects the web platform. CLI, Slack, Telegram, and
-GitHub always run workflows in foreground mode regardless of this setting.
+Workflow-level `interactive:` is deprecated and has no effect. A workflow that still declares
+it loads with a warning; remove the line.
 
 ### Provider Validation
 
@@ -3050,10 +3017,7 @@ A key Archon does not recognise is dropped from the parsed workflow — the YAML
 WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
   Nothing on this node gates. For a human gate, use an 'approval:' node; to gate
   each iteration of a loop, set BOTH 'loop.interactive: true' and
-  'loop.gate_message' ('gate_message' on its own does not gate). Workflow-level
-  'interactive:' is a different setting, and only on the web UI — it keeps the
-  run in the foreground there; chat platforms already run in the foreground, so
-  it does nothing for them.
+  'loop.gate_message' ('gate_message' on its own does not gate).
 ```
 
 (The `WARNING [unknown_key]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)

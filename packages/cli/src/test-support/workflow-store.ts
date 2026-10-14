@@ -252,10 +252,6 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
-    failPausedAttentionWait: (id, wait, error) =>
-      write(view => view.failPausedAttentionWait(id, wait, error)),
-    failPausedApproval: (id, approval, error) =>
-      write(view => view.failPausedApproval(id, approval, error)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
       write(view => view.resolveApprovalGate(id, metadata, gateEvents, expected)),
     resolveAndCancelApprovalGate: (id, gateEvents, cancellation, expected) =>
@@ -317,6 +313,8 @@ export function createInMemoryWorkflowStore(
     deferWorkflowContinuation: (id, retry, cursor) =>
       write(view => view.deferWorkflowContinuation(id, retry, cursor)),
     answerAttentionWait: (id, answered) => write(view => view.answerAttentionWait(id, answered)),
+    labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
+    listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),

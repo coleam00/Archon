@@ -60,7 +60,8 @@ import type {
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  runAttention,
+  queuedRunAttention,
+  isAttentionQueueRow,
   isScheduledWorkflowResume,
   workflowRunStatusSchema,
   scheduledWorkflowResumeSchema,
@@ -86,9 +87,14 @@ import type {
   WorkflowWaitCompletion,
   WorkflowWaitPause,
   NodeStateEventInput,
+  AttentionAnswerWrite,
+  AttentionLabelWrite,
 } from '@archon/workflows/store';
 import {
   FAN_OUT_CANCEL_REASONS,
+  attentionLabeledEvent,
+  labeledAttentionWait,
+  answeredAttentionWait,
   waitCompletionEvents,
   waitAnsweredEvent,
   WorkflowRunPauseConflictError,
@@ -1743,43 +1749,6 @@ export async function pauseWorkflowRun(
   }
 }
 
-/** Fail an undelivered gate only while the persisted approval still matches its owner. */
-export async function failPausedApproval(
-  id: string,
-  approvalContext: ApprovalContext,
-  error: string
-): Promise<{ failed: boolean }> {
-  const dialect = getDialect();
-  const approvalMatches =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval' = $2::jsonb"
-      : "json_extract(metadata, '$.approval') = json($2)";
-  const outcome = await getDatabase().withTransaction(async query => {
-    const update = await query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'failed', completed_at = ${dialect.now()},
-           metadata = ${dialect.jsonMerge('metadata', 3)}
-       WHERE id = $1 AND status = 'paused' AND ${approvalMatches}`,
-      [
-        id,
-        JSON.stringify(approvalContext),
-        JSON.stringify({ error, stop_reason: { reason: 'node_error' } }),
-      ]
-    );
-    const failed = (update.rowCount ?? 0) > 0;
-    if (failed) {
-      await insertTerminalWorkflowEvent(query, {
-        workflow_run_id: id,
-        event_type: 'workflow_failed',
-        data: { error, exit_reason: 'node_error' },
-      });
-    }
-    return { failed };
-  });
-  if (outcome.failed) await reportRunTerminal(id);
-  return outcome;
-}
-
 /** Pause a running run on a persisted wait condition. */
 export async function pauseWorkflowRunForWait(
   id: string,
@@ -1819,71 +1788,6 @@ export async function pauseWorkflowRunForWait(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_wait_pause_failed');
     throw new Error(`Failed to pause workflow run for wait: ${err.message}`);
   }
-}
-
-/** Fail the exact attention cursor whose required notification could not be delivered. */
-export async function failPausedAttentionWait(
-  id: string,
-  waitContext: WorkflowAttentionWaitContext,
-  error: string
-): Promise<{ failed: boolean }> {
-  const parsedWaitContext = workflowWaitContextSchema.parse(waitContext);
-  if (parsedWaitContext.kind !== 'attention') {
-    throw new Error('Only an attention wait can fail through notification delivery');
-  }
-  const dialect = getDialect();
-  const postgres = getDatabaseType() === 'postgresql';
-  const waitField = (field: string): string =>
-    postgres ? `metadata->'wait'->>'${field}'` : `json_extract(metadata, '$.wait.${field}')`;
-  const params: unknown[] = [
-    id,
-    JSON.stringify({ error }),
-    parsedWaitContext.nodeId,
-    parsedWaitContext.waitingSince,
-  ];
-  const ownerClauses = [`${waitField('owner')} = '${parsedWaitContext.owner}'`];
-  if (parsedWaitContext.owner === 'loop_group') {
-    params.push(parsedWaitContext.bodyWaitId, parsedWaitContext.iteration);
-    const iterationField = postgres
-      ? "(metadata->'wait'->>'iteration')::integer"
-      : "json_extract(metadata, '$.wait.iteration')";
-    ownerClauses.push(`${waitField('bodyWaitId')} = $5`, `${iterationField} = $6`);
-  }
-  const metadataWithoutScheduledResume = postgres
-    ? "metadata - 'scheduled_resume'"
-    : "json_remove(metadata, '$.scheduled_resume')";
-
-  let outcome: { failed: boolean };
-  try {
-    outcome = await getDatabase().withTransaction(async query => {
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-         SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutScheduledResume, 2)}
-         WHERE id = $1
-           AND status = 'paused'
-           AND ${waitField('kind')} = 'attention'
-           AND ${waitField('nodeId')} = $3
-           AND ${waitField('waitingSince')} = $4
-           AND ${ownerClauses.join('\n           AND ')}`,
-        params
-      );
-      const failed = (result.rowCount ?? 0) > 0;
-      if (failed) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error },
-        });
-      }
-      return { failed };
-    });
-  } catch (dbError) {
-    const err = dbError as Error;
-    getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_notification_fail_error');
-    throw new Error(`Failed to fail paused attention wait: ${err.message}`);
-  }
-  if (outcome.failed) await reportRunTerminal(id);
-  return outcome;
 }
 
 /** Atomically consume one exact wait cursor and persist its completed node snapshot. */
@@ -2150,39 +2054,89 @@ export async function deferWorkflowContinuation(
   }
 }
 
-/** Atomically record the answer to one open attention wait (see `IWorkflowStore.answerAttentionWait`). */
+/** Atomically add one answer to an open attention wait (see `IWorkflowStore.answerAttentionWait`). */
 export async function answerAttentionWait(
   id: string,
-  answered: WorkflowAttentionWaitContext
+  write: AttentionAnswerWrite
 ): Promise<{ answered: boolean }> {
-  const stored = workflowWaitContextSchema.parse(answered);
-  if (stored.kind !== 'attention' || stored.pauseId === undefined || stored.answer === undefined) {
-    throw new Error('An attention answer needs the answered wait with its pauseId and answer');
-  }
-  const postgres = getDatabaseType() === 'postgresql';
-  const waitField = (field: string): string =>
-    postgres ? `metadata->'wait'->>'${field}'` : `json_extract(metadata, '$.wait.${field}')`;
-  const writeWait = postgres
-    ? "jsonb_set(metadata, '{wait}', $3::jsonb, true)"
-    : "json_set(metadata, '$.wait', json($3))";
   try {
     return await getDatabase().withTransaction(async query => {
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-         SET metadata = ${writeWait}
-         WHERE id = $1 AND status = 'paused' AND ${waitField('kind')} = 'attention'
-           AND ${waitField('pauseId')} = $2 AND ${waitField('answer')} IS NULL`,
-        [id, stored.pauseId, JSON.stringify(stored)]
-      );
-      const won = (result.rowCount ?? 0) > 0;
-      if (won) await insertWorkflowEvent(query, waitAnsweredEvent(id, stored));
-      return { answered: won };
+      const row = await lockedRunRow(query, id);
+      const answered =
+        row &&
+        answeredAttentionWait(
+          { status: row.status, metadata: normalizeMetadata(row.metadata) },
+          write
+        );
+      if (!answered) return { answered: false };
+      await writeWaitContext(query, id, workflowWaitContextSchema.parse(answered));
+      await insertWorkflowEvent(query, waitAnsweredEvent(id, answered));
+      return { answered: true };
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_answer_failed');
     throw new Error(`Failed to answer attention wait: ${err.message}`);
   }
+}
+
+/** Atomically apply one label write to an open attention wait (see `IWorkflowStore.labelAttentionWait`). */
+export async function labelAttentionWait(
+  id: string,
+  write: AttentionLabelWrite
+): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }> {
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const row = await lockedRunRow(query, id);
+      const labeled =
+        row &&
+        labeledAttentionWait(
+          { status: row.status, metadata: normalizeMetadata(row.metadata) },
+          write
+        );
+      if (!labeled) return { labeled: false } as const;
+      await writeWaitContext(query, id, labeled);
+      await insertWorkflowEvent(query, attentionLabeledEvent(id, labeled, write));
+      return { labeled: true, wait: labeled } as const;
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_label_failed');
+    throw new Error(`Failed to label attention wait: ${err.message}`);
+  }
+}
+
+/**
+ * Read one run row for a read-merge-write of its wait. SQLite takes its write lock
+ * before the read, as `setToolCallAttention` does, so the merge acts on the row it read.
+ */
+async function lockedRunRow(
+  query: TransactionQuery,
+  id: string
+): Promise<{ status: WorkflowRunStatus; metadata: unknown } | undefined> {
+  if (getDatabaseType() === 'sqlite') {
+    await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+  }
+  const result = await query<{ status: WorkflowRunStatus; metadata: unknown }>(
+    `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+    [id]
+  );
+  return result.rows[0];
+}
+
+async function writeWaitContext(
+  query: TransactionQuery,
+  id: string,
+  wait: WorkflowWaitContext
+): Promise<void> {
+  const writeWait =
+    getDatabaseType() === 'postgresql'
+      ? "jsonb_set(metadata, '{wait}', $2::jsonb, true)"
+      : "json_set(metadata, '$.wait', json($2))";
+  await query(`UPDATE remote_agent_workflow_runs SET metadata = ${writeWait} WHERE id = $1`, [
+    id,
+    JSON.stringify(wait),
+  ]);
 }
 
 /** Atomically record the signal for one exact paused event wait. */
@@ -2506,8 +2460,23 @@ export async function listDashboardRuns(
   }
 }
 
-export async function listRunsNeedingAttention(
+/** Paused runs that are attention queue items on their own (`queuedRunAttention`). */
+export function listRunsNeedingAttention(
   query: IDatabase['query'] = pool.query
+): Promise<DashboardWorkflowRun[]> {
+  return listPausedRuns(query, run => queuedRunAttention(run) !== undefined);
+}
+
+/** The rows the attention queue reads (see `IWorkflowStore.listAttentionQueueRows`). */
+export function listAttentionQueueRows(
+  query: IDatabase['query'] = pool.query
+): Promise<DashboardWorkflowRun[]> {
+  return listPausedRuns(query, isAttentionQueueRow);
+}
+
+async function listPausedRuns(
+  query: IDatabase['query'],
+  keep: (run: DashboardWorkflowRun) => boolean
 ): Promise<DashboardWorkflowRun[]> {
   const result = await query<JoinedWorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
@@ -2541,14 +2510,7 @@ export async function listRunsNeedingAttention(
       getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
       continue;
     }
-    const attention = runAttention(run);
-    if (
-      attention?.kind === 'awaiting_response' ||
-      attention?.kind === 'attention' ||
-      attention?.kind === 'unreadable'
-    ) {
-      runs.push(run);
-    }
+    if (keep(run)) runs.push(run);
   }
   return runs;
 }

@@ -5245,38 +5245,15 @@ async function executeLoopGroupBody(
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
         `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
-      if (!gateSent) {
-        const { failed } = await requireTerminalStatusWrite(
-          deps.store.failPausedApproval(
-            workflowRun.id,
-            paused,
-            undeliveredGatePromptError('Loop-group gate', node.id)
-          ),
-          { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
-        );
-        if (!failed)
-          return {
-            state: 'running',
-            output: lastIterationOutput,
-            ...usage,
-            loopIterations: i,
-          };
-        getLog().error(
-          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
-          'loop_group_node.gate_message_send_failed'
-        );
-        return {
-          state: 'failed',
-          output: lastIterationOutput,
-          failureKind: 'unknown',
-          error: undeliveredGatePromptError('Loop-group gate', node.id),
-          ...usage,
-        };
-      }
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        stepName,
+        gateMsg
+      );
       deps.store
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
@@ -6846,34 +6823,15 @@ async function executeLoopNode(
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
         `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
-      if (!gateSent) {
-        const { failed } = await requireTerminalStatusWrite(
-          deps.store.failPausedApproval(
-            workflowRun.id,
-            paused,
-            undeliveredGatePromptError('Loop gate', node.id)
-          ),
-          { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
-        );
-        if (!failed) return deferredLoopOutput;
-        getLog().error(
-          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
-          'loop_node.gate_message_send_failed'
-        );
-        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
-          failureKind: 'unknown',
-          output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-          ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
-          loopIterations: i,
-          data: { iteration: i },
-        });
-      }
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        stepName,
+        gateMsg
+      );
       deps.store
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
@@ -6907,20 +6865,50 @@ async function executeLoopNode(
   });
 }
 
-function undeliveredGatePromptError(
-  gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
-  nodeId: string
-): string {
-  return `${gate} message failed to deliver for node '${nodeId}' — cannot pause safely`;
+/**
+ * Send a paused run's inline notice. The durable pause is the record and the attention
+ * queue is where it is answered, so a notice the platform cannot deliver leaves the run
+ * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
+ * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
+ * can see that nobody was told.
+ */
+async function sendPauseNotice(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRunId: string,
+  nodeId: string,
+  stepName: string,
+  notice: string
+): Promise<void> {
+  if (
+    await safeSendMessage(platform, conversationId, notice, {
+      workflowId: workflowRunId,
+      nodeName: nodeId,
+    })
+  )
+    return;
+  await deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRunId,
+      event_type: 'pause_notice_undelivered',
+      step_name: stepName,
+      data: { nodeId, platform: platform.getPlatformType() },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId, eventType: 'pause_notice_undelivered' },
+        'workflow.event_persist_failed'
+      );
+    });
 }
 
 /**
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
- * Returns the persisted context, including its minted `pauseId`, so callers that later
- * compare against the stored gate (failPausedApproval) match it exactly; undefined when
- * the gate did not pause.
+ * Returns the persisted context, including its minted `pauseId`; undefined when the gate
+ * did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
@@ -7113,6 +7101,12 @@ async function executeWaitNode(
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
     const options = resolveAttentionOptions(node.id, condition.options, ctx);
+    const labels =
+      condition.labels === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(condition.labels).map(([key, value]) => [key, resolveEventText(value)])
+          );
     context = {
       ...owner,
       kind: 'attention',
@@ -7121,6 +7115,7 @@ async function executeWaitNode(
       pauseId: randomUUID(),
       form: condition.form,
       ...(options !== undefined ? { options } : {}),
+      ...(labels !== undefined ? { labels } : {}),
     };
   }
 
@@ -7154,23 +7149,15 @@ async function executeWaitNode(
       );
     }
     if (paused && context.kind === 'attention') {
-      const delivered = await safeSendMessage(
+      await sendPauseNotice(
+        deps,
         platform,
         conversationId,
-        attentionNotification(platform, workflowRun.id, context),
-        { workflowId: workflowRun.id, nodeName: node.id }
+        workflowRun.id,
+        node.id,
+        stepNamePrefix + node.id,
+        attentionNotification(platform, workflowRun.id, context)
       );
-      if (!delivered) {
-        const deliveryError = `Wait node '${node.id}' could not deliver its attention notification`;
-        const { failed } = await requireTerminalStatusWrite(
-          deps.store.failPausedAttentionWait(workflowRun.id, context, deliveryError),
-          {
-            workflowRunId: workflowRun.id,
-            site: 'dag.attention_notification_fail',
-          }
-        );
-        if (failed) throw new Error(deliveryError);
-      }
     }
     return execution === undefined
       ? { state: 'running', output: '' }
@@ -7506,33 +7493,15 @@ async function executeApprovalNode(
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
     choices.join(' | ');
-  if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
-    const { failed } = await requireTerminalStatusWrite(
-      deps.store.failPausedApproval(
-        workflowRun.id,
-        paused,
-        undeliveredGatePromptError('Approval', node.id)
-      ),
-      { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
-    );
-    if (!failed) return serializeNodeOutput(execution);
-    getLog().error(
-      { nodeId: node.id, workflowRunId: workflowRun.id },
-      'approval_node.gate_message_send_failed'
-    );
-    return recordNodeState(
-      { store: deps.store, logDir: ctx.logDir },
-      finishNodeExecution(
-        execution,
-        {
-          status: 'failed',
-          error: undeliveredGatePromptError('Approval', node.id),
-          failureKind: 'unknown',
-        },
-        { output: { text: '' }, diagnostics: { iteration } }
-      )
-    );
-  }
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    workflowRun.id,
+    node.id,
+    stepName,
+    approvalMsg
+  );
 
   deps.store
     .createWorkflowEvent({

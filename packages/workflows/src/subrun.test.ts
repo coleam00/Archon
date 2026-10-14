@@ -303,6 +303,12 @@ class InMemoryStore implements IWorkflowStore {
   answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
     throw new Error('Unexpected answerAttentionWait');
   };
+  labelAttentionWait: IWorkflowStore['labelAttentionWait'] = () => {
+    throw new Error('Unexpected labelAttentionWait');
+  };
+  listAttentionQueueRows: IWorkflowStore['listAttentionQueueRows'] = () => {
+    throw new Error('Unexpected listAttentionQueueRows');
+  };
   signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
     throw new Error('Unexpected signalWorkflowWait');
   };
@@ -525,29 +531,6 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  failPausedAttentionWait: IWorkflowStore['failPausedAttentionWait'] = (id, waitContext, error) => {
-    const r = this.runs.get(id);
-    const wait = r?.metadata.wait as WorkflowWaitContext | undefined;
-    const ownerMatches =
-      wait?.owner === waitContext.owner &&
-      (wait?.owner !== 'loop_group' ||
-        waitContext.owner !== 'loop_group' ||
-        (wait.bodyWaitId === waitContext.bodyWaitId && wait.iteration === waitContext.iteration));
-    if (
-      r?.status === 'paused' &&
-      wait?.kind === 'attention' &&
-      wait.nodeId === waitContext.nodeId &&
-      wait.waitingSince === waitContext.waitingSince &&
-      ownerMatches
-    ) {
-      r.status = 'failed';
-      r.completed_at = new Date();
-      r.metadata = { ...r.metadata, error };
-      return Promise.resolve({ failed: true });
-    }
-    return Promise.resolve({ failed: false });
-  };
-
   clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (
     id,
     waitContext,
@@ -571,19 +554,6 @@ class InMemoryStore implements IWorkflowStore {
       return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
-  };
-
-  failPausedApproval: IWorkflowStore['failPausedApproval'] = (id, approvalContext, error) => {
-    const r = this.runs.get(id);
-    if (
-      r?.status !== 'paused' ||
-      JSON.stringify(r.metadata?.approval) !== JSON.stringify(approvalContext)
-    ) {
-      return Promise.resolve({ failed: false });
-    }
-    r.status = 'failed';
-    r.metadata = { ...r.metadata, error };
-    return Promise.resolve({ failed: true });
   };
 
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
@@ -1056,7 +1026,6 @@ nodes:
       `
 name: originless-resume
 description: local approval lifecycle
-interactive: true
 persist_sessions: true
 nodes:
   - id: before
@@ -1587,7 +1556,6 @@ nodes:
       `
 name: child-gated-spelling
 description: child with an approval gate
-interactive: true
 nodes:
   - id: review-gate
     approval:
@@ -1599,7 +1567,6 @@ nodes:
       `
 name: parent-gated-spelling
 description: parent composing a gated child
-interactive: true
 nodes:
   - id: sub
     workflow: child-gated-spelling
@@ -1643,7 +1610,6 @@ nodes:
       `
 name: child-gated
 description: child with an approval gate
-interactive: true
 nodes:
   - id: implement
     prompt: "implement $ARGUMENTS"
@@ -1661,7 +1627,6 @@ nodes:
       `
 name: parent-gated
 description: parent composing a gated child
-interactive: true
 nodes:
   - id: plan
     prompt: "plan"
@@ -1732,7 +1697,6 @@ nodes:
 name: independent-child
 description: Child approval
 mutates_checkout: false
-interactive: true
 nodes:
   - id: review
     approval:
@@ -1748,7 +1712,6 @@ nodes:
 name: independent-parent
 description: Independent children
 mutates_checkout: false
-interactive: true
 nodes:
   - id: first
     workflow: independent-child
@@ -1822,7 +1785,6 @@ nodes:
       `
 name: child-gated
 description: child with an approval gate
-interactive: true
 nodes:
   - id: implement
     prompt: "implement $ARGUMENTS"
@@ -1837,7 +1799,6 @@ nodes:
       `
 name: parent-gated
 description: parent composing a gated child
-interactive: true
 nodes:
   - id: sub
     workflow: child-gated
@@ -1894,7 +1855,6 @@ nodes:
       `
 name: child-gated
 description: child with an approval gate
-interactive: true
 nodes:
   - id: implement
     prompt: "implement $ARGUMENTS"
@@ -1909,7 +1869,6 @@ nodes:
       `
 name: parent-gated
 description: parent composing a gated child
-interactive: true
 nodes:
   - id: sub
     workflow: child-gated
@@ -2325,7 +2284,6 @@ nodes:
       `
 name: child-gated
 description: child with an approval gate
-interactive: true
 nodes:
   - id: implement
     prompt: "implement $ARGUMENTS"
@@ -2340,7 +2298,6 @@ nodes:
       `
 name: parent-gated
 description: parent composing a gated child
-interactive: true
 nodes:
   - id: sub
     workflow: child-gated
@@ -2942,7 +2899,6 @@ nodes:
       `
 name: child-gated-iso
 description: isolated child that pauses at a gate
-interactive: true
 nodes:
   - id: implement
     prompt: "implement $ARGUMENTS"
@@ -2970,7 +2926,6 @@ nodes:
       `
 name: parent-gated-iso
 description: isolated implement, gate, isolated review
-interactive: true
 nodes:
   - id: implement
     workflow: child-gated-iso
@@ -3071,7 +3026,6 @@ nodes:
       `
 name: identity-child
 description: child that pauses at its own gate
-interactive: true
 nodes:
   - id: work
     bash: |
@@ -3087,7 +3041,6 @@ nodes:
       `
 name: identity-parent
 description: reads $BASE_BRANCH on both sides of a child gate
-interactive: true
 nodes:
   - id: before
     bash: |
@@ -4868,7 +4821,6 @@ nodes:
   const fanAskChild = (name: string, askFor: string, op: '==' | '!=' = '=='): string => `
 name: ${name}
 description: asks for review on one item only
-interactive: true
 nodes:
   - id: echo
     bash: |
@@ -4888,7 +4840,6 @@ nodes:
   const fanAskParent = (name: string, child: string, items: string, fanOut: string): string => `
 name: ${name}
 description: fans out over children that may pause
-interactive: true
 nodes:
   - id: plan
     bash: |
@@ -5174,7 +5125,6 @@ ${fanOut}
       `
 name: fan-ask-fail
 description: fails on x, asks on y
-interactive: true
 nodes:
   - id: echo
     bash: |
@@ -6261,7 +6211,6 @@ nodes:
       `
 name: gating-child
 description: pauses at a gate
-interactive: true
 nodes:
   - id: gate
     approval:
@@ -6782,7 +6731,6 @@ nodes:
       `
 name: child-cold
 description: gated child that reads an input AFTER the gate
-interactive: true
 inputs:
   style:
     default: strict
@@ -6800,7 +6748,6 @@ nodes:
       `
 name: parent-cold
 description: spawns the gated child
-interactive: true
 nodes:
   - id: sub
     workflow: child-cold
@@ -7003,7 +6950,6 @@ nodes:
       `
 name: direct-cold
 description: gated top-level run reading an input AFTER the gate
-interactive: true
 inputs:
   style:
     default: strict

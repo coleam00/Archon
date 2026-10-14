@@ -38,7 +38,6 @@ import {
   resumeWorkflowRun,
   pauseWorkflowRun,
   pauseWorkflowRunForWait,
-  failPausedAttentionWait,
   listDueWorkflowContinuations,
   listWorkflowEventSignalCandidates,
   deferWorkflowContinuation,
@@ -772,60 +771,6 @@ describe('workflows database', () => {
       const eventData = JSON.parse(eventParams[5] as string) as Record<string, unknown>;
       expect(eventData).toEqual({ kind: 'attention' });
       expect(eventData).not.toHaveProperty('resume_at');
-    });
-
-    test('fails only the exact paused attention cursor after notification loss', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockTerminalSnapshot('failed');
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      const attentionWait = {
-        owner: 'loop_group' as const,
-        nodeId: 'recover-ci',
-        bodyWaitId: 'pause',
-        iteration: 4,
-        sessionId: null,
-        sessionProvider: null,
-        kind: 'attention' as const,
-        waitingSince: '2026-08-24T10:00:00.000Z',
-        message: 'Re-run the failing check, then resume.',
-      };
-
-      await expect(
-        failPausedAttentionWait('workflow-run-123', attentionWait, 'notification lost')
-      ).resolves.toEqual({ failed: true });
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("SET status = 'failed'");
-      expect(query).toContain("status = 'paused'");
-      expect(query).toContain("metadata->'wait'->>'kind' = 'attention'");
-      expect(query).toContain("metadata->'wait'->>'owner' = 'loop_group'");
-      expect(query).toContain("metadata->'wait'->>'bodyWaitId' = $5");
-      expect(query).toContain("(metadata->'wait'->>'iteration')::integer = $6");
-      expect(params).toEqual([
-        'workflow-run-123',
-        JSON.stringify({ error: 'notification lost' }),
-        'recover-ci',
-        '2026-08-24T10:00:00.000Z',
-        'pause',
-        4,
-      ]);
-      expect(mockQuery.mock.calls[3]?.[0]).toContain('INSERT INTO remote_agent_workflow_events');
-    });
-
-    test('leaves a replaced attention cursor untouched', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-      const attentionWait = {
-        owner: 'node' as const,
-        nodeId: 'rerun-ci',
-        kind: 'attention' as const,
-        waitingSince: '2026-08-24T10:00:00.000Z',
-        message: 'Re-run the failing check, then resume.',
-      };
-
-      await expect(
-        failPausedAttentionWait('workflow-run-123', attentionWait, 'notification lost')
-      ).resolves.toEqual({ failed: false });
-      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('fails the pause transaction when the wait-start audit cannot be recorded', async () => {

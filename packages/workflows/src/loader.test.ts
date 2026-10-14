@@ -485,34 +485,21 @@ describe('Workflow Loader', () => {
   });
 
   describe('parseWorkflow (via discoverWorkflows)', () => {
-    it('should parse interactive: true when present', async () => {
-      const yaml = `name: test\ndescription: test\ninteractive: true\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-    });
-
-    it('should omit interactive field when not present', async () => {
-      const yaml = `name: test\ndescription: test\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBeUndefined();
-    });
-
-    it('should preserve interactive: false when explicitly set', async () => {
-      const yaml = `name: test\ndescription: test\ninteractive: false\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBe(false);
-    });
-
-    it('should treat non-boolean interactive value as undefined', async () => {
-      // YAML string "yes" is not a boolean — should be dropped
-      const yaml = `name: test\ndescription: test\ninteractive: "yes"\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBeUndefined();
-    });
+    it.each(['true', 'false', '"yes"'])(
+      'loads workflow-level interactive: %s with a deprecation warning and drops it',
+      async value => {
+        const yaml = `name: test\ndescription: test\ninteractive: ${value}\nnodes:\n  - id: n\n    prompt: p\n`;
+        await writeWorkflowFile(testDir, 'test.yaml', yaml);
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect('interactive' in result.workflows[0].workflow).toBe(false);
+        expect(result.workflows[0].parseWarnings).toEqual([
+          "Workflow 'test': workflow-level 'interactive:' is deprecated and has no effect. " +
+            'Any workflow can start in the foreground, in the background or from a trigger; a ' +
+            'pause waits in the attention queue until it is answered. Remove the line.',
+        ]);
+      }
+    );
 
     it('should parse worktree.enabled: false', async () => {
       const yaml = `name: triage\ndescription: read-only\nworktree:\n  enabled: false\nnodes:\n  - id: n\n    prompt: p\n`;
@@ -4397,7 +4384,6 @@ nodes:
         `
 name: valid-interactive
 description: Valid interactive loop
-interactive: true
 nodes:
   - id: my-loop
     loop:
@@ -4426,7 +4412,6 @@ nodes:
         `
 name: bad-interactive
 description: Missing gate_message
-interactive: true
 nodes:
   - id: my-loop
     loop:
@@ -4440,41 +4425,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('gate_message');
-    });
-
-    it('should infer interactive: true (with a warning) when an interactive loop node is in an undeclared workflow (#2707 step 2 / #2736)', async () => {
-      // Grace period (#2736/#2738): this used to be a hard load error. It now loads
-      // successfully with `interactive` coerced to `true`, so #1991's background-dispatch
-      // refusal still protects the run even though the author never declared the class.
-
-      await writeWorkflowFile(
-        testDir,
-        'warn-test.yaml',
-        `
-name: warn-test
-description: Non-interactive workflow with interactive loop
-nodes:
-  - id: my-loop
-    loop:
-      prompt: Iterate.
-      until: DONE
-      max_iterations: 5
-      interactive: true
-      gate_message: Review.
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-      // Also carries the pre-existing "node-level loop interactive: is deprecated"
-      // warning (#2707 step 3) for this same node — unrelated to this check, so
-      // find the class-placement warning by content rather than asserting length.
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const classWarning = pw.find(w => w.includes("Node 'my-loop' is a pause node"));
-      expect(classWarning).toBeDefined();
-      expect(classWarning).toContain('has been applied for this run only');
     });
 
     // -----------------------------------------------------------------------
@@ -4653,7 +4603,6 @@ nodes:
         `
 name: signal-completes
 description: Interactive loop that completes autonomously on the signal
-interactive: true
 nodes:
   - id: validate
     loop:
@@ -4764,7 +4713,6 @@ nodes:
         `
 name: loop-group-gate-terminal
 description: A gate as the body's sole terminal sink, completion reading its decision
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4793,7 +4741,6 @@ nodes:
         `
 name: loop-group-conditional-gate
 description: Ask only when blocked
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4822,7 +4769,6 @@ nodes:
         `
 name: loop-group-gate-completion-not-referenced
 description: A gate-terminated body whose completion channel ignores the gate
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4854,7 +4800,6 @@ nodes:
         `
 name: loop-group-multiple-gates
 description: Two gates in one body — only the last can pause the loop
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4903,7 +4848,6 @@ nodes:
         `
 name: loop-group-gate-include-dependent
 description: A downstream include node depends on the gate
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4946,7 +4890,6 @@ nodes:
         `
 name: loop-group-gate-include-co-terminal
 description: An independent include node is a second terminal sink
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -5118,124 +5061,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0].error).toContain('shadows a node id in the enclosing DAG');
-    });
-
-    it('should infer interactive: true (with a warning) when an interactive loop_group is in an undeclared workflow (#2707 step 2 / #2736)', async () => {
-      // Grace period (#2736/#2738) — see the loop: sibling test above.
-
-      await writeWorkflowFile(
-        testDir,
-        'loop-group-gate-warn.yaml',
-        `
-name: loop-group-gate-warn
-description: Interactive loop_group without workflow-level interactive
-nodes:
-  - id: grp
-    loop_group:
-      until: DONE
-      max_iterations: 3
-      interactive: true
-      gate_message: "Review this iteration"
-      nodes:
-        - id: work
-          prompt: "do work"
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-      // Also carries the pre-existing "node-level loop interactive: is deprecated"
-      // warning (#2707 step 3) for this same node — find by content, not length.
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const classWarning = pw.find(w => w.includes("Node 'grp' is a pause node"));
-      expect(classWarning).toBeDefined();
-    });
-  });
-
-  // A gate-authoring leaf block (a workflow whose only purpose is to be composed via
-  // `include:`, but which directly authors its own native gate) is now covered by the
-  // grace-period inference like any other workflow (#2736/#2738) — it loads with a
-  // warning and `interactive: true` inferred, rather than failing outright, so a
-  // composer of it succeeds too instead of seeing a cascaded failure. Exercised through
-  // the REAL discovery pipeline (discoverWorkflows -> parseWorkflow per file ->
-  // expandWorkflowIncludes), not expandWorkflowIncludes called directly on hand-built
-  // WorkflowDefinition objects — that bypass never reaches parseWorkflow's class check.
-  describe('workflow-class placement — leaf gate-authoring block composed via include: (#2707 step 2 / #2736)', () => {
-    async function writeAndDiscover(files: Record<string, string>) {
-      for (const [filename, content] of Object.entries(files)) {
-        await writeWorkflowFile(testDir, filename, content);
-      }
-      return discoverWorkflows(testDir, { loadDefaults: false });
-    }
-
-    it('a leaf block with a native gate and no interactive: true loads on its own with interactive inferred', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-    });
-
-    it('a composer of that leaf block also succeeds — the inference propagates through include: composition', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-        'top.yaml': `
-name: top
-description: composes the review gate
-interactive: true
-nodes:
-  - id: inc
-    include: gate-blk
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      const names = result.workflows.map(w => w.workflow.name).sort();
-      expect(names).toEqual(['gate-blk', 'top']);
-    });
-
-    it('once the leaf block also declares interactive: true, both it and its composer load correctly with no warning', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-interactive: true
-nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-        'top.yaml': `
-name: top
-description: composes the review gate
-interactive: true
-nodes:
-  - id: inc
-    include: gate-blk
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      const names = result.workflows.map(w => w.workflow.name).sort();
-      expect(names).toEqual(['gate-blk', 'top']);
-      for (const w of result.workflows) {
-        expect(w.parseWarnings ?? []).toEqual([]);
-      }
     });
   });
 
@@ -5411,7 +5236,8 @@ nodes:
       mockLogger.warn.mockClear();
       const yaml = `
 name: parse-warnings
-description: Non-interactive workflow with a native gate, a legacy loop, and a typo
+description: Deprecated interactive declaration, a legacy loop, and a typo
+interactive: true
 nodes:
   - id: gate
     approval:
@@ -5428,7 +5254,6 @@ nodes:
       for (let parse = 0; parse < 2; parse++) {
         const result = parseWorkflow(yaml, 'parse-warnings.yaml');
         expect(result.error).toBeNull();
-        expect(result.workflow?.interactive).toBe(true);
         expect(result.warnings).toHaveLength(3);
       }
       expect(mockLogger.warn).not.toHaveBeenCalled();
@@ -6241,7 +6066,6 @@ name: gated-block
 description: A block whose node config travels but whose run config cannot
 provider: claude
 requires: [github]
-interactive: true
 worktree:
   enabled: true
 nodes:
@@ -6281,7 +6105,6 @@ nodes:
       expect(payload.include).toBe('sub');
       // Run-owned: whoever starts the run decides these, so the composed file's
       // values cannot apply and the author gets told.
-      expect(payload.droppedFields).toContain('interactive');
       expect(payload.droppedFields).toContain('worktree');
       // Node-affecting: `provider` travelled onto the block's own nodes (#1764), so
       // reporting it as dropped would now be a lie.
@@ -7515,7 +7338,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -7531,7 +7353,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -7684,7 +7505,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'worktree:',
         '  enabled: true',
         'nodes:',
@@ -7981,7 +7801,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -7999,7 +7818,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -8013,7 +7831,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -8029,7 +7846,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: iterate',
         '    loop:',
@@ -8087,7 +7903,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
@@ -8113,7 +7928,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
@@ -8139,7 +7953,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grandparent',
         '    loop_group:',
@@ -8170,7 +7983,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
@@ -8211,7 +8023,6 @@ nodes:
           [
             'name: parent',
             'description: composes a review block',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -8227,7 +8038,6 @@ nodes:
           [
             'name: review-block',
             'description: reusable interactive review',
-            'interactive: true',
             'nodes:',
             '  - id: iterate',
             '    loop_group:',
@@ -8253,7 +8063,6 @@ nodes:
           [
             'name: parent',
             'description: composes a gate block mid-body',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -8273,7 +8082,6 @@ nodes:
           [
             'name: gate-block',
             'description: reusable approval',
-            'interactive: true',
             'nodes:',
             '  - id: check',
             '    approval:',
@@ -8295,7 +8103,6 @@ nodes:
           [
             'name: parent',
             'description: composes an approval as the loop sink',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -8311,7 +8118,6 @@ nodes:
           [
             'name: gate-block',
             'description: reusable approval',
-            'interactive: true',
             'nodes:',
             '  - id: check',
             '    approval:',
@@ -8354,7 +8160,6 @@ nodes:
       const err = await loadErrorFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grp',
         '    loop_group:',
@@ -8377,7 +8182,6 @@ nodes:
       const err = await loadErrorFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grp',
         '    loop_group:',
@@ -8465,7 +8269,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -8482,7 +8285,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -8921,7 +8723,6 @@ describe('workflow-level field parity (#2457)', () => {
       present: w => w.effort === 'high' && w.modelReasoningEffort === undefined,
     },
     webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
-    interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
     effort: { yaml: 'effort: high', present: w => w.effort === 'high' },
     fallbackModel: {
       yaml: 'fallbackModel: haiku',
@@ -9640,7 +9441,6 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
       Bun.YAML.stringify({
         name: 'structured-group-gate',
         description: 'test',
-        interactive: true,
         nodes: [
           {
             id: 'refine',
@@ -9669,7 +9469,6 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
       Bun.YAML.stringify({
         name: 'structured-group-gate-fan-in',
         description: 'test',
-        interactive: true,
         nodes: [
           {
             id: 'refine',
@@ -9875,6 +9674,40 @@ nodes:
     '$a.output == true',
   ])('loads supported syntax: %s', when => {
     expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
+  });
+});
+
+describe('attention wait labels', () => {
+  const parseLabels = (labels: string, dependsOn = '[plan]'): ParseResult =>
+    parseWorkflow(
+      `name: labeled
+description: Labels on an attention wait
+nodes:
+  - id: plan
+    bash: echo '{}'
+  - id: other
+    bash: echo '{}'
+  - id: ask
+    depends_on: ${dependsOn}
+    wait:
+      attention: CI is red. Retry?
+      labels: ${labels}
+`,
+      'labeled.yaml'
+    );
+
+  it('loads literal labels and labels that reference an upstream output', () => {
+    expect(parseLabels('{ ci: "$plan.output.cause", area: delivery }').error).toBeNull();
+  });
+
+  it('rejects a label key a CLI filter could not name', () => {
+    expect(parseLabels('{ "ci=x": other }').error).not.toBeNull();
+  });
+
+  it('rejects a label that references a node the wait does not depend on', () => {
+    expect(parseLabels('{ ci: "$other.output.cause" }').error?.error).toContain(
+      "field 'wait.labels.ci' references '$other.output', which is not an upstream dependency"
+    );
   });
 });
 

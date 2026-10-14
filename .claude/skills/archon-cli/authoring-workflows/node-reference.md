@@ -17,7 +17,6 @@ inputs:                      # declared signature; callers pass via --input name
     description: Optional work override; prompts read $ARGUMENTS explicitly for fallback
 returns: implement           # which node's output is the workflow's terminal output
 outcome_field: green         # persist one authored boolean beside run status (e.g. green/ready/rooted)
-interactive: false           # true REQUIRED if any approval gate exists (fresh launch cannot detach)
 worktree:
   enabled: true              # pin worktree isolation. Bounds git files ONLY —
                              # not ~/.archon, env vars, database, or sessions
@@ -213,9 +212,8 @@ as a typed condition reference. A failed body node fails the group immediately.
   when: "$review-gate.output.decision == 'needs-revision'"
 ```
 
-Requires `interactive: true` at workflow level. The fresh launch cannot detach;
-continuation actions on an already-paused run can. Use only for interactive
-sessions or super load-bearing actions. Authored `decisions:` always produce
+The run pauses in the attention queue until the gate is answered, however it was
+started. Use only for interactive sessions or super load-bearing actions. Authored `decisions:` always produce
 structured `{decision, text}` output. `capture_response` and `on_reject` are
 compatibility-only; wire rework explicitly with `when:` as above, or put the gate
 at the end of a `loop_group` when review and revision should repeat.
@@ -302,11 +300,15 @@ and `payload`.
     options:                  # select and multi_select only; or one whole "$plan.output.options"
       - { id: use-main, label: "Base on main" }
       - { id: use-dev }
+    labels:                   # optional; plain strings, runtime refs resolved at pause
+      about: "$plan.output.topic"
 ```
 
 The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
 and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
 an answer and never cancels the run; branch on `$ask.output.decision` with `when:`.
+`labels` mean nothing to the engine; they let the user's handler workflows pick the
+pause out of `archon workflow attention --label k=v`.
 
 ## Wiring nodes together
 
