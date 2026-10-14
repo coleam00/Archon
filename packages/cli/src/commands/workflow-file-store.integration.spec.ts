@@ -4,7 +4,9 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import { z } from '@hono/zod-openapi';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
-import { expect, test } from 'bun:test';
+import { expect, test, setSystemTime } from 'bun:test';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { readdir } from 'node:fs/promises';
 import {
   existsSync,
   mkdtempSync,
@@ -80,20 +82,26 @@ await import(${src('packages/cli/src/cli.ts')});`
     ARCHON_USER_ID: 'file-operator',
     ARCHON_TELEMETRY_DISABLED: '1',
     LOG_LEVEL: 'silent',
+    WORKFLOW_ID: '',
+    ARCHON_NODE_EXECUTION: '',
   };
   return { root, project, home, entry, trap, env };
 }
 async function cli(
   f: ReturnType<typeof fixture>,
   args: string[],
-  env = f.env
+  env = f.env,
+  input = ''
 ): Promise<{ output: string; error: string; code: number }> {
   const child = Bun.spawn([process.execPath, f.entry, ...args], {
     cwd: f.project,
     env,
+    stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
+  child.stdin.write(input);
+  child.stdin.end();
   const [output, error, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -147,7 +155,6 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(JSON.parse(get.output)).toMatchObject({ id, status: 'completed' });
   const final = await cli(f, ['workflow', 'runs', '--json']);
   expect(JSON.parse(final.output).runs).toMatchObject([{ id, status: 'completed' }]);
-  // Cleanup also prunes state revisions; the file store holds none, so it must not fail.
   const cleanup = await cli(f, ['workflow', 'cleanup']);
   expect(cleanup, cleanup.output + cleanup.error).toMatchObject({ code: 0 });
   expect(readFileSync(join(f.project, 'before-count'), 'utf8')).toBe('executed\n');
@@ -199,16 +206,11 @@ test('wake schedule skips provider and file-store startup checks, as it does on 
   expect(result.output + result.error).toContain('Usage: archon workflow wake schedule');
   expect(result.output + result.error).not.toContain('concurrency.providers');
 }, 30000);
-test('SQL-only commands fail explicitly under files', async () => {
+test('SQL-only AI settings fail explicitly under files', async () => {
   const f = fixture();
-  for (const args of [
-    ['ai', 'show'],
-    ['state', 'get', 'notes'],
-  ]) {
-    const result = await cli(f, args);
-    expect(result.code).toBe(1);
-    expect(result.output + result.error).toContain('store: database');
-  }
+  const result = await cli(f, ['ai', 'show']);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).toContain('store: database');
   expect(existsSync(f.trap)).toBe(false);
 }, 30000);
 
@@ -391,3 +393,137 @@ nodes:
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 60000);
+
+test('state commands use files, retain scope and CAS, and cleanup preserves latest tombstones', async () => {
+  const f = fixture();
+  expect(Bun.spawnSync(['git', 'init', '-q', f.project]).exitCode).toBe(0);
+  async function state(args: string[], input = '', env = f.env) {
+    return cli(f, ['state', ...args], env, input);
+  }
+  const put = await state(
+    ['put', 'notes', '--project', 'owner/repo', '--if-revision', '0'],
+    '{"seen":[]}'
+  );
+  expect(put, put.output + put.error).toMatchObject({ code: 0 });
+  expect(JSON.parse(put.output)).toMatchObject({
+    revision: 1,
+    writer: { kind: 'surface', via: 'cli' },
+  });
+  const patch = await state(
+    ['patch', 'notes', '--project', 'owner/repo'],
+    '{"ops":[{"op":"append","path":"/seen","value":1}]}'
+  );
+  expect(patch, patch.output + patch.error).toMatchObject({ code: 0 });
+  const get = await state(['get', 'notes', '--project', 'owner/repo']);
+  expect(JSON.parse(get.output)).toMatchObject({ revision: 2, value: { seen: [1] } });
+  const conflict = await state(
+    ['put', 'notes', '--project', 'owner/repo', '--if-revision', '1'],
+    '{}'
+  );
+  expect(conflict.code).toBe(3);
+  const mismatch = await state(
+    ['patch', 'notes'],
+    '{"ops":[{"op":"set","path":"/wrong","value":true}]}',
+    { ...f.env, WORKFLOW_ID: 'unknown-run', ARCHON_NODE_EXECUTION: '{}' }
+  );
+  expect(mismatch.code).toBe(5);
+  expect(JSON.parse(mismatch.output).error).toContain('files does not know WORKFLOW_ID');
+  const log = await state(['log', 'notes', '--project', 'owner/repo']);
+  expect(JSON.parse(log.output).revisions.map((row: { revision: number }) => row.revision)).toEqual(
+    [2, 1]
+  );
+  expect(
+    (await state(['put', 'notes', '--install', '--raw', '--if-revision', '0'], 'hello')).code
+  ).toBe(0);
+  const raw = await state(['get', 'notes', '--install', '--raw']);
+  expect(raw.output).toBe('hello');
+  const deleted = await state(['delete', 'notes', '--project', 'owner/repo']);
+  expect(deleted.code).toBe(0);
+  const list = await state(['list', '--project', 'owner/repo']);
+  expect(JSON.parse(list.output)).toMatchObject({
+    documents: [{ name: 'notes', revision: 3, deleted: true }],
+  });
+  // The immutable fixture is born old rather than rewritten to age it.
+  const root = join(f.home, 'store');
+  const store = await createFileWorkflowStore({ root });
+  const input = {
+    scope: { kind: 'install' } as const,
+    writer: { kind: 'surface', via: 'cli' } as const,
+  };
+  setSystemTime(new Date('2000-01-01T00:00:00Z'));
+  try {
+    for (const name of ['old-live', 'old-deleted']) {
+      await store.putStateDocument({ ...input, name, value: {}, ifRevision: 0 });
+      if (name === 'old-live')
+        await store.putStateDocument({ ...input, name, value: { latest: true }, ifRevision: 1 });
+      else await store.deleteStateDocument({ ...input, name });
+    }
+  } finally {
+    setSystemTime();
+  }
+  const before = await readdir(join(root, 'state'), { recursive: true });
+  const cleanup = await cli(f, ['workflow', 'cleanup', '7']);
+  expect(cleanup, cleanup.output + cleanup.error).toMatchObject({ code: 0 });
+  expect(cleanup.output).toContain('2 state revision');
+  for (const name of ['old-live', 'old-deleted'])
+    expect(
+      (await store.listStateRevisions({ kind: 'install' }, name)).map(row => row.revision)
+    ).toEqual([2]);
+  expect(await store.getStateDocument({ kind: 'install' }, 'old-deleted')).toBeNull();
+  const after = await readdir(join(root, 'state'), { recursive: true });
+  expect(before.filter(path => !after.includes(path))).toHaveLength(2);
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
+
+test('file-backed bash and script writes record run identity; checkout writes register their project', async () => {
+  const f = fixture();
+  const initialized = Bun.spawnSync(['git', 'init', '-q', f.project]);
+  expect(initialized.exitCode).toBe(0);
+  const registered = await cli(f, ['state', 'put', 'operator', '--if-revision', '0'], f.env, '{}');
+  expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
+  writeFileSync(
+    join(f.project, '.archon/workflows/state.yaml'),
+    `name: state
+description: state from exec nodes
+worktree:
+  enabled: false
+nodes:
+  - id: script-write
+    runtime: bun
+    script: |
+      const command = JSON.parse(process.env.ARCHON_CLI_COMMAND);
+      const child = Bun.spawn([...command, 'state', 'patch', 'ledger'], {stdin:'pipe',stdout:'inherit',stderr:'inherit'});
+      child.stdin.write('{"ops":[{"op":"append","path":"/seen","value":"script"}]}');
+      child.stdin.end();
+      if (await child.exited !== 0) throw new Error('State write failed');
+  - id: bash-write
+    depends_on: [script-write]
+    bash: |
+      bun -e 'const command = JSON.parse(process.env.ARCHON_CLI_COMMAND); const child = Bun.spawn([...command, "state", "patch", "ledger"], {stdin:"pipe",stdout:"inherit",stderr:"inherit"}); child.stdin.write(JSON.stringify({ops:[{op:"append",path:"/seen",value:"bash"}]})); child.stdin.end(); process.exit(await child.exited);'
+`
+  );
+  const run = await cli(f, ['workflow', 'run', 'state', '--no-worktree']);
+  expect(run, run.output + run.error).toMatchObject({ code: 0 });
+  const log = await cli(f, ['state', 'log', 'ledger']);
+  expect(log, log.output + log.error).toMatchObject({ code: 0 });
+  const revisions = JSON.parse(log.output).revisions;
+  expect(revisions).toMatchObject([
+    {
+      revision: 2,
+      value: { seen: ['script', 'bash'] },
+      writer: { kind: 'run', nodePath: 'bash-write' },
+    },
+    { revision: 1, writer: { kind: 'run', nodePath: 'script-write' } },
+  ]);
+  const runs = await cli(f, ['workflow', 'runs', '--json']);
+  expect(
+    revisions.every(
+      (row: { writer: { runId: string } }) =>
+        row.writer.runId === JSON.parse(runs.output).runs[0].id
+    )
+  ).toBe(true);
+  expect(existsSync(join(f.home, 'store/host/codebases.json'))).toBe(true);
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);

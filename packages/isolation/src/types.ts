@@ -141,7 +141,10 @@ export interface CreatedWorktreeMetadata {
    */
   branchCreated: boolean;
   request?: IsolationRequest;
-  /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
+  /**
+   * The commit the branch was cut from or reset to; absent when an existing branch was
+   * checked out as it was.
+   */
   cutFromCommit?: string;
 }
 
@@ -465,7 +468,7 @@ export type ResolutionMethod =
       /** Whether this resolution created the branch, so undoing it may delete the branch. */
       branchCreated: boolean;
       autoCleanedCount?: number;
-      /** The commit the new branch was cut from, when this resolution created one. */
+      /** The commit the branch was cut from or reset to, when this resolution did either. */
       cutFromCommit?: string;
     };
 

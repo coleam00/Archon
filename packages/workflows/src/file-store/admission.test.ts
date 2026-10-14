@@ -166,23 +166,26 @@ test('attempt holders are retained until their exact owner is provably gone', as
   expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toHaveLength(1);
 });
 
-test('an attempt holder with a non-positive pid fails admission instead of being released', async () => {
-  const { root, store } = await fixture();
-  const first = intent();
-  await store.admitResourceStart(first);
-  await store.cancelWorkflowRun(first.launch.run.id);
-  const path = join(root, 'resource/slots', (await readdir(join(root, 'resource/slots')))[0]!);
-  const slot = JSON.parse(await readFile(path, 'utf8'));
-  slot.holders = [
-    { kind: 'attempt', id: crypto.randomUUID(), owner: { ...currentProcessOwner, pid: -999999 } },
-  ];
-  const tampered = JSON.stringify(slot);
-  await writeFile(path, tampered);
-  const error = await store.admitResourceStart(intent()).catch((thrown: unknown) => thrown);
-  expect(error).toBeInstanceOf(ProcessOwnerRecordError);
-  expect((error as ProcessOwnerRecordError).source).toBe(path);
-  expect(await readFile(path, 'utf8')).toBe(tampered);
-});
+test.each([-999999, 1.5])(
+  'an attempt holder with pid %p fails admission instead of being released',
+  async pid => {
+    const { root, store } = await fixture();
+    const first = intent();
+    await store.admitResourceStart(first);
+    await store.cancelWorkflowRun(first.launch.run.id);
+    const path = join(root, 'resource/slots', (await readdir(join(root, 'resource/slots')))[0]!);
+    const slot = JSON.parse(await readFile(path, 'utf8'));
+    slot.holders = [
+      { kind: 'attempt', id: crypto.randomUUID(), owner: { ...currentProcessOwner, pid } },
+    ];
+    const tampered = JSON.stringify(slot);
+    await writeFile(path, tampered);
+    const error = await store.admitResourceStart(intent()).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(ProcessOwnerRecordError);
+    expect((error as ProcessOwnerRecordError).source).toBe(path);
+    expect(await readFile(path, 'utf8')).toBe(tampered);
+  }
+);
 
 test('receipt-linked requests validate their binding and inspection follows every linked request', async () => {
   const { root, store } = await fixture();

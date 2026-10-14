@@ -12,11 +12,12 @@
  * `output_format` is declared on `dagNodeBaseSchema`, so a bash/script node may
  * carry one; the fresh path holds the full stdout in memory and parses fine.
  * `formatPersistedNodeOutput` also spills the full bytes to the run's artifacts
- * directory when it truncates, and `getDagResumeSnapshot` (packages/core)
- * prefers reading that spill back over the clipped preview on resume (#2726) —
+ * directory when it truncates, and `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
+ * prefers that spill over the clipped preview when folding the store's resume snapshot (#2726) —
  * so a resumed run ordinarily sees the same full text a fresh run would have.
  * This marker is now the fallback: it only surfaces when the spill itself is
- * missing or unreadable (e.g. artifacts were removed out-of-band). Without it,
+ * missing, unreadable (e.g. artifacts were removed out-of-band), or stale (its
+ * byte length differs from the recorded output). Without it,
  * that failure would read "output is not a JSON object — emit JSON containing
  * 'x'", which sends the author to fix a producer that was already correct.
  */

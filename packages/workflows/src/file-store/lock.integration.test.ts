@@ -214,6 +214,21 @@ describe('file store filesystem primitives', () => {
     expect(count).toBe(20);
   });
 
+  // A caller that does not await one write before issuing the next, as the executor does
+  // with `workflow_started`, still expects the store's feed to keep that order.
+  test('in-process callers run in call order', async () => {
+    const root = await fixture();
+    const order: number[] = [];
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        withFileStoreLock(root, async () => {
+          order.push(index);
+        })
+      )
+    );
+    expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
   test('rename replaces whole files while other processes read', async () => {
     const root = await fixture();
     const target = join(root, 'document');
@@ -327,12 +342,14 @@ describe('file store filesystem primitives', () => {
     const path = join(root, 'lock');
     await writeFile(path, JSON.stringify({ ...currentProcessOwner, instance: randomUUID() }));
     expect(await withFileStoreLock(root, async () => 'recovered')).toBe('recovered');
-    const malformed = JSON.stringify({ ...currentProcessOwner, pid: -1 });
-    await writeFile(path, malformed);
-    await expect(withFileStoreLock(root, async () => {}, 25)).rejects.toThrow(
-      'Invalid owner record'
-    );
-    expect(await readFile(path, 'utf8')).toBe(malformed);
+    for (const pid of [-1, 1.5]) {
+      const malformed = JSON.stringify({ ...currentProcessOwner, pid });
+      await writeFile(path, malformed);
+      await expect(withFileStoreLock(root, async () => {}, 25)).rejects.toThrow(
+        'Invalid owner record'
+      );
+      expect(await readFile(path, 'utf8')).toBe(malformed);
+    }
     await writeFile(path, '{');
     let entered = false;
     const error = await rejection(

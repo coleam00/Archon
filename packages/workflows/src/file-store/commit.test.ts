@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import type { StateRevision } from '../state-document-store';
 import { expect, spyOn, test } from 'bun:test';
 import { appendFile, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -325,3 +327,87 @@ test.each([...deletionCrashSteps])(
     ).toEqual(committed);
   }
 );
+
+const stateCrashSteps = ['intent', 'name', 'scratch', 'published', 'deleted', 'head'] as const;
+test.each([...stateCrashSteps])('state redo preserves immutable files after %s', async step => {
+  const { root, store } = await fixture();
+  const { rename, mkdir, stat } = await import('node:fs/promises');
+  const dir = `state/${createHash('sha256')
+    .update(JSON.stringify(['_install', 'ledger']))
+    .digest('hex')}`;
+  const name = `${dir}/name.json`;
+  const revision = `${dir}/2.json`;
+  const obsolete = `${dir}/1.json`;
+  await mkdir(join(root, dir), { recursive: true });
+  const row: StateRevision = {
+    name: 'ledger',
+    revision: 2,
+    value: null,
+    operation: { op: 'delete' },
+    writer: { kind: 'surface', via: 'cli' },
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(
+    join(root, obsolete),
+    JSON.stringify({ ...row, revision: 1, value: {}, operation: { op: 'put' } })
+  );
+  const seq = JSON.parse(await readFile(join(root, 'head.json'), 'utf8')).seq + 1;
+  const immutableDocuments = {
+    [name]: { scope: { kind: 'install' }, name: 'ledger' },
+    [revision]: row,
+  };
+  await writeFile(
+    join(root, 'intent.json'),
+    JSON.stringify({
+      seq,
+      lines: [],
+      documents: {},
+      deleteRuns: [],
+      immutableDocuments,
+      deleteDocuments: [obsolete],
+    })
+  );
+  if (stateCrashSteps.indexOf(step) >= 1)
+    await writeFile(join(root, name), JSON.stringify(immutableDocuments[name]));
+  let inode: number | undefined;
+  if (stateCrashSteps.indexOf(step) >= 2) {
+    await writeFile(
+      join(root, `${revision}.publish.tmp`),
+      JSON.stringify(immutableDocuments[revision])
+    );
+  }
+  if (stateCrashSteps.indexOf(step) >= 3) {
+    await rename(join(root, `${revision}.publish.tmp`), join(root, revision));
+    inode = (await stat(join(root, revision))).ino;
+  }
+  if (stateCrashSteps.indexOf(step) >= 4) await unlink(join(root, obsolete));
+  if (stateCrashSteps.indexOf(step) >= 5)
+    await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq }));
+  expect(await store.getStateDocument({ kind: 'install' }, 'ledger')).toBeNull();
+  expect(await store.listStateRevisions({ kind: 'install' }, 'ledger')).toEqual([row]);
+  expect(await readFile(join(root, revision), 'utf8')).toBe(JSON.stringify(row));
+  expect(await Bun.file(join(root, obsolete)).exists()).toBe(false);
+  if (inode !== undefined) expect((await stat(join(root, revision))).ino).toBe(inode);
+  expect(await Bun.file(join(root, `${revision}.publish.tmp`)).exists()).toBe(false);
+  const head = await readFile(join(root, 'head.json'));
+  await createFileWorkflowStore({ root });
+  expect(await readFile(join(root, 'head.json'))).toEqual(head);
+  expect(String(await store.getWorkflowEventHead())).toBe(`file:${seq}.9007199254740991`);
+});
+
+test('immutable publication rejects different bytes and retains the recovery intent', async () => {
+  const { root } = await fixture();
+  await commitModule.commit(root, [], async () => ({
+    result: undefined,
+    changes: { immutableDocuments: { 'state/test/1.json': { value: 1 } } },
+  }));
+  const before = await readFile(join(root, 'state/test/1.json'));
+  await expect(
+    commitModule.commit(root, [], async () => ({
+      result: undefined,
+      changes: { immutableDocuments: { 'state/test/1.json': { value: 2 } } },
+    }))
+  ).rejects.toThrow('Immutable store document differs');
+  expect(await readFile(join(root, 'state/test/1.json'))).toEqual(before);
+  expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(true);
+});

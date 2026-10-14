@@ -128,7 +128,6 @@ describe('RunStream tool rendering', () => {
     durationMs: null,
     skipReason: null,
     skipExpr: null,
-    outputPreview: null,
     costUsd: null,
     costScope: null,
     stopReason: null,

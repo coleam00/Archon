@@ -523,11 +523,12 @@ test('provider logs dispatch at the plugin severity', async () => {
   }
 });
 
-test('provider log failure classes outside the contract enum log severity only', async () => {
+test('provider log records without a contract failure class are dropped', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   try {
     await collect(provider('logs-untrusted', 'warn').sendQuery('credentialsecret', tmpdir()));
-    expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
+    await collect(provider('logs-untrusted', 'warn').sendQuery('', tmpdir()));
+    expect(warn.mock.calls).toEqual([]);
   } finally {
     warn.mockRestore();
   }

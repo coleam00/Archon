@@ -18,6 +18,7 @@ import {
   type ReviewsResult,
   type MutationFailure,
 } from '../../workflows/sdlc/.shared/forge';
+import { SIZE_LABEL, TYPE_LABEL } from '../../workflows/sdlc/.shared/labels';
 import type { PrRef } from '../../../packages/forge/src/identity';
 import {
   forgePrRecordSchema,
@@ -127,6 +128,49 @@ test('triage producer declares qualified identities and its non-tracker sentinel
   ]) {
     expect(validateStructuredOutput(illegal, schema).valid).toBe(false);
   }
+});
+
+test('triage requires its five judged fields, each a listed value and a non-empty reason', () => {
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  if (parsed.workflow === null) throw new Error(parsed.error.error);
+  const node = parsed.workflow.nodes.find(node => node.id === 'triage');
+  if (!node || !('output_format' in node) || !node.output_format)
+    throw new Error('missing triage schema');
+  const schema = node.output_format;
+  const valid = {
+    decision: { contract: 'READY', route: 'deliver' },
+    type: { value: 'bug', reason: 'a regression' },
+    size: { value: 's', reason: 'one file' },
+    complexity: { value: 'high', reason: 'touches authentication' },
+    importance: { value: 'medium', reason: 'on direction' },
+    urgency: { value: 'now', reason: 'blocks a release' },
+    item: { repo: { host: '', path: '' }, number: 0 },
+    area_labels: [],
+    summary: 'Ready',
+    report: { type: 'archon_artifact', run_id: 'r', path: 'triage.md' },
+  };
+  expect(validateStructuredOutput(valid, schema).valid).toBe(true);
+  // An invalid output is what the engine re-asks the provider on.
+  for (const field of ['type', 'size', 'complexity', 'importance', 'urgency'] as const) {
+    const { [field]: judged, ...missing } = valid;
+    expect(validateStructuredOutput(missing, schema).valid).toBe(false);
+    for (const broken of [
+      { value: judged.value },
+      { value: judged.value, reason: ' ' },
+      { value: 'small', reason: 'retired value' },
+    ]) {
+      expect(validateStructuredOutput({ ...valid, [field]: broken }, schema).valid).toBe(false);
+    }
+  }
+  // The labels mirror type and size, so the schema's values and the label map's keys
+  // must be the same set.
+  const properties = schema.properties as Record<
+    string,
+    { properties: { value: { enum: string[] } } }
+  >;
+  expect([...properties.type.properties.value.enum].sort()).toEqual(Object.keys(TYPE_LABEL).sort());
+  expect([...properties.size.properties.value.enum].sort()).toEqual(Object.keys(SIZE_LABEL).sort());
 });
 
 type ContractResult = Extract<ForgeResponse, { ok: true }>['result'];

@@ -107,14 +107,13 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
     const deliveryId = c.req.header('x-github-delivery');
 
     try {
-      const payload = await readSignedBody(c.req.raw);
-      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
-
       const signature = c.req.header('x-hub-signature-256');
       if (!signature) {
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
@@ -180,10 +179,10 @@ export function registerWebhookSourceRoutes(
   app.post('/webhooks/sources/:sourceInstanceId', async c => {
     const sourceInstanceId = c.req.param('sourceInstanceId');
     try {
-      const body = await readSignedBody(c.req.raw);
-      if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (!sources.hasSource(sourceInstanceId))
         return c.json({ error: 'Unknown webhook source' }, 404);
+      const body = await readSignedBody(c.req.raw);
+      if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (body.kind === 'read_failed') throw body.error;
       if (body.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
       const result = await sources.receive(sourceInstanceId, {

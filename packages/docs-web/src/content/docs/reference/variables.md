@@ -174,8 +174,9 @@ nodes:
 
 ### Node-local `with:` bindings on `command:` and `script:` nodes
 
-A command file and a named script are opaque to inline text substitution — the engine never
-rewrites their bodies. `with:` on a `command:` or `script:` node binds upstream values **by
+A command file and a named script live in their own files, outside the workflow YAML. A
+command body gets the same variable substitution as an inline `prompt:`; a named script body
+is never rewritten. `with:` on a `command:` or `script:` node binds upstream values **by
 name** through the channels those bodies already read: `$INPUTS.<name>` in a command file,
 `INPUTS_<UPPER_SNAKE>` env vars in a script.
 

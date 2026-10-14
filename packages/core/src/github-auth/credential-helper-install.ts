@@ -8,7 +8,7 @@
  *   2. Register the helper on the worktree's git config:
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *
- * The caller (the GitHub adapter clone path in App mode) decides whether to
+ * The caller (the GitHub adapter in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.

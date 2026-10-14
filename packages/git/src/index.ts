@@ -87,3 +87,5 @@ export {
   InvalidBaseBranchError,
 } from './remote-branches';
 export type { RemoteBranchTarget, RemoteBranches } from './remote-branches';
+
+export { githubTokenCredentials } from './credentials';
