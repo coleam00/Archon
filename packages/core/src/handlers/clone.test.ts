@@ -610,15 +610,23 @@ describe('cloneRepository', () => {
       }
     );
 
+    test('trusts the destination before clone can execute checkout hooks', async () => {
+      mockCreateCodebase.mockResolvedValue(makeCodebase());
+      spyCloneGitRepository.mockImplementation(async (_url, target) => {
+        expect(spyAddSafeDirectory).toHaveBeenCalledWith(target);
+        return { ok: true, value: undefined };
+      });
+      await cloneRepository('https://github.com/owner/repo');
+    });
+
     test('adds safe.directory before registration and propagates config failures', async () => {
       spyAddSafeDirectory.mockRejectedValueOnce(new Error('config locked'));
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'config locked'
       );
       expect(mockCreateCodebase).not.toHaveBeenCalled();
-      expect(spyFsRm).toHaveBeenCalledWith('/home/test/.archon/workspaces/owner/repo/source', {
-        recursive: true,
-      });
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(spyFsRm).not.toHaveBeenCalled();
     });
   });
 

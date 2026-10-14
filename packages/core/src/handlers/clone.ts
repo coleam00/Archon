@@ -491,35 +491,35 @@ export async function cloneRepository(
   // Resolve authentication without putting it into the repository URL.
   const credentials = resolveForgeAuth(workingUrl);
 
-  const cloneResult = await cloneGitRepository(
-    workingUrl,
-    toRepoPath(targetPath),
-    credentials ? { credentials } : undefined
-  );
-  if (!cloneResult.ok) {
-    let detail: string;
-    switch (cloneResult.error.code) {
-      case 'not_a_repo':
-        detail = 'Repository not found or unavailable. Check the URL and repository access.';
-        break;
-      case 'permission_denied':
-        detail = 'Authentication failed. Check the configured forge token and repository access.';
-        break;
-      case 'no_space':
-        detail = 'No space left at the clone destination.';
-        break;
-      case 'unknown':
-        detail = cloneResult.error.message;
-        break;
-      default:
-        detail = 'Git clone failed.';
-        break;
+  return withProvisionalSafeDirectory(toRepoPath(targetPath), async () => {
+    const cloneResult = await cloneGitRepository(
+      workingUrl,
+      toRepoPath(targetPath),
+      credentials ? { credentials } : undefined
+    );
+    if (!cloneResult.ok) {
+      let detail: string;
+      switch (cloneResult.error.code) {
+        case 'not_a_repo':
+          detail = 'Repository not found or unavailable. Check the URL and repository access.';
+          break;
+        case 'permission_denied':
+          detail = 'Authentication failed. Check the configured forge token and repository access.';
+          break;
+        case 'no_space':
+          detail = 'No space left at the clone destination.';
+          break;
+        case 'unknown':
+          detail = cloneResult.error.message;
+          break;
+        default:
+          detail = 'Git clone failed.';
+          break;
+      }
+      throw new Error(`Failed to clone repository: ${detail}`);
     }
-    throw new Error(`Failed to clone repository: ${detail}`);
-  }
 
-  try {
-    return await withProvisionalSafeDirectory(toRepoPath(targetPath), async () => {
+    try {
       getLog().debug({ path: targetPath }, 'safe_directory_added');
       await validateRegistrationChoice(targetPath, options);
       const result = await registerRepoAtPath(
@@ -532,12 +532,12 @@ export async function cloneRepository(
       );
       getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
       return result;
-    });
-  } catch (error) {
-    // Any failure here leaves a clone with no registration, which would block a retry.
-    await rm(targetPath, { recursive: true });
-    throw error;
-  }
+    } catch (error) {
+      // Any failure here leaves a clone with no registration, which would block a retry.
+      await rm(targetPath, { recursive: true });
+      throw error;
+    }
+  });
 }
 
 /**
