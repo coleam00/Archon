@@ -14,6 +14,7 @@ facts:
     stage: new
     body_digest: "sha256:stub"
     labels: []
+    waiting: []
     notes: []
 triage__triage:
   decision: { contract: READY, route: deliver }
