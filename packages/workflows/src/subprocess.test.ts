@@ -63,6 +63,30 @@ posixOnly('ending recorded node trees ends the in-flight node and its descendant
   }
 });
 
+posixOnly('a node whose root exited stays endable while its job holds the output', async () => {
+  const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
+  const trees = recordNodeProcessTrees();
+  try {
+    const node = runHostBash(`/bin/sleep 30 & echo $! > '${pidFile}'`, 30_000);
+    const settled = node.then(
+      () => 'settled',
+      () => 'settled'
+    );
+    await waitUntil(
+      'the descendant pid',
+      () => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== ''
+    );
+    const descendant = Number(readFileSync(pidFile, 'utf8'));
+
+    await trees.end();
+
+    await waitUntil('the descendant to exit', () => !processExists(descendant));
+    expect(await settled).toBe('settled');
+  } finally {
+    trees.release();
+  }
+});
+
 posixOnly('no node subprocess starts after the recorded trees are ended', async () => {
   const marker = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'ran');
   const trees = recordNodeProcessTrees();

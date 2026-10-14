@@ -677,9 +677,15 @@ before this field existed carry no `stop_reason`.
 
 After recording why the run stopped, the owner ends the process tree of every `bash:` or
 `script:` node still running, including an `until_bash` check, so a resume never overlaps the
-interrupted attempt. On macOS and Linux those subprocesses run in their own session during a
-foreground run, so they have no controlling terminal. A process that starts its own session or
-process group (`setsid`, a daemon) escapes this.
+interrupted attempt. This applies to foreground `workflow run`, `workflow resume` and
+`trigger execute`. A node counts as running until its output closes, so a background job that
+still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
+their own session during a foreground run, so they have no controlling terminal. If the owner
+dies before its teardown ends the tree (a terminal hangup, a second Ctrl-C, `kill -9`), a small
+watcher process still ends the node's process group; a run whose stop was never recorded stays
+`running`. A process that starts its own session or process group (`setsid`, a daemon)
+escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
+root already exited is not reached.
 
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider

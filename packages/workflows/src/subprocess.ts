@@ -109,7 +109,8 @@ export function redactSubprocessError(
 }
 
 interface NodeProcessRecorder {
-  roots: Set<number>;
+  /** Each in-flight node's root PID, with the function that disarms its owner-death watcher. */
+  roots: Map<number, () => void>;
   ended: boolean;
 }
 let nodeProcessRecorder: NodeProcessRecorder | undefined;
@@ -128,15 +129,15 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * starts while the owner exits never runs.
  */
 export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
-  const recorder: NodeProcessRecorder = { roots: new Set(), ended: false };
+  const recorder: NodeProcessRecorder = { roots: new Map(), ended: false };
   nodeProcessRecorder = recorder;
   return {
     end: async () => {
       recorder.ended = true;
       const failed: string[] = [];
       await Promise.all(
-        [...recorder.roots].map(pid =>
-          terminateTree(pid).catch((error: unknown) => {
+        [...recorder.roots].map(([pid, disarm]) =>
+          terminateTree(pid).then(disarm, (error: unknown) => {
             failed.push(
               `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
             );
@@ -150,6 +151,25 @@ export function recordNodeProcessTrees(): { end(): Promise<void>; release(): voi
     release: () => {
       if (nodeProcessRecorder === recorder) nodeProcessRecorder = undefined;
     },
+  };
+}
+
+// A node runs in its own session, so terminal hangup or a second Ctrl-C kills the owner
+// without reaching the node, and so does SIGKILL. The watcher sits outside the node's
+// group and session: owner death of any kind closes its stdin before the release line.
+const NODE_LIFELINE = 'IFS= read -r line || kill -s KILL -- "-$1"';
+
+function armNodeLifeline(pgid: number, onError: (error: Error) => void): () => void {
+  const watcher = spawn('/bin/sh', ['-c', NODE_LIFELINE, 'archon-node-lifeline', String(pgid)], {
+    detached: true,
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  watcher.unref();
+  watcher.once('error', onError);
+  // EPIPE only means the watcher already exited, so there is nothing left to disarm.
+  watcher.stdin?.on('error', () => undefined);
+  return () => {
+    watcher.stdin?.end('\n');
   };
 }
 
@@ -336,11 +356,6 @@ async function execOwnedProcessGroup(
     detached: posix,
     stdio: [lifeline || recorder ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
-  const rootPid = child.pid;
-  if (recorder && rootPid !== undefined) {
-    recorder.roots.add(rootPid);
-    child.once('exit', () => recorder.roots.delete(rootPid));
-  }
   const maxBuffer = 1024 * 1024;
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
@@ -360,6 +375,24 @@ async function execOwnedProcessGroup(
       terminationError = error instanceof Error ? error : new Error(String(error));
     });
   };
+  const rootPid = child.pid;
+  if (recorder && rootPid !== undefined) {
+    const disarm = posix
+      ? armNodeLifeline(rootPid, error => {
+          error.message = `could not start the node's owner-death watcher: ${error.message}`;
+          failure ??= error;
+          stop();
+        })
+      : (): void => undefined;
+    recorder.roots.set(rootPid, disarm);
+    // The node is in flight until `close`: a root that exits while a background job still
+    // holds its output has not settled. Its group stays endable by the root PID, which
+    // the kernel does not reuse while a process group with that ID exists.
+    child.once('close', () => {
+      recorder.roots.delete(rootPid);
+      disarm();
+    });
+  }
   const timer = setTimeout(() => {
     timedOut = true;
     stop();
