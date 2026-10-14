@@ -35,12 +35,9 @@ Read these files to understand the primary message and execution flow:
 
 ### 4. Understand Package Dependency Layers
 
-Read the dependency chain (no @archon/* deps → most isolated):
-
-- `packages/paths/src/index.ts` — path resolution + Pino logger (zero deps)
-- `packages/git/src/index.ts` — git ops (depends only on @archon/paths)
-- `packages/isolation/src/index.ts` — worktree isolation (depends on @archon/git + @archon/paths)
-- `packages/workflows/src/index.ts` — workflow engine (depends on @archon/git + @archon/paths)
+Inspect the relevant `packages/*/package.json` manifests for workspace dependencies
+before reporting dependency order. Read each package's entry points to understand
+its responsibility.
 
 ### 5. Understand Current State
 
@@ -58,8 +55,8 @@ List any active worktrees:
 Provide a concise summary (under 300 words) covering:
 
 ### Project Overview
-- Archon: Remote agentic coding platform (Slack, Telegram, GitHub, Discord, Web)
-- Bun + TypeScript monorepo with 8 packages: paths, git, isolation, workflows, core, adapters, server, web
+- Archon: Self-hostable, governed agentic automation engine
+- Bun + TypeScript monorepo; use `packages/` and the root `package.json` for the current workspace structure
 - SQLite (default, zero-setup) or PostgreSQL (optional via DATABASE_URL)
 
 ### Architecture

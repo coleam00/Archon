@@ -305,7 +305,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Running it here killed parallel workflow runs from other processes
   // (CLI, adapters) by flipping their `running` rows to `failed` mid-flight.
   // Same lesson the CLI already learned — see packages/cli/src/cli.ts:256-258.
-  // Per CLAUDE.md "No Autonomous Lifecycle Mutation Across Process Boundaries":
+  // Per AGENTS.md "Do not guess lifecycle ownership":
   // surface ambiguous state to users and provide a one-click action instead.
   // Users transition a stuck `running` row via the per-row Cancel/Abandon
   // buttons in the Web UI dashboard, or `archon workflow abandon <run-id>`.

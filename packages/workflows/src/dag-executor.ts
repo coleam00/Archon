@@ -7757,8 +7757,8 @@ const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set(FAN_OUT_
  * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
  * pass, or a live execution in another process. Past this idle window (no
  * `last_activity_at` heartbeat — written ≤ every 60s while a child runs) it reads as an
- * orphan; within it, as possibly still live. Only the MESSAGE differs — per CLAUDE.md's
- * "No Autonomous Lifecycle Mutation Across Process Boundaries", NEITHER branch cancels.
+ * orphan; within it, as possibly still live. Only the MESSAGE differs — per AGENTS.md
+ * "Do not guess lifecycle ownership", NEITHER branch cancels.
  */
 const FAN_OUT_CHILD_STALE_MS = 5 * 60_000;
 
@@ -7814,9 +7814,9 @@ function fanOutAutonomousGateMessage(
 
 /**
  * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
- * auto-cancelled (CLAUDE.md lifecycle rule). Names the state and the run to act on, with
- * wording keyed to `last_activity_at` staleness (fresh → likely live; stale → likely
- * orphaned). This text is persisted as the node failure and read on every surface, so it
+ * auto-cancelled (AGENTS.md "Do not guess lifecycle ownership"). Names the state and the
+ * run to act on, with wording keyed to `last_activity_at` staleness (fresh → likely live;
+ * stale → likely orphaned). This text is persisted as the node failure and read on every surface, so it
  * names the run in full and leaves the abandon command to whichever surface renders it.
  */
 function fanOutAmbiguousChildMessage(
@@ -7957,8 +7957,8 @@ async function findFanOutChildRuns(
  *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
  *     — the single parent gate slot can't hold N children) and is cancelled tagged
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
- *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (CLAUDE.md
- *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
+ *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (AGENTS.md
+ *     "Do not guess lifecycle ownership"), surfacing a staleness-keyed wait/abandon action;
  *   - EVERY index is spawned and every child runs to its own terminal state — no child's
  *     outcome ends another's — and only then does the join reduce: `all_success` (any
  *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal if a
@@ -8220,8 +8220,8 @@ async function executeFanOutWorkflowNode(
   //      rejection: cancel it (tagged `fan_out_gate`, so removing the gate + resuming
   //      re-drives it) and point the author at the gate.
   //    - `running`/`pending` = AMBIGUOUS (a crash-orphan of a prior pass, or a live run in
-  //      another process). Per CLAUDE.md's "No Autonomous Lifecycle Mutation Across Process
-  //      Boundaries" rule we DO NOT cancel — surface the state + a one-click action, wording
+  //      another process). Per AGENTS.md "Do not guess lifecycle ownership"
+  //      we DO NOT cancel — surface the state + a one-click action, wording
   //      keyed to `last_activity_at` staleness. NEVER the gate message for a non-gate cause.
   const pausedExisting = [...existingByIndex.entries()].filter(([, c]) => c.status === 'paused');
   if (pausedExisting.length > 0) {
