@@ -114,7 +114,7 @@ Rules:
 ## Monitoring
 
 ```bash
-archon workflow wait <run-id> --json        # block until the run ends or needs a human decision
+archon workflow wait <run-id> --json        # block until the run ends or needs attention
 archon workflow runs --json                 # recent runs for this project
 archon workflow status --json               # active only for this project (running/paused)
 archon workflow status --all --json         # active across all projects
