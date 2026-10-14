@@ -294,7 +294,12 @@ test('bounds structural source failures locally and warns once', async () => {
   expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
   expect(mockWarn).toHaveBeenCalledTimes(1);
   expect(mockWarn).toHaveBeenCalledWith(
-    { runId: candidate.id, path: '/owning-host/source/manifest.json', attempts: 3 },
+    {
+      err: expect.any(WorkflowSourceUnavailableError),
+      runId: candidate.id,
+      path: '/owning-host/source/manifest.json',
+      attempts: 3,
+    },
     expect.stringContaining(`archon workflow resume ${candidate.id}`)
   );
   expect(mockWarn.mock.calls[0]).toEqual([

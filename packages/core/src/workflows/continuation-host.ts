@@ -179,7 +179,7 @@ export async function wakeDueWorkflowContinuations(
         structuralFailures.set(run.id, count);
         if (count >= MAX_SOURCE_FAILURES) {
           log.warn(
-            { runId: run.id, path: sourceError.path, attempts: count },
+            { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
             `This host stopped automatically resuming run ${run.id}: frozen workflow source at ${sourceError.path} is unreadable. Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
           );
           return outcome;
