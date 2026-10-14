@@ -150,6 +150,23 @@ export const executionOutputSchema = z.object({
 });
 export type ExecutionOutput = z.infer<typeof executionOutputSchema>;
 
+/**
+ * Why a node's optional MCP declaration did not reach its provider. A server that
+ * reached the provider and failed to connect is recorded by the provider's own
+ * `mcp_server_status` event instead.
+ */
+export const mcpUnavailableReasonSchema = z.enum(['provider_unsupported', 'config_missing']);
+export type McpUnavailableReason = z.infer<typeof mcpUnavailableReasonSchema>;
+
+export const mcpUnavailableSchema = z.object({
+  /** The path as the node declared it. */
+  path: z.string(),
+  reason: mcpUnavailableReasonSchema,
+  /** The servers the config file names, when the file was readable. */
+  servers: z.array(z.string()).optional(),
+});
+export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
+
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),
   loopIterations: z.number().optional(),
@@ -174,6 +191,8 @@ export const executionDiagnosticsSchema = z.object({
   ordinal: z.number().optional(),
   approvalDecision: z.string().optional(),
   expr: z.string().optional(),
+  /** The node's optional MCP servers were not loaded, and why. */
+  mcpUnavailable: mcpUnavailableSchema.optional(),
 });
 
 export const nodeExecutionMetadataSchema = z.object({

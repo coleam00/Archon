@@ -47,6 +47,7 @@ import {
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
+import type { ServerNotification } from './protocol/ServerNotification';
 
 const trackTempRoot = trackTempRoots();
 
@@ -1029,6 +1030,45 @@ describe('CodexProvider', () => {
         message:
           'MCP config references undefined env vars: ARCHON_CODEX_MISSING. These will be empty strings - MCP servers may fail to authenticate.',
       });
+    });
+
+    test('reports this thread’s MCP server startup as mcp_server_status', async () => {
+      const startup = (
+        name: string,
+        status: 'starting' | 'ready' | 'failed' | 'cancelled',
+        extra: { threadId?: string | null; error?: string; reauth?: boolean } = {}
+      ): ServerNotification => ({
+        method: 'mcpServer/startupStatus/updated',
+        params: {
+          threadId: extra.threadId === undefined ? THREAD_ID : extra.threadId,
+          name,
+          status,
+          error: extra.error ?? null,
+          failureReason: extra.reauth ? 'reauthenticationRequired' : null,
+        },
+      });
+      const chunks = await streamOf({
+        notifications: [
+          startup('posthog', 'starting'),
+          startup('posthog', 'failed', { error: 'No such file or directory (os error 2)' }),
+          startup('linear', 'failed', { reauth: true }),
+          startup('global', 'ready', { threadId: null }),
+          startup('local', 'cancelled'),
+          startup('other-thread', 'failed', { threadId: 'thread-2' }),
+        ],
+      });
+      expect(chunks.filter(chunk => chunk.type === 'mcp_server_status')).toEqual([
+        { type: 'mcp_server_status', server: 'posthog', status: 'pending' },
+        {
+          type: 'mcp_server_status',
+          server: 'posthog',
+          status: 'failed',
+          error: 'No such file or directory (os error 2)',
+        },
+        { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
+        { type: 'mcp_server_status', server: 'global', status: 'connected' },
+        { type: 'mcp_server_status', server: 'local', status: 'failed' },
+      ]);
     });
   });
 

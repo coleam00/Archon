@@ -4619,7 +4619,12 @@ export interface components {
           timeout?: number;
         }[];
       };
-      mcp?: string;
+      mcp?:
+        | string
+        | {
+            path: string;
+            optional?: boolean;
+          };
       skills?: string[];
       plugins?: string[];
       agents?: {

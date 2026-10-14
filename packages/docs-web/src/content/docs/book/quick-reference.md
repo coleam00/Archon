@@ -146,7 +146,7 @@ All nodes share these base fields:
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 30 minutes) |
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
-| `mcp` | No | string | Path to MCP server config JSON file (Claude, Codex and Copilot; other providers fail the run) |
+| `mcp` | No | string or `{ path, optional }` | Path to MCP server config JSON file (Claude, Codex and Copilot; other providers fail the run unless `optional: true`, which runs the node without the servers) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
 | `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude and Codex; other providers fail the run |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
