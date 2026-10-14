@@ -39,27 +39,45 @@ export const PACK_LABELS = {
     color: '6A737D',
     description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
   },
-  'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
-  'archon-risky': {
-    color: 'FBCA04',
-    description: 'Triage: touches auth, data, a destructive path, or a compatibility boundary',
+  'archon-type-bug': { color: 'D73A4A', description: 'Triage: something that worked is broken' },
+  'archon-type-feature': { color: 'A2EEEF', description: 'Triage: new behavior' },
+  'archon-type-refactor': { color: 'BFD4F2', description: 'Triage: same behavior, better structure' },
+  'archon-type-maintenance': {
+    color: 'D4C5F9',
+    description: 'Triage: dependencies, tooling, CI, or upkeep',
   },
-  'archon-large': {
-    color: 'F9D0C4',
-    description: 'Triage: several packages or schemas, or an unsettled shape',
-  },
+  'archon-type-docs': { color: '0075CA', description: 'Triage: documentation only' },
+  'archon-type-question': { color: 'D876E3', description: 'Triage: a question for a person' },
+  'archon-size-s': { color: 'C2E0C6', description: 'Triage: a few files on one surface' },
+  'archon-size-m': { color: 'FEF2C0', description: 'Triage: several files or two surfaces' },
+  'archon-size-l': { color: 'F9D0C4', description: 'Triage: several packages, schemas, or surfaces' },
 } as const satisfies Record<string, LabelSpec>;
 
 export type PackLabel = keyof typeof PACK_LABELS;
-
-export const PACK_LABEL_NAMES = Object.keys(PACK_LABELS) as PackLabel[];
 
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
 }
 
+// Labels an earlier version of the pack wrote. A write removes them from the item
+// and never creates them, so re-triaging an item clears its old size label.
+const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large'] as const;
+
+/** A label the pack owns on an item: one it writes now, or one it retired. */
+export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
+
+export const OWNED_LABEL_NAMES: readonly OwnedLabel[] = [
+  ...(Object.keys(PACK_LABELS) as PackLabel[]),
+  ...RETIRED_LABELS,
+];
+
+export function isOwnedLabel(name: string): name is OwnedLabel {
+  return (OWNED_LABEL_NAMES as readonly string[]).includes(name);
+}
+
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
-export type Complexity = 'small' | 'risky' | 'large';
+export type WorkType = 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
+export type Size = 's' | 'm' | 'l';
 export type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
 
 // Exactly one state label per item. A READY item's label names the route the run
@@ -77,11 +95,21 @@ export const ROUTE_LABEL = {
   plan: 'archon-plan',
   investigate: 'archon-issue',
 } as const satisfies Record<Route, PackLabel>;
-export const COMPLEXITY_LABEL = {
-  small: 'archon-small',
-  risky: 'archon-risky',
-  large: 'archon-large',
-} as const satisfies Record<Complexity, PackLabel>;
+// Of triage's five fields only type and size become labels, the two a person
+// filters by; complexity, importance and urgency stay in the verdict.
+export const TYPE_LABEL = {
+  bug: 'archon-type-bug',
+  feature: 'archon-type-feature',
+  refactor: 'archon-type-refactor',
+  maintenance: 'archon-type-maintenance',
+  docs: 'archon-type-docs',
+  question: 'archon-type-question',
+} as const satisfies Record<WorkType, PackLabel>;
+export const SIZE_LABEL = {
+  s: 'archon-size-s',
+  m: 'archon-size-m',
+  l: 'archon-size-l',
+} as const satisfies Record<Size, PackLabel>;
 
 function gh(...args: string[]): string {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -131,12 +159,12 @@ function ghIssueLabels(item: QualifiedPr): Set<string> {
 export function writeLabels(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly PackLabel[]
+  remove: readonly OwnedLabel[]
 ): string[] {
   return forgeSource() === 'forge' ? forgeWrite(item, add, remove) : ghWrite(item, add, remove);
 }
 
-function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly PackLabel[]): string[] {
+function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly OwnedLabel[]): string[] {
   const repository = `${item.repo.host}/${item.repo.path}`;
   const current = ghIssueLabels(item);
   const present = ghRepositoryLabels(repository);
@@ -177,7 +205,7 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Pac
 function forgeWrite(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly PackLabel[]
+  remove: readonly OwnedLabel[]
 ): string[] {
   const current = readWorkItemLabels(item);
   const present = new Set(readRepositoryLabels(item.repo));
