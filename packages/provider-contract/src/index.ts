@@ -115,6 +115,12 @@ export {
   requireProvider,
   parseProviderRunModel,
 } from './registration';
+export {
+  declaredSkillRoots,
+  skillDiscoverySchema,
+  type SkillDiscovery,
+  type SkillRootScope,
+} from './skills';
 
 export { buildProviderSubprocessEnv } from './agent-provider';
 

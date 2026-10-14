@@ -85,6 +85,14 @@ test('a plugin selects its credential vendor from the model its own run schema n
   expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
 });
 
+test('a declared skillDiscovery survives process registration', () => {
+  const skillDiscovery = { project: ['.stub/skills'], user: ['skills'] };
+  expect(
+    processProviderRegistration({ ...descriptor, skillDiscovery }, argv).skillDiscovery
+  ).toEqual(skillDiscovery);
+  expect(processProviderRegistration(descriptor, argv)).not.toHaveProperty('skillDiscovery');
+});
+
 test('undeliverable api-key vendors are rejected at registration', () => {
   expect(() =>
     processProviderRegistration(

@@ -68,7 +68,7 @@ import {
   type ProviderStopReason,
 } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
-import { CLAUDE_CAPABILITIES } from './capabilities';
+import { CLAUDE_CAPABILITIES, CLAUDE_SKILL_DISCOVERY } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import {
   resolveClaudeBinaryPath,
@@ -90,11 +90,10 @@ import {
   readClaudePluginIds,
   withPluginScopeCheck,
 } from './plugins';
-import { clampEffort, type AssertNever } from '@archon/provider-contract';
+import { clampEffort, declaredSkillRoots, type AssertNever } from '@archon/provider-contract';
 import {
-  claudeSkillSearchRoots,
   findInstalledSkillNames,
-  resolveClaudeSkillDirectories,
+  resolveSkillDirectoriesFromRoots,
   skillSearchRoots,
 } from '@archon/paths/skills';
 
@@ -608,7 +607,7 @@ async function applyNodeConfig(
   nodeConfig: NodeConfig,
   cwd: string,
   skillSearch: {
-    userConfigDir?: string;
+    env: Record<string, string | undefined>;
     includeProject: boolean;
     includeUser: boolean;
     isContainer: boolean;
@@ -632,7 +631,8 @@ async function applyNodeConfig(
     );
 
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
-      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
+      const roots = declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, skillSearch);
+      const { missing } = resolveSkillDirectoriesFromRoots(roots, nodeConfig.skills);
       if (missing.length > 0) {
         // Split by whether the name exists on disk at all. A skill that resolves
         // under some other root — `.agents/skills/`, or a scope this node's
@@ -644,11 +644,7 @@ async function applyNodeConfig(
         const unreachable = findInstalledSkillNames(
           [
             ...skillSearchRoots(cwd),
-            ...claudeSkillSearchRoots(cwd, {
-              ...(skillSearch.userConfigDir ? { userConfigDir: skillSearch.userConfigDir } : {}),
-              includeProject: true,
-              includeUser: true,
-            }),
+            ...declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, { env: skillSearch.env }),
           ],
           missing
         );
@@ -666,7 +662,7 @@ async function applyNodeConfig(
             ? ' Container workflows cannot use host user-global skills.'
             : '';
           getLog().error(
-            { nodeId: nodeConfig.nodeId, unreachable, skillSearch },
+            { nodeId: nodeConfig.nodeId, unreachable, roots },
             'claude.declared_skills_unreachable'
           );
           throw new ClassifiedProviderError(
@@ -676,7 +672,7 @@ async function applyNodeConfig(
         }
 
         getLog().warn(
-          { nodeId: nodeConfig.nodeId, missing, skillSearch },
+          { nodeId: nodeConfig.nodeId, missing, roots },
           'claude.declared_skills_unresolved'
         );
         warnings.push({
@@ -1695,7 +1691,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       if (requestOptions?.nodeConfig) {
         const skillSearch = {
-          ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+          env,
           includeProject: settingSources.includes('project'),
           includeUser: !isContainerRun && settingSources.includes('user'),
           isContainer: isContainerRun,

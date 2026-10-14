@@ -1056,6 +1056,45 @@
         "ownsUnprefixedModelRefs": {
           "type": "boolean",
           "const": true
+        },
+        "skillDiscovery": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "user": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "userDirectory": {
+              "type": "object",
+              "properties": {
+                "env": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "home": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "env",
+                "home"
+              ]
+            }
+          },
+          "required": [
+            "project",
+            "user"
+          ]
         }
       },
       "required": [

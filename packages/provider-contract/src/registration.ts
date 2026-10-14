@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { IAgentProvider } from './agent-provider';
 import type { ProviderCapabilities } from './capabilities';
+import type { SkillDiscovery } from './skills';
 
 export const MAINTAINED_PROVIDER_IDS = ['claude', 'codex', 'pi'] as const;
 
@@ -169,6 +170,9 @@ export interface ProviderRegistration {
 
   /** Accepts vendor/model refs without an agent prefix; at most one registry entry owns them. */
   ownsUnprefixedModelRefs?: true;
+
+  /** Where this provider loads named skills from; see {@link SkillDiscovery}. */
+  skillDiscovery?: SkillDiscovery;
 }
 
 /**

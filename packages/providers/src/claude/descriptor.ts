@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { BUNDLED_VERSION } from '@archon/paths';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
-import { CLAUDE_CAPABILITIES } from './capabilities';
+import { CLAUDE_CAPABILITIES, CLAUDE_SKILL_DISCOVERY } from './capabilities';
 import { configSchemas } from './config';
 import { singleVendorCatalog } from '../credential-catalog';
 
@@ -11,6 +11,7 @@ export const descriptor = providerPluginDescriptorSchema.parse({
   displayName: 'Claude (Anthropic)',
   version: BUNDLED_VERSION,
   capabilities: CLAUDE_CAPABILITIES,
+  skillDiscovery: CLAUDE_SKILL_DISCOVERY,
   credentials: {
     kind: 'static',
     specs: singleVendorCatalog({

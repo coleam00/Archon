@@ -24,12 +24,13 @@ import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
-  claudeSkillSearchRoots,
   findInstalledSkillNames,
+  parseSettingSources,
   skillSearchRoots,
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
 import {
+  declaredSkillRoots,
   findStrictSchemaIssues,
   isObjectSchemaNode,
   mcpServerMap,
@@ -117,8 +118,10 @@ export interface ValidationConfig {
   assistant?: string;
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
-  claudeSettingSources?: ('project' | 'user')[];
-  claudeConfigDir?: string;
+  /** Install-level provider defaults, keyed by provider id. */
+  assistants?: Record<string, Record<string, unknown>>;
+  /** The run environment, for provider skill roots named by an environment variable. */
+  env?: Record<string, string>;
 }
 
 // Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
@@ -486,7 +489,8 @@ export async function validateWorkflowResources(
       });
     }
 
-    const providerCaps = provider ? providers.get(provider)?.capabilities : undefined;
+    const providerDescriptor = provider ? providers.get(provider) : undefined;
+    const providerCaps = providerDescriptor?.capabilities;
 
     // --- Strict-schema compatibility (#2945, #3557) ---
     // A schema with a bare object or incomplete 'required' coverage is rejected
@@ -712,18 +716,24 @@ export async function validateWorkflowResources(
       // match Archon's shared four-root resolver, so accepting a `.claude`
       // match here would falsely imply that Codex can invoke it.
       if (providerCaps?.skills !== false) {
-        const settingSources =
-          'settingSources' in node && node.settingSources !== undefined
-            ? node.settingSources
-            : (config?.claudeSettingSources ?? ['project', 'user']);
-        const searchRoots =
-          provider === 'claude'
-            ? claudeSkillSearchRoots(cwd, {
-                ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
-                includeProject: settingSources.includes('project'),
-                includeUser: settingSources.includes('user'),
-              })
-            : skillSearchRoots(cwd);
+        const discovery = providerDescriptor?.skillDiscovery;
+        const env = config?.env;
+        const nodeSources = 'settingSources' in node ? node.settingSources : undefined;
+        const sources =
+          provider !== undefined && providerCaps?.settingSources
+            ? (nodeSources ??
+              parseSettingSources(config?.assistants?.[provider]?.settingSources) ?? [
+                'project',
+                'user',
+              ])
+            : undefined;
+        const searchRoots = discovery
+          ? declaredSkillRoots(discovery, cwd, {
+              includeProject: sources?.includes('project') ?? true,
+              includeUser: sources?.includes('user') ?? true,
+              env,
+            })
+          : skillSearchRoots(cwd);
         for (const skillName of node.skills) {
           let found = false;
           for (const root of searchRoots) {
@@ -735,49 +745,41 @@ export async function validateWorkflowResources(
           }
 
           if (!found) {
-            // Mirror the provider's rule (claude/provider.ts): a Claude skill
-            // that exists under some other root is installed but unreachable, so
-            // it is an error. A name that exists nowhere on disk may be one of
-            // Claude's built-in or `plugin:skill` entries, which no filesystem
-            // root contains — warn there rather than failing a workflow that runs.
-            // Same helper the provider preflight uses, over the same roots, so
+            // Mirror the declaring provider's rule (e.g. claude/provider.ts): a
+            // skill that exists under some other root is installed but
+            // unreachable, so it is an error. A name that exists nowhere on disk
+            // may be a built-in or `plugin:skill` entry the provider resolves
+            // itself — warn there rather than failing a workflow that runs. Same
+            // helper the provider preflight uses, over the same roots, so
             // validation and execution always agree on which case this is.
             const installedButUnusable =
-              provider === 'claude' &&
+              discovery !== undefined &&
               findInstalledSkillNames(
                 [
                   ...searchRoots,
                   ...skillSearchRoots(cwd),
-                  ...claudeSkillSearchRoots(cwd, {
-                    ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
-                    includeProject: true,
-                    includeUser: true,
-                  }),
+                  ...declaredSkillRoots(discovery, cwd, { env }),
                 ],
                 [skillName]
               ).length > 0;
 
             if (installedButUnusable) {
+              const displayName = providerDescriptor?.displayName ?? provider;
+              const everyDeclaredRoot = declaredSkillRoots(discovery, cwd, { env });
               issues.push({
                 level: 'error',
                 nodeId: node.id,
                 field: 'skills',
-                message: `Claude skill '${skillName}' not found in an enabled .claude/skills/ directory, though it is installed elsewhere`,
-                hint: `Claude reads .claude/skills/ only (never .agents/skills/), and only from scopes settingSources enables. Ensure .claude/skills/${skillName}/SKILL.md exists in an enabled scope`,
+                message: `${displayName} skill '${skillName}' not found in an enabled skill directory, though it is installed elsewhere`,
+                hint: `${displayName} loads skills only from ${everyDeclaredRoot.join(', ')}${providerCaps?.settingSources ? ', in the scopes settingSources enables' : ''}. A skill is a directory containing SKILL.md`,
               });
             } else {
               issues.push({
                 level: 'warning',
                 nodeId: node.id,
                 field: 'skills',
-                message:
-                  provider === 'claude'
-                    ? `Claude skill '${skillName}' not found on disk — expected for built-in and plugin-qualified skills, which Claude resolves itself`
-                    : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-                hint:
-                  provider === 'claude'
-                    ? `A plugin:skill name also needs its plugin under plugins:. Otherwise check the spelling or create .claude/skills/${skillName}/SKILL.md`
-                    : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+                message: `Skill '${skillName}' not found in ${searchRoots.join(', ') || 'any enabled skill directory'}`,
+                hint: `Create ${searchRoots[0] ?? '<skill directory>'}/${skillName}/SKILL.md or check the spelling. Names the provider resolves itself, such as built-in or plugin skills, have no directory; a plugin:skill name also needs its plugin under plugins:`,
               });
             }
           }

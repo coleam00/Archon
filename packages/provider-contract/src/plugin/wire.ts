@@ -13,6 +13,7 @@ import type { AssertNever } from '../effort';
 import { providerChunkSchema } from '../events';
 import { credentialSpecSchema } from '../registration';
 import { providerStopReasonSchema, type ProviderStopReason } from '../result';
+import { skillDiscoverySchema } from '../skills';
 
 export const PROVIDER_PLUGIN_PROTOCOL = 1;
 export { PLUGIN_MAX_MESSAGE_BYTES as PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './rpc';
@@ -34,6 +35,7 @@ export const providerPluginDescriptorSchema = z.object({
     })
     .optional(),
   ownsUnprefixedModelRefs: z.literal(true).optional(),
+  skillDiscovery: skillDiscoverySchema.optional(),
 });
 export type ProviderPluginDescriptor = z.infer<typeof providerPluginDescriptorSchema>;
 

@@ -46,6 +46,7 @@ export function processProviderRegistration(
     capabilities: descriptor.capabilities,
     builtIn: isMaintainedProvider(descriptor.id),
     ...(descriptor.ownsUnprefixedModelRefs ? { ownsUnprefixedModelRefs: true } : {}),
+    ...(descriptor.skillDiscovery ? { skillDiscovery: descriptor.skillDiscovery } : {}),
     credentials: {
       ...descriptor.credentials,
       // The model is read the way the provider's own run schema normalizes it, and
