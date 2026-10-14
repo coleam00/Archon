@@ -1558,6 +1558,22 @@ describe('SqliteAdapter busy locks', () => {
   });
 });
 
+/** Read a child's stdout line by line until `done` accepts one; the stream may split lines. */
+async function readUntil(
+  stream: ReadableStream<Uint8Array>,
+  done: (line: string) => boolean
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for await (const chunk of stream) {
+    buffered += decoder.decode(chunk, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    if (lines.some(line => done(line.trim()))) return;
+  }
+  throw new Error('stream ended before the expected line');
+}
+
 describe('SqliteAdapter fresh schema', () => {
   /** Commit frames in the WAL: one per committed write transaction since the last checkpoint. */
   function walCommits(path: string): number {
@@ -1588,7 +1604,8 @@ describe('SqliteAdapter fresh schema', () => {
 
   test('opening waits out another process that holds a fresh file instead of failing', async () => {
     // Switching a file to WAL fails with SQLITE_BUSY at once, without busy_timeout,
-    // while another connection holds a write lock on it.
+    // while another connection holds a write lock on it. The holder releases only after
+    // the opener has reported waiting, so the test always exercises the contention.
     const path = await upgradeFixturePath();
     const holder = Bun.spawn(
       [
@@ -1600,21 +1617,31 @@ db.run('CREATE TABLE IF NOT EXISTS held (a)');
 db.run('BEGIN IMMEDIATE');
 db.run('INSERT INTO held VALUES (1)');
 console.log('held');
-await Bun.sleep(300);
+for await (const _ of console) break;
 db.run('COMMIT');`,
       ],
-      { stdout: 'pipe', stderr: 'inherit' }
+      { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' }
     );
-    const reader = holder.stdout.getReader();
-    const first = await reader.read();
-    expect(new TextDecoder().decode(first.value)).toContain('held');
-    const adapter = new SqliteAdapter(path);
+    await readUntil(holder.stdout, line => line === 'held');
+    const opener = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+const adapter = new SqliteAdapter(${JSON.stringify(path)});
+await adapter.query('SELECT COUNT(*) FROM remote_agent_codebases');
+await adapter.close();`,
+      ],
+      { stdout: 'pipe', stderr: 'inherit', env: { ...process.env, LOG_LEVEL: 'warn' } }
+    );
     try {
-      expect(await holder.exited).toBe(0);
-      await adapter.query('SELECT COUNT(*) FROM remote_agent_codebases');
+      await readUntil(opener.stdout, line => line.includes('db.sqlite_busy_waiting'));
     } finally {
-      await adapter.close();
+      holder.stdin.write('release\n');
+      await holder.stdin.end();
     }
+    expect(await holder.exited).toBe(0);
+    expect(await opener.exited).toBe(0);
   });
 
   test('processes opening the same fresh file at once all get the full schema', async () => {
