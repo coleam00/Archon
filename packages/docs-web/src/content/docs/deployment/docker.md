@@ -690,7 +690,7 @@ docker run --env-file .env -p 3000:3000 archon
 - **Runtime**: Bun (runs TypeScript directly, no compile step)
 - **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
 - **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: Source of every workspace package except `docs-web` (deployed separately) and `chat-slack` (installed as a plugin), plus the pre-built web UI. The `sources` stage lists the exclusions.
+- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (installed as a plugin). The `sources` stage lists the exclusions.
 - **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
 
