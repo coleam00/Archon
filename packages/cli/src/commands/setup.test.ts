@@ -1231,12 +1231,21 @@ describe('GitHub setup wizard', () => {
       return chosen.value;
     });
     const input = spyOn(prompts, 'text').mockImplementation(async options => {
+      if (options.message === 'Enter allowed Telegram user IDs (comma-separated):') return '222';
+      if (
+        options.message ===
+        'Enter allowed Slack user IDs (comma-separated, or leave empty for all):'
+      )
+        return 'U222';
       if (options.message === 'GitHub App ID:') return '123';
       if (options.message === 'GitHub App private key path:') return keyPath;
       if (options.message === 'GitHub App slug (optional):') return 'fixture-app';
       return '';
     });
     const secret = spyOn(prompts, 'password').mockImplementation(async options => {
+      if (options.message === 'Enter your Telegram Bot Token:') return '123456:new-telegram';
+      if (options.message === 'Enter your Slack Bot Token (xoxb-...):') return 'xoxb-new-slack';
+      if (options.message === 'Enter your Slack App Token (xapp-...):') return 'xapp-new-slack';
       if (options.message === 'GitHub App private key (PEM):')
         return keySource === 'inline' ? privateKey.replace(/\n/g, '\\n') : privateKey;
       if (options.message === 'GitHub webhook secret:') return webhookSecret;
@@ -1284,6 +1293,85 @@ describe('GitHub setup wizard', () => {
 
   const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
+
+  it.each([
+    ['home', 'app', true],
+    ['home', 'pat', true],
+    ['project', 'app', true],
+    ['project', 'pat', true],
+    ['home', 'app', false],
+    ['home', 'pat', false],
+    ['project', 'app', false],
+    ['project', 'pat', false],
+  ] as const)(
+    'Add in %s with %s and force=%j keeps every reported platform authenticated',
+    async (selectedScope, selectedMode, force) => {
+      scope = selectedScope;
+      target = resolveScopedEnvPath(scope, root);
+      setupMode = 'add';
+      authMode = selectedMode;
+      const original = serializeEnv({
+        ...(authMode === 'app'
+          ? { GITHUB_APP_ID: '999', GITHUB_APP_PRIVATE_KEY_PATH: keyPath }
+          : { GITHUB_TOKEN: 'old-token' }),
+        WEBHOOK_SECRET: 'old-webhook',
+        TELEGRAM_BOT_TOKEN: '123456:old-telegram',
+        TELEGRAM_ALLOWED_USER_IDS: '111',
+        SLACK_BOT_TOKEN: 'xoxb-old-slack',
+        SLACK_APP_TOKEN: 'xapp-old-slack',
+        SLACK_ALLOWED_USER_IDS: 'U111',
+        CUSTOM_KEY: 'keep',
+      });
+      writeFileSync(target, original);
+      expect(checkExistingConfig(target)?.platforms).toEqual({
+        github: true,
+        telegram: true,
+        slack: true,
+      });
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        expect(await run(force)).toBe(0);
+        const env = read();
+        expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
+        if (selectedMode === 'app') {
+          expect(loadGitHubAppConfig(env)).toMatchObject({
+            appId: force ? '123' : '999',
+            privateKey,
+          });
+          expect(env.GITHUB_TOKEN).toBeUndefined();
+          expect(env.GH_TOKEN).toBeUndefined();
+        } else {
+          expect(env.GITHUB_TOKEN).toBe(force ? pat : 'old-token');
+        }
+        expect(env.WEBHOOK_SECRET).toBeTruthy();
+        expect(env.TELEGRAM_BOT_TOKEN).toBe(force ? '123456:new-telegram' : '123456:old-telegram');
+        expect(env.TELEGRAM_ALLOWED_USER_IDS).toBe(force ? '222' : '111');
+        expect(env.SLACK_BOT_TOKEN).toBe(force ? 'xoxb-new-slack' : 'xoxb-old-slack');
+        expect(env.SLACK_APP_TOKEN).toBe(force ? 'xapp-new-slack' : 'xapp-old-slack');
+        expect(env.SLACK_ALLOWED_USER_IDS).toBe(force ? 'U222' : 'U111');
+        if (force) expect(env.CUSTOM_KEY).toBeUndefined();
+        else expect(env.CUSTOM_KEY).toBe('keep');
+        expect(output.find(message => message.startsWith('AI:'))).toContain(
+          'Platforms: GitHub, Telegram, Slack'
+        );
+        for (const value of [
+          env.GITHUB_TOKEN,
+          env.WEBHOOK_SECRET,
+          env.TELEGRAM_BOT_TOKEN,
+          env.SLACK_BOT_TOKEN,
+          env.SLACK_APP_TOKEN,
+          privateKey,
+        ]) {
+          if (value) expect(output.join('\n')).not.toContain(value);
+        }
+        const backups = Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target)));
+        expect(backups).toHaveLength(1);
+        expect(readFileSync(join(dirname(target), backups[0]), 'utf8')).toBe(original);
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
 
   it('switch cleanup covers every App env key read by runtime authentication', () => {
     const authDir = join(import.meta.dir, '../../../core/src/github-auth');

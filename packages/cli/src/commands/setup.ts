@@ -2207,7 +2207,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
         {
           value: 'add',
           label: 'Add providers or platforms',
-          hint: 'Keep existing credentials, configure selected providers and new platforms',
+          hint: force
+            ? 'Re-enter existing platform credentials and configure additions before replacing the file'
+            : 'Keep existing credentials, configure selected providers and new platforms',
         },
         { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
         { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
@@ -2254,14 +2256,17 @@ async function runSetup(options: SetupOptions): Promise<void> {
       slack: config.platforms.slack || newPlatforms.slack,
     };
 
-    // Collect credentials for new platforms only
-    if (newPlatforms.github && !existing?.platforms.github) {
+    if (force) {
+      log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
+    }
+
+    if (config.platforms.github && (force || !existing?.platforms.github)) {
       config.github = await collectGitHubConfig();
     }
-    if (newPlatforms.telegram && !existing?.platforms.telegram) {
+    if (config.platforms.telegram && (force || !existing?.platforms.telegram)) {
       config.telegram = await collectTelegramConfig();
     }
-    if (newPlatforms.slack && !existing?.platforms.slack) {
+    if (config.platforms.slack && (force || !existing?.platforms.slack)) {
       config.slack = await collectSlackConfig();
     }
   } else {
