@@ -77,10 +77,19 @@ async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<R
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
-// Configuration constants (configurable via env vars)
-const STALE_THRESHOLD_DAYS = parseInt(process.env.STALE_THRESHOLD_DAYS ?? '14', 10);
-const CLEANUP_INTERVAL_HOURS = parseInt(process.env.CLEANUP_INTERVAL_HOURS ?? '6', 10);
-const SESSION_RETENTION_DAYS = parseInt(process.env.SESSION_RETENTION_DAYS ?? '30', 10);
+function readPositiveIntegerEnv(name: string, defaultValue: number): number {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer; received ${JSON.stringify(value)}`);
+  }
+  return parsed;
+}
+
+const STALE_THRESHOLD_DAYS = readPositiveIntegerEnv('STALE_THRESHOLD_DAYS', 14);
+const CLEANUP_INTERVAL_HOURS = readPositiveIntegerEnv('CLEANUP_INTERVAL_HOURS', 6);
+const SESSION_RETENTION_DAYS = readPositiveIntegerEnv('SESSION_RETENTION_DAYS', 30);
 
 // Export configuration for use by other modules
 export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS };
