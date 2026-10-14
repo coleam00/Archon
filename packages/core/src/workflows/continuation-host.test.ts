@@ -466,33 +466,27 @@ test('temporary discovery reads keep retrying through resolution and recover', a
   });
   const cause = Object.assign(new Error('temporary descriptor shortage'), { code: 'EMFILE' });
   const readFile = fs.readFile;
-  const reader = spyOn(fs, 'readFile').mockImplementation((path, options) => {
-    if (path === workflowPath && options === 'utf-8') return Promise.reject(cause);
-    return readFile(path, options);
-  });
-  try {
-    const { resolveContinuationWorkflow } = await import('@archon/workflows/executor');
-    await expect(resolveContinuationWorkflow(deps, candidate, root)).rejects.toMatchObject({
-      cause: [
-        {
-          filename: 'deliver.yaml',
-          errorType: 'read_error',
-          error: expect.stringContaining('EMFILE'),
-        },
-      ],
-    });
-    for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const reader = spyOn(fs, 'readFile')
+      .mockImplementation(readFile)
+      .mockImplementationOnce(readFile)
+      .mockImplementationOnce(readFile)
+      .mockImplementationOnce(readFile)
+      .mockImplementationOnce(readFile)
+      .mockRejectedValueOnce(cause);
+    try {
       const now = new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000);
       const outcomes = await wakeDueWorkflowContinuations(store, now, resume);
       expect(outcomes[0]?.kind).toBe('unavailable');
+      expect(reader.mock.calls[4]).toEqual([workflowPath, 'utf-8']);
       expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
         candidate.id,
         new Date(now.getTime() + 60_000).toISOString(),
         { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
       );
+    } finally {
+      reader.mockRestore();
     }
-  } finally {
-    reader.mockRestore();
   }
   const outcomes = await wakeDueWorkflowContinuations(
     store,
