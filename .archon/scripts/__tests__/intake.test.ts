@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  TERMINAL_WORKFLOW_STATUSES,
+  workflowRunStatusSchema,
+} from '../../../packages/workflows/src/schemas/workflow-run';
+import {
   assertNoSelfPromotion,
   bodyDigest,
   claimDisposition,
@@ -274,11 +278,33 @@ describe('pickup', () => {
       expect(fields[key]?.properties.value.enum).toEqual([...ranks]);
   });
 
-  test('a claim held by a pending, running or paused run, or one the engine cannot find, is held', () => {
-    for (const status of ['pending', 'running', 'paused', null])
-      expect(claimDisposition(status)).toBe('hold');
-    for (const status of ['completed', 'failed', 'cancelled'])
-      expect(claimDisposition(status)).toBe('release');
+  test("a claim is released only when its run's status is one the engine calls terminal", () => {
+    for (const status of workflowRunStatusSchema.options)
+      expect(claimDisposition(status)).toBe(
+        TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
+      );
+    expect(claimDisposition(null)).toBe('hold');
+  });
+
+  test('an item whose last attempt failed sorts after every other waiting item', () => {
+    const released = {
+      ...newWorkItem({ repo: PR.repo, number: 1 }, '2026-01-01'),
+      facts: { triage: triaged({ urgency: { value: 'now', reason: 'r' } }) },
+      history: [{ at: AT, stage: 'intake' as const, run_id: 'r', outcome: 'released', summary: '' }],
+    };
+    const fresh = newWorkItem({ repo: PR.repo, number: 2 }, '2026-02-01');
+    const order = (docs: WorkItem[]) =>
+      sortCandidates(
+        docs.map(doc => ({ doc })),
+        parseOrder('')
+      ).map(entry => entry.doc.subject.number);
+    expect(order([released, fresh])).toEqual([2, 1]);
+    // A decision recorded after the release means the item's last attempt finished.
+    const recovered = {
+      ...released,
+      facts: { ...released.facts, intake: { body_digest: DIGEST, at: '2026-10-15T00:00:00.000Z', run_id: 'later' } },
+    };
+    expect(order([recovered, fresh])).toEqual([1, 2]);
   });
 
   test('the maintainer list is an array of logins; anything else refuses', () => {
@@ -337,6 +363,8 @@ interface Event {
   readonly actor?: string;
   readonly issueLabels?: readonly string[];
   readonly statuses?: Record<string, string>;
+  readonly state?: 'open' | 'closed';
+  readonly writeLost?: boolean;
 }
 
 function run(
@@ -349,9 +377,15 @@ function run(
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {
-      issue: { number: 7, author: event.author ?? 'Maintainer', body: event.body ?? BODY },
+      issue: {
+        number: 7,
+        author: event.author ?? 'Maintainer',
+        body: event.body ?? BODY,
+        state: event.state ?? 'open',
+      },
       issueLabels: event.issueLabels ?? [],
       repositoryLabels: [],
+      writeLost: event.writeLost,
     },
     inputs: {
       ...at.env,
@@ -618,5 +652,108 @@ describe('the intake scripts', () => {
       outcome: 'released',
       summary: expect.stringContaining('run-1, which ended failed'),
     });
+  }, 60_000);
+  test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    const failed = outcome(at, { runId: 'run-1', writeLost: true }, decided, READY_VERDICT);
+    expect(failed.code).not.toBe(0);
+    expect(stored(at).value).toMatchObject({
+      stage: 'deliver',
+      claim: { run_id: 'run-1' },
+    });
+
+    const retried = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } });
+    expect(retried.output).toMatchObject({ path: 'quiet', item: SUBJECT });
+    expect(stored(at).value.claim).toMatchObject({
+      run_id: 'run-2',
+      requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
+    });
+    const applied = outcome(at, { runId: 'run-2' }, retried.output, SKIPPED_TRIAGE);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh).toContain(
+      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --add-label archon-size-s --add-label archon-type-feature'
+    );
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
+  }, 60_000);
+
+  test('a promoted item whose body changes while triage runs is demoted and gets no route label', () => {
+    const at = install();
+    const outside = { author: 'stranger' };
+    expect(
+      outcome(
+        at,
+        { ...outside, runId: 'run-1' },
+        facts(at, { ...outside, runId: 'run-1' }).output,
+        SKIPPED_TRIAGE
+      ).code
+    ).toBe(0);
+    const promote = {
+      ...outside,
+      action: 'added',
+      label: 'archon-triage',
+      actor: 'Maintainer',
+      issueLabels: ['archon-triage', 'archon-needs-maintainer'],
+    };
+    const decided = facts(at, { ...promote, runId: 'run-2', statuses: { 'run-1': 'completed' } })
+      .output;
+    expect(decided).toMatchObject({ path: 'triage', decision: { promoted: { by: 'Maintainer' } } });
+
+    const applied = outcome(
+      at,
+      { ...promote, runId: 'run-2', body: 'An edited body' },
+      decided,
+      READY_VERDICT
+    );
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+      'issue edit 7 --repo ghe.example.com/example/repo --remove-label archon-triage',
+    ]);
+    const doc = stored(at).value;
+    expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null, claim: null });
+    expect(doc.history.at(-1)).toMatchObject({
+      outcome: 'demoted',
+      summary: expect.stringContaining('during triage'),
+    });
+  }, 60_000);
+
+  test('a closed issue is recorded and its labels are left alone', () => {
+    const at = install();
+    const closed = { author: 'stranger', state: 'closed' as const, issueLabels: ['archon-ready'] };
+    const decided = facts(at, { ...closed, runId: 'run-1' }).output;
+    expect(decided).toMatchObject({ path: 'closed', decision: { trust: null } });
+    const applied = outcome(at, { ...closed, runId: 'run-1' }, decided, SKIPPED_TRIAGE);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
+    const doc = stored(at).value;
+    expect(doc).toMatchObject({ stage: 'new', trust: null, claim: null, requests: [] });
+    expect(doc.history.at(-1)).toMatchObject({ outcome: 'closed' });
+  }, 60_000);
+
+  test('a label that requests nothing, such as the pack writing a type label, queues nothing', () => {
+    const at = install();
+    const first = facts(at, { runId: 'run-1' }).output;
+    expect(outcome(at, { runId: 'run-1' }, first, READY_VERDICT).code).toBe(0);
+    const revision = stored(at).revision;
+    const echo = facts(at, {
+      runId: 'run-2',
+      action: 'added',
+      label: 'archon-type-feature',
+      actor: 'install',
+      statuses: { 'run-1': 'completed' },
+    }).output;
+    expect(echo).toMatchObject({ path: 'idle' });
+    expect(stored(at).revision).toBe(revision);
+  }, 60_000);
+
+  test('a run whose claim a pickup released refuses to write its outcome', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } });
+    const late = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    expect(late.code).not.toBe(0);
+    expect(late.stderr).toContain('no longer claimed by this run');
+    expect(late.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
+    expect(stored(at).value).toMatchObject({ stage: 'new', claim: { run_id: 'run-2' } });
   }, 60_000);
 });

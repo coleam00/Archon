@@ -246,10 +246,15 @@ pack labels mirror it, and a label a person adds is a request, never the state.
   waiting item that sorts first by the `order` input (default
   `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
   sorts after triaged ones, oldest first) with a conditional write. A request that
-  arrives while its item is claimed waits for the next intake run. The next pickup
-  releases a claim whose run the engine reports completed, failed or cancelled, and
-  queues a failed run's requests again. A claim whose run is pending, running,
-  paused or unknown is never released, and there is no age timeout.
+  arrives while its item is claimed waits for the next intake run. A run clears its
+  claim only after the item's labels are written. The next pickup releases a claim
+  whose run the engine reports completed, failed or cancelled and queues that run's
+  requests again; the item then sorts after every other waiting item until an
+  attempt finishes, so one item that cannot be read or labelled never starves the
+  rest. A claim whose run is pending, running, paused or unknown is never released,
+  and there is no age timeout.
+- **Closed issues.** Intake records the event and changes nothing else: no trust
+  decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
   trust. Only the binding, or someone with access to the install, can supply it.
 

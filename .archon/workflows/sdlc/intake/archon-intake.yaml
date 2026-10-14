@@ -56,7 +56,7 @@ nodes:
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, quiet, outside, triage] }
+        path: { type: string, enum: [idle, quiet, closed, outside, triage] }
         # The claimed issue; null when nothing waits.
         item:
           type: [object, 'null']
@@ -74,7 +74,7 @@ nodes:
         decision:
           type: [object, 'null']
           properties:
-            path: { type: string, enum: [quiet, outside, triage] }
+            path: { type: string, enum: [quiet, closed, outside, triage] }
             trust: { type: [string, 'null'], enum: [maintainer, outside, null] }
             promoted: { type: [object, 'null'] }
             stage: { type: string }
@@ -117,7 +117,7 @@ nodes:
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, quiet, outside, triage] }
+        path: { type: string, enum: [idle, quiet, closed, outside, triage] }
         item: { type: [integer, 'null'] }
         stage: { type: [string, 'null'] }
         trust: { type: [string, 'null'] }

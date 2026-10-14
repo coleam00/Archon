@@ -108,7 +108,7 @@ export interface WorkItem {
 
 /** What the facts node decided for the item it claimed, handed to the outcome node. */
 export interface IntakeDecision {
-  readonly path: 'quiet' | 'outside' | 'triage';
+  readonly path: 'quiet' | 'closed' | 'outside' | 'triage';
   readonly trust: Trust | null;
   readonly promoted: Promotion | null;
   readonly stage: Stage;
@@ -129,17 +129,17 @@ export const MAINTAINERS_PATH = '.archon/sdlc/policy/maintainers.json';
 // keeps every revision.
 const KEPT = 50;
 
-const STAGES: readonly Stage[] = [
-  'new',
-  'needs_maintainer',
-  'investigate',
-  'plan',
-  'deliver',
-  'continue',
-  'needs_contract',
-  'blocked',
-  'close',
-];
+const STAGES = {
+  new: true,
+  needs_maintainer: true,
+  investigate: true,
+  plan: true,
+  deliver: true,
+  continue: true,
+  needs_contract: true,
+  blocked: true,
+  close: true,
+} as const satisfies Record<Stage, true>;
 
 export function workItemName(number: number): string {
   return `work/${String(number)}`;
@@ -181,7 +181,8 @@ export function parseWorkItem(value: unknown): WorkItem {
     typeof repo.path !== 'string' ||
     typeof subject?.number !== 'number' ||
     typeof doc.created_at !== 'string' ||
-    !STAGES.includes(doc.stage as Stage) ||
+    typeof doc.stage !== 'string' ||
+    !Object.hasOwn(STAGES, doc.stage) ||
     !(doc.trust === null || doc.trust === 'maintainer' || doc.trust === 'outside') ||
     claim === undefined ||
     (claim !== null && (typeof claim.run_id !== 'string' || !Array.isArray(claim.requests))) ||
@@ -249,15 +250,28 @@ function sortValue(doc: WorkItem, key: OrderKey['key']): number | string | undef
 }
 
 /**
- * Order candidates by the keys, then by issue number. An item with no value for a
- * key sorts after every item that has one, whichever the direction, so untriaged
- * items fall back to the later keys.
+ * Whether the item's last attempt ended without recording an outcome: a pickup
+ * released its claim after the item's latest recorded decision.
+ */
+export function lastAttemptFailed(doc: WorkItem): boolean {
+  const released = doc.history.filter(entry => entry.outcome === 'released').at(-1);
+  return released !== undefined && released.at > (doc.facts.intake?.at ?? '');
+}
+
+/**
+ * Order candidates by the keys, then by issue number. An item whose last attempt
+ * failed sorts after every other, so an item that cannot be read or labelled is
+ * retried without starving the rest. An item with no value for a key sorts after
+ * every item that has one, whichever the direction, so untriaged items fall back to
+ * the later keys.
  */
 export function sortCandidates<T extends { readonly doc: WorkItem }>(
   candidates: readonly T[],
   order: readonly OrderKey[]
 ): T[] {
   return [...candidates].sort((left, right) => {
+    const failed = Number(lastAttemptFailed(left.doc)) - Number(lastAttemptFailed(right.doc));
+    if (failed !== 0) return failed;
     for (const { key, direction } of order) {
       const a = sortValue(left.doc, key);
       const b = sortValue(right.doc, key);
@@ -363,7 +377,7 @@ export function decideIntake(
   });
   if (issue.state === 'closed') {
     noted('closed', 'the issue is closed; intake changes nothing on it');
-    return quiet();
+    return { ...quiet(), path: 'closed' };
   }
   if (trust === null) {
     if (issue.author === undefined) {
@@ -658,7 +672,11 @@ function read(name: string): Read | undefined {
   }
 }
 
-/** Release a claim whose run the engine reports terminal; any other answer holds it. */
+/**
+ * Release a claim whose run the engine reports terminal; any other answer holds it.
+ * A run that finishes clears its own claim, so a terminal run still holding one
+ * stopped before its labels were written, and its requests wait again.
+ */
 function releaseIfTerminal(item: Read, at: string, runId: string): Read {
   const claim = item.doc.claim;
   if (claim === null) return item;
@@ -671,12 +689,10 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
     }
     return item;
   }
-  // A run that recorded its outcome honored its requests; any other gets them back.
-  const honored = item.doc.facts.intake?.run_id === claim.run_id;
   const doc: WorkItem = {
     ...item.doc,
     claim: null,
-    requests: honored ? item.doc.requests : [...claim.requests, ...item.doc.requests],
+    requests: [...claim.requests, ...item.doc.requests],
     history: newest([
       ...item.doc.history,
       {
@@ -684,7 +700,7 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
         stage: 'intake',
         run_id: runId,
         outcome: 'released',
-        summary: `released the claim of run ${claim.run_id}, which ended ${String(status)}${honored ? '' : '; its requests wait again'}`,
+        summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
       },
     ]),
   };

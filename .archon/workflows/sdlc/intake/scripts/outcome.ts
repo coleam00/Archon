@@ -1,6 +1,6 @@
 /**
  * Apply the facts node's decision: write the work item first, then the labels that
- * mirror it, then release the claim.
+ * mirror it, then release the claim. A closed issue gets the document write only.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; triage's
  * verdict fields, each "null" when triage did not run.
@@ -78,16 +78,22 @@ function main(): void {
     applyDecision(doc, decision, triage, bodyMoved, at, runId)
   );
 
-  const add: readonly string[] =
-    decision.path === 'triage' && !bodyMoved && triage !== null
-      ? triage.labels
-      : mirrorLabels(next);
-  assertNoSelfPromotion(next, add);
-  const labels = writeLabels(
-    item,
-    add,
-    OWNED_LABEL_NAMES.filter(name => !add.includes(name))
-  );
+  // A closed issue's labels are left as they are.
+  let labels: string[] = [];
+  if (decision.path !== 'closed') {
+    const add: readonly string[] =
+      decision.path === 'triage' && !bodyMoved && triage !== null
+        ? triage.labels
+        : mirrorLabels(next);
+    assertNoSelfPromotion(next, add);
+    labels = writeLabels(
+      item,
+      add,
+      OWNED_LABEL_NAMES.filter(name => !add.includes(name))
+    );
+  }
+  // Clearing the claim is what marks this run's requests honored; a run that stops
+  // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
 
   const latest = next.history.at(-1);
