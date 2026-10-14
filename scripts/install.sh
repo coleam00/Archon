@@ -8,6 +8,8 @@
 # Options:
 #   --providers <ids> - Comma-separated providers to install (claude, codex, pi).
 #                       An empty value installs none. Without it, the installer asks.
+#                       Releases up to 0.11.1 bundle their providers and have no
+#                       `archon provider`; pin one with `--providers=`.
 #
 # Options (via environment variables):
 #   VERSION          - Specific version to install (default: latest)

@@ -72,6 +72,11 @@ An installed provider must match the CLI version. After upgrading Archon, run
 `archon provider install` again for each provider you use; until then those
 runs fail with the command to run. Rerunning the quick installer asks again.
 
+Releases up to 0.11.1 predate `archon provider` and bundle their providers. To
+pin one with `VERSION`, skip the provider step with an empty selection
+(`--providers=` or `-Providers ''`); otherwise the installer runs a command that
+release does not have and exits with an error.
+
 Docker images and source checkouts run Claude, Codex and Pi from source and need
 no install step.
 

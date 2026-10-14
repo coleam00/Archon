@@ -76,7 +76,7 @@ Archon provides a unified directory and configuration system with:
   workflow in the project. Survives worktree teardown; never visible to git.
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
 - `plugins/` - Everything `archon plugin install` and `archon provider install` write.
-  Plugin executables such as `archon-provider-codex-<os>-<arch>` sit at the top,
+  Plugin executables such as `archon-provider-codex` (`.exe` on Windows) sit at the top,
   each plugin's receipt is `installed/<owner>/<repo>[/<path>]/receipt.json`, and
   workflow pack trees live under `packs/`. Release binaries load the Claude, Codex
   and Pi providers only from these receipts; source checkouts and Docker run them
