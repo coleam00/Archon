@@ -16,26 +16,46 @@ export function validateCommand(command: string): string | undefined {
 
 export async function terminateTree(pid: number): Promise<void> {
   if (process.platform === 'win32') {
-    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
-    try {
-      await execFileAsync(
-        join(systemRoot, 'System32', 'taskkill.exe'),
-        ['/PID', String(pid), '/T', '/F'],
-        {
-          windowsHide: true,
-          timeout: 5_000,
-        }
-      );
-    } catch (error) {
-      // taskkill exits 128 when the process is already gone: the win32 ESRCH. A child can
-      // exit between its caller's liveness check and this call, e.g. on stdin EOF.
-      if ((error as { code?: unknown }).code !== 128) throw error;
-    }
+    await terminateWindowsTree(pid);
     return;
   }
   try {
     process.kill(-pid, 'SIGKILL');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+export async function terminateWindowsTree(
+  pid: number,
+  taskkill: (pid: number) => Promise<unknown> = runTaskkill,
+  isGone: (pid: number) => boolean = isProcessGone
+): Promise<void> {
+  try {
+    await taskkill(pid);
+  } catch (error) {
+    // taskkill's exit code does not say whether the tree survived: 128 means the root was
+    // already gone, and 255 can mean the root exited while its children were being ended.
+    // A root that no longer exists is the only proof that is not taskkill's prose.
+    if (!isGone(pid)) throw error;
+  }
+}
+
+function runTaskkill(pid: number): Promise<unknown> {
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
+  return execFileAsync(
+    join(systemRoot, 'System32', 'taskkill.exe'),
+    ['/PID', String(pid), '/T', '/F'],
+    { windowsHide: true, timeout: 5_000 }
+  );
+}
+
+function isProcessGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    // EPERM means the pid exists under another user; only ESRCH proves it is gone.
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
   }
 }
