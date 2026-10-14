@@ -4858,8 +4858,8 @@ nodes:
     expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual(['ok:keep0', 'recovered']);
   });
 
-  /** A fan-out child that pauses at an approval gate only for the item `askFor`. */
-  const fanAskChild = (name: string, askFor: string): string => `
+  /** A fan-out child that pauses at an approval gate only for items where `item <op> askFor`. */
+  const fanAskChild = (name: string, askFor: string, op: '==' | '!=' = '=='): string => `
 name: ${name}
 description: asks for review on one item only
 interactive: true
@@ -4871,7 +4871,7 @@ nodes:
     approval:
       message: "review $echo.output"
     depends_on: [echo]
-    when: "$echo.output == '${askFor}'"
+    when: "$echo.output ${op} '${askFor}'"
   - id: done
     bash: |
       printf 'did:%s' "$ARGUMENTS"
@@ -5045,6 +5045,65 @@ ${fanOut}
     expect([...all.keys()].sort()).toEqual(['a', 'b', 'c']);
     expect([...all.values()].every(r => r.status === 'completed')).toBe(true);
     expect(maxUnfinished).toBe(1);
+  });
+
+  it('a fan-out parent stays paused until every held child finishes (#4044 D5)', async () => {
+    await writeWorkflow('fan-ask-two', fanAskChild('fan-ask-two', 'c', '!='));
+    await writeWorkflow(
+      'fan-ask-two-parent',
+      fanAskParent('fan-ask-two-parent', 'fan-ask-two', '["a","b","c"]', '      max_parallel: 3')
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const pause = store.pauseWorkflowRun;
+    let fanOutPauses = 0;
+    store.pauseWorkflowRun = (id, approval, extra, suspension) => {
+      if (approval.type === 'fan_out') fanOutPauses += 1;
+      return pause(id, approval, extra, suspension);
+    };
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-two-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+
+    const children = childByItem(store, 'fan-ask-two');
+    const [a, b] = [children.get('a')!, children.get('b')!];
+    expect([a.status, b.status, children.get('c')?.status]).toEqual([
+      'paused',
+      'paused',
+      'completed',
+    ]);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-ask-two-parent')!;
+    const gate = parentRun.metadata.approval;
+    expect(gate).toMatchObject({ type: 'fan_out', childRunIds: [a.id, b.id] });
+    expect(fanOutPauses).toBe(1);
+
+    await answerChild(deps, store, a.id, 'fan-ask-two');
+
+    expect((await store.getWorkflowRun(a.id))?.status).toBe('completed');
+    const held = await store.getWorkflowRun(parentRun.id);
+    expect(held?.status).toBe('paused');
+    expect(held?.metadata.approval).toEqual(gate);
+    expect(fanOutPauses).toBe(1);
+
+    await answerChild(deps, store, b.id, 'fan-ask-two');
+
+    expect((await store.getWorkflowRun(parentRun.id))?.status).toBe('completed');
+    expect(fanOutPauses).toBe(1);
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual([
+      'did:a',
+      'did:b',
+      'did:c',
+    ]);
   });
 
   it('continuing a fan-out does not re-drive a child that already failed (#4044 D3)', async () => {
