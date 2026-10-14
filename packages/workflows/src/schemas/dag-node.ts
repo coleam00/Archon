@@ -1022,7 +1022,8 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
  * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
  * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
- * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
+ * time, so no two of them contend for the parent checkout's path lock. The window counts
+ * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
  * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/

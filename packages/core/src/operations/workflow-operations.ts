@@ -316,33 +316,41 @@ function unreadableGateMessage(
 }
 
 /**
- * A parent blocked on a `workflow:` sub-run has no gate of its own — the decision lives
- * on the child. Typed rather than a prose string because the redirect command is spelled
- * differently on every surface: `message` names the child run but never a command, and
- * `messageFor` adds the command the rendering surface actually accepts.
+ * A parent blocked on `workflow:` sub-runs has no gate of its own — the decision lives
+ * on each child: one for a 1:1 node, every unfinished child for a `fan_out:` node. Typed
+ * rather than a prose string because the redirect command is spelled differently on
+ * every surface: `message` names the child runs but never a command, and `messageFor`
+ * adds the commands the rendering surface actually accepts.
  */
 export class ChildRunRedirectError extends Error {
   constructor(
     readonly parentRunId: string,
-    readonly childRunId: string,
+    readonly childRunIds: readonly string[],
     readonly nodeId: string,
     readonly action: 'approve' | 'reject'
   ) {
+    const one = childRunIds.length === 1;
     super(
-      `Run ${parentRunId} is paused waiting on sub-run ${childRunId} ` +
-        `('workflow:' node '${nodeId}'). ` +
+      (one
+        ? `Run ${parentRunId} is paused waiting on sub-run ${childRunIds[0]} ` +
+          `('workflow:' node '${nodeId}'). `
+        : `Run ${parentRunId} is paused waiting on sub-runs ${childRunIds.join(', ')} ` +
+          `('fan_out' node '${nodeId}'). `) +
         (action === 'approve'
-          ? 'Approve or reject the child run instead.'
-          : 'Reject the child run instead, or abandon this run to discard the whole tree.')
+          ? `Approve or reject ${one ? 'the child run' : 'each paused child run'} instead.`
+          : `Reject ${one ? 'the child run' : 'a paused child run'} instead, or abandon this run ` +
+            'to discard the whole tree.')
     );
     this.name = 'ChildRunRedirectError';
   }
 
-  /** The same refusal with the redirect command spelled for `surface`. */
+  /** The same refusal with the redirect commands spelled for `surface`. */
   messageFor(surface: WorkflowCommandSurface): string {
     const label = this.action === 'approve' ? 'Approve' : 'Reject';
-    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
-    return `${this.message} ${label} it by run id: \`${command}\``;
+    const commands = this.childRunIds
+      .map(id => `\`${spellWorkflowCommand(surface, `${this.action} ${id}`)}\``)
+      .join(', ');
+    return `${this.message} ${label} ${this.childRunIds.length === 1 ? 'it' : 'each'} by run id: ${commands}`;
   }
 }
 
@@ -468,7 +476,9 @@ export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext
   if (wait === undefined) {
     const attention = runAttention(run);
     if (attention?.kind === 'blocked_on_child')
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'approve');
+    if (attention?.kind === 'blocked_on_children')
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'approve');
     throw new Error(
       attention?.kind === 'awaiting_response'
         ? `Run ${run.id} is paused at a gate, not an attention wait. Answer it with approve, reject or respond.`
@@ -581,7 +591,11 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
       // parent's workflow node with empty output (the child's real output is then
       // discarded on resume) and orphan the still-paused child. Redirect the
       // operator to the child run, where the actual gate lives.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'approve');
+    case 'blocked_on_children':
+      // A fan-out parent waits on each unfinished child, and each child is answered by
+      // its own run id — never through the parent.
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'approve');
     case 'attention':
       throw new Error(
         `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
@@ -661,7 +675,9 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       // gate — cancelling the parent here would silently orphan the still-paused
       // child run. Reject the child (its own gate) or abandon the parent (which
       // cascade-cancels the subtree) instead.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'reject');
+    case 'blocked_on_children':
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'reject');
     case 'unreadable':
       if (isRejectableUnreadableGate(run, attention)) break;
       if (attention.reason === 'malformed_gate') {
@@ -784,7 +800,7 @@ export interface AbandonWorkflowResult {
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
    * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
    * (the hook only fires from inside the child's own execution) — the user should
-   * resume it (fails the node cleanly) or abandon it too.
+   * resume it (it reads this sub-run's outcome) or abandon it too.
    */
   blockedParentRunId: string | null;
 }
@@ -1127,10 +1143,11 @@ export function createWorkflowOperations({
   }
 
   /**
-   * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it,
-   * return the parent's run id — abandoning the child strands that parent (nothing
-   * re-fires the auto-resume hook for a terminal-via-abandon child), so callers must
-   * tell the user to resume (fails the node cleanly) or abandon the parent too.
+   * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it —
+   * a 1:1 child, or one of the children a fan-out waits on — return the parent's run
+   * id. Abandoning the child strands that parent (nothing re-fires the auto-resume hook
+   * for a terminal-via-abandon child), so callers must tell the user to resume it (it
+   * reads this child's outcome) or abandon the parent too.
    * Best-effort: lookup failures are logged and read as "no blocked parent".
    */
   async function findParentBlockedOn(run: WorkflowRun): Promise<string | null> {
@@ -1839,11 +1856,13 @@ export function createWorkflowOperations({
         break;
       }
       case 'child_workflow':
-        // Unreachable: assertApprovable already redirects a child_workflow gate to the
-        // child run before this point. Fail loud rather than silently falling through
-        // to the generic 'approval' shape above if that guard is ever bypassed.
+      case 'fan_out':
+        // Unreachable: assertApprovable already redirects a child_workflow or fan_out
+        // gate to the child runs before this point. Fail loud rather than silently
+        // falling through to the generic 'approval' shape above if that guard is ever
+        // bypassed.
         throw new Error(
-          `approveWorkflow: unexpected child_workflow gate reached resolution for run ${runId}`
+          `approveWorkflow: unexpected ${approval.type} gate reached resolution for run ${runId}`
         );
       default: {
         const unreachable: never = approval.type;
@@ -1964,12 +1983,13 @@ export function createWorkflowOperations({
           };
         }
         case 'child_workflow':
-          // Unreachable: assertRejectable already redirects a child_workflow gate to
-          // the child run before this point. Fail loud rather than silently falling
-          // through to the generic rework/cancel path below if that guard is ever
-          // bypassed.
+        case 'fan_out':
+          // Unreachable: assertRejectable already redirects a child_workflow or fan_out
+          // gate to the child runs before this point. Fail loud rather than silently
+          // falling through to the generic rework/cancel path below if that guard is
+          // ever bypassed.
           throw new Error(
-            `rejectWorkflow: unexpected child_workflow gate reached resolution for run ${runId}`
+            `rejectWorkflow: unexpected ${approval.type} gate reached resolution for run ${runId}`
           );
         case 'approval':
         case 'interactive_loop':

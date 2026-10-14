@@ -41,6 +41,8 @@ import {
   workflowWaitStepName,
   runAttention,
   nodeOutputSchema,
+  isRunBlockedOnChild,
+  isFanOutBlockReleased,
 } from './schemas';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
 import type {
@@ -2572,7 +2574,7 @@ describe('runAttention', () => {
   });
 
   describe('awaiting a human', () => {
-    // Every recognized reason EXCEPT child_workflow, plus the legacy undefined.
+    // Every recognized reason EXCEPT child_workflow and fan_out, plus the legacy undefined.
     const humanReasons: (SuspendReason | undefined)[] = [
       'approval',
       'interactive_loop',
@@ -2623,6 +2625,29 @@ describe('runAttention', () => {
       for (const childRunId of [undefined, '']) {
         const attention = runAttention(
           pausedOn(gate({ type: 'child_workflow', nodeId: 'sub', childRunId }))
+        );
+        expect(attention).toMatchObject({ kind: 'unreadable', reason: 'child_pointer_missing' });
+      }
+    });
+  });
+
+  describe('blocked on fan-out children', () => {
+    test('reports every child it waits on, never its own item', () => {
+      const attention = runAttention(
+        pausedOn(gate({ type: 'fan_out', nodeId: 'work', childRunIds: ['k0', 'k2'] }))
+      );
+      expect(attention).toEqual({
+        kind: 'blocked_on_children',
+        runId: 'run-1',
+        nodeId: 'work',
+        childRunIds: ['k0', 'k2'],
+      });
+    });
+
+    test('a fan-out block with no children recorded is unreadable', () => {
+      for (const childRunIds of [undefined, []]) {
+        const attention = runAttention(
+          pausedOn(gate({ type: 'fan_out', nodeId: 'work', childRunIds }))
         );
         expect(attention).toMatchObject({ kind: 'unreadable', reason: 'child_pointer_missing' });
       }
@@ -2787,6 +2812,54 @@ describe('resource start resource names', () => {
       expect(schema.safeParse(reserved).success).toBe(false);
       expect(schema.safeParse('deploy-lane').success).toBe(true);
     }
+  });
+});
+
+describe('fan-out block predicates (#4044)', () => {
+  const fanOutGate = (childRunIds: string[], unspawnedItems = 0) =>
+    approvalContextSchema.parse({
+      type: 'fan_out',
+      nodeId: 'work',
+      message: 'waiting',
+      childRunIds,
+      unspawnedItems,
+    });
+  const statuses =
+    (map: Record<string, WorkflowRunStatus>) =>
+    (id: string): WorkflowRunStatus | undefined =>
+      map[id];
+
+  test('isRunBlockedOnChild is true only for a listed child of a paused fan-out parent', () => {
+    const parent = { status: 'paused' as const, metadata: { approval: fanOutGate(['a', 'b']) } };
+    expect(isRunBlockedOnChild(parent, 'b')).toBe(true);
+    expect(isRunBlockedOnChild(parent, 'c')).toBe(false);
+    expect(isRunBlockedOnChild({ ...parent, status: 'running' }, 'b')).toBe(false);
+  });
+
+  test('released once every listed child is terminal', () => {
+    const gate = fanOutGate(['a', 'b']);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'failed' }))).toBe(true);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'paused' }))).toBe(false);
+  });
+
+  test('a missing child row counts as finished', () => {
+    expect(isFanOutBlockReleased(fanOutGate(['a', 'b']), statuses({ a: 'cancelled' }))).toBe(true);
+  });
+
+  test('with unspawned items, one finished child frees a slot', () => {
+    const gate = fanOutGate(['a', 'b'], 3);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'paused' }))).toBe(true);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'running', b: 'paused' }))).toBe(false);
+  });
+
+  test('never releases a gate of another type', () => {
+    const gate = approvalContextSchema.parse({
+      type: 'child_workflow',
+      nodeId: 'sub',
+      message: 'blocked',
+      childRunId: 'a',
+    });
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed' }))).toBe(false);
   });
 });
 

@@ -20462,8 +20462,8 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   it('records usage accumulated before an approval gate PAUSES the run', async () => {
-    // A fan-out child that pauses at a gate is cancelled by the parent (`fan_out_gate`),
-    // so the pause is its only chance to record what it spent.
+    // A paused run may never resume (an operator can abandon it, cancelling it without
+    // running it again), so the pause is its only chance to record what it spent.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'analysis' };
       yield {
@@ -39545,46 +39545,6 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     ).rejects.toThrow('Could not persist node_completed for child: child result storage rejected');
     expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('stops new siblings when a paused child cancellation rolls back', async () => {
-    await writeBlock(
-      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
-      'child-workflow'
-    );
-    const store = createMockStore();
-    store.cancelFanOutRun = mock(async () => {
-      throw new Error('child cancellation rolled back');
-    });
-    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
-      childRunId: 'paused-child',
-      status: 'paused',
-    }));
-    await expect(
-      executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          cwd: testDir,
-          runChildWorkflow,
-          workflow: {
-            name: 'paused-cancel-failure',
-            nodes: [
-              {
-                id: 'fan',
-                kind: 'workflow',
-                workflow: 'child-workflow',
-                fan_out: { items: '["a", "b"]', max_parallel: 1, join: 'all_done' },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun('paused-cancel-failure'),
-        })
-      )
-    ).rejects.toThrow('child cancellation rolled back');
-    expect(runChildWorkflow).toHaveBeenCalledTimes(1);
-    expect(store.cancelFanOutRun).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('persists the instance snapshot before scheduling any body work', async () => {

@@ -4110,7 +4110,9 @@ export interface components {
           | {
               /** @enum {string} */
               status: 'suspended';
-              point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+              point:
+                | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                | 'wait';
             };
       };
       timestamp: number;
@@ -4209,6 +4211,13 @@ export interface components {
           runId: string;
           childRunId: string;
           nodeId: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_children';
+          runId: string;
+          nodeId: string;
+          childRunIds: string[];
         }
       | {
           /** @enum {string} */
@@ -5027,8 +5036,10 @@ export interface components {
         pauseId?: string;
         message: string;
         /** @enum {string} */
-        type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow';
+        type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out';
         childRunId?: string;
+        childRunIds?: string[];
+        unspawnedItems?: number;
         bodyGateId?: string;
         iteration?: number;
         sessionId?: string | null;
@@ -5461,7 +5472,9 @@ export interface components {
             | {
                 /** @enum {string} */
                 status: 'suspended';
-                point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+                point:
+                  | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                  | 'wait';
               };
         };
         commandSnapshot?: string | null;

@@ -1923,7 +1923,7 @@ export async function listDueWorkflowContinuations(
                AND ${metadataText('approval.resolved')} IN ('approved', 'rejected')
                AND ${metadataText('approval.pauseId')} IS NOT NULL
                AND COALESCE(${metadataText('approval.nodeId')}, '') <> ''
-               AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'writeback')`;
+               AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'fan_out', 'writeback')`;
   const answeredAttention = `status = 'paused' AND ${waitKind} = 'attention'
                AND COALESCE(${metadataText('isolation')}, '') <> 'container'
                AND ${metadataText('wait.pauseId')} IS NOT NULL

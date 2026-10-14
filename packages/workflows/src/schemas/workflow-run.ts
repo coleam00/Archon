@@ -460,7 +460,12 @@ export function continuablePause(
   }
   const approval = run.metadata.approval;
   if (!isApprovalContext(approval)) return undefined;
-  if (approval.type === 'child_workflow' || approval.type === 'writeback') return undefined;
+  if (
+    approval.type === 'child_workflow' ||
+    approval.type === 'fan_out' ||
+    approval.type === 'writeback'
+  )
+    return undefined;
   if (approval.pauseId === undefined || approval.nodeId === '') return undefined;
   return { nodeId: approval.nodeId, pauseId: approval.pauseId, answered: isGateResolved(approval) };
 }
@@ -853,6 +858,10 @@ const approvalContextBaseSchema = z.object({
    *    auto-resume hook re-enters the parent (executor.ts), which re-runs the
    *    workflow node, finds the child terminal, and threads its output. NO
    *    node_completed is written for the parent's node on this pause.
+   *  - `fan_out`          — a `fan_out:` workflow node (#4044) whose children have not
+   *    all finished because some paused. `nodeId` is the fan-out node, `childRunIds`
+   *    the children it waits on. Each child is answered by its own run id; the parent
+   *    re-enters once `isFanOutBlockReleased` holds and joins as usual.
    */
   type: suspendReasonSchema.optional(),
   /**
@@ -861,6 +870,17 @@ const approvalContextBaseSchema = z.object({
    * child of the same parent can't trigger the wrong re-entry.
    */
   childRunId: z.string().optional(),
+  /**
+   * `type === 'fan_out'` only: every non-terminal child of the node at pause time, in
+   * item order. A paused child keeps its `max_parallel` slot, so this holds at most
+   * `max_parallel` ids.
+   */
+  childRunIds: z.array(z.string()).optional(),
+  /**
+   * `type === 'fan_out'` only: items with no child run yet because the `max_parallel`
+   * window is full of unfinished children.
+   */
+  unspawnedItems: z.number().int().min(0).optional(),
   /**
    * Set only on an ESCALATED pause: a `gate:` node that is the sole terminal sink
    * of a `loop_group` body (#2707 step 3), still `type: 'approval'`. The enclosing
@@ -1071,7 +1091,8 @@ export type GateAddress = z.infer<typeof gateAddressSchema>;
  * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
  * and `child_pointer_missing` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
- * produced by a reader that follows a `blocked_on_child` pointer into the database
+ * produced by a reader that follows a `blocked_on_child` or `blocked_on_children`
+ * pointer into the database
  * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
  */
 export const runAttentionUnreadableReasonSchema = z.enum([
@@ -1122,6 +1143,12 @@ const nonTerminalRunAttentionSchemas = [
     nodeId: z.string(),
   }),
   z.object({
+    kind: z.literal('blocked_on_children'),
+    runId: z.string(),
+    nodeId: z.string(),
+    childRunIds: z.array(z.string()),
+  }),
+  z.object({
     kind: z.literal('unreadable'),
     runId: z.string(),
     reason: runAttentionUnreadableReasonSchema,
@@ -1159,6 +1186,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  * wake a host for normal progress; returning null would strand one when the child
  * really is on a gate. So the projection reports what it knows — this run is blocked
  * on that child — and a reader with database access resolves the chain.
+ * `blocked_on_children` is the same for a fan-out node waiting on several children:
+ * each child is its own queue item, never the parent's.
  */
 export type RunAttention = z.infer<typeof runAttentionSchema>;
 
@@ -1296,6 +1325,21 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
       nodeId: raw.nodeId,
     };
   }
+  if (raw.type === 'fan_out') {
+    if (raw.childRunIds === undefined || raw.childRunIds.length === 0) {
+      return unreadableAttention(
+        run.id,
+        'child_pointer_missing',
+        `blocked on fan-out sub-runs at node '${raw.nodeId}' but no child run ids are recorded`
+      );
+    }
+    return {
+      kind: 'blocked_on_children',
+      runId: run.id,
+      nodeId: raw.nodeId,
+      childRunIds: raw.childRunIds,
+    };
+  }
 
   // Every remaining recognized reason — `approval`, `interactive_loop`, `writeback`,
   // and `undefined` for legacy plain gates — needs a response from outside the run.
@@ -1320,8 +1364,8 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
  * because `rejectWorkflow`'s stage-rework path never writes `node_completed`
  * (only `metadata.approval.resolved`/`rejection_reason`/`rejection_count`).
  *
- * - `interactive_loop` / `child_workflow` — always true: both kinds are
- *   re-entered by the node executor's own re-read of `metadata.approval`,
+ * - `interactive_loop` / `child_workflow` / `fan_out` — always true: these kinds
+ *   are re-entered by the node executor's own re-read of its state,
  *   independent of `priorCompletedNodes` (`executeLoopNode`/
  *   `executeLoopGroupNode`/`executeWorkflowNode` in dag-executor.ts).
  * - `writeback` — always false: there is no DAG node behind this gate to
@@ -1344,6 +1388,7 @@ export function reRunsOwnNodeOnResume(
   switch (approval.type) {
     case 'interactive_loop':
     case 'child_workflow':
+    case 'fan_out':
       return true;
     case 'writeback':
       return false;
@@ -1367,7 +1412,8 @@ export function reRunsOwnNodeOnResume(
 /**
  * True when `run` is currently paused blocked on the child sub-run `childRunId`
  * (#2121 Phase 2) — i.e. a `paused` run whose `metadata.approval` is a
- * `child_workflow` gate pointing at that child. This is the single source of the
+ * `child_workflow` gate pointing at that child, or a `fan_out` gate listing it in
+ * `childRunIds`. This is the single source of the
  * "parent blocked on this child" invariant, shared by the abandon-strand detector
  * (`findParentBlockedOn`, @archon/core) and the auto-resume hook
  * (`maybeResumeParentRun`, @archon/workflows) so the two cannot drift if the gate
@@ -1379,11 +1425,30 @@ export function isRunBlockedOnChild(
 ): boolean {
   if (run.status !== 'paused') return false;
   const approval = run.metadata?.approval;
-  return (
-    isApprovalContext(approval) &&
-    approval.type === 'child_workflow' &&
-    approval.childRunId === childRunId
-  );
+  if (!isApprovalContext(approval)) return false;
+  if (approval.type === 'child_workflow') return approval.childRunId === childRunId;
+  if (approval.type === 'fan_out') return approval.childRunIds?.includes(childRunId) === true;
+  return false;
+}
+
+/**
+ * True when a parent paused on a `fan_out` gate should continue: every child it waits
+ * on is terminal (or has no row), or a slot is free for an unspawned item. A paused
+ * child holds its `max_parallel` slot, so with `unspawnedItems > 0` one finished child
+ * is enough to let the next item start. `childStatus` returns undefined for a missing row.
+ * False for every other gate type.
+ */
+export function isFanOutBlockReleased(
+  approval: ApprovalContext,
+  childStatus: (childRunId: string) => WorkflowRunStatus | undefined
+): boolean {
+  if (approval.type !== 'fan_out') return false;
+  const ids = approval.childRunIds ?? [];
+  const finished = ids.filter(id => {
+    const status = childStatus(id);
+    return status === undefined || isTerminalRunStatus(status);
+  }).length;
+  return finished === ids.length || ((approval.unspawnedItems ?? 0) > 0 && finished > 0);
 }
 
 /**

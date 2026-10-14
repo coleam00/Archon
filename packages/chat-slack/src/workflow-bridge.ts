@@ -408,7 +408,7 @@ export class SlackWorkflowBridge {
         if (result.cascadeFailures > 0)
           note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
         if (result.blockedParentRunId)
-          note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         await this.postActionNote(body, runId, note);
       } else if (result.kind === 'cooperative' && !result.cancelled) {
         await this.postActionNote(

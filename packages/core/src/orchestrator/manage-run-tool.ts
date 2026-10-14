@@ -472,7 +472,7 @@ async function handleWrite(
           msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
         }
         if (result.blockedParentRunId) {
-          msg += ` Parent run ${result.blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it to fail the node cleanly, or abandon it too.`;
+          msg += ` Parent run ${result.blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return msg;
       } catch (error) {
@@ -496,7 +496,7 @@ async function handleWrite(
         msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
       }
       if (blockedParentRunId) {
-        msg += ` Parent run ${blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it to fail the node cleanly, or abandon it too.`;
+        msg += ` Parent run ${blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
       }
       return msg;
     }
