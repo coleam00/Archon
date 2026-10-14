@@ -70,7 +70,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run investigate --cwd /path/to/repo --no-worktree "Why does the nightly build fail?"
 ```
 
-**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
+**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands and `workflow attention` work anywhere.
 
 ## Commands
 

@@ -31,7 +31,8 @@ single read and `workflow wait` all derive from the same run projection, so they
 disagree about what a run needs.
 
 - **Scope.** The CLI defaults to the project of the working directory. `--project` names
-  another project and `--all` covers the install. Over HTTP there is no working directory,
+  another project and `--all` covers the install. Every `workflow attention` form runs from
+  any directory, registered or not. Over HTTP there is no working directory,
   so the default is the install.
 - **Filters.** `--label k=v` is an exact match on the label's value, and repeated filters
   must all match. No filter or field depends on who is asking.

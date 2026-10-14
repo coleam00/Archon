@@ -394,7 +394,11 @@ async function main(): Promise<number> {
     'user',
     'ai',
   ];
-  const requiresGitRepo = !noGitCommands.includes(command ?? '');
+  // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
+  // directory's project, which need not be registered or a git repository.
+  const requiresGitRepo =
+    !noGitCommands.includes(command ?? '') &&
+    !(command === 'workflow' && subcommand === 'attention');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
 
   const showUpdateNotice =
