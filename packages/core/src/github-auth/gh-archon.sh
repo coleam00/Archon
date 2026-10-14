@@ -6,13 +6,14 @@
 #   ARCHON_PORT             the App-mode server serving /internal/git-credential
 #   ARCHON_GITHUB_APP_REPO  owner/repo the run's dispatch token was minted for
 #
-# Each call asks that loopback endpoint for a current installation token and
-# execs the real `gh` with it in GH_TOKEN/GITHUB_TOKEN, so a run outlives its
-# dispatch-time token. A GH_TOKEN that is not an installation token (`ghs_`
-# prefix, e.g. one a step set itself) passes through unchanged. When a refresh
-# is due but fails, the shim exits 1 without running `gh`: a stale token would
-# only turn the failure into a later 401. The token travels in the environment
-# only, never in argv or output.
+# Each call asks that loopback endpoint, through git-credential-archon in the
+# parent directory, for a current installation token and execs the real `gh`
+# with it in GH_TOKEN/GITHUB_TOKEN, so a run outlives its dispatch-time token.
+# A GH_TOKEN that is not an installation token (`ghs_` prefix, e.g. one a step
+# set itself) passes through unchanged. When a refresh is due but fails, the
+# shim exits 1 without running `gh`: a stale token would only turn the failure
+# into a later 401. The token travels in the environment only, never in argv
+# or output.
 
 self="$0"
 real_gh=""
@@ -45,35 +46,14 @@ fail() {
   exit 1
 }
 
-repo="${ARCHON_GITHUB_APP_REPO:-}"
-case "$repo" in
-  *[!a-zA-Z0-9_./-]* | */*/* | /* | */) fail 'ARCHON_GITHUB_APP_REPO is not owner/repo' ;;
-  ?*/?*) ;;
-  *) fail 'ARCHON_GITHUB_APP_REPO is not owner/repo' ;;
-esac
-
-port="${ARCHON_PORT:-}"
-case "$port" in
-  ''|*[!0-9]*|??????*) fail 'missing or invalid ARCHON_PORT' ;;
-esac
-if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-  fail 'missing or invalid ARCHON_PORT'
-fi
-url="http://127.0.0.1:$port/internal/git-credential"
-
-# Same request and response shape as git-credential-archon. GitHub names contain
-# no JSON metacharacters, so interpolation preserves the literal repository.
-resp=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST \
-  -H 'Content-Type: application/json' \
-  -d "{\"host\":\"github.com\",\"path\":\"$repo\"}" "$url" 2>/dev/null)
-curl_status=$?
-if [ "$curl_status" -ne 0 ]; then
-  fail "curl to $url failed (exit $curl_status)"
-fi
-
-token=$(printf '%s' "$resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+# git-credential-archon owns the loopback request and the repository check. It
+# exits 0 with no password on failure, after printing its own diagnostic.
+helper="$(dirname "$self")/../git-credential-archon"
+[ -x "$helper" ] || fail "credential helper not found at $helper"
+token=$(printf 'host=github.com\npath=%s\n\n' "${ARCHON_GITHUB_APP_REPO:-}" \
+  | "$helper" get | sed -n 's/^password=//p')
 if [ -z "$token" ]; then
-  fail "server returned no token (resp len=$(printf '%s' "$resp" | wc -c | tr -d ' '))"
+  fail 'credential helper returned no token'
 fi
 
 GH_TOKEN=$token

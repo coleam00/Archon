@@ -121,6 +121,7 @@ describe.skipIf(process.platform === 'win32')('gh shim in a workflow run', () =>
     const { exitCode, stdout, stderr } = await runGh('gh pr checks 7');
     expect(exitCode).toBe(1);
     expect(stdout).toBe('');
+    expect(stderr).toContain('git-credential-archon: curl to');
     expect(stderr).toContain('gh (archon shim): cannot refresh the GitHub App token');
     expect(stderr).not.toContain('ghs_');
   });

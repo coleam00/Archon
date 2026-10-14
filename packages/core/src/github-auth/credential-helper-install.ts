@@ -37,17 +37,26 @@ export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
 
+/**
+ * Write the helper to `~/.archon/bin/git-credential-archon` when outdated and
+ * return its path. Throws when the script cannot be written.
+ */
+export function installCredentialHelperScript(): string {
+  const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
+  if (installManagedScript(helperPath, credentialHelperScript)) {
+    getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
+  }
+  return helperPath;
+}
+
 /** Never throws. The caller serializes setup per repository. */
 export async function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const repoPath = resolve(worktreePath);
-  const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
-  const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
   try {
-    if (installManagedScript(helperPath, credentialHelperScript)) {
-      getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
-    }
+    const helperPath = installCredentialHelperScript();
+    const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
     await execFileAsync(
       'git',
       ['-C', repoPath, 'config', 'credential.https://github.com.helper', helperCommand],

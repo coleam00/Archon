@@ -187,9 +187,11 @@ A run's `GH_TOKEN` and `GITHUB_TOKEN` hold the installation token resolved when 
 
 `gh` keeps the start-time token, and fails once it expires, in these cases:
 
-- **A CLI run without `ARCHON_PORT`.** No endpoint is reachable, so the run logs `workflow.gh_token_refresh_unavailable` once at start. The CLI mints its token at start, so it lasts about an hour. Export `ARCHON_PORT` with an App-mode server's port to cover longer runs.
+- **A CLI run without `ARCHON_PORT`.** No endpoint is reachable, so Archon logs `workflow.gh_token_refresh_unavailable` each time it resolves the run's GitHub environment. That happens when the run starts, when it runs worktree setup commands, and when it resumes, so one run can log it several times. The CLI mints its token at start, so it lasts about an hour. Export `ARCHON_PORT` with an App-mode server's port to cover longer runs.
 - **`gh` called by a Codex agent.** Codex's shell snapshot restores a fixed `PATH`, so its shell never finds the shim. Archon does not change that Codex setting. Bash, script and loop nodes, and Claude and Pi agents, use the shim.
-- **Windows.** The shim is a POSIX shell script, so a run on Windows logs the same warning at start and keeps the start-time token.
+- **Windows.** The shim is a POSIX shell script, so a run on Windows logs the same warning and keeps the start-time token.
+
+Run output redacts the start-time token only. A token the shim fetches later lives in the `gh` process's environment, so it is not redacted if a step prints it, for example with `gh auth token`.
 
 ### Internal endpoint security — REQUIRED
 
