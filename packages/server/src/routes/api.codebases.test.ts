@@ -225,7 +225,7 @@ const MOCK_ENV = {
   updated_at: new Date().toISOString(),
 };
 
-function makeApp(): OpenAPIHono {
+function makeApp(dependencies?: Parameters<typeof registerApiRoutes>[5]): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
@@ -239,7 +239,7 @@ function makeApp(): OpenAPIHono {
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, mockLockManager, undefined, undefined, dependencies);
   return app;
 }
 
@@ -513,6 +513,36 @@ describe('POST /api/codebases', () => {
     // registerRepository unless a test opts into the folder fallback.
     mockFindRepoRoot.mockReset();
     mockFindRepoRoot.mockImplementation(async (p: string) => p);
+  });
+
+  test('passes the host App provider to URL registration and branch inspection', async () => {
+    const githubAppAuth = { getInstallationToken: mock(async () => 'installation-secret') };
+    mockCloneRepository.mockResolvedValueOnce({
+      codebaseId: 'clone-uuid-1',
+      alreadyExisted: false,
+    });
+    mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+    const app = makeApp({ githubAppAuth });
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://github.com/owner/repo', base_branch: 'dev' }),
+    });
+    expect(response.status).toBe(201);
+    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/owner/repo', {
+      baseBranch: 'dev',
+      githubAppAuth,
+    });
+    const inspection = await app.request('/api/codebases/base-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://github.com/owner/repo' }),
+    });
+    expect(inspection.status).toBe(200);
+    expect(mockInspectBaseBranch).toHaveBeenCalledWith(
+      { url: 'https://github.com/owner/repo' },
+      { githubAppAuth }
+    );
   });
 
   test('registers codebase by URL and returns 201', async () => {

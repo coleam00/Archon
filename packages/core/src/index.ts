@@ -112,6 +112,7 @@ export {
   inspectProjectBaseBranch,
   ProjectRegistrationError,
   type RegistrationOptions,
+  type CloneOptions,
   type ProjectBaseBranchInspection,
 } from './handlers/sql-registration';
 
@@ -214,6 +215,7 @@ export { getLinkedIssueNumbers } from './utils/github-graphql';
 export {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
+  loadGitHubAppConfig,
   installCredentialHelper,
   AppNotInstalledError,
   AppPrivateKeyError,

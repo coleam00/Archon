@@ -52,6 +52,7 @@ import {
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
+  type CloneOptions,
   inspectProjectBaseBranch,
   ProjectRegistrationError,
   registerRepository,
@@ -1947,7 +1948,8 @@ export function registerApiRoutes(
   webAdapter: WebAdapter,
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
-  attention?: { webPush: WebPushDestination; router: AttentionRouter }
+  attention?: { webPush: WebPushDestination; router: AttentionRouter },
+  registration: Pick<CloneOptions, 'githubAppAuth'> = {}
 ): void {
   const {
     assertRunActionAllowed,
@@ -3350,7 +3352,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(inspectBaseBranchRoute, async c => {
     const body = getValidatedBody(c, inspectBaseBranchBodySchema);
     try {
-      return c.json(await inspectProjectBaseBranch(body), 200);
+      return c.json(await inspectProjectBaseBranch(body, registration), 200);
     } catch (error) {
       if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'inspect_base_branch_failed');
@@ -3365,7 +3367,10 @@ export function registerApiRoutes(
     try {
       let result;
       if ('url' in body) {
-        result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
+        result = await cloneRepository(body.url, {
+          ...registration,
+          baseBranch: body.base_branch ?? undefined,
+        });
       } else if (body.folder === true) {
         result = await registerFolder(body.path, undefined, {
           baseBranch: body.base_branch ?? undefined,

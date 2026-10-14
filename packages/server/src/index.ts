@@ -746,10 +746,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager, activePlatforms, {
-    webPush,
-    router: attentionRouter,
-  });
+  registerApiRoutes(
+    app,
+    webAdapter,
+    lockManager,
+    activePlatforms,
+    {
+      webPush,
+      router: attentionRouter,
+    },
+    { githubAppAuth: githubAppAuthProvider ?? undefined }
+  );
 
   // GitHub webhook endpoint
   if (github) {
