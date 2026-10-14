@@ -3247,7 +3247,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'needs work' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs work',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3299,6 +3304,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
           resolved: 'rejected',
+          answeredVia: 'api',
+          answeredAt: expect.any(String),
         },
         rejection_reason: 'needs more tests',
         rejection_count: 1,
@@ -3307,7 +3314,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'needs more tests' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs more tests',
+          },
         },
       ],
       undefined
@@ -3348,7 +3360,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'still bad' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still bad',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3575,19 +3592,53 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
           },
         },
       });
-      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
       const { app } = makeApp();
       const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
         method: 'POST',
         body: JSON.stringify({ decision, text: 'feedback', expectedGate }),
         headers: { 'Content-Type': 'application/json' },
       });
-      expect(response.status).toBe(500);
-      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+      // Refused before any write, as a conflict naming the occurrence the run is at now.
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toContain(
+        "It is now awaiting occurrence 'pause-after'."
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
       expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
       expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  test('a stale occurrence is a 409, not an undeclared-decision 400, when the new gate lacks the decision', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'next-gate',
+          pauseId: 'pause-after',
+          message: 'Something else',
+          decisions: [{ id: 'approve' }, { id: 'accept' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+      method: 'POST',
+      body: JSON.stringify({
+        decision: 'revise',
+        text: 'feedback',
+        expectedGate: { nodeId: 'review-gate', pauseId: 'pause-before' },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      "It is now awaiting occurrence 'pause-after'."
+    );
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 
   test("'approve' produces the exact same resolution as POST .../approve", async () => {
     mockGetWorkflowRun.mockResolvedValue({
@@ -3960,7 +4011,7 @@ describe('approve/reject auto-resume', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { decision: 'rejected', reason: 'no' },
+          data: { via: 'api', occurrence: expect.any(String), decision: 'rejected', reason: 'no' },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },

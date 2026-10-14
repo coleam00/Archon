@@ -173,7 +173,24 @@ nodes:
     await workflowStatusCommand(host, project, { json: true });
     expect(JSON.parse(output.join('').trim()).runs[0].id).toBe(paused.id);
     output.length = 0;
-    await workflowApproveCommand(host, paused.id, 'Ship it', true, project);
+    const attention = runAttention(paused);
+    if (attention?.kind !== 'awaiting_response') throw new Error('Gate not awaiting a response');
+    // An answer prepared for an earlier pause is refused and names the current one.
+    await workflowApproveCommand(host, paused.id, 'Ship it', true, project, false, 'stale');
+    expect(JSON.parse(output.join('').trim())).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(`awaiting occurrence '${attention.occurrence}'`),
+    });
+    output.length = 0;
+    await workflowApproveCommand(
+      host,
+      paused.id,
+      'Ship it',
+      true,
+      project,
+      false,
+      attention.occurrence
+    );
     expect(JSON.parse(output.join('').trim())).toMatchObject({
       ok: true,
       action: 'approve',
@@ -181,6 +198,11 @@ nodes:
       resumable: true,
     });
     output.length = 0;
+    expect((await store.getWorkflowRun(paused.id))?.metadata.approval).toMatchObject({
+      resolved: 'approved',
+      answeredVia: 'cli',
+      answeredAt: expect.any(String),
+    });
     expect((await store.getWorkflowRun(paused.id))?.status).toBe('paused');
     const snapshot = await store.getDagResumeSnapshot(paused.id);
     expect(snapshot.completedNodeOutputs.get('review')?.structuredOutput).toEqual({

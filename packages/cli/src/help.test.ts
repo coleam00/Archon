@@ -283,6 +283,8 @@ Options:
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
   --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
+  --occurrence <id>          For 'workflow approve/reject/respond': refuse the answer unless the run is still paused at
+                             this occurrence (the 'occurrence' that 'workflow wait --json' reports)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)

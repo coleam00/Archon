@@ -93,9 +93,9 @@ const mockRejectWorkflow = mock<WorkflowOperations['rejectWorkflow']>(async () =
   rejectionResult()
 );
 const mockRespondToWorkflow = mock<WorkflowOperations['respondToWorkflow']>(
-  async (runId, decision, text, actor) => {
-    if (decision === 'approve') return mockApproveWorkflow(runId, text, actor);
-    if (decision === 'reject') return mockRejectWorkflow(runId, text ?? 'Rejected', actor);
+  async (runId, decision, text, actor, origin) => {
+    if (decision === 'approve') return mockApproveWorkflow(runId, text, actor, origin);
+    if (decision === 'reject') return mockRejectWorkflow(runId, text ?? 'Rejected', actor, origin);
     return approvalResult('approval_gate');
   }
 );
@@ -551,7 +551,7 @@ describe('SlackWorkflowBridge', () => {
         decision,
         undefined,
         { kind: 'user', userId: 'archon-U123' },
-        { nodeId: 'review', pauseId: 'pause-one' }
+        { via: 'slack', expectedGate: { nodeId: 'review', pauseId: 'pause-one' } }
       );
       expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
       expect(updated.find(message => message.ts === '2.000')?.text).toContain(
@@ -651,7 +651,7 @@ describe('SlackWorkflowBridge', () => {
       'approve',
       undefined,
       { kind: 'user', userId: 'archon-U123' },
-      'review'
+      { via: 'slack', expectedGate: 'review' }
     );
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
@@ -730,10 +730,12 @@ describe('SlackWorkflowBridge', () => {
     // The reject button has no text-entry affordance, so it can never supply a
     // reason — the bridge must default it to 'Rejected' itself (#2740),
     // otherwise a new-mode gate's structured output.text records ''.
-    expect(mockRejectWorkflow).toHaveBeenCalledWith('r1', 'Rejected', {
-      kind: 'user',
-      userId: 'archon-U999',
-    });
+    expect(mockRejectWorkflow).toHaveBeenCalledWith(
+      'r1',
+      'Rejected',
+      { kind: 'user', userId: 'archon-U999' },
+      { via: 'slack', expectedGate: 'review' }
+    );
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U999');
     const resolution = updated.find(message => message.ts === '2.000');
     const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
@@ -753,10 +755,12 @@ describe('SlackWorkflowBridge', () => {
       message: { ts: '2.000' },
     });
 
-    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1', undefined, {
-      kind: 'user',
-      userId: 'archon-U123',
-    });
+    expect(mockApproveWorkflow).toHaveBeenCalledWith(
+      'r1',
+      undefined,
+      { kind: 'user', userId: 'archon-U123' },
+      { via: 'slack', expectedGate: 'review' }
+    );
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
     const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;

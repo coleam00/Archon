@@ -14,6 +14,7 @@ import { getStoragePathsForRoot, resolveRunStorageRoot } from '@archon/paths/arc
 import { finishNodeExecution } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
+import { recordSurfaceSchema, type RecordSurface } from '@archon/workflows/schemas/record-surface';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -32,6 +33,7 @@ import {
   readExecutionOwner,
   readOwnedWorktree,
   runAttention,
+  gateOccurrence,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
@@ -323,6 +325,97 @@ export class ChildRunRedirectError extends Error {
     const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
     return `${this.message} ${label} it by run id: \`${command}\``;
   }
+}
+
+/**
+ * Where an answer came from, recorded with it for audit. `via` names the surface the
+ * answer arrived through: `cli`, `api`, `manage_run`, or a chat platform's id. Nothing
+ * routes, restricts or branches on it, and it never names who answered. `expectedGate`
+ * refuses an answer meant for an earlier pause of the same run.
+ */
+export interface GateAnswerOrigin {
+  via: RecordSurface;
+  expectedGate?: ExpectedApprovalGate;
+}
+
+/** The gate context a resolution writes: the decision plus the answer's surface and time. */
+function answeredGate(
+  approval: ApprovalContext | undefined,
+  resolved: 'approved' | 'rejected',
+  origin: GateAnswerOrigin
+): Record<string, unknown> {
+  return {
+    ...approval,
+    resolved,
+    answeredVia: origin.via,
+    answeredAt: new Date().toISOString(),
+  };
+}
+
+const LOST_GATE_MESSAGE = (runId: string): string =>
+  `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`;
+
+/**
+ * An answer named an occurrence that is not the run's open one. Typed so a surface can
+ * report it as a conflict rather than a server failure; the message names the occurrence
+ * the run is at now.
+ */
+export class StaleGateAnswerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleGateAnswerError';
+  }
+}
+
+/** The refusal for an answer whose occurrence is not the run's open one, naming the one it is at now. */
+function staleGateError(runId: string, current: WorkflowRun | null): StaleGateAnswerError {
+  const attention = current ? runAttention(current) : null;
+  return new StaleGateAnswerError(
+    attention?.kind === 'awaiting_response'
+      ? `${LOST_GATE_MESSAGE(runId)} It is now awaiting occurrence '${attention.occurrence}'.`
+      : `${LOST_GATE_MESSAGE(runId)} It is not awaiting an answer now.`
+  );
+}
+
+/**
+ * The checks every answer passes before anything else judges it: the surface id is
+ * well formed, and a named occurrence is the run's open one. The occurrence goes first
+ * so an answer prepared for an earlier pause is reported as stale, not as an invalid
+ * decision for a gate its sender never saw. Mirrors the store's own CAS predicate,
+ * which still decides a race after this read. Read-only, so the CLI's detached
+ * pre-flight runs it too.
+ */
+export function assertAnswerAdmissible(run: WorkflowRun, origin: GateAnswerOrigin): void {
+  recordSurfaceSchema.parse(origin.via);
+  const expected = origin.expectedGate;
+  if (expected === undefined) return;
+  const gate = run.metadata.approval;
+  const open =
+    run.status === 'paused' && isApprovalContext(gate) && !isGateResolved(gate) ? gate : undefined;
+  const matches =
+    open !== undefined &&
+    open.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
+    (open.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId);
+  if (!matches) throw staleGateError(run.id, run);
+}
+
+/** The occurrence an answer resolved, recorded on its audit event; absent when the gate is unreadable. */
+function answerOccurrence(approval: ApprovalContext | undefined): { occurrence?: string } {
+  return approval === undefined ? {} : { occurrence: gateOccurrence(approval) };
+}
+
+/**
+ * The expected gate for an occurrence id as run-attention reports it: a gate's `pauseId`,
+ * or `legacy:<nodeId>` for a gate paused before pause identities existed. The prefix is
+ * Archon's own token, minted by `runAttention`, not user text.
+ */
+export function expectedGateForOccurrence(
+  run: WorkflowRun,
+  occurrence: string
+): ExpectedApprovalGate {
+  if (occurrence.startsWith('legacy:')) return occurrence.slice('legacy:'.length);
+  const approval = run.metadata.approval;
+  return { nodeId: isApprovalContext(approval) ? approval.nodeId : '', pauseId: occurrence };
 }
 
 /** Render an operation failure, including a surface-specific child-run redirect. */
@@ -760,19 +853,21 @@ export interface WorkflowOperations {
   approveWorkflow: (
     runId: string,
     comment: string | undefined,
-    actor: RunActor
+    actor: RunActor,
+    origin: GateAnswerOrigin
   ) => Promise<ApprovalOperationResult>;
   rejectWorkflow: (
     runId: string,
     reason: string | undefined,
-    actor: RunActor
+    actor: RunActor,
+    origin: GateAnswerOrigin
   ) => Promise<RejectionOperationResult>;
   respondToWorkflow: (
     runId: string,
     decision: string,
     text: string | undefined,
     actor: RunActor,
-    expectedGate?: ExpectedApprovalGate
+    origin: GateAnswerOrigin
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
@@ -1384,6 +1479,25 @@ export function createWorkflowOperations({
   }
 
   /**
+   * A resolution that lost its compare-and-swap. When the caller named an occurrence, say
+   * which occurrence the run is at now, so a stale answer is visibly stale.
+   */
+  async function lostGateError(
+    runId: string,
+    expected: ExpectedApprovalGate | undefined
+  ): Promise<Error> {
+    if (expected === undefined) return new Error(LOST_GATE_MESSAGE(runId));
+    let current: WorkflowRun | null;
+    try {
+      current = await store.getWorkflowRun(runId);
+    } catch (err) {
+      getLog().warn({ err, runId }, 'operations.workflow_gate_occurrence_lookup_failed');
+      return new Error(LOST_GATE_MESSAGE(runId));
+    }
+    return staleGateError(runId, current);
+  }
+
+  /**
    * Approve a paused workflow run.
    *
    * Handles both interactive_loop and standard approval gate paths.
@@ -1396,10 +1510,11 @@ export function createWorkflowOperations({
     runId: string,
     comment: string | undefined,
     actor: RunActor,
-    expectedGate?: ExpectedApprovalGate
+    origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     await assertMayAct(run, actor, 'approve');
+    assertAnswerAdmissible(run, origin);
     const approval = assertApprovable(run);
 
     // Whitespace-only comments count as absent (mirrors feedbackProvided below):
@@ -1430,14 +1545,20 @@ export function createWorkflowOperations({
         // `approval_response`, which is kept only for backward-compat/telemetry (H1). NO
         // node_completed event — there is no DAG node behind this gate (`nodeId` is synthetic).
         metadataPayload = {
-          approval: { ...approval, resolved: 'approved' },
+          approval: answeredGate(approval, 'approved', origin),
           approval_response: 'approved',
         };
         events = [
           {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { decision: 'approved', comment: approvalComment, gate: 'writeback' },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'approved',
+              comment: approvalComment,
+              gate: 'writeback',
+            },
           },
         ];
         break;
@@ -1455,7 +1576,10 @@ export function createWorkflowOperations({
           loop_user_input: approvalComment,
           loop_feedback_given: feedbackProvided,
         };
-        metadataPayload = { approval: { ...approval, resolved: 'approved' }, ...gateRunMetadata };
+        metadataPayload = {
+          approval: answeredGate(approval, 'approved', origin),
+          ...gateRunMetadata,
+        };
         // Interactive loop gate — user input already stored in metadata for the next
         // iteration. Note: node_completed is NOT written here. The executor writes it
         // when the AI emits the completion signal (meaning the user actually approved)
@@ -1466,7 +1590,13 @@ export function createWorkflowOperations({
           {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { decision: 'approved', comment: approvalComment, iteration: approval.iteration },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'approved',
+              comment: approvalComment,
+              iteration: approval.iteration,
+            },
           },
         ];
         break;
@@ -1474,7 +1604,7 @@ export function createWorkflowOperations({
       case 'approval':
       case undefined: {
         metadataPayload = {
-          approval: { ...approval, resolved: 'approved' },
+          approval: answeredGate(approval, 'approved', origin),
           approval_response: 'approved',
           rejection_reason: '',
           rejection_count: 0,
@@ -1503,7 +1633,12 @@ export function createWorkflowOperations({
           {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { decision: 'approved', comment: approvalComment },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'approved',
+              comment: approvalComment,
+            },
           },
         ];
         break;
@@ -1533,12 +1668,10 @@ export function createWorkflowOperations({
       runId,
       metadataPayload,
       events,
-      expectedGate
+      origin.expectedGate
     );
     if (!won) {
-      throw new Error(
-        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
-      );
+      throw await lostGateError(runId, origin.expectedGate);
     }
 
     await publishGateExecution(run, events);
@@ -1568,10 +1701,11 @@ export function createWorkflowOperations({
     runId: string,
     reason: string | undefined,
     actor: RunActor,
-    expectedGate?: ExpectedApprovalGate
+    origin: GateAnswerOrigin
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     await assertMayAct(run, actor, 'reject');
+    assertAnswerAdmissible(run, origin);
     const approval = assertRejectable(run);
 
     // Exhaustively switched on the suspend reason (#2489) so a future reason value
@@ -1592,18 +1726,21 @@ export function createWorkflowOperations({
           const rejectionEvent: GateResolutionEvent = {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { decision: 'rejected', gate: 'writeback' },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'rejected',
+              gate: 'writeback',
+            },
           };
           const { resolved: won } = await store.resolveApprovalGate(
             runId,
-            { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
+            { approval: answeredGate(approval, 'rejected', origin), approval_response: 'rejected' },
             [rejectionEvent],
-            expectedGate
+            origin.expectedGate
           );
           if (!won) {
-            throw new Error(
-              `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
-            );
+            throw await lostGateError(runId, origin.expectedGate);
           }
           await publishGateExecution(run, [rejectionEvent]);
           captureApprovalResolved({ resolution: 'rejected' });
@@ -1674,7 +1811,12 @@ export function createWorkflowOperations({
     const rejectionEvent: GateResolutionEvent = {
       event_type: 'approval_received',
       step_name: approval?.nodeId ?? 'unknown',
-      data: { decision: 'rejected', reason: rejectReason },
+      data: {
+        via: origin.via,
+        ...answerOccurrence(approval),
+        decision: 'rejected',
+        reason: rejectReason,
+      },
     };
 
     // Compare-and-swap resolution guard — a concurrent second reject loses here
@@ -1703,20 +1845,20 @@ export function createWorkflowOperations({
       completedGateEvent = nodeCompletedEvent;
       ({ resolved: won } = await store.resolveApprovalGate(
         runId,
-        { approval: { ...approval, resolved: 'rejected' } },
+        { approval: answeredGate(approval, 'rejected', origin) },
         [nodeCompletedEvent, rejectionEvent],
-        expectedGate
+        origin.expectedGate
       ));
     } else if (willStageRework) {
       ({ resolved: won } = await store.resolveApprovalGate(
         runId,
         {
-          approval: { ...approval, resolved: 'rejected' },
+          approval: answeredGate(approval, 'rejected', origin),
           rejection_reason: rejectReason,
           rejection_count: currentCount + 1,
         },
         [rejectionEvent],
-        expectedGate
+        origin.expectedGate
       ));
     } else {
       // The CAS writes `workflow_cancelled` itself; this only names the gate that
@@ -1727,13 +1869,11 @@ export function createWorkflowOperations({
         runId,
         [rejectionEvent],
         { step_name: approval?.nodeId ?? 'unknown', reason: 'approval_rejected' },
-        expectedGate
+        origin.expectedGate
       ));
     }
     if (!won) {
-      throw new Error(
-        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
-      );
+      throw await lostGateError(runId, origin.expectedGate);
     }
 
     await publishGateExecution(
@@ -1774,11 +1914,12 @@ export function createWorkflowOperations({
     runId: string,
     decision: string,
     actor: RunActor,
-    text?: string,
-    expectedGate?: ExpectedApprovalGate
+    text: string | undefined,
+    origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     await assertMayAct(run, actor, 'respond');
+    assertAnswerAdmissible(run, origin);
     const approval = assertRespondable(run, decision);
     if (!approval) throw new Error('Workflow run is paused but missing approval context.');
 
@@ -1794,19 +1935,22 @@ export function createWorkflowOperations({
       {
         event_type: 'approval_received',
         step_name: approval.nodeId,
-        data: { decision, comment: text !== undefined && text.trim().length > 0 ? text : decision },
+        data: {
+          via: origin.via,
+          ...answerOccurrence(approval),
+          decision,
+          comment: text !== undefined && text.trim().length > 0 ? text : decision,
+        },
       },
     ];
     const { resolved: won } = await store.resolveApprovalGate(
       runId,
-      { approval: { ...approval, resolved: 'approved' }, approval_response: decision },
+      { approval: answeredGate(approval, 'approved', origin), approval_response: decision },
       events,
-      expectedGate
+      origin.expectedGate
     );
     if (!won) {
-      throw new Error(
-        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
-      );
+      throw await lostGateError(runId, origin.expectedGate);
     }
 
     await publishGateExecution(run, events);
@@ -1843,11 +1987,11 @@ export function createWorkflowOperations({
     decision: string,
     text: string | undefined,
     actor: RunActor,
-    expectedGate?: ExpectedApprovalGate
+    origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-    if (decision === 'approve') return approveWorkflow(runId, text, actor, expectedGate);
-    if (decision === 'reject') return rejectWorkflow(runId, text, actor, expectedGate);
-    return respondToWorkflowWithDeclaredDecision(runId, decision, actor, text, expectedGate);
+    if (decision === 'approve') return approveWorkflow(runId, text, actor, origin);
+    if (decision === 'reject') return rejectWorkflow(runId, text, actor, origin);
+    return respondToWorkflowWithDeclaredDecision(runId, decision, actor, text, origin);
   }
 
   /**

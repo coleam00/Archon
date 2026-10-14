@@ -4463,6 +4463,8 @@ describe('paused approval gate routing', () => {
           nodeId: 'gate-1',
           message: 'Please review the plan',
           resolved: 'approved',
+          answeredVia: 'manage_run',
+          answeredAt: expect.any(String),
         },
         approval_response: 'approved',
         rejection_reason: '',

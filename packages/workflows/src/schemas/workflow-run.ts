@@ -13,6 +13,7 @@ import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
+import { recordSurfaceSchema } from './record-surface';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
@@ -817,6 +818,13 @@ const approvalContextBaseSchema = z.object({
    */
   resolved: z.enum(['approved', 'rejected']).nullable().optional(),
   /**
+   * Audit facts of the answer that set `resolved`: the surface it arrived through
+   * (`cli`, `api`, `manage_run`, or a chat platform id) and when it was committed. Never
+   * who answered. Replaced with the rest of the context by the next pause.
+   */
+  answeredVia: recordSurfaceSchema.optional(),
+  answeredAt: z.string().optional(),
+  /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the
    * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
    * executeLoopNode/executeLoopGroupNode: a signal-bearing gate approved WITHOUT feedback
@@ -1072,6 +1080,15 @@ function unreadableAttention(
 }
 
 /**
+ * The occurrence id of a gate pause: its `pauseId`, or `legacy:<nodeId>` for a gate paused
+ * before pause identities existed. Run-attention reports it and answers record it, so a
+ * reader can tie an answer to the exact pause it resolved.
+ */
+export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pauseId'>): string {
+  return approval.pauseId ?? `legacy:${approval.nodeId}`;
+}
+
+/**
  * The single derivation of "what does this run need from outside, if anything".
  *
  * No database or I/O. The clock computes display durations only. The run row is
@@ -1186,7 +1203,7 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
     runId: run.id,
     respondTo: { runId: run.id, nodeId: raw.nodeId },
     message: raw.message,
-    occurrence: raw.pauseId ?? `legacy:${raw.nodeId}`,
+    occurrence: gateOccurrence(raw),
   };
 }
 
