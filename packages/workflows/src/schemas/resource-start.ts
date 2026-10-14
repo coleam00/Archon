@@ -100,6 +100,22 @@ const notProviderResource = {
  */
 export const resourceSlotCapacitySchema = z.number().int().min(1).default(1);
 
+export const resourceStartOverlapSchema = z.enum(['skip', 'queue']);
+export const startBindingPreparationStatusSchema = z.enum([
+  'pending',
+  'preparing',
+  'failed',
+  'rejected',
+  'unmatched',
+  'complete',
+]);
+export const sourceReceiptOutcomeSchema = z.enum([
+  'matched',
+  'unmatched',
+  'unsupported',
+  'malformed',
+]);
+
 export const resourceStartIntentSchema = z
   .object({
     resource: z
@@ -109,7 +125,7 @@ export const resourceStartIntentSchema = z
       .refine(notProviderResource.check, notProviderResource.message),
     capacity: resourceSlotCapacitySchema,
     hostId: z.string().trim().min(1),
-    overlap: z.enum(['skip', 'queue']),
+    overlap: resourceStartOverlapSchema,
     launch: preparedWorkflowLaunchSchema,
     receipt: z
       .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
@@ -142,6 +158,10 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
     ]),
   }),
 ]);
+export const resourceStartRequestStatusSchema = z.union([
+  ...resourceStartDispositionSchema.options.map(option => option.shape.status),
+  z.literal('withdrawn'),
+]);
 export type ResourceStartDisposition = z.infer<typeof resourceStartDispositionSchema>;
 
 export const sourceReceiptInputSchema = z
@@ -172,7 +192,7 @@ export const resourceStartBindingIntentSchema = z
     runAsUserId: z.string().min(1),
     resource: z.string().min(1).refine(notProviderResource.check, notProviderResource.message),
     capacity: resourceSlotCapacitySchema,
-    overlap: z.enum(['skip', 'queue']),
+    overlap: resourceStartOverlapSchema,
     launch: z
       .object({
         cwd: z.string().min(1),
@@ -217,7 +237,7 @@ const sourceReceiptAcceptanceBaseSchema = z
           .object({
             bindingId: z.string().min(1),
             bindingRevision: z.string().min(1).nullable(),
-            status: z.enum(['unmatched', 'rejected']),
+            status: startBindingPreparationStatusSchema.extract(['unmatched', 'rejected']),
             reason: z.string(),
           })
           .strict()
@@ -229,11 +249,11 @@ const sourceReceiptAcceptanceBaseSchema = z
 export const sourceReceiptAcceptanceSchema = z
   .discriminatedUnion('outcome', [
     sourceReceiptAcceptanceBaseSchema.extend({
-      outcome: z.literal('matched'),
+      outcome: sourceReceiptOutcomeSchema.extract(['matched']),
       bindings: z.tuple([resourceStartBindingIntentSchema]).rest(resourceStartBindingIntentSchema),
     }),
     sourceReceiptAcceptanceBaseSchema.extend({
-      outcome: z.enum(['unmatched', 'unsupported', 'malformed']),
+      outcome: sourceReceiptOutcomeSchema.exclude(['matched']),
       bindings: z.tuple([]),
     }),
   ])
