@@ -11,6 +11,7 @@ import {
   type WorkflowAttentionWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { validateStructuredOutput } from '@archon/workflows/structured-output';
+import { RunActionForbiddenError } from './run-authorization';
 import {
   StaleGateAnswerError,
   createWorkflowOperations,
@@ -195,5 +196,88 @@ describe('answering an attention wait', () => {
     await expect(operations.resumeWorkflow(await paused('select'), operator)).rejects.toThrow(
       "waiting for an answer to its 'select' attention wait"
     );
+  });
+});
+
+describe('labeling an attention wait', () => {
+  test('merges set and unset keys and reports the new revision', async () => {
+    await setup();
+    const id = await paused('message');
+    const first = await operations.labelAttentionWait(
+      id,
+      { occurrence: 'pause-1', set: { ci: 'other', urgency: 'high' }, unset: [] },
+      operator,
+      'cli'
+    );
+    expect(first).toEqual({
+      runId: id,
+      occurrence: 'pause-1',
+      revision: 2,
+      labels: { ci: 'other', urgency: 'high' },
+    });
+    const second = await operations.labelAttentionWait(
+      id,
+      { occurrence: 'pause-1', set: { ci: 'pr' }, unset: ['urgency'] },
+      operator,
+      'api'
+    );
+    expect(second).toMatchObject({ revision: 3, labels: { ci: 'pr' } });
+  });
+
+  test('refuses a stale occurrence by naming the current one, and writes nothing', async () => {
+    await setup();
+    const id = await paused('message');
+    const write = { occurrence: 'pause-0', set: { ci: 'other' }, unset: [] };
+    const refusal = operations.labelAttentionWait(id, write, operator, 'cli');
+    await expect(refusal).rejects.toBeInstanceOf(StaleGateAnswerError);
+    await expect(operations.labelAttentionWait(id, write, operator, 'cli')).rejects.toThrow(
+      "awaiting occurrence 'pause-1'"
+    );
+    expect(await storedWait(id)).not.toHaveProperty('labels');
+  });
+
+  test('refuses a malformed write, a gate, an answered wait and an unauthorized actor', async () => {
+    await setup();
+    const id = await paused('message');
+    const label = (
+      runId: string,
+      request: { occurrence: string; set: Record<string, string>; unset: string[] },
+      actor: Parameters<WorkflowOperations['labelAttentionWait']>[2] = operator
+    ): Promise<unknown> => operations.labelAttentionWait(runId, request, actor, 'cli');
+    await expect(label(id, { occurrence: 'pause-1', set: {}, unset: [] })).rejects.toThrow(
+      'at least one key'
+    );
+    await expect(
+      label(id, { occurrence: 'pause-1', set: { ci: 'x' }, unset: ['ci'] })
+    ).rejects.toThrow("Label 'ci' is both set and unset");
+    await expect(
+      label(id, { occurrence: 'pause-1', set: {}, unset: ['bad key'] })
+    ).rejects.toThrow();
+
+    const gate = await store.createWorkflowRun({ workflow_name: 'gate', user_message: '' });
+    await store.claimPendingWorkflowRun(gate.id);
+    await store.pauseWorkflowRun(gate.id, {
+      nodeId: 'review',
+      message: 'Ship?',
+      type: 'approval',
+      pauseId: 'gate-1',
+    });
+    await expect(
+      label(gate.id, { occurrence: 'gate-1', set: { ci: 'x' }, unset: [] })
+    ).rejects.toThrow('Only attention waits carry labels');
+
+    await operations.answerWorkflow(id, { choose: [], text: 'done' }, operator, cli);
+    await expect(label(id, { occurrence: 'pause-1', set: { ci: 'x' }, unset: [] })).rejects.toThrow(
+      'It is not awaiting an answer now'
+    );
+
+    const owned = await store.createWorkflowRun({ workflow_name: 'ask', user_message: '' });
+    await expect(
+      label(
+        owned.id,
+        { occurrence: 'pause-1', set: { ci: 'x' }, unset: [] },
+        { kind: 'user', userId: 'someone-else' }
+      )
+    ).rejects.toBeInstanceOf(RunActionForbiddenError);
   });
 });
