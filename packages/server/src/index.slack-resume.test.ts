@@ -18,7 +18,10 @@ const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
-type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
+type SlackWorkflowResume = (
+  runId: string,
+  slackUserId: string
+) => Promise<ServerResumeOutcome['kind']>;
 
 const persistedRun: WorkflowRun = {
   origin: { conversationId: 'conversation-1' },
@@ -691,7 +694,7 @@ describe('Slack workflow resume composition', () => {
 
       const accepted = await capturedResume?.('run-1', 'U123');
 
-      expect(accepted).toBe(true);
+      expect(accepted).toBe('resumed');
       expect(mockGetWorkflowRun).toHaveBeenCalledWith('run-1');
       expect(mockFindOrCreateUser).toHaveBeenCalledWith('slack', 'U123', undefined);
       expect(mockWorkflowResumeTargetForRun).toHaveBeenCalledTimes(1);
@@ -705,6 +708,11 @@ describe('Slack workflow resume composition', () => {
         'actor-user-1',
         resumeTarget
       );
+      mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
+        kind: 'waiting_for_capacity',
+        message: 'busy',
+      });
+      expect(await capturedResume?.('run-1', 'U123')).toBe('waiting_for_capacity');
     } finally {
       serveSpy.mockRestore();
     }

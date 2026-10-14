@@ -658,13 +658,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       workflowPlatforms.set(slack.getPlatformType(), slack);
       slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
         const run = await workflowDb.getWorkflowRun(runId);
-        if (!run) return false;
+        if (!run) return 'not_resumed';
         const actorUserId = await resolveUserId('slack', slackUserId, undefined);
         const target = await workflowResumeTargetForRun(run, workflowPlatforms);
         return (
-          (await resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target))
-            .kind === 'resumed'
-        );
+          await resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target)
+        ).kind;
       });
       slackBridge.attach();
 

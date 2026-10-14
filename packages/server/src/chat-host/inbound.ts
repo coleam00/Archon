@@ -140,7 +140,7 @@ export function registerChatInbound(
             : {}),
         }
       );
-      let resumed = false;
+      let resume: { resumed: boolean; waitingForCapacity?: true } = { resumed: false };
       if (!('cancelled' in result) || !result.cancelled) {
         // The gate response is already recorded; a failed resume must not report it refused.
         try {
@@ -153,7 +153,10 @@ export function registerChatInbound(
               actor.kind === 'user' ? actor.userId : undefined,
               target
             );
-            resumed = outcome.kind === 'resumed';
+            resume =
+              outcome.kind === 'waiting_for_capacity'
+                ? { resumed: false, waitingForCapacity: true }
+                : { resumed: outcome.kind === 'resumed' };
           }
         } catch {
           getLog().warn({ plugin: descriptor.id, action: action.action }, 'chat.run_resume_failed');
@@ -169,9 +172,9 @@ export function registerChatInbound(
                 maxAttemptsReached: result.maxAttemptsReached,
                 writeBack: result.writeBack,
                 newMode: result.newMode,
-                resumed,
+                ...resume,
               }
-            : { kind: 'approved', type: result.type, resumed },
+            : { kind: 'approved', type: result.type, ...resume },
       };
     } catch (error) {
       if (error instanceof RunActionForbiddenError)

@@ -42,6 +42,8 @@ interface RunState {
 const STATUS_UPDATE_DEBOUNCE_MS = 500;
 const RESUME_NOT_ACCEPTED_NOTE =
   'recorded — resume was not accepted; check the run status and resume it manually if still paused';
+const CAPACITY_WAIT_NOTE =
+  'recorded — waiting for capacity; the run stays paused in its place and Archon continues it when its resource frees';
 
 export class SlackWorkflowBridge {
   private readonly runs = new Map<string, RunState>();
@@ -504,11 +506,15 @@ function parseApprovalAction(action: ButtonAction): SlackApprovalAction | undefi
   return nodeId ? { runId, nodeId, decision } : undefined;
 }
 
+function notResumedNote(result: { waitingForCapacity?: true }): string {
+  return result.waitingForCapacity ? CAPACITY_WAIT_NOTE : RESUME_NOT_ACCEPTED_NOTE;
+}
+
 export function resolutionNote(result: RunActionResult): string | undefined {
   switch (result.kind) {
     case 'approved':
       return !result.resumed
-        ? RESUME_NOT_ACCEPTED_NOTE
+        ? notResumedNote(result)
         : result.type === 'interactive_loop'
           ? 'workflow resumed — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration'
           : 'workflow resumed';
@@ -518,7 +524,7 @@ export function resolutionNote(result: RunActionResult): string | undefined {
           ? 'cancelled — max reject attempts reached'
           : 'cancelled'
         : !result.resumed
-          ? RESUME_NOT_ACCEPTED_NOTE
+          ? notResumedNote(result)
           : result.writeBack
             ? 'recorded — workflow resumed to discard the container changes'
             : result.newMode

@@ -229,6 +229,22 @@ test('a failed resume reports the recorded approval as not resumed, not refused'
   });
 });
 
+test('an approval refused for capacity reports the run as waiting, not refused', async () => {
+  const paused = await run(true);
+  resume.mockImplementationOnce(async () => ({ kind: 'waiting_for_capacity', message: 'busy' }));
+  expect(
+    await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'starter' } })
+  ).toEqual({
+    status: 'done',
+    result: {
+      kind: 'approved',
+      type: 'approval_gate',
+      resumed: false,
+      waitingForCapacity: true,
+    },
+  });
+});
+
 test('cancel without a live owner carries an explicit abandon hint', async () => {
   const started = await run();
   expect(
