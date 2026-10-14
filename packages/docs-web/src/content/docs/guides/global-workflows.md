@@ -70,7 +70,7 @@ A plugin root is a directory containing `archon-plugin.json` and one pack in the
 ```text
 review-kit/                     # plugin root: owner/repo or owner/repo/<path>
 ├── archon-plugin.json
-├── .shared/                    # modules the pack's scripts import
+├── .shared/                    # modules and documents the pack's scripts use
 │   └── util.ts
 ├── .github/workflows/ci.yml    # a dot directory: never a workflow folder
 ├── tests/                      # no direct YAML: not a workflow folder

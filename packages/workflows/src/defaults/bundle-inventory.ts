@@ -46,7 +46,7 @@ export type BundleSourceFile = {
   | { readonly kind: 'workflow'; readonly name: string; readonly owner: Owner }
   | { readonly kind: 'command'; readonly name: string }
   | {
-      readonly kind: 'script';
+      readonly kind: 'pack-file';
       readonly pack: string;
       readonly packPath: string;
       readonly entry?: { readonly name: string; readonly runtime: Script['runtime'] };
@@ -103,23 +103,31 @@ async function entryType(
   return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
 }
 
-async function sharedModules(directory: string): Promise<string[]> {
+// `.shared/` holds a pack's runtime modules and its markdown documents. Other
+// extensions stay out: untracked strays such as `__pycache__/*.pyc` would otherwise
+// be selected and fail generation.
+function isSharedFile(name: string): boolean {
+  const extension = extname(name);
+  return runtime(extension) !== undefined || extension === '.md';
+}
+
+async function sharedFiles(directory: string): Promise<string[]> {
   if ((await lstat(directory)).isSymbolicLink()) {
-    throw new Error(`Shared module symlinks are not supported: ${directory}`);
+    throw new Error(`Shared file symlinks are not supported: ${directory}`);
   }
   const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    if (entry.isSymbolicLink())
-      throw new Error(`Shared module symlinks are not supported: ${path}`);
-    if (entry.isDirectory()) files.push(...(await sharedModules(path)));
-    else if (entry.isFile() && runtime(extname(entry.name))) files.push(path);
+    if (entry.isSymbolicLink()) throw new Error(`Shared file symlinks are not supported: ${path}`);
+    if (entry.isDirectory()) files.push(...(await sharedFiles(path)));
+    else if (entry.isFile() && isSharedFile(entry.name)) files.push(path);
   }
   return files;
 }
 
 /** Only the indexed packs are inspected. Fixtures, prose and unrelated directories never
- * enter the bundle merely because they live beside a workflow. A named missing pack fails. */
+ * enter the bundle merely because they live beside a workflow; prose enters only as a
+ * command or a `.shared/` document. A named missing pack fails. */
 export async function collectBundleSources(
   workflowsRoot: string,
   packs: readonly string[]
@@ -128,7 +136,7 @@ export async function collectBundleSources(
   const workflowNames = new Set<string>();
   const commandNames = new Set<string>();
   const add = (file: BundleSourceFile): void => {
-    if (file.kind !== 'script') {
+    if (file.kind !== 'pack-file') {
       const names = file.kind === 'workflow' ? workflowNames : commandNames;
       if (names.has(file.name))
         throw new Error(`Bundled ${file.kind} filename collision: "${file.name}".`);
@@ -154,10 +162,10 @@ export async function collectBundleSources(
       throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
     const shared = join(packRoot, PACK_SHARED_DIRECTORY);
     if (await isDirectory(shared)) {
-      for (const path of await sharedModules(shared)) {
+      for (const path of await sharedFiles(shared)) {
         const packPath = relative(packRoot, path).replaceAll('\\', '/');
         add({
-          kind: 'script',
+          kind: 'pack-file',
           pack,
           packPath,
           sourcePath: path,
@@ -222,7 +230,7 @@ export async function collectBundleSources(
             seen.add(name);
             const packPath = `${workflow}/scripts/${candidate}`;
             add({
-              kind: 'script',
+              kind: 'pack-file',
               pack,
               packPath,
               sourcePath: join(packRoot, packPath),
@@ -240,7 +248,7 @@ export async function collectBundleSources(
 export async function readBundleContent(file: BundleSourceFile): Promise<string> {
   const content = (await readFile(file.sourcePath, 'utf8')).replace(/\r\n/g, '\n');
   // Empty shared modules (e.g. Python __init__.py) are meaningful, unlike entry points.
-  if (!content.trim() && !(file.kind === 'script' && file.entry === undefined)) {
+  if (!content.trim() && !(file.kind === 'pack-file' && file.entry === undefined)) {
     throw new Error(`Bundled default "${file.sourcePath}" is empty.`);
   }
   return content;
