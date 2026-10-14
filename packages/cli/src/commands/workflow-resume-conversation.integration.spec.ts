@@ -9,8 +9,8 @@
  * Foreground commands execute against real SQLite. Detached handoffs keep the CLI
  * process boundary so the child's conversation routing stays under test.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -139,7 +139,7 @@ function openDatabase(fixture: Fixture): Database {
 }
 
 /**
- * The run's thread as the database records it.
+ * The run's thread in one read transaction: a detached child can commit between queries.
  *
  * Reads every public conversation row, not just the run's, because the defect is an EXTRA
  * row: asserting only that the run still points somewhere valid would pass while a
@@ -148,33 +148,35 @@ function openDatabase(fixture: Fixture): Database {
 function readThreadState(fixture: Fixture): ThreadState {
   const database = openDatabase(fixture);
   try {
-    const run = database
-      .query<
-        { id: string; status: string; conversation_id: string },
-        [string]
-      >('SELECT id, status, conversation_id FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
-      .get(WORKFLOW_NAME);
-    if (!run) throw new Error('no run row was recorded');
-    const conversationIds = database
-      .query<{ id: string }, []>(
-        'SELECT id FROM remote_agent_conversations WHERE hidden = 0 ORDER BY created_at'
-      )
-      .all()
-      .map(row => row.id);
-    const countDispatches = database.query<{ total: number }, [string]>(
-      "SELECT COUNT(*) AS total FROM remote_agent_messages WHERE conversation_id = ? AND content LIKE 'Dispatching workflow%'"
-    );
-    return {
-      runId: run.id,
-      runStatus: run.status,
-      runConversationId: run.conversation_id,
-      conversationIds,
-      dispatchMessages: countDispatches.get(run.conversation_id)?.total ?? 0,
-      dispatchMessagesAnywhere: conversationIds.reduce(
-        (total, id) => total + (countDispatches.get(id)?.total ?? 0),
-        0
-      ),
-    };
+    return database.transaction(() => {
+      const run = database
+        .query<
+          { id: string; status: string; conversation_id: string },
+          [string]
+        >('SELECT id, status, conversation_id FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
+        .get(WORKFLOW_NAME);
+      if (!run) throw new Error('no run row was recorded');
+      const conversationIds = database
+        .query<{ id: string }, []>(
+          'SELECT id FROM remote_agent_conversations WHERE hidden = 0 ORDER BY created_at'
+        )
+        .all()
+        .map(row => row.id);
+      const countDispatches = database.query<{ total: number }, [string]>(
+        "SELECT COUNT(*) AS total FROM remote_agent_messages WHERE conversation_id = ? AND content LIKE 'Dispatching workflow%'"
+      );
+      return {
+        runId: run.id,
+        runStatus: run.status,
+        runConversationId: run.conversation_id,
+        conversationIds,
+        dispatchMessages: countDispatches.get(run.conversation_id)?.total ?? 0,
+        dispatchMessagesAnywhere: conversationIds.reduce(
+          (total, id) => total + (countDispatches.get(id)?.total ?? 0),
+          0
+        ),
+      };
+    })();
   } finally {
     database.close();
   }
@@ -343,6 +345,76 @@ function expectResumedInPlace(after: ThreadState, before: ThreadState): void {
   expect(after.conversationIds).toEqual(before.conversationIds);
   expect(after.dispatchMessages).toBe(2);
 }
+
+describe('thread state snapshots', () => {
+  test('a dispatch committed between count reads appears in the next snapshot', async () => {
+    const fixture = makeFixture();
+    const before = await seedFailedRun(fixture);
+    const writer = new Database(join(fixture.archonHome, 'archon.db'));
+    const query = Database.prototype.query;
+    let wroteDispatch = false;
+    const read = spyOn(Database.prototype, 'query').mockImplementation(function <
+      ReturnType,
+      ParamsType extends SQLQueryBindings | SQLQueryBindings[],
+    >(this: Database, sql: string) {
+      const statement = query.bind(this)<ReturnType, ParamsType>(sql);
+      if (sql.startsWith('SELECT COUNT(*) AS total')) {
+        const get = statement.get.bind(statement);
+        statement.get = (...params) => {
+          const result = get(...params);
+          if (!wroteDispatch) {
+            writer
+              .query(
+                "INSERT INTO remote_agent_messages (conversation_id, role, content) VALUES (?, 'assistant', 'Dispatching workflow: resume-thread')"
+              )
+              .run(before.runConversationId);
+            wroteDispatch = true;
+          }
+          return result;
+        };
+      }
+      return statement;
+    });
+    let snapshot: ThreadState;
+    try {
+      snapshot = readThreadState(fixture);
+    } finally {
+      read.mockRestore();
+      writer.close();
+    }
+    expect(wroteDispatch).toBe(true);
+    expect(snapshot.dispatchMessages).toBe(1);
+    expect(snapshot.dispatchMessagesAnywhere).toBe(1);
+    expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
+  });
+
+  test('a dispatch into another conversation fails the same-thread assertion', async () => {
+    const fixture = makeFixture();
+    let before = await seedFailedRun(fixture);
+    const writer = new Database(join(fixture.archonHome, 'archon.db'));
+    const wrongConversationId = randomUUID();
+    try {
+      writer
+        .query(
+          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, cwd) VALUES (?, 'cli', ?, ?)"
+        )
+        .run(wrongConversationId, `cli-wrong-${wrongConversationId}`, fixture.repo);
+      before = readThreadState(fixture);
+      writer
+        .query(
+          "INSERT INTO remote_agent_messages (conversation_id, role, content) VALUES (?, 'assistant', 'Dispatching workflow: resume-thread')"
+        )
+        .run(wrongConversationId);
+    } finally {
+      writer.close();
+    }
+    const after = await waitForDetachedDispatch(fixture);
+    expect(after.conversationIds).toEqual(before.conversationIds);
+    expect(after.dispatchMessagesAnywhere).toBe(2);
+    expect(after.dispatchMessages).toBe(1);
+    expect(() => expectResumedInPlace(after, before)).toThrow();
+  });
+});
 
 describe('resumed runs keep one conversation', () => {
   test('a continuation stops when its recorded conversation is missing', async () => {
