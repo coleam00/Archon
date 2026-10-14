@@ -74,7 +74,15 @@ fi
 # worktrees are nested at arbitrary depths unknown at build time.
 find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
   repo_dir="$(dirname "$git_dir")"
-  $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
+  entries=$($RUNNER git config --global --fixed-value --get-all safe.directory "$repo_dir") || {
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      exit "$status"
+    fi
+  }
+  if [ "$entries" != "$repo_dir" ]; then
+    $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
+  fi
 done
 
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper

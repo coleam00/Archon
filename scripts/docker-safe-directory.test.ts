@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -51,6 +51,16 @@ test.skipIf(process.platform === 'win32')(
       '/workspace/other',
       repo,
     ]);
+    await writeFile(join(home, '.gitconfig.lock'), '');
+    execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
+    await unlink(join(home, '.gitconfig.lock'));
+    git('config', '--global', '--add', 'safe.directory', repo);
+    await writeFile(join(home, '.gitconfig.lock'), '');
+    expect(() =>
+      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
+    ).toThrow();
+    await unlink(join(home, '.gitconfig.lock'));
+    git('config', '--global', '--fixed-value', '--unset-all', 'safe.directory', repo);
     await writeFile(join(home, '.gitconfig.lock'), '');
     expect(() =>
       execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
