@@ -3012,13 +3012,13 @@ This checks resource resolution beyond what load-time validation covers. Bundled
 A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a pause and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
 
 ```text
-WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
+WARNING [parse_warning] Node 'plan': unknown key 'interactive' will be ignored.
   Nothing on this node pauses. To ask for an answer, add a 'wait: { attention:
   <message> }' node; to ask on each iteration of a loop, use a 'loop_group' whose
   body ends in one.
 ```
 
-(The `WARNING [unknown_key]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
+(The `WARNING [parse_warning]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
 
 **What is checked.** The workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body.
 
@@ -3034,7 +3034,7 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
 
 | Surface | Where |
 |---|---|
-| `archon validate workflows` | A `WARNING [unknown_key]` issue (also in `--json`) |
+| `archon validate workflows` | A `WARNING [parse_warning]` issue (also in `--json`) |
 | `archon workflow list` | Inline under the workflow; `parseWarnings` on each `--json` entry |
 | `archon workflow run` | On **stderr** before the run starts (`--detach --json` keeps stdout to the payload) |
 | Chat (`/workflow list`) | Inline with the workflow that raised it |
