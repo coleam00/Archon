@@ -7,13 +7,14 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { canonicalizeProjectPath, getProjectStoragePaths } from '@archon/paths';
-import { stateCommand } from './state';
+import { stateCommand, type StateCommandOptions } from './state';
 import {
   createInMemoryWorkflowStore,
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 
 const track = trackTempRoots();
+const project = { kind: 'project', key: 'owner/repo' } as const;
 const priorEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...priorEnv };
@@ -46,7 +47,7 @@ async function fixture() {
   const invoke = (
     op: string,
     input = '',
-    flags: { ifRevision?: string; limit?: string } = {},
+    flags: Partial<Omit<StateCommandOptions, 'cwd'>> = {},
     override: NodeJS.ProcessEnv = env
   ) =>
     stateCommand(
@@ -68,7 +69,7 @@ async function fixture() {
 test('JSON commands preserve run attribution, audit, CAS and tombstone recreation', async () => {
   const { invoke, output } = await fixture();
   expect(await invoke('get')).toBe(0);
-  expect(output.at(-1)).toEqual({ name: 'review/123', revision: 0, value: null });
+  expect(output.at(-1)).toEqual({ scope: project, name: 'review/123', revision: 0, value: null });
   expect(await invoke('put', '{"seen":[]}', { ifRevision: '0' })).toBe(0);
   expect(output.at(-1)).toMatchObject({
     revision: 1,
@@ -77,11 +78,17 @@ test('JSON commands preserve run attribution, audit, CAS and tombstone recreatio
   expect(await invoke('put', '{}', { ifRevision: '0' })).toBe(3);
   expect(await invoke('patch', '{"ops":[{"op":"append","path":"/seen","value":123}]}')).toBe(0);
   expect(await invoke('get')).toBe(0);
-  expect(output.at(-1)).toEqual({ name: 'review/123', revision: 2, value: { seen: [123] } });
+  expect(output.at(-1)).toEqual({
+    scope: project,
+    name: 'review/123',
+    revision: 2,
+    value: { seen: [123] },
+  });
   expect(await invoke('log', '', { limit: '1' })).toBe(0);
-  expect(output.at(-1)).toMatchObject([
-    { revision: 2, operation: { op: 'patch' }, writer: { kind: 'run' } },
-  ]);
+  expect(output.at(-1)).toMatchObject({
+    scope: project,
+    revisions: [{ revision: 2, operation: { op: 'patch' }, writer: { kind: 'run' } }],
+  });
   expect(await invoke('delete', '', { ifRevision: '2' })).toBe(0);
   expect(await invoke('put', '{}', { ifRevision: '3' })).toBe(0);
 });
@@ -90,7 +97,13 @@ test('get on a deleted document returns the revision a recreating put must name'
   expect(await invoke('put', '{"a":1}', { ifRevision: '0' })).toBe(0);
   expect(await invoke('delete', '', { ifRevision: '1' })).toBe(0);
   expect(await invoke('get')).toBe(0);
-  expect(output.at(-1)).toEqual({ name: 'review/123', revision: 2, value: null, deleted: true });
+  expect(output.at(-1)).toEqual({
+    scope: project,
+    name: 'review/123',
+    revision: 2,
+    value: null,
+    deleted: true,
+  });
   const { revision } = output.at(-1) as { revision: number };
   expect(await invoke('put', '{"a":2}', { ifRevision: String(revision) })).toBe(0);
   expect(output.at(-1)).toMatchObject({ revision: 3, value: { a: 2 } });
@@ -98,11 +111,11 @@ test('get on a deleted document returns the revision a recreating put must name'
 test('mismatched store, absent project and invalid identity refuse without writes', async () => {
   const { invoke, output, store, env } = await fixture();
   expect(await invoke('put', '{}', { ifRevision: '0' }, { ...env, WORKFLOW_ID: 'missing' })).toBe(
-    1
+    5
   );
   expect(output.at(-1)).toMatchObject({
     error: expect.stringContaining('different store than the engine: sqlite'),
-    code: 1,
+    code: 5,
   });
   expect(
     await invoke(
@@ -141,7 +154,7 @@ test('mismatched store, absent project and invalid identity refuse without write
     )
   ).toBe(1);
   expect(output.at(-1)).toMatchObject({ error: 'The run has no resolvable project root' });
-  expect(await store.listStateRevisions('owner/repo', 'review/123')).toEqual([]);
+  expect(await store.listStateRevisions(project, 'review/123')).toEqual([]);
 });
 test('usage, cap and patch errors have distinct codes and write nothing', async () => {
   const { invoke, output, store } = await fixture();
@@ -157,9 +170,9 @@ test('usage, cap and patch errors have distinct codes and write nothing', async 
       '{"ops":[{"op":"set","path":"/a","value":1},{"op":"append","path":"/a","value":2}]}'
     )
   ).toBe(4);
-  expect(await store.listStateRevisions('owner/repo', 'review/123')).toEqual([]);
+  expect(await store.listStateRevisions(project, 'review/123')).toEqual([]);
 });
-test('operator identity and registered folder project use the same durable scope', async () => {
+test('an operator write records the CLI surface in the registered folder project', async () => {
   const { host, root, output } = await fixture();
   // Registration stores the canonical path; the operator's cwd may be a symlink or,
   // on Windows, the 8.3 short name the runner's temp directory already uses.
@@ -179,7 +192,7 @@ test('operator identity and registered folder project use the same durable scope
       ['ledger'],
       { cwd: alias, ifRevision: '0' },
       {
-        env: { ARCHON_USER_ID: 'rasmus' },
+        env: {},
         readInput: async () => '{}',
         write: async row => {
           output.push(row);
@@ -187,8 +200,11 @@ test('operator identity and registered folder project use the same durable scope
       }
     )
   ).toBe(0);
-  expect(output.at(-1)).toMatchObject({ writer: { kind: 'operator', identity: 'rasmus' } });
-  expect((await host.deps.store.getStateDocument('_folder/ops', 'ledger'))?.revision).toBe(1);
+  expect(output.at(-1)).toMatchObject({ writer: { kind: 'surface', via: 'cli' } });
+  expect(
+    (await host.deps.store.getStateDocument({ kind: 'project', key: '_folder/ops' }, 'ledger'))
+      ?.revision
+  ).toBe(1);
 });
 
 test('JSON input keeps own prototype keys and enforces their size', async () => {
@@ -207,7 +223,7 @@ test('JSON input keeps own prototype keys and enforces their size', async () => 
     4
   );
   expect(await invoke('log')).toBe(0);
-  expect(output.at(-1)).toHaveLength(2);
+  expect((output.at(-1) as { revisions: unknown[] }).revisions).toHaveLength(2);
 });
 
 test('operator state from a folder descendant inside Git belongs only to the folder', async () => {
@@ -233,15 +249,121 @@ test('operator state from a folder descendant inside Git belongs only to the fol
       ['ledger'],
       { cwd: descendant, ifRevision: '0' },
       {
-        env: { ARCHON_USER_ID: 'rasmus' },
+        env: {},
         readInput: async () => '{"approved":true}',
         write: async () => undefined,
       }
     )
   ).toBe(0);
-  expect(await host.deps.store.getStateDocument('_folder/ops', 'ledger')).toMatchObject({
+  expect(
+    await host.deps.store.getStateDocument({ kind: 'project', key: '_folder/ops' }, 'ledger')
+  ).toMatchObject({
     revision: 1,
     value: { approved: true },
   });
-  expect(await host.deps.store.getStateDocument('owner/repo', 'ledger')).toBeNull();
+  expect(await host.deps.store.getStateDocument(project, 'ledger')).toBeNull();
+});
+
+test('a patch that names a stale revision exits 3 and writes nothing', async () => {
+  const { invoke, output, store } = await fixture();
+  expect(await invoke('put', '{"owner":"a"}', { ifRevision: '0' })).toBe(0);
+  expect(await invoke('patch', '{"ops":[{"op":"set","path":"/owner","value":"b"}]}')).toBe(0);
+  expect(
+    await invoke('patch', '{"ops":[{"op":"set","path":"/owner","value":"c"}]}', {
+      ifRevision: '1',
+    })
+  ).toBe(3);
+  expect(output.at(-1)).toMatchObject({ ok: false, code: 3 });
+  expect(
+    await invoke('patch', '{"ops":[{"op":"set","path":"/owner","value":"c"}]}', {
+      ifRevision: '2',
+    })
+  ).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 3, operation: { ifRevision: 2 } });
+  expect(await store.listStateRevisions(project, 'review/123')).toHaveLength(3);
+});
+
+test('install scope is separate from the run project and keeps run attribution', async () => {
+  const { invoke, output, store, run } = await fixture();
+  expect(await invoke('put', '"install"', { ifRevision: '0', install: true })).toBe(0);
+  expect(output.at(-1)).toMatchObject({
+    scope: { kind: 'install' },
+    writer: { kind: 'run', runId: run.id },
+  });
+  expect(await invoke('get')).toBe(0);
+  expect(output.at(-1)).toMatchObject({ scope: project, revision: 0, value: null });
+  expect((await store.getStateDocument({ kind: 'install' }, 'review/123'))?.value).toBe('install');
+  expect(await invoke('get', '', { project: 'other/repo' })).toBe(1);
+  expect(output.at(-1)).toMatchObject({ error: expect.stringContaining('outside a run') });
+});
+
+test('outside a run, --project and --install address scopes without the cwd', async () => {
+  const { host, root, output, store } = await fixture();
+  const call = (op: string, flags: Partial<Omit<StateCommandOptions, 'cwd'>>, input = '') =>
+    stateCommand(
+      host,
+      op,
+      op === 'list' ? [] : ['notes/a'],
+      { cwd: root, ...flags },
+      {
+        env: {},
+        readInput: async () => input,
+        write: async value => {
+          output.push(value);
+        },
+      }
+    );
+  expect(await call('put', { project: 'acme/widgets', ifRevision: '0' }, '{"n":1}')).toBe(0);
+  expect(output.at(-1)).toMatchObject({ writer: { kind: 'surface', via: 'cli' } });
+  expect(
+    (await store.getStateDocument({ kind: 'project', key: 'acme/widgets' }, 'notes/a'))?.value
+  ).toEqual({ n: 1 });
+  expect(await call('list', { project: 'acme/widgets', prefix: 'notes/' })).toBe(0);
+  expect(output.at(-1)).toEqual({
+    scope: { kind: 'project', key: 'acme/widgets' },
+    documents: [
+      {
+        name: 'notes/a',
+        revision: 1,
+        updatedAt: expect.any(String),
+        writer: { kind: 'surface', via: 'cli' },
+        deleted: false,
+      },
+    ],
+  });
+  expect(await call('list', { install: true })).toBe(0);
+  expect(output.at(-1)).toEqual({ scope: { kind: 'install' }, documents: [] });
+  // A one-segment key is the install scope's storage key, never a project.
+  expect(await call('get', { project: '_install' })).toBe(1);
+  expect(await call('get', { project: 'x', install: true })).toBe(1);
+});
+
+test('--raw reads and writes a text value as is', async () => {
+  const { invoke, output, host, env, root } = await fixture();
+  const text = '# Notes\n\n- "quoted" line\n';
+  expect(await invoke('put', text, { ifRevision: '0', raw: true })).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 1, value: text });
+  const printed: string[] = [];
+  const get = () =>
+    stateCommand(
+      host,
+      'get',
+      ['review/123'],
+      { cwd: root, raw: true },
+      {
+        env,
+        write: async value => {
+          output.push(value);
+        },
+        writeRaw: async value => {
+          printed.push(value);
+        },
+      }
+    );
+  expect(await get()).toBe(0);
+  expect(printed).toEqual([text]);
+  expect(await invoke('put', '{"not":"text"}', { ifRevision: '1' })).toBe(0);
+  expect(await get()).toBe(4);
+  expect(printed).toHaveLength(1);
+  expect(await invoke('log', '', { raw: true })).toBe(1);
 });
