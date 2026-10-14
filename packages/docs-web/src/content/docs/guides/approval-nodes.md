@@ -55,7 +55,7 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Every approve surface
-   also continues the run: the `/workflow approve <run-id>` slash command, the
+   also continues a non-container run: the `/workflow approve <run-id>` slash command, the
    CLI, the Web UI approve button, the in-thread **Approve** button posted by the
    Slack adapter, and a chat agent resolving the gate on your behalf after you
    tell it to.
@@ -174,8 +174,13 @@ For default gates without authored decisions, use the binary commands:
 /workflow reject <run-id> needs changes
 ```
 
-These commands resolve the default gate and continue or cancel the run according
-to its rejection rules. Slack uses `/archon-workflow` in place of `/workflow`.
+These commands resolve the default gate and continue a non-container run or cancel
+it according to its rejection rules. Slack uses `/archon-workflow` in place of `/workflow`.
+
+For both authored and default gates, a chat decision that requires further execution
+leaves a container run resumable. Continue it with `archon workflow resume <run-id>`
+from the CLI in the same project; chat cannot resume its container. This also applies
+when the chat agent records the decision for you.
 
 ### Asking the chat agent
 
@@ -189,7 +194,7 @@ For a default gate, the agent uses approve or reject:
 
 ```text
 User: "looks good, ship it"
-→ agent approves the gate; the run continues
+→ agent approves the gate; a non-container run continues
 
 User: "no, stop — why is it editing the schema?"
 → agent rejects the gate with your words as the reason
@@ -272,7 +277,8 @@ resume automatically; the gate's rejection rules can instead cancel the run.
 **Cross-platform caveat**: Web-dispatched and headless CLI runs can auto-resume
 after a Web UI decision. A run with a Slack, Telegram, or GitHub parent records
 the decision but does not auto-resume. Use `archon workflow resume <run-id>` or
-resume it from the originating conversation to continue the same run.
+resume it from the originating conversation to continue the same run. Container
+runs require the CLI resume command in the same project.
 
 ### REST API
 
