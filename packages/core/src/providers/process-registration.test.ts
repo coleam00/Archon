@@ -61,7 +61,7 @@ test('a plugin selects its credential vendor from the model its own run schema n
     ).optional(),
   });
   const registration = processProviderRegistration(
-    {
+    providerPluginDescriptorSchema.parse({
       ...descriptor,
       id: 'stub-plugin',
       credentials: {
@@ -76,7 +76,7 @@ test('a plugin selects its credential vendor from the model its own run schema n
         run: z.toJSONSchema(run, { io: 'input' }),
         snapshot: z.toJSONSchema(run, { io: 'input' }),
       },
-    },
+    }),
     argv
   );
   expect(registration.credentials.vendorFor(' acme / m ')).toBe('acme');
