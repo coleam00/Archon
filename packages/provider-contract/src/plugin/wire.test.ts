@@ -3,7 +3,6 @@ import { providerStopReasonSchema } from '../result';
 import { checkAcp } from './fixtures/acp';
 import {
   acpStopReason,
-  logNotificationSchema,
   providerPluginDescriptorSchema,
   providerSessionRequestSchema,
 } from './wire';
@@ -51,25 +50,4 @@ test('every stop reason uses ACP v1 vocabulary; missing reasons only affect ackn
     checkAcp('PromptResponse', { stopReason: acpStopReason(reason, false) });
   }
   expect(acpStopReason('end_turn', true)).toBe('cancelled');
-});
-
-test('log events admit short machine tokens and discard invalid optional diagnostics', () => {
-  const record = { level: 'warn', msg: 'private message', bindings: { token: 'secret' } };
-  for (const event of ['provider.auth_failed', 'retry2', 'a'.repeat(64)]) {
-    expect(logNotificationSchema.parse({ ...record, event }).event).toBe(event);
-  }
-  for (const event of [
-    undefined,
-    '',
-    'provider auth failed',
-    'Provider.AuthFailed',
-    'a'.repeat(65),
-    42,
-    null,
-    {},
-    'provider..failed',
-    'provider.failed\n',
-  ]) {
-    expect(logNotificationSchema.parse({ ...record, event }).event).toBeUndefined();
-  }
 });

@@ -155,7 +155,6 @@ await serveProvider(
         if (mode === 'logs') {
           await log({
             level: 'warn',
-            event: 'provider.auth_failed',
             msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''} ${prompt}`,
             bindings: {
               failureClass: 'auth',
@@ -178,8 +177,7 @@ await serveProvider(
               jsonrpc: '2.0',
               method: '_archon/log',
               params: {
-                level: 'warn',
-                event: process.argv[3],
+                level: process.argv[3],
                 msg: 'credential-secret private message',
                 bindings: { failureClass: prompt, module: 'provider.forged' },
               },

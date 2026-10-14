@@ -168,15 +168,12 @@ function startProcess(
         {
           onLog(record): void {
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
-            // Only wire-validated event names and closed failure classes cross this boundary.
+            // Only the severity and a failure class from the contract's closed enum cross
+            // this boundary. An open plugin-chosen token would let a credential-shaped
+            // word through, so no other plugin field is forwarded.
             const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
             providerLog[record.level](
-              record.event
-                ? {
-                    event: record.event,
-                    ...(failureClass.success ? { failureClass: failureClass.data } : {}),
-                  }
-                : {},
+              failureClass.success ? { failureClass: failureClass.data } : {},
               'provider.plugin.log'
             );
           },

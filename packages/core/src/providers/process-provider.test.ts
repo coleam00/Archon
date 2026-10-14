@@ -370,9 +370,7 @@ test('provider logs preserve severity and withhold arbitrary content', async () 
         }
       )
     );
-    expect(warn.mock.calls).toEqual([
-      [{ event: 'provider.auth_failed', failureClass: 'auth' }, 'provider.plugin.log'],
-    ]);
+    expect(warn.mock.calls).toEqual([[{ failureClass: 'auth' }, 'provider.plugin.log']]);
     expect(info.mock.calls).toEqual([]);
   } finally {
     info.mockRestore();
@@ -512,28 +510,24 @@ test('Claude resume and fork retain per-query cost and model across fresh proces
   }
 });
 
-test.each([undefined, 'provider auth failed', 'Provider.AuthFailed', 'a'.repeat(65)])(
-  'provider logs without a valid event (%s) preserve severity only',
-  async event => {
-    const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
-    try {
-      expect(await collect(provider('logs-untrusted', event).sendQuery('auth', tmpdir()))).toEqual(
-        chunks
-      );
-      expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
-    } finally {
-      warn.mockRestore();
-    }
+test('provider logs dispatch at the plugin severity', async () => {
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+  const error = spyOn(providerLog, 'error').mockImplementation(() => {});
+  try {
+    await collect(provider('logs-untrusted', 'error').sendQuery('rate_limited', tmpdir()));
+    expect(error.mock.calls).toEqual([[{ failureClass: 'rate_limited' }, 'provider.plugin.log']]);
+    expect(warn.mock.calls).toEqual([]);
+  } finally {
+    warn.mockRestore();
+    error.mockRestore();
   }
-);
+});
 
-test('provider log failure classes are revalidated against the contract', async () => {
+test('provider log failure classes outside the contract enum log severity only', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   try {
-    await collect(
-      provider('logs-untrusted', 'provider.auth_failed').sendQuery('credential-secret', tmpdir())
-    );
-    expect(warn.mock.calls).toEqual([[{ event: 'provider.auth_failed' }, 'provider.plugin.log']]);
+    await collect(provider('logs-untrusted', 'warn').sendQuery('credentialsecret', tmpdir()));
+    expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
   } finally {
     warn.mockRestore();
   }

@@ -131,13 +131,6 @@ export const toolCallResponseSchema = z.object({ text: z.string() });
 export const logNotificationSchema = z.object({
   level: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']),
   msg: z.string(),
-  // Discard invalid optional events so legacy and malformed records still log their severity.
-  event: z
-    .string()
-    .max(64)
-    .regex(/^[a-z][a-z0-9]*(?:[._][a-z][a-z0-9]*)*$/)
-    .optional()
-    .catch(undefined),
   bindings: z.record(z.string(), z.json()),
 });
 export type ProviderLog = z.infer<typeof logNotificationSchema>;

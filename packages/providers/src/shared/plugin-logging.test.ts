@@ -31,7 +31,6 @@ test('RPC logging redirects existing loggers and strips SDK payloads, credential
     {
       level: 'error',
       msg: 'provider.fixture_failed',
-      event: 'provider.fixture_failed',
       bindings: {
         module: 'provider.fixture',
         count: 2,
