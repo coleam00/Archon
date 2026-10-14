@@ -2490,6 +2490,21 @@ export async function executeWorkflow(
                 ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
                 : '') +
               `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
+          } else if (
+            attention?.kind === 'blocked_on_child' ||
+            attention?.kind === 'blocked_on_children'
+          ) {
+            // The parent takes no answer of its own; it continues when its sub-runs finish.
+            const childRunIds =
+              attention.kind === 'blocked_on_child'
+                ? [attention.childRunId]
+                : attention.childRunIds;
+            stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
+            actionLines = childRunIds
+              .map(
+                id => `• Check sub-run \`${id}\`: \`${formatRunCommand(platform, 'status', id)}\`\n`
+              )
+              .join('');
           } else {
             stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
             actionLines =
