@@ -64,6 +64,8 @@ export {
   getSourceServerEntry,
   getSourceProviderEntry,
   getServerDistDir,
+  projectKeyForStorageRoot,
+  projectKeyForCodebase,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 

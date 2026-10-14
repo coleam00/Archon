@@ -890,6 +890,30 @@ export function resolveRunStorageRoot(
 }
 
 /**
+ * The project key a storage root is filed under: its path below the workspaces
+ * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/<name>`).
+ * Project-scoped state documents use it as their identity, so every surface that
+ * names a project derives it here. A root outside the workspaces directory has
+ * no key and throws rather than yielding a `..` path.
+ */
+export function projectKeyForStorageRoot(root: string): string {
+  const key = relative(getArchonWorkspacesPath(), root);
+  if (!key || key.startsWith('..') || isAbsolute(key))
+    throw new Error(`Project storage root is not inside the workspaces directory: ${root}`);
+  return key.split('\\').join('/');
+}
+
+/** {@link projectKeyForStorageRoot} for a codebase row, or for an unregistered `cwd`. */
+export function projectKeyForCodebase(
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
+  cwd: string
+): string {
+  return projectKeyForStorageRoot(
+    getProjectStoragePaths(resolveProjectStorageKey(codebase, cwd)).root
+  );
+}
+
+/**
  * Compose the output roots from an already-resolved project root — the branch
  * taken when a run recorded its `output_root` at start and must NOT re-derive
  * identity (a renamed codebase would otherwise orphan its artifacts, #1192).
