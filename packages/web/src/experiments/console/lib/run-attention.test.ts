@@ -261,11 +261,13 @@ describe('watchRunAttention', () => {
       run('action', {
         status: 'paused',
         attention: {
-          kind: 'action_required',
+          kind: 'attention',
           runId: 'action',
           nodeId: 'w',
           message: 'Rotate key',
-          occurrence: 'wait:2026-10-01T10:00:00.000Z',
+          occurrence: 'legacy:w',
+          form: 'message',
+          options: [],
         },
         wait: {
           kind: 'attention',
