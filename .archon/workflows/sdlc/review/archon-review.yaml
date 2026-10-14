@@ -1,18 +1,17 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, seams always runs. A full-tier round adds code,
-  tests, and simplify; a focused round (a low-risk change) adds one general
-  reviewer first. An engaged full-review risk adds the full specialists before
-  synthesis. Errors judges failure visibility and containment; docs runs only for
-  shipped-doc changes.
-  Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
-  stated acceptance item, invariant, and steering constraint is met with cited
-  evidence or raised as a blocking finding.
-  Advisory and read-only: it judges, it never edits. Given the
-  previous round's report, one continuation reviewer verifies the prior findings,
-  reviews the correction delta, and follows their causal class without repeating
-  the full specialist fan-out.
+  verdict. On the first round, a quick route agent picks the lenses the change
+  earns — seams, code, tests, errors, docs — with seams on unless the change
+  clearly touches no type, contract, state or boundary. Reviews a PR when given
+  one, otherwise the working diff. Every round also holds the change to the
+  accepted contract: each stated acceptance item, invariant, and steering
+  constraint is met with cited evidence or raised as a blocking finding.
+  Advisory and read-only: it judges, it never edits. Given the previous round's
+  report, the same lenses review only the correction delta since the reviewed
+  commit, judging whether each prior finding was resolved or validly declined
+  (`light` runs the general code reviewer alone, for a CI fix), and one
+  continuation reviewer carries the prior findings forward.
 
   When reviewing a PR, the final synthesized report is posted to it as one
   canonical comment, edited in place on re-review.
@@ -42,21 +41,15 @@ inputs:
       The accepted outcome and scope boundaries for this change. Delivery passes
       the same work order implementation received. Standalone review may leave
       this empty and use the PR's problem, outcome, and explicit scope instead.
+  light:
+    default: "false"
+    description: >-
+      "true" when this continuation follows a correction for CI rather than for
+      review: the general code lens alone reviews the delta.
+  # Error review can be forced on or off; `auto` leaves it to the route agent.
   errors:
-    default: false
-    description: Enable the failure visibility and containment lens.
-  tier:
-    default: "full"
-    description: >-
-      focused — seams plus one general reviewer, for a change that engages none
-      of the risks the lenses scale on; any other value runs the full tier: code,
-      seams, tests and simplify. A focused risk escalation adds those specialists
-      before the round publishes its verdict.
-  docs:
     default: "auto"
-    description: >-
-      Docs-impact lens — auto selects shipped-documentation changes from the
-      reviewed diff; true or false overrides that selection.
+    description: Silent-failure lens — auto, true, or false.
 
 returns: publish
 outcome_field: ready
@@ -76,6 +69,7 @@ nodes:
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
+      light: "$INPUTS.light"
     output_format:
       type: object
       properties:
@@ -84,8 +78,15 @@ nodes:
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
+        # This node's engine identity, so synthesis counts only this round's lenses.
         execution: { type: object }
-      required: [continuation, head, cursor, risks, execution]
+        # A continuation's lenses; all false on a first round, where route decides.
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs]
 
   - id: scope
     command: review-scope
@@ -95,7 +96,6 @@ nodes:
     output_format:
       type: object
       properties:
-        docs: { type: boolean }
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -112,20 +112,52 @@ nodes:
               required: [host, path]
             number: { type: integer, minimum: 1 }
           required: [repo, number]
-      required: [docs, pr]
+        # The engine refuses this node when scope.md is missing or empty, so no
+        # verdict is ever judged without its scope.
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [review/scope.md] }
+          required: [type, run_id, path]
+      required: [pr, report]
+
+  # The lens decision is quick and separate from scope: a small model reads the diff
+  # summary and the work order and answers, with seams on by default. Only a first
+  # round decides; a continuation reruns what mode read back.
+  - id: route
+    command: route-review
+    model: small
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode]
+    when: "$mode.output.continuation == false"
+    output_format:
+      type: object
+      properties:
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+        reason: { type: string, pattern: '\S' }
+      required: [seams, code, tests, errors, docs, reason]
 
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
-  # mislead the others. Seams runs on every tier: a contract two sides must keep
-  # in agreement is as easy to break in a small change as in a large one.
+  # mislead the others. `&&` binds tighter than `||` and short-circuits, so a
+  # round that skipped the route node never reads it.
   - id: seams
     output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false"
+    depends_on: [scope, route]
+    # A later round skips route; scope alone must have succeeded.
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.seams == true || $mode.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -133,100 +165,57 @@ nodes:
     command: review-code
     context: fresh
     mutates_checkout: false
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
+    depends_on: [scope, route]
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.code == true || $mode.output.code == true"
 
   - id: tests
     output_type: review-lens
     command: review-tests
     context: fresh
     mutates_checkout: false
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
-
-  # A focused reviewer can require full coverage before this round concludes.
-  - id: focused
-    output_type: review-lens
-    command: review-focused
-    context: fresh
-    mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier == 'focused'"
-    output_format:
-      type: object
-      properties:
-        full_review: { type: boolean }
-        reason: { type: string, pattern: '\S' }
-      required: [full_review, reason]
-
-  - id: coverage
-    output_type: review-coverage
-    script: resolve-review-coverage
-    runtime: bun
-    depends_on: [scope, focused]
+    depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    with:
-      continuation: "$mode.output.continuation"
-      tier: "$INPUTS.tier"
-      focused: { from: "$focused.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        full: { type: boolean }
-      required: [full]
-
-  # Structure is judged on every full-tier change, never selected for one; the
-  # focused reviewer carries a machinery check instead. The charter lives in its
-  # own workflow so delivery can also run it before the PR opens, when a smaller
-  # shape is still cheap; this lens is then the second, independent look.
-  - id: simplify
-    include: archon-simplify
-    with:
-      stage: review
-      work_order: "$INPUTS.work_order"
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
+    when: "$mode.output.continuation == false && $route.output.tests == true || $mode.output.tests == true"
 
   - id: errors
     output_type: review-lens
     command: review-errors
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.errors == 'true'"
+    depends_on: [scope, route]
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.errors == true || $mode.output.errors == true"
 
   - id: docs
     output_type: review-lens
     command: review-docs
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.docs == 'true' || $mode.output.continuation == false && $INPUTS.docs == 'auto' && $scope.output.docs == true"
+    depends_on: [scope, route]
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.docs == true || $mode.output.docs == true"
 
-  # all_done lets this barrier settle after input-disabled lenses, every skipped
-  # continuation lens, or a lens whose retries were exhausted. The deciding
+  # all_done lets this barrier settle after unselected lenses, or a lens whose
+  # retries were exhausted. The deciding
   # agent can then tolerate specialist failures without also tolerating a failed
   # mode/scope preflight: synthesize separately requires scope to have succeeded.
   - id: review-complete
     bash: "true"
-    depends_on: [coverage, seams, code, tests, focused, simplify, errors, docs]
+    depends_on: [scope, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
-  # the review: synthesize detects the missing
-  # report for an ENABLED lens and forces ready:false naming the gap, so
-  # degradation is disclosed, never silent, and the correction loop's recheck is
-  # the retry. `ready` is a real boolean — the load-bearing field a composing
-  # loop terminates on. Full reviews receive complete lens files; continuation
-  # reviews receive the complete prior report and correction delta.
+  # the review: synthesize detects the missing completion for a selected lens and
+  # forces ready:false naming the gap, so degradation is disclosed, never silent,
+  # and the next round is the retry. `ready` is a real boolean — the load-bearing field a composing
+  # loop terminates on. Every round receives this round's lens files; a
+  # continuation also receives the complete prior report and correction delta.
   #
-  # The deciding agent starts fresh and re-reads the diff. On a continuation it
-  # performs the review itself from the previous report and correction delta;
-  # that keeps the accumulated review state without paying for a cold fan-out.
-  # Returning into the scope
-  # node's session is not portable across the bundle's supported providers:
-  # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
-  # floor even where the configured provider can resume a named upstream session.
+  # The deciding agent and the lenses start fresh and carry earlier rounds through
+  # the prior report, not a resumed session: a loop body cannot resume a session
+  # from its own earlier iteration, and session resume is not portable across the
+  # bundle's supported providers (Claude Code, Codex, and Pi).
   #
   # Adversarial per-finding verification happens inside this node's prompt. A
   # separate verify stage between the lenses and this node is now expressible and
@@ -246,7 +235,7 @@ nodes:
           type: boolean
         action:
           type: string
-          enum: [none, correct, replan]
+          enum: [none, correct, replan, needs_human]
         findings_summary:
           type: string
         # The report the verdict rests on, as a certified artifact pointer: the
@@ -259,7 +248,20 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/report.md] }
           required: [type, run_id, path]
-      required: [ready, action, findings_summary, report]
+        # Work this review proved but the change does not do. The run's outcome
+        # relays each record; the human-readable copy is discoveries.md.
+        discoveries:
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string, pattern: '\S' }
+              claim: { type: string, pattern: '\S' }
+              evidence: { type: array, items: { type: string }, minItems: 1 }
+              relation: { type: string, enum: [unrelated, scope_conflict, note] }
+              source_nodes: { type: array, items: { type: string }, minItems: 1 }
+            required: [title, claim, evidence, relation, source_nodes]
+      required: [ready, action, findings_summary, report, discoveries]
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
@@ -280,5 +282,19 @@ nodes:
       action: "$synthesize.output.action"
       summary: "$synthesize.output.findings_summary"
       report_pointer: "$synthesize.output.report"
+      discoveries: { from: "$synthesize.output.discoveries" }
+      route: { from: "$route.output", if_skipped: null }
+      mode: { from: "$mode.output" }
     output_type: review-report
     output_format: *review_verdict
+
+  # Reviewers' scratch worktrees are removed by the workflow once every lens and
+  # the deciding agent have settled, whether they succeeded or failed.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [synthesize]
+    trigger_rule: all_done
+    with:
+      lens: ""
+

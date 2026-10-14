@@ -1,13 +1,11 @@
 /**
  * Validate the triage verdict before it routes work, and apply its labels.
  *
- * The prompt judges; this boundary verifies what a schema cannot. Each field's type
- * and vocabulary — the contract, route, and complexity enums, the item and edit
- * shapes, the report pointer — were certified by the engine on the node that
- * produced them, so nothing here re-checks membership. What remains is the relations
- * between fields: only a READY contract carries an engineering route, design-first
- * is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
- * BLOCKED names blockers, and blockers are qualified URLs. The pack's own labels
+ * The prompt judges; the triage node's schema admits only legal decisions (one
+ * branch per contract verdict, each carrying only its own fields), so an illegal
+ * combination is re-asked at that node rather than refused here. This flattens the
+ * decision into the fields every caller reads and checks what a schema cannot:
+ * blockers are qualified URLs. The pack's own labels
  * derive from the declared fields here rather than being chosen by the model, and
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
@@ -27,23 +25,35 @@ import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 
 type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 type Complexity = 'small' | 'risky' | 'large';
+type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
 
-// Exactly one state label per item. Design-first is READY whose next step is
-// design, so it replaces the ready label rather than sitting beside it.
-const STATE_LABEL: Record<Contract, string> = {
-  READY: 'archon-ready',
+// Exactly one state label per item. A READY item's label names the route the run
+// takes on it: archon-ready delivers (a new pull request, or the open one it
+// continues), archon-plan plans then delivers, and archon-issue investigates then
+// delivers.
+const STATE_LABEL: Record<Exclude<Contract, 'READY'>, string> = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
   NO_ACTION: 'archon-close',
 };
-const DESIGN_FIRST_LABEL = 'archon-design-first';
+const ROUTE_LABEL: Record<Route, string> = {
+  deliver: 'archon-ready',
+  continue: 'archon-ready',
+  plan: 'archon-plan',
+  investigate: 'archon-issue',
+};
 const COMPLEXITY_LABEL: Record<Complexity, string> = {
   small: 'archon-small',
   risky: 'archon-risky',
   large: 'archon-large',
 };
 const PACK_LABELS: Record<string, { color: string; description: string }> = {
-  'archon-ready': { color: '0E8A16', description: 'Triage: the contract is ready for a run' },
+  'archon-ready': { color: '0E8A16', description: 'Triage: ready to deliver' },
+  'archon-plan': { color: '1D76DB', description: 'Triage: ready; a plan comes before delivery' },
+  'archon-issue': {
+    color: 'C5DEF5',
+    description: 'Triage: ready; an investigation comes before delivery',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",
@@ -55,10 +65,6 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
   'archon-close': {
     color: '6A737D',
     description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
-  },
-  'archon-design-first': {
-    color: '5319E7',
-    description: 'Triage: ready, but settle the engineering shape before implementing',
   },
   'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
   'archon-risky': {
@@ -195,14 +201,25 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
   return [...new Set([...wanted, ...areaPresent])].sort();
 }
 
+/** One branch of the triage decision, as the node's schema admits it. */
+type Decision =
+  | { contract: 'READY'; route: Exclude<Route, 'continue'> }
+  | { contract: 'READY'; route: 'continue'; pull_request: number }
+  | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
+  | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
+  | { contract: 'NO_ACTION' };
+
 function main(): void {
-  const contract = text(process.env.INPUTS_CONTRACT) as Contract;
-  const route = text(process.env.INPUTS_ROUTE);
+  const decision = bound(process.env.INPUTS_DECISION) as Decision;
+  const contract: Contract = decision.contract;
+  const route = 'route' in decision ? decision.route : 'no_action';
+  const edits: Edits = 'proposed_edits' in decision ? decision.proposed_edits : { title: '', body: '' };
+  const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
+  const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
+  const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
   const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
-  const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
-  const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
   const boundItem = record(bound(process.env.INPUTS_ITEM));
   const repo = record(boundItem?.repo);
@@ -225,43 +242,14 @@ function main(): void {
     boundItem.number === 0
       ? undefined
       : { repo: { host: repo.host, path: repo.path }, number: boundItem.number };
-  const edits = bound(process.env.INPUTS_PROPOSED_EDITS) as Edits;
-  const blockedBy = bound(process.env.INPUTS_BLOCKED_BY) as string[];
   const report = bound(process.env.INPUTS_REPORT);
 
   const invalid = (message: string): void => {
     refuse(`invalid triage verdict: ${message}`);
   };
 
-  if ((contract === 'READY') !== (route !== 'no_action')) {
-    invalid(
-      `only a READY contract carries an engineering route: got contract=${contract} route=${route}`
-    );
-    return;
-  }
-  if (designFirst && route !== 'plan') {
-    invalid(`design_first requires route=plan, got route=${route}`);
-    return;
-  }
-  const proposes = edits.title.trim() !== '' && edits.body.trim() !== '';
-  if (contract === 'NEEDS_CONTRACT_WORK' && !proposes) {
-    invalid('NEEDS_CONTRACT_WORK requires a proposed title and body');
-    return;
-  }
-  if (contract !== 'NEEDS_CONTRACT_WORK' && (edits.title !== '' || edits.body !== '')) {
-    invalid('only NEEDS_CONTRACT_WORK proposes edits');
-    return;
-  }
   if (!blockedBy.every(isQualifiedUrl)) {
     invalid('blocked_by must be a list of fully qualified http(s) URLs');
-    return;
-  }
-  if (contract === 'BLOCKED' && trimmed(blockedReason) === '') {
-    invalid('BLOCKED requires a blocked_reason');
-    return;
-  }
-  if (contract !== 'BLOCKED' && (blockedReason !== '' || blockedBy.length > 0)) {
-    invalid('only BLOCKED names a blocker');
     return;
   }
   if (trimmed(summary) === '') {
@@ -279,7 +267,9 @@ function main(): void {
     return;
   }
 
-  let labels = [designFirst ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
+  let labels = [
+    decision.contract === 'READY' ? ROUTE_LABEL[decision.route] : STATE_LABEL[decision.contract],
+  ];
   // Size only matters on an item that can still be worked; a close verdict carries none.
   if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
 
@@ -294,8 +284,8 @@ function main(): void {
   emit({
     contract,
     route,
+    pull_request: pullRequest,
     ready: contract === 'READY',
-    design_first: designFirst,
     complexity,
     labels,
     published,

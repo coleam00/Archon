@@ -18,7 +18,10 @@ const track = trackTempRoots();
 const PACK = join(import.meta.dir, '..', '.archon', 'workflows', 'sdlc', 'validate', 'scripts');
 const execFileAsync = promisify(execFile);
 
-type Check = Discovery['checks'][number];
+/** A check as discover declares it; the group defaults to one shared gate. */
+type Check = Omit<Discovery['checks'][number], 'group'> & { group?: string };
+const declared = (checks: Check[]): Discovery['checks'] =>
+  checks.map(check => ({ group: 'gate', ...check }));
 
 function checkout(): { cwd: string; artifacts: string } {
   const root = track(mkdtempSync(join(tmpdir(), 'validation-run-')));
@@ -39,7 +42,7 @@ function run(
   const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
     cwd: f.cwd,
     env: env(f.artifacts, {
-      INPUTS_DISCOVERY: JSON.stringify({ checks, notes: 'test gate' }),
+      INPUTS_DISCOVERY: JSON.stringify({ checks: declared(checks), notes: 'test gate' }),
     }),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -88,6 +91,27 @@ describe('run-checks', () => {
     expect(existsSync(join(f.cwd, 'built'))).toBe(false);
   });
 
+  it('runs every independent group, stopping each at its own first failure', () => {
+    const f = checkout();
+    const result = run(f, [
+      { name: 'api lint', argv: sh('echo "lint broke"; exit 2'), group: 'api' },
+      { name: 'api tests', argv: sh('touch api-tested'), group: 'api' },
+      { name: 'web tests', argv: sh('echo "web 1 failing"; exit 1'), group: 'web' },
+      { name: 'cli tests', argv: sh('exit 0'), group: 'cli' },
+    ]);
+    expect(result.output?.status).toBe('red');
+    expect(result.output?.summary).toContain('api lint failed (exit 2)');
+    expect(result.output?.summary).toContain('web tests failed (exit 1)');
+    expect(result.output?.summary).toContain('Passed: cli tests.');
+    expect(existsSync(join(f.cwd, 'api-tested'))).toBe(false);
+    const text = report(f.artifacts);
+    expect(text).toContain('lint broke');
+    expect(text).toContain('web 1 failing');
+    expect(text).toMatch(
+      /## 2\. api tests \(group: api\)\n\n`bash -c touch api-tested` never ran\./
+    );
+  });
+
   it('reports a check that could not start as incomplete, not red', () => {
     const f = checkout();
     const result = run(f, [
@@ -96,7 +120,18 @@ describe('run-checks', () => {
     ]);
     expect(result.output?.status).toBe('incomplete');
     expect(result.output?.summary).toContain('tests could not start');
-    expect(result.output?.summary).toContain('Passed first: lint.');
+    expect(result.output?.summary).toContain('Passed: lint.');
+  });
+
+  it('keeps a partly unrun gate incomplete even when another group failed', () => {
+    const f = checkout();
+    const result = run(f, [
+      { name: 'api tests', argv: sh('exit 1'), group: 'api' },
+      { name: 'web tests', argv: ['archon-no-such-command-for-this-test'], group: 'web' },
+    ]);
+    expect(result.output?.status).toBe('incomplete');
+    expect(result.output?.summary).toContain('web tests could not start');
+    expect(result.output?.summary).toContain('Failed: api tests failed (exit 1).');
   });
 
   it("reports a project that defines no checks as green with discover's notes", () => {
@@ -125,7 +160,7 @@ describe('run-checks', () => {
         timeout: 3000,
         env: env(f.artifacts, {
           INPUTS_DISCOVERY: JSON.stringify({
-            checks,
+            checks: declared(checks),
             notes: '',
           }),
         }),
@@ -202,6 +237,7 @@ describe("the gate's environment", () => {
                 '-e',
                 `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
               ],
+              group: 'gate',
             },
           ],
           notes: '',

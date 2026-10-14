@@ -8,10 +8,13 @@
  * what makes a review true.
  *
  * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it, the pull request's remote
- * head must be it, and the report must name it. Any mismatch refuses, so a
- * verdict about one commit can never stand as the verdict on another. Once
- * published, the commit is recorded beside the report as the next round's cursor.
+ * (review-round): the checkout must still be at it and the pull request's remote
+ * head must be it. The head is checked before the scope agent's declaration, so a
+ * correction that was never pushed is named as that rather than as a scope
+ * mismatch. Any mismatch refuses, so a verdict about one commit can never
+ * stand as the verdict on another. This node stamps that commit on the comment
+ * itself rather than trusting the report's text to name it. Once published, the
+ * commit is recorded beside the report as the next round's cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
@@ -20,8 +23,12 @@
  *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
- * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER: the
- *   certified verdict fields this node forwards.
+ * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
+ *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
+ * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
+ *   continuation skipped it) and review-round's output, whose lens fields hold a
+ *   continuation's set. The lenses this round ran are recorded beside the report
+ *   as the next round's lens set.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,6 +44,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
 
@@ -62,6 +70,13 @@ function declaredPr(value: string): QualifiedPr | undefined {
   return parseQualifiedPr(target);
 }
 
+/** The lenses this round ran: the route agent's call on a first round, review-round's otherwise. */
+function lenses(): Record<string, boolean> {
+  const decision = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
+  const source = decision ?? record(JSON.parse(text(process.env.INPUTS_MODE)));
+  return Object.fromEntries(REVIEW_LENSES.map(lens => [lens, source?.[lens] === true]));
+}
+
 function label(pr: QualifiedPr | undefined): string {
   return pr ? `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}` : 'no pull request';
 }
@@ -73,17 +88,10 @@ try {
     action: text(process.env.INPUTS_ACTION),
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
+    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
   };
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
-  if (
-    recorded &&
-    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
-  ) {
-    throw new Error(
-      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
-    );
-  }
   const pr = recorded ?? declared;
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
@@ -93,30 +101,38 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (!report.includes(head)) {
-    throw new Error(`the review report does not name ${head}, the commit this round reviewed`);
+  if (pr) {
+    const remote = viewPr(pr, source).pr.head_revision;
+    if (remote !== head) {
+      throw new Error(
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
+      );
+    }
+  }
+  if (
+    recorded &&
+    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
+  ) {
+    throw new Error(
+      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
+    );
   }
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
-    const remote = viewPr(pr, source).pr.head_revision;
-    if (remote !== head) {
-      throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}`
-      );
-    }
     const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
     try {
       const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\n${report}`);
+      writeFileSync(marked, `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`);
       const comment = upsertComment(pr, MARKER, marked, source);
       note(`publish-review: canonical review comment at ${comment.url}`);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   }
-  // review-round reads this as the next round's cursor.
+  // review-round reads these as the next round's cursor and lens set.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
+  writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

@@ -30,16 +30,22 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
-  - id: planned
-    include: archon-plan
+  - id: intel
+    command: intel
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
-  # STAGE 3: DELIVER. Implement, open a draft PR, review, fix, validate, flip ready
+  - id: planned
+    include: archon-plan
+    depends_on: [triage, intel]
+    when: "$triage.output.route == 'plan'"
+
+  # STAGE 3: DELIVER. Rounds of implement, draft PR, review; then CI flips it ready
   - id: deliver
     include: archon-deliver
-    depends_on: [gate-direct, gate-rooted, gate-planned]
+    depends_on: [triage, inv, planned]
     trigger_rule: none_failed_min_one_success
+    when: "$triage.output.route == 'deliver' || ..."
 
   # STAGE 4: OUTCOME. Record whether a PR was delivered
   - id: outcome
@@ -47,7 +53,7 @@ nodes:
     depends_on: [triage, deliver]
 ```
 
-That's the shape of it. Each `include:` node pulls in another bundled workflow, and each of those workflows is built from nodes that run a **command** (a markdown file that tells the AI what to do), a script, or a shell step. Nodes declare `depends_on` to express ordering, and `when:` skips a branch the route did not choose. The abridged file omits three small `gate-*` nodes that let `deliver` start only after a route actually succeeded.
+That's the shape of it. Each `include:` node pulls in another bundled workflow, and each of those workflows is built from nodes that run a **command** (a markdown file that tells the AI what to do), a script, or a shell step. Nodes declare `depends_on` to express ordering, and `when:` skips a branch the route did not choose. The abridged `when:` on `deliver` lets it start only after a route actually succeeded: the direct route, a rooted investigation, or a ready plan.
 
 ---
 
@@ -57,11 +63,13 @@ That's the shape of it. Each `include:` node pulls in another bundled workflow, 
 |-------|----------|-----------------|-------------------|
 | Triage | `archon-triage` | Read the issue, checked its claims against the current code, and chose a route | `triage.md` |
 | Investigate | `archon-investigate` | For an unknown cause: reproduced the problem and proved the root cause | `investigation.md` |
-| Plan | `archon-plan` | For an undecided shape: chose an approach and broke it into verifiable steps | `plan.md` |
-| Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran the project's checks, committed | `implementation.md` |
+| Intel | `intel` agent (plan route) | Judged whether usage data could change a design call, and said so when no data source is connected | `intel.md` |
+| Plan | `archon-plan` | For an undecided shape: made the design calls from the project's own documents, citing what settled each one, and stopped with the open questions when a call needs a person | `plan.md` |
+| Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran focused checks on what it changed, committed | `implementation.md` |
 | Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened a draft PR | Draft PR on GitHub |
-| Review | `archon-review` (inside deliver) | Ran parallel review lenses; deliver then fixed the findings and re-reviewed each fix | PR comment |
-| Validate | `archon-validate` (inside deliver) | Ran the project's checks; deliver then waited for CI and flipped the PR ready | `validation.md` |
+| Review | `archon-review` (inside deliver) | Ran the review lenses a route agent picked; open findings went back to the implementer for another round | PR comment |
+| Simplify | `archon-simplify` (inside deliver) | Once a review passed, looked for a smaller shape; the implementer adopted or declined each finding | `shape.md` |
+| CI | `ci` agent (inside deliver) | Marked the PR ready, waited for CI (the project's full validation), and put the PR back in draft if CI was red; a red the change caused, or a conflict with the base, went back to the implementer and review | PR checks |
 
 Each stage is independent and focused. Triage doesn't know how the fix will be built; it writes a file. Deliver doesn't repeat triage's checks; it reads `triage.md` and whichever of `investigation.md` or `plan.md` the route produced. The workflow stitches them together.
 

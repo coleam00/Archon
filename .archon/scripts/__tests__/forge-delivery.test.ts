@@ -4,26 +4,26 @@
  * process, which talks to a fake GitHub (./fake-github-fetch.ts).
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
- * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, reads checks, flips ready and restores draft, and none of
+ * a delivery creates a draft pull request and upserts the same review comment
+ * across rounds, and none of
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
-  forgePrRecord,
-  packScriptRunner,
   PR,
+  gitCheckout,
+  packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
 
 const { runPackScript } = packScriptRunner();
-
 const trackTempRoot = trackTempRoots();
 const REPO_ROOT = resolve(import.meta.dir, '../../..');
 const FORGE_COMMAND = join(REPO_ROOT, 'packages/cli/src/commands/forge.ts');
@@ -31,9 +31,12 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-const HEAD_SHA = 'feedface00000000000000000000000000000000';
+// A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+// it before it creates.
+const CHECKOUT = gitCheckout({}, trackTempRoot);
+const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
-const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
 const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
@@ -125,10 +128,11 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, resyncs its body, upserts one review comment, reads checks, flips ready and restores draft', () => {
+  it('creates a draft and upserts one review comment', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
+        cwd: CHECKOUT,
         ...options,
         source: 'forge',
         forge: { kind: 'command', argv: host.argv },
@@ -155,6 +159,9 @@ describe('the forge opt-in delivers through plugin operations', () => {
           INPUTS_ACTION: ready ? 'none' : 'correct',
           INPUTS_SUMMARY: 'summary',
           INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
+          INPUTS_DISCOVERIES: '[]',
+          INPUTS_ROUTE: 'null',
+          INPUTS_MODE: JSON.stringify({ seams: false, code: true, tests: false, errors: false, docs: false }),
         },
         artifacts: { 'report.md': report },
       });
@@ -162,20 +169,18 @@ describe('the forge opt-in delivers through plugin operations', () => {
 
     // 1. The draft pull request.
     const created = through('pr/scripts/publish-pr', {
-      inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-intent.json' },
-      artifacts: {
-        'pr-intent.json': JSON.stringify({
-          repo: PR.repo,
-          headRepo: PR.repo,
-          head: 'feature',
-          headRevision: HEAD_SHA,
-          base: 'dev',
-          title: 'Add a guard',
-          bodyPath: '{ARTIFACTS}/pr-body.md',
-          draft: true,
-        }),
-        'pr-body.md': OPENING_BODY,
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: 'feature',
+        INPUTS_BASE: 'dev',
+        INPUTS_EXISTING: 'null',
+        INPUTS_TITLE: 'Add a guard',
+        INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+        INPUTS_DRAFT: 'true',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
+      artifacts: { 'pr-body.md': OPENING_BODY, 'listing.json': EMPTY_LISTING },
     });
     const record = JSON.parse(created.stdout) as Record<string, unknown>;
     expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
@@ -183,49 +188,27 @@ describe('the forge opt-in delivers through plugin operations', () => {
     // 2. The first review round's canonical comment.
     review(ROUND_ONE, false);
 
-    // 3. The body resync reads the live body, then replaces it.
-    const read = through('deliver/scripts/read-pr-body', {
-      inputs: { INPUTS_PR: created.stdout },
-    });
-    const current = JSON.parse(read.stdout) as { body: string };
-    expect(readFileSync(current.body, 'utf8')).toBe(OPENING_BODY);
-    through('deliver/scripts/publish-pr-body', {
-      inputs: { INPUTS_PR: created.stdout, INPUTS_INTENT: '{ARTIFACTS}/intent.json' },
-      artifacts: {
-        'intent.json': JSON.stringify({ change: true, bodyPath: '{ARTIFACTS}/final.md' }),
-        'final.md': RESYNCED_BODY,
-      },
-    });
-
-    // 4. The second round edits the same comment rather than adding one.
+    // 3. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
-
-    // 5. The ready flip reads checks, then flips.
-    const flipped = through('deliver/scripts/flip-ready');
-    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
-
-    const drafted = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(drafted.stdout)).toMatchObject({ is_draft: true, state: 'open' });
-    const unchanged = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(unchanged.stdout)).toMatchObject({ is_draft: true });
 
     const state = github();
     expect(state.pulls).toHaveLength(1);
-    expect(state.pulls[0]).toMatchObject({ draft: true, body: RESYNCED_BODY });
-    expect(state.comments).toEqual([{ id: 900, body: `${MARKER}\n${ROUND_TWO}` }]);
+    expect(state.pulls[0]).toMatchObject({ draft: true });
+    expect(state.comments).toEqual([
+      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\n\n${ROUND_TWO}` },
+    ]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
-      `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/pulls/42`,
       `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
-      `POST https://${FAKE_HOST}/api/graphql`,
-      `POST https://${FAKE_HOST}/api/graphql`,
     ]);
   }, 120_000);
 });
 
-it('preserves inherited-property labels and publishes marker-idempotent discoveries through a non-GitHub tracker', () => {
+// Real CLI and plugin processes, like the delivery test above: several seconds on a
+// loaded machine, past the default five.
+it('preserves inherited-property labels through a non-GitHub tracker', () => {
   const host = forgeHost(true);
   const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
   const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
@@ -239,15 +222,10 @@ it('preserves inherited-property labels and publishes marker-idempotent discover
   const inputs = {
     INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
     INPUTS_PUBLISH: 'true',
-    INPUTS_CONTRACT: 'READY',
-    INPUTS_ROUTE: 'direct',
+    INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
     INPUTS_COMPLEXITY: 'small',
-    INPUTS_DESIGN_FIRST: 'false',
     INPUTS_SUMMARY: 'Ready',
-    INPUTS_BLOCKED_REASON: '',
-    INPUTS_BLOCKED_BY: '[]',
     INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
-    INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
     INPUTS_REPORT: '{"path":"triage.md"}',
   };
   const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };
@@ -258,35 +236,12 @@ it('preserves inherited-property labels and publishes marker-idempotent discover
     published: true,
     labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
   });
-  const record = {
-    title: 'Proved discovery',
-    claim: 'Concrete claim',
-    evidence: ['file:12'],
-    relation: 'unrelated',
-    source_nodes: ['review'],
-  };
-  const discovery = (runId: string): ScriptRun =>
-    runPackScript('deliver/scripts/file-discoveries', {
-      ...options,
-      inputs: { INPUTS_PR: JSON.stringify(forgePrRecord({ repo })), WORKFLOW_ID: runId },
-      artifacts: { 'discoveries.json': JSON.stringify([{ ...record, source_nodes: [runId] }]) },
-    });
-  const first = discovery('first');
-  const second = discovery('second');
-  for (const result of [first, second]) {
-    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
-    expect(result.gh).toEqual([]);
-    const saved = JSON.parse(readFileSync(join(result.artifacts, 'discoveries.json'), 'utf8'));
-    expect(saved[0].issue).toBe(JSON.parse(result.stdout).issues[0]);
-  }
-  expect(JSON.parse(first.stdout)).toEqual(JSON.parse(second.stdout));
   const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
     issues: { number: number; labels: (string | { name: string })[] }[];
     labels: { name: string }[];
     writes?: string[];
     calls?: string[];
   };
-  expect(state.issues).toHaveLength(2);
   const labels = state.issues[0].labels.map(label =>
     typeof label === 'string' ? label : label.name
   );
@@ -294,6 +249,4 @@ it('preserves inherited-property labels and publishes marker-idempotent discover
     ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
   );
   expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
-  const writes = state.writes?.filter(op => op === 'workitem.create');
-  expect(writes).toHaveLength(1);
-});
+}, 120_000);

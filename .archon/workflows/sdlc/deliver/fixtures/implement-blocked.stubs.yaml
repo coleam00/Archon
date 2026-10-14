@@ -1,0 +1,13 @@
+# Outcome: not ready, implement_blocked. Red the change introduced never reaches a
+# pull request: pr is skipped, and the real round script ends the rounds.
+implement__implement:
+  done: true
+  green: false
+  red_cause: "introduced"
+  summary: "stub: the new guard broke two type checks in the package it touches"
+implement__assert-changed: "3 files changed"
+update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
+fixture:
+  expect: completed
+  reached: [round, outcome]
+exec-code: true

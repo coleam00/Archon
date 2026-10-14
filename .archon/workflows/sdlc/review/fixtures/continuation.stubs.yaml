@@ -1,32 +1,28 @@
-# Dry-run fixture: a continuation round runs no specialist at all. One reviewer
-# verifies the prior report and the correction delta itself, so the whole fan-out
-# stays gated off — including the docs lens the scope node would otherwise select
-# here (`docs: true`).
-#
-# That is the structural half of the loop guard: when a correction delta adds
-# user-facing surface, the continuation reviewer re-evaluates a gated-off lens
-# against the delta in its own judgment, and there is no route by which an
-# already-passed lens can rerun. No lens carries a stub, so one that runs anyway
-# fails this fixture instead of passing quietly. The judgment itself — which
-# surface earns a re-evaluation, and whether the finding resolves as a follow-up —
-# is model reasoning that no fixture can assert.
-mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
-coverage: { full: false }
+# Dry-run fixture: a later round. The mode node reruns the selection the first round
+# recorded (seams and code) on the correction delta, without asking the route agent;
+# the synthesizer carries the prior findings forward. The route node and the lenses
+# the selection left out carry no stub, so one that runs anyway fails this fixture.
+mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false}'
 scope:
-  docs: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+seams: "0 findings; prior finding S1 resolved by the delta"
+code: "0 findings; prior finding C1 validly declined"
 review-complete: "settled"
 synthesize:
   ready: true
   action: none
-  findings_summary: "stub: prior findings verified against the delta; nothing open"
+  findings_summary: "stub: prior findings resolved or validly declined; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 publish:
   ready: true
   action: none
-  findings_summary: "stub: prior findings verified against the delta; nothing open"
+  findings_summary: "stub: prior findings resolved or validly declined; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
-  reached: [synthesize]
+  reached: [seams, code, synthesize]
