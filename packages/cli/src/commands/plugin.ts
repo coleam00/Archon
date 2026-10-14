@@ -39,9 +39,10 @@ import {
 } from '@archon/plugin-manifest';
 import {
   packTreePath,
-  readReceipts,
   receiptPath,
   RECEIPT_FILE,
+  scanReceipts,
+  type BrokenReceipt,
 } from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
@@ -133,6 +134,21 @@ export function parsePluginRef(input: string): PluginRef {
  */
 export function stagingName(fileName: string): string {
   return `.${fileName}.${randomBytes(6).toString('hex')}.partial${fileName.endsWith('.exe') ? '.exe' : ''}`;
+}
+
+/** A broken receipt's own error and the two commands that repair it. */
+function brokenReceiptNote(broken: BrokenReceipt): string {
+  // A receipt.json placed outside the owner/repo layout has no id the commands accept.
+  let ref: PluginRef;
+  try {
+    ref = parsePluginRef(broken.id);
+  } catch {
+    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
+  }
+  if (ref.id !== broken.id) {
+    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
+  }
+  return `${broken.message}. Repair it: archon plugin update ${broken.id}, or archon plugin remove ${broken.id}`;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -332,6 +348,7 @@ async function installBinaryPlugin(
   ref: PluginRef,
   source: ResolvedBinarySource,
   receipts: PluginReceipt[],
+  broken: readonly BrokenReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment
 ): Promise<void> {
@@ -349,9 +366,21 @@ async function installBinaryPlugin(
     );
   }
   if (!owner && (await pathExists(target))) {
-    throw new Error(
-      `${target} exists but was not installed by archon plugin. Move or delete it, then retry.`
-    );
+    // A broken receipt cannot say which files it owns, so an unclaimed target may be
+    // replaced only by the repair of the one broken receipt there is: no valid receipt
+    // claims it, and no other broken receipt could. The target is always inside
+    // `pluginsDir`, because a manifest's executable name holds no separator.
+    const others = broken.filter(entry => entry.id !== ref.id);
+    if (others.length > 0) {
+      throw new Error(
+        `${target} exists and may belong to a plugin whose receipt cannot be read, so nothing was installed. Delete ${target} by hand if no plugin owns it, or repair first:\n${others.map(brokenReceiptNote).join('\n')}`
+      );
+    }
+    if (!broken.some(entry => entry.id === ref.id)) {
+      throw new Error(
+        `${target} exists but was not installed by archon plugin. Move or delete it, then retry.`
+      );
+    }
   }
 
   const bunTarget = `bun-${platform === 'win32' ? 'windows' : platform}-${env.arch ?? process.arch}`;
@@ -720,15 +749,27 @@ async function installPlugin(
   mode: 'install' | 'update' | 'replace',
   env: PluginEnvironment
 ): Promise<void> {
-  const receipts = await readReceipts(env.pluginsDir);
+  const { receipts, broken } = await scanReceipts(env.pluginsDir);
   const previous = receipts.find(receipt => receipt.id === ref.id);
+  const brokenSelf = broken.find(entry => entry.id === ref.id);
   if (mode === 'install' && previous) {
     throw new Error(
       `${ref.id} is already installed at ${previous.tag ?? 'the default branch head'} (${previous.commit}). Use: archon plugin update ${ref.id}`
     );
   }
-  if (mode === 'update' && !previous) {
+  if (mode === 'install' && brokenSelf) {
+    throw new Error(
+      `${ref.id} is installed, but its receipt is broken: ${brokenReceiptNote(brokenSelf)}`
+    );
+  }
+  if (mode === 'update' && !previous && !brokenSelf) {
     throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
+  }
+  // A fresh install cannot know which files a broken receipt owns, so it could claim them.
+  if (!previous && !brokenSelf && broken.length > 0) {
+    throw new Error(
+      `Nothing was installed: the files these plugins own are unknown until their receipts are repaired.\n${broken.map(brokenReceiptNote).join('\n')}`
+    );
   }
 
   const source = await resolveSource(ref, previous?.manifest.kind, env);
@@ -739,11 +780,16 @@ async function installPlugin(
   }
   if (source.kind !== 'workflow-pack') {
     assertCompatible(`${ref.id}@${source.tag}`, source.manifest, env.archonVersion);
-    await installBinaryPlugin(ref, source, receipts, previous, env);
+    await installBinaryPlugin(ref, source, receipts, broken, previous, env);
   } else {
     // The kind check above means an existing receipt here is a pack receipt.
     const packReceipt = previous && !isBinaryReceipt(previous) ? previous : undefined;
     await installPack(ref, source, receipts, packReceipt, env);
+  }
+  if (brokenSelf) {
+    console.log(
+      `  Replaced the unreadable receipt ${brokenSelf.file}. The files it named could not be identified; any this install did not overwrite remain under ${env.pluginsDir}.`
+    );
   }
 }
 
@@ -754,7 +800,16 @@ export async function replacePlugin(ref: string, env: PluginEnvironment): Promis
 }
 
 async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {
-  const receipt = (await readReceipts(env.pluginsDir)).find(candidate => candidate.id === ref.id);
+  const { receipts, broken } = await scanReceipts(env.pluginsDir);
+  const brokenSelf = broken.find(entry => entry.id === ref.id);
+  if (brokenSelf) {
+    await rm(brokenSelf.file);
+    console.log(
+      `Removed the unreadable receipt of ${ref.id}: ${brokenSelf.file}. The files it named could not be identified and were left in place; look for its executable in ${env.pluginsDir} or its workflow pack under ${join(env.pluginsDir, 'packs', ...ref.id.split('/'))}.`
+    );
+    return;
+  }
+  const receipt = receipts.find(candidate => candidate.id === ref.id);
   if (!receipt) throw new Error(`${ref.id} is not installed`);
   let removed: string;
   if (isBinaryReceipt(receipt)) {
@@ -770,7 +825,10 @@ async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<voi
 
 /** Makes an ordinary project copy of an installed pack; the copy is the project's from then on. */
 async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {
-  const receipt = (await readReceipts(env.pluginsDir)).find(candidate => candidate.id === ref.id);
+  const { receipts, broken } = await scanReceipts(env.pluginsDir);
+  const brokenSelf = broken.find(entry => entry.id === ref.id);
+  if (brokenSelf) throw new Error(brokenReceiptNote(brokenSelf));
+  const receipt = receipts.find(candidate => candidate.id === ref.id);
   if (!receipt) throw new Error(`${ref.id} is not installed`);
   if (receipt.manifest.kind !== 'workflow-pack') {
     throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
@@ -790,8 +848,8 @@ async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void>
 }
 
 async function listPlugins(env: PluginEnvironment): Promise<void> {
-  const receipts = await readReceipts(env.pluginsDir);
-  if (receipts.length === 0) {
+  const { receipts, broken } = await scanReceipts(env.pluginsDir);
+  if (receipts.length === 0 && broken.length === 0) {
     console.log('No plugins installed.');
     return;
   }
@@ -801,6 +859,7 @@ async function listPlugins(env: PluginEnvironment): Promise<void> {
       `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
     );
   }
+  for (const entry of broken) console.log(`${entry.id}  unreadable  ${brokenReceiptNote(entry)}`);
 }
 
 const USAGE =
