@@ -3,7 +3,7 @@ import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { expect, mock, test } from 'bun:test';
 import { z } from 'zod';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
-import { InvalidProviderRunConfigError } from '@archon/provider-contract';
+import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
 import { processProviderRegistration } from './process-registration';
 import { claudeDescriptor, codexDescriptor, piDescriptor } from '@archon/providers';
 import { parseClaudeConfigStrict } from '@archon/providers/claude/config';
@@ -50,6 +50,38 @@ test('credential vendor selection follows single-vendor and declared prefix rule
   expect(registration.credentials.vendorFor('claude/sonnet')).toBe('anthropic');
   expect(registration.credentials.vendorFor('codex/gpt')).toBe('openai');
   expect(registration.credentials.vendorFor('unknown/model')).toBeUndefined();
+  expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
+});
+
+test('a plugin selects its credential vendor from the model its own run schema normalizes', () => {
+  const run = z.strictObject({
+    model: normalizedConfigString(
+      z.string().regex(/^\s*[a-z]+\s*\//),
+      'slash-separated'
+    ).optional(),
+  });
+  const registration = processProviderRegistration(
+    {
+      ...descriptor,
+      id: 'stub-plugin',
+      credentials: {
+        kind: 'static',
+        specs: [
+          { vendor: 'acme', displayName: 'Acme', kinds: ['subscription'] },
+          { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+        ],
+      },
+      config: {
+        install: z.toJSONSchema(run, { io: 'input' }),
+        run: z.toJSONSchema(run, { io: 'input' }),
+        snapshot: z.toJSONSchema(run, { io: 'input' }),
+      },
+    },
+    argv
+  );
+  expect(registration.credentials.vendorFor(' acme / m ')).toBe('acme');
+  expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
+  expect(registration.credentials.vendorFor('Acme/m')).toBeUndefined();
   expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
 });
 

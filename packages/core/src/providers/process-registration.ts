@@ -1,5 +1,4 @@
 import { normalizeCredentialVendor } from '@archon/providers';
-import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
@@ -40,6 +39,7 @@ export function processProviderRegistration(
       }
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
+  const runModel = schemas.run.pipe(z.object({ model: z.string() }));
   return {
     id: descriptor.id,
     displayName: descriptor.displayName,
@@ -48,16 +48,15 @@ export function processProviderRegistration(
     ...(descriptor.ownsUnprefixedModelRefs ? { ownsUnprefixedModelRefs: true } : {}),
     credentials: {
       ...descriptor.credentials,
+      // The model is read the way the provider's own run schema normalizes it, and
+      // the text before its first `/` names the vendor. A model that schema
+      // rejects selects no vendor; the run would refuse it anyway.
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
-        const prefix =
-          model === undefined
-            ? undefined
-            : normalizeCredentialVendor(
-                descriptor.id === 'pi'
-                  ? (parsePiModelRef(model)?.provider ?? '')
-                  : model.split('/')[0]
-              );
+        if (model === undefined) return undefined;
+        const parsed = runModel.safeParse({ model });
+        if (!parsed.success) return undefined;
+        const prefix = normalizeCredentialVendor(parsed.data.model.split('/')[0]);
         return specs.find(spec => spec.vendor === prefix)?.vendor;
       },
     },
