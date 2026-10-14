@@ -38,6 +38,8 @@ runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the l
 archived-runs/<id>/log.jsonl  retained feed log after run deletion
 runs/<id>/node-sessions.json
 node-sessions/<hash>.json
+state/<document-hash>/name.json scope and document name
+state/<document-hash>/<revision>.json immutable state revisions
 host/codebases.json       project records with per-project envVars
 host/isolation.json       isolation records
 host/users.json           trigger run-as identities
@@ -87,9 +89,12 @@ file storage, because files hold no user tokens and a run would otherwise use th
 token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential
 mode does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
 before creating a worktree. Environment credentials and the provider's own login work
-normally. State documents (`archon state`) are not stored in files; the command requires
-database storage, and `workflow cleanup` has no state revisions to prune. Other SQL-only
-CLI commands, including user and stored credential management, require database storage.
+normally. State documents (`archon state`) use the selected store. Files keep immutable
+JSON revisions under `state/<document-hash>/<revision>.json`, with a `name.json` record
+containing the scope and name. Writes publish through the store-wide lock and recovery
+intent. `workflow cleanup` removes old revisions while keeping each document's latest
+revision, including tombstones. User and stored credential management still require
+database storage.
 
 ## SQLite (Default - No Setup Required)
 
