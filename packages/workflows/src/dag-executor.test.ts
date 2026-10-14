@@ -303,6 +303,9 @@ function createMockStore(): MockWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
+      throw new Error('Unexpected answerAttentionWait');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -17432,7 +17435,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
     );
   });
 
-  it('pauses for an outside action with a rendered message and no deadline', async () => {
+  it('pauses an attention wait with a rendered message, a pause id and its form', async () => {
     const store = createMockStore();
     const platform = createMockPlatform();
 
@@ -17466,17 +17469,20 @@ describe('executeDagWorkflow -- durable wait node', () => {
         kind: 'attention',
         waitingSince: expect.any(String),
         message: 'Re-run windows tests, then resume.',
+        pauseId: expect.any(String),
+        form: 'message',
       },
       { kind: 'started', stepName: 'rerun-ci' }
     );
     const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(call =>
       String(call[1])
     );
-    expect(messages.join('\n')).toContain('Action required for workflow run `attention-wait`');
+    expect(messages.join('\n')).toContain('Workflow run `attention-wait` needs attention');
     expect(messages.join('\n')).toContain('Re-run windows tests, then resume.');
+    expect(messages.join('\n')).toContain('approve attention-wait <your answer>');
   });
 
-  it('fails an action-required pause when its notification cannot be delivered', async () => {
+  it('fails an attention pause when its notification cannot be delivered', async () => {
     const store = createEscalationStore('attention-delivery-failed');
     const platform = createMockPlatform();
     platform.sendMessage.mockImplementation(async () => {
@@ -17520,7 +17526,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
         event_type: 'node_failed',
         step_name: 'rerun-ci',
         data: expect.objectContaining({
-          error: "Wait node 'rerun-ci' could not deliver its action-required notification",
+          error: "Wait node 'rerun-ci' could not deliver its attention notification",
         }),
       })
     );
@@ -17531,12 +17537,12 @@ describe('executeDagWorkflow -- durable wait node', () => {
         nodeId: 'rerun-ci',
         kind: 'attention',
       }),
-      "Wait node 'rerun-ci' could not deliver its action-required notification"
+      "Wait node 'rerun-ci' could not deliver its attention notification"
     );
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('consumes an action-required wait on explicit resume', async () => {
+  it('completes a wait paused before answers existed on a bare resume, with empty text', async () => {
     const store = createMockStore();
     const persisted: WorkflowWaitContext = {
       owner: 'node',
@@ -17566,8 +17572,204 @@ describe('executeDagWorkflow -- durable wait node', () => {
       expect.objectContaining({
         stepName: 'rerun-ci',
         result: expect.objectContaining({ status: 'satisfied' }),
+        answer: { text: '' },
       })
     );
+  });
+
+  it('completes an answered select wait with its answer as typed output', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Which base?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'use-main' }, { id: 'use-dev' }],
+      answer: { decision: 'use-dev', text: 'dev is ahead' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-answered',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-answered-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: { attention: 'Which base?', form: 'select', options: [{ id: 'use-main' }] },
+            },
+            {
+              id: 'after',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'printf "%s" "$ask.output.decision"',
+              depends_on: ['ask'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-answered', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalledWith(
+      'attention-answered',
+      persisted,
+      expect.objectContaining({
+        stepName: 'ask',
+        answer: { decision: 'use-dev', text: 'dev is ahead' },
+      })
+    );
+    const afterCompleted = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.step_name === 'after' && event.event_type === 'node_completed');
+    expect(JSON.stringify(afterCompleted?.data)).toContain('use-dev');
+  });
+
+  it('pauses an unanswered select wait again on a bare resume', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Which base?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'use-main' }],
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-unanswered',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-unanswered-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: { attention: 'Which base?', form: 'select', options: [{ id: 'use-main' }] },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-unanswered', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith('attention-unanswered', persisted, {
+      kind: 'continued',
+    });
+    expect(store.clearWorkflowWaitContext).not.toHaveBeenCalled();
+  });
+
+  it('resolves referenced options when the wait pauses', async () => {
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-options',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-options-test',
+          nodes: [
+            {
+              id: 'plan',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"options":[{"id":"use-main","label":"Main"},{"id":"use-dev"}]}'`,
+              output_format: {
+                type: 'object',
+                properties: {
+                  options: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: { id: { type: 'string' }, label: { type: 'string' } },
+                      required: ['id'],
+                    },
+                  },
+                },
+                required: ['options'],
+              },
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['plan'],
+              wait: { attention: 'Which base?', form: 'select', options: '$plan.output.options' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-options'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-options',
+      expect.objectContaining({
+        kind: 'attention',
+        form: 'select',
+        options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
+  });
+
+  it('fails the wait, naming the producer, when referenced options are invalid', async () => {
+    for (const [name, value] of [
+      ['empty', '[]'],
+      ['duplicate', '[{"id":"a"},{"id":"a"}]'],
+      ['not kebab-case', '[{"id":"Use Main"}]'],
+      ['wrong shape', '["a"]'],
+    ] as const) {
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          conversationId: 'conv-attention-bad-options',
+          cwd: testDir,
+          workflow: {
+            name: 'attention-bad-options-test',
+            nodes: [
+              {
+                id: 'plan',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `printf '%s' '{"options":${value}}'`,
+              },
+              {
+                id: 'ask',
+                kind: 'wait',
+                depends_on: ['plan'],
+                wait: { attention: 'Which?', form: 'select', options: '$plan.output.options' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(`attention-bad-options-${name.replace(/ /g, '-')}`),
+        })
+      );
+      expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      const failed = store.createWorkflowEvent.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'node_failed' && event.step_name === 'ask');
+      expect({ name, error: String(failed?.data?.error) }).toMatchObject({
+        name,
+        error: expect.stringContaining("from 'plan' are not a valid option list"),
+      });
+    }
   });
 
   it('completes an expired event wait with typed output on resume', async () => {
@@ -17675,7 +17877,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
     const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(call =>
       String(call[1])
     );
-    expect(messages.join('\n')).not.toContain('Action required');
+    expect(messages.join('\n')).not.toContain('needs attention');
   });
 });
 
@@ -18725,7 +18927,7 @@ describe('executeDagWorkflow -- env var injection', () => {
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    expect(optionsArg?.env).toEqual({
+    expect(optionsArg?.env).toMatchObject({
       MY_SECRET: 'abc123',
       ANTHROPIC_API_KEY: 'acting-user-secret',
       GIT_AUTHOR_NAME: 'connected-author',
@@ -18738,28 +18940,119 @@ describe('executeDagWorkflow -- env var injection', () => {
     ]);
   });
 
-  it('does not set env on claudeOptions when config.envVars is empty', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
+  describe('run identity', () => {
+    const cliCommand = JSON.stringify(['/opt/archon/bin/archon']);
+    let savedCliCommand: string | undefined;
+    beforeEach(() => {
+      savedCliCommand = process.env.ARCHON_CLI_COMMAND;
+      process.env.ARCHON_CLI_COMMAND = cliCommand;
+    });
+    afterEach(() => {
+      if (savedCliCommand === undefined) delete process.env.ARCHON_CLI_COMMAND;
+      else process.env.ARCHON_CLI_COMMAND = savedCliCommand;
+    });
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'dag-no-env',
-          nodes: [{ id: 'task', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+    const shadowingEnv = {
+      MY_VAR: 'keep-me',
+      WORKFLOW_ID: 'project-run',
+      ARCHON_NODE_EXECUTION: '{"runId":"project-run","path":"elsewhere"}',
+      ARCHON_CLI_COMMAND: '["project-archon"]',
+    };
+
+    async function runIdentityEnv(
+      node: TestWorkflowDefinition['nodes'][number],
+      envVars: Record<string, string>
+    ): Promise<{ env: Record<string, string>; execution: Record<string, unknown> }> {
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-identity', nodes: [node] },
+          workflowRun: makeWorkflowRun('identity-run'),
+          config: { ...minimalConfig, envVars },
+        })
+      );
+      const env = (mockSendQueryDag.mock.calls[0]?.[3] as { env: Record<string, string> }).env;
+      return { env, execution: JSON.parse(env.ARCHON_NODE_EXECUTION ?? '') };
+    }
+
+    it("a prompt: node's environment carries its run, node and the CLI command", async () => {
+      const { env, execution } = await runIdentityEnv(
+        { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+        {}
+      );
+      expect(Object.keys(env).sort()).toEqual([
+        'ARCHON_CLI_COMMAND',
+        'ARCHON_NODE_EXECUTION',
+        'WORKFLOW_ID',
+      ]);
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'notes' });
+      expect(execution).toHaveProperty('invocation');
+      expect(execution).toHaveProperty('attempt');
+    });
+
+    it('project env cannot shadow the identity of a prompt: node', async () => {
+      const { env, execution } = await runIdentityEnv(
+        { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+        shadowingEnv
+      );
+      expect(env.MY_VAR).toBe('keep-me');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'notes' });
+    });
+
+    it("a loop node's iterations carry the loop's run and node", async () => {
+      mockSendQueryDag.mockImplementationOnce(async function* () {
+        yield { type: 'result', sessionId: 's', text: '<promise>COMPLETE</promise>' };
+      });
+      const { env, execution } = await runIdentityEnv(
+        {
+          id: 'iterate',
+          kind: 'loop',
+          loop: { prompt: 'Work.', until: 'COMPLETE', max_iterations: 2, fresh_context: false },
         },
-        workflowRun,
-        config: { ...minimalConfig, envVars: {} },
-      })
-    );
+        shadowingEnv
+      );
+      expect(env.MY_VAR).toBe('keep-me');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'iterate' });
+    });
 
-    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
-    const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
-    expect(optionsArg?.env).toBeUndefined();
+    it('a container run owns ARCHON_CLI_COMMAND as empty, so project env cannot supply one', async () => {
+      const execSpy = stubMissingContainer();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(createMockStore()),
+            cwd: testDir,
+            workflow: {
+              name: 'dag-identity',
+              nodes: [
+                { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+              ],
+            },
+            workflowRun: makeWorkflowRun('identity-run'),
+            config: { ...minimalConfig, envVars: shadowingEnv },
+            execContext: { kind: 'container', containerId: 'identity-container' },
+          })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+      const env = (mockSendQueryDag.mock.calls[0]?.[3] as { env: Record<string, string> }).env;
+      expect(env.ARCHON_CLI_COMMAND).toBe('');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(JSON.parse(env.ARCHON_NODE_EXECUTION ?? '')).toMatchObject({
+        runId: 'identity-run',
+        path: 'notes',
+      });
+    });
   });
 });
 
@@ -20169,8 +20462,8 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   it('records usage accumulated before an approval gate PAUSES the run', async () => {
-    // A fan-out child that pauses at a gate is cancelled by the parent (`fan_out_gate`),
-    // so the pause is its only chance to record what it spent.
+    // A paused run may never resume (an operator can abandon it, cancelling it without
+    // running it again), so the pause is its only chance to record what it spent.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'analysis' };
       yield {
@@ -37616,7 +37909,7 @@ function attentionTerminatedLoopGroupWorkflow(
 ): WorkflowDefinition {
   return {
     name: 'attention-terminated-loop-group',
-    description: 'action-required wait escalation shape',
+    description: 'attention wait escalation shape',
     nodes: [
       dagNodeSchema.parse({
         id: 'grp',
@@ -38017,7 +38310,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
   });
 
-  it('keeps an action-required loop resumable beyond its autonomous iteration bound', async () => {
+  it('keeps an attention loop resumable beyond its autonomous iteration bound', async () => {
     const probeCountPath = join(testDir, 'attention-unbounded-probe-count');
     const greenMarkerPath = join(testDir, 'attention-unbounded-green-marker');
     const workflow = ready(
@@ -38066,7 +38359,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
   });
 
-  it('completes an action-required loop when the explicit-resume probe turns green', async () => {
+  it('completes an attention loop when the explicit-resume probe turns green', async () => {
     const probeCountPath = join(testDir, 'attention-green-probe-count');
     const greenMarkerPath = join(testDir, 'attention-green-marker');
     const workflow = ready(attentionTerminatedLoopGroupWorkflow(probeCountPath, greenMarkerPath));
@@ -38310,9 +38603,9 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       .map(call => call[0])
       .filter(data => data.event_type === 'node_completed' && data.step_name === 'grp');
     expect(completedEvents.length).toBe(1);
-    expect(completedEvents[0].data).toMatchObject({
-      structured_output: approvedDecision,
-    });
+    // until_bash read the answer; the group's output is still the work (#4043).
+    expect(completedEvents[0].data?.node_output).toBe('work output');
+    expect(completedEvents[0].data?.structured_output).toBeUndefined();
   });
 
   it('resuming after a non-completing decision advances to a fresh iteration, with the text available via $LOOP_PREV', async () => {
@@ -38544,6 +38837,147 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stdout_tail).toBe('resume probe ran');
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
+  });
+});
+
+// A pause asks about the work; it is not the work. The group's output reads past it
+// to the nodes it depends on, while `until_bash` and `$LOOP_PREV.<pause>.output`
+// keep reading the answer (#4043).
+describe('executeDagWorkflow -- loop_group output with a pause sink (#4043)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-pause-output-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  function groupCompletion(store: MockWorkflowStore): Record<string, unknown> | undefined {
+    return store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_completed' && event.step_name === 'grp')?.data;
+  }
+
+  function loopGroupWorkflow(nodes: unknown[], untilBash = 'true'): WorkflowDefinition {
+    return {
+      name: 'loop-group-output',
+      description: 'loop_group output selection',
+      interactive: true,
+      nodes: [
+        dagNodeSchema.parse({
+          id: 'grp',
+          loop_group: { until_bash: untilBash, max_iterations: 1, nodes },
+        }),
+      ],
+    };
+  }
+
+  it('a skipped approval gate leaves the work as the group output', async () => {
+    const store = createEscalationStore('run-skipped-gate');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          loopGroupWorkflow(
+            [
+              { id: 'work', bash: "printf 'the plan'" },
+              {
+                id: 'ask',
+                depends_on: ['work'],
+                when: "$work.output == 'blocked'",
+                approval: { message: 'Unblock?' },
+              },
+            ],
+            'test $work.output != blocked'
+          )
+        ),
+        workflowRun: makeWorkflowRun('run-skipped-gate'),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(groupCompletion(store)?.node_output).toBe('the plan');
+  });
+
+  it('a skipped attention wait leaves the work as the group output', async () => {
+    const greenMarkerPath = join(testDir, 'green');
+    await writeFile(greenMarkerPath, 'green');
+    const store = createEscalationStore('run-skipped-attention');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          attentionTerminatedLoopGroupWorkflow(join(testDir, 'probe-count'), greenMarkerPath)
+        ),
+        workflowRun: makeWorkflowRun('run-skipped-attention'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(groupCompletion(store)?.node_output).toBe('{"state":"concluded","detail":"green"}');
+  });
+
+  it('an answered attention wait leaves the work as the group output', async () => {
+    const store = createEscalationStore('run-answered-attention');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          attentionTerminatedLoopGroupWorkflow(join(testDir, 'probe-count'), join(testDir, 'green'))
+        ),
+        workflowRun: makeWorkflowRun('run-answered-attention', {
+          metadata: {
+            wait: {
+              owner: 'loop_group',
+              nodeId: 'grp',
+              bodyWaitId: 'pause',
+              iteration: 1,
+              sessionId: null,
+              sessionProvider: null,
+              kind: 'attention',
+              waitingSince: '2026-08-24T10:00:00.000Z',
+              message: 'Re-run the check, then resume.',
+            } satisfies WorkflowWaitContext,
+          },
+        }),
+        priorCompletedNodes: new Map([
+          ['grp.probe', { output: '{"state":"concluded","detail":"rerun"}' }],
+        ]),
+      })
+    );
+
+    // The restored probe satisfied until_bash on the resume recheck: no fresh iteration.
+    expect(await Bun.file(join(testDir, 'probe-count')).exists()).toBe(false);
+    expect(groupCompletion(store)?.node_output).toBe('{"state":"concluded","detail":"rerun"}');
+  });
+
+  it('a group without a pause sink still takes its output from its terminal sink', async () => {
+    const store = createEscalationStore('run-no-pause');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          loopGroupWorkflow([
+            { id: 'work', bash: "printf 'draft'" },
+            { id: 'polish', depends_on: ['work'], bash: "printf 'final'" },
+          ])
+        ),
+        workflowRun: makeWorkflowRun('run-no-pause'),
+      })
+    );
+
+    expect(groupCompletion(store)?.node_output).toBe('final');
   });
 });
 
@@ -39252,46 +39686,6 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     ).rejects.toThrow('Could not persist node_completed for child: child result storage rejected');
     expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('stops new siblings when a paused child cancellation rolls back', async () => {
-    await writeBlock(
-      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
-      'child-workflow'
-    );
-    const store = createMockStore();
-    store.cancelFanOutRun = mock(async () => {
-      throw new Error('child cancellation rolled back');
-    });
-    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
-      childRunId: 'paused-child',
-      status: 'paused',
-    }));
-    await expect(
-      executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          cwd: testDir,
-          runChildWorkflow,
-          workflow: {
-            name: 'paused-cancel-failure',
-            nodes: [
-              {
-                id: 'fan',
-                kind: 'workflow',
-                workflow: 'child-workflow',
-                fan_out: { items: '["a", "b"]', max_parallel: 1, join: 'all_done' },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun('paused-cancel-failure'),
-        })
-      )
-    ).rejects.toThrow('child cancellation rolled back');
-    expect(runChildWorkflow).toHaveBeenCalledTimes(1);
-    expect(store.cancelFanOutRun).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('persists the instance snapshot before scheduling any body work', async () => {

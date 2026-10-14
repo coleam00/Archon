@@ -34,6 +34,11 @@ import {
   readOwnedWorktree,
   runAttention,
   gateOccurrence,
+  legacyOccurrenceStep,
+  attentionForm,
+  attentionOptions,
+  pausedAttentionWait,
+  workflowWaitStepName,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
@@ -42,6 +47,8 @@ import type {
   ExecutionOwnerRecord,
   LoopGateRunMetadata,
   RunAttention,
+  AttentionAnswer,
+  WorkflowAttentionWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { IWorkflowStore, GateResolutionEvent } from '@archon/workflows/store';
@@ -81,7 +88,19 @@ export interface ApprovalOperationResult {
   codebaseId: string | null;
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string | null;
-  type: 'interactive_loop' | 'approval_gate';
+  type: 'interactive_loop' | 'approval_gate' | 'attention';
+}
+
+/** An answer to an attention wait: the declared option ids it chooses, and free text. */
+export interface AttentionAnswerRequest {
+  choose: readonly string[];
+  text?: string;
+}
+
+export interface AttentionAnswerOperationResult extends ApprovalOperationResult {
+  type: 'attention';
+  /** The answer as recorded, which is what the next node reads. */
+  answer: AttentionAnswer;
 }
 
 export interface RejectionOperationResult {
@@ -297,33 +316,41 @@ function unreadableGateMessage(
 }
 
 /**
- * A parent blocked on a `workflow:` sub-run has no gate of its own — the decision lives
- * on the child. Typed rather than a prose string because the redirect command is spelled
- * differently on every surface: `message` names the child run but never a command, and
- * `messageFor` adds the command the rendering surface actually accepts.
+ * A parent blocked on `workflow:` sub-runs has no gate of its own — the decision lives
+ * on each child: one for a 1:1 node, every unfinished child for a `fan_out:` node. Typed
+ * rather than a prose string because the redirect command is spelled differently on
+ * every surface: `message` names the child runs but never a command, and `messageFor`
+ * adds the commands the rendering surface actually accepts.
  */
 export class ChildRunRedirectError extends Error {
   constructor(
     readonly parentRunId: string,
-    readonly childRunId: string,
+    readonly childRunIds: readonly string[],
     readonly nodeId: string,
     readonly action: 'approve' | 'reject'
   ) {
+    const one = childRunIds.length === 1;
     super(
-      `Run ${parentRunId} is paused waiting on sub-run ${childRunId} ` +
-        `('workflow:' node '${nodeId}'). ` +
+      (one
+        ? `Run ${parentRunId} is paused waiting on sub-run ${childRunIds[0]} ` +
+          `('workflow:' node '${nodeId}'). `
+        : `Run ${parentRunId} is paused waiting on sub-runs ${childRunIds.join(', ')} ` +
+          `('fan_out' node '${nodeId}'). `) +
         (action === 'approve'
-          ? 'Approve or reject the child run instead.'
-          : 'Reject the child run instead, or abandon this run to discard the whole tree.')
+          ? `Approve or reject ${one ? 'the child run' : 'each paused child run'} instead.`
+          : `Reject ${one ? 'the child run' : 'a paused child run'} instead, or abandon this run ` +
+            'to discard the whole tree.')
     );
     this.name = 'ChildRunRedirectError';
   }
 
-  /** The same refusal with the redirect command spelled for `surface`. */
+  /** The same refusal with the redirect commands spelled for `surface`. */
   messageFor(surface: WorkflowCommandSurface): string {
     const label = this.action === 'approve' ? 'Approve' : 'Reject';
-    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
-    return `${this.message} ${label} it by run id: \`${command}\``;
+    const commands = this.childRunIds
+      .map(id => `\`${spellWorkflowCommand(surface, `${this.action} ${id}`)}\``)
+      .join(', ');
+    return `${this.message} ${label} ${this.childRunIds.length === 1 ? 'it' : 'each'} by run id: ${commands}`;
   }
 }
 
@@ -371,7 +398,7 @@ export class StaleGateAnswerError extends Error {
 function staleGateError(runId: string, current: WorkflowRun | null): StaleGateAnswerError {
   const attention = current ? runAttention(current) : null;
   return new StaleGateAnswerError(
-    attention?.kind === 'awaiting_response'
+    attention?.kind === 'awaiting_response' || attention?.kind === 'attention'
       ? `${LOST_GATE_MESSAGE(runId)} It is now awaiting occurrence '${attention.occurrence}'.`
       : `${LOST_GATE_MESSAGE(runId)} It is not awaiting an answer now.`
   );
@@ -389,14 +416,28 @@ export function assertAnswerAdmissible(run: WorkflowRun, origin: GateAnswerOrigi
   recordSurfaceSchema.parse(origin.via);
   const expected = origin.expectedGate;
   if (expected === undefined) return;
-  const gate = run.metadata.approval;
-  const open =
-    run.status === 'paused' && isApprovalContext(gate) && !isGateResolved(gate) ? gate : undefined;
+  const open = openPause(run);
   const matches =
     open !== undefined &&
     open.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
     (open.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId);
   if (!matches) throw staleGateError(run.id, run);
+}
+
+/**
+ * The unanswered gate or attention wait a run is paused at, by the identity an expected
+ * occurrence names: the gate's node, or the wait's step, plus its `pauseId` if it has one.
+ */
+function openPause(run: WorkflowRun): { nodeId: string; pauseId?: string } | undefined {
+  const wait = pausedAttentionWait(run);
+  if (wait !== undefined)
+    return wait.answer === undefined
+      ? { nodeId: workflowWaitStepName(wait), pauseId: wait.pauseId }
+      : undefined;
+  const gate = run.metadata.approval;
+  return run.status === 'paused' && isApprovalContext(gate) && !isGateResolved(gate)
+    ? gate
+    : undefined;
 }
 
 /** The occurrence an answer resolved, recorded on its audit event; absent when the gate is unreadable. */
@@ -413,9 +454,99 @@ export function expectedGateForOccurrence(
   run: WorkflowRun,
   occurrence: string
 ): ExpectedApprovalGate {
-  if (occurrence.startsWith('legacy:')) return occurrence.slice('legacy:'.length);
+  const legacyStep = legacyOccurrenceStep(occurrence);
+  if (legacyStep !== undefined) return legacyStep;
+  const wait = pausedAttentionWait(run);
   const approval = run.metadata.approval;
-  return { nodeId: isApprovalContext(approval) ? approval.nodeId : '', pauseId: occurrence };
+  const nodeId =
+    wait !== undefined
+      ? workflowWaitStepName(wait)
+      : isApprovalContext(approval)
+        ? approval.nodeId
+        : '';
+  return { nodeId, pauseId: occurrence };
+}
+
+/**
+ * The open attention wait `run` is paused at, refusing every state where an answer to one
+ * cannot land. Read-only, so the CLI's detached pre-flight runs it too.
+ */
+export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext {
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined) {
+    const attention = runAttention(run);
+    if (attention?.kind === 'blocked_on_child')
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'approve');
+    if (attention?.kind === 'blocked_on_children')
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'approve');
+    throw new Error(
+      attention?.kind === 'awaiting_response'
+        ? `Run ${run.id} is paused at a gate, not an attention wait. Answer it with approve, reject or respond.`
+        : `Run ${run.id} is not paused at an attention wait (status '${run.status}').`
+    );
+  }
+  if (wait.answer !== undefined)
+    throw new Error(
+      `Run ${run.id}'s attention wait was already answered and is awaiting continuation.`
+    );
+  if (wait.pauseId === undefined)
+    throw new Error(
+      `Run ${run.id} paused at an attention wait before answers existed. Continue it with resume, ` +
+        'or abandon it if it should not continue.'
+    );
+  return wait;
+}
+
+/**
+ * The answer `request` gives `wait`, validated against its form: a message takes only
+ * text; approval and select take exactly one declared option; multi_select takes one or
+ * more distinct declared options. An undeclared option is refused on every surface.
+ */
+export function attentionAnswerFor(
+  run: WorkflowRun,
+  wait: WorkflowAttentionWaitContext,
+  request: AttentionAnswerRequest
+): AttentionAnswer {
+  const form = attentionForm(wait);
+  const text = request.text ?? '';
+  const declared = attentionOptions(wait).map(option => option.id);
+  const refuse = (problem: string): Error =>
+    new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
+  if (form === 'message') {
+    if (request.choose.length > 0) throw refuse('takes only text, not an option.');
+    return { text };
+  }
+  const undeclared = request.choose.filter(id => !declared.includes(id));
+  if (undeclared.length > 0)
+    throw refuse(
+      `does not declare option '${undeclared.join("', '")}'. Declared options: ${declared.join(', ')}.`
+    );
+  if (form === 'multi_select') {
+    if (request.choose.length === 0) throw refuse('needs at least one option.');
+    if (new Set(request.choose).size !== request.choose.length)
+      throw refuse('takes each option at most once.');
+    return { decisions: [...request.choose], text };
+  }
+  const [decision] = request.choose;
+  if (decision === undefined || request.choose.length > 1)
+    throw refuse(`takes exactly one option. Declared options: ${declared.join(', ')}.`);
+  return { decision, text };
+}
+
+/**
+ * The answer `approve`, `reject` or `respond <decision>` stands for at an attention wait,
+ * or undefined when the run is not paused at one. `approve` answers a message with its
+ * text; otherwise the verb chooses the option of the same id, which the form validates.
+ */
+export function attentionSugarRequest(
+  run: WorkflowRun,
+  decision: string,
+  text: string | undefined
+): AttentionAnswerRequest | undefined {
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined) return undefined;
+  const choose = decision === 'approve' && attentionForm(wait) === 'message' ? [] : [decision];
+  return text === undefined ? { choose } : { choose, text };
 }
 
 /** Render an operation failure, including a surface-specific child-run redirect. */
@@ -460,11 +591,14 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
       // parent's workflow node with empty output (the child's real output is then
       // discarded on resume) and orphan the still-paused child. Redirect the
       // operator to the child run, where the actual gate lives.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
-    case 'action_required':
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'approve');
+    case 'blocked_on_children':
+      // A fan-out parent waits on each unfinished child, and each child is answered by
+      // its own run id — never through the parent.
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'approve');
+    case 'attention':
       throw new Error(
-        `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
-          'abandon it if it should not continue.'
+        `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
       );
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
@@ -532,17 +666,18 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
     : undefined;
   const attention = runAttention(run);
   switch (attention?.kind) {
-    case 'action_required':
+    case 'attention':
       throw new Error(
-        `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
-          'abandon it if it should not continue.'
+        `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
       );
     case 'blocked_on_child':
       // Same redirect as assertApprovable: the parent's pause is not a rejectable
       // gate — cancelling the parent here would silently orphan the still-paused
       // child run. Reject the child (its own gate) or abandon the parent (which
       // cascade-cancels the subtree) instead.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
+      throw new ChildRunRedirectError(run.id, [attention.childRunId], attention.nodeId, 'reject');
+    case 'blocked_on_children':
+      throw new ChildRunRedirectError(run.id, attention.childRunIds, attention.nodeId, 'reject');
     case 'unreadable':
       if (isRejectableUnreadableGate(run, attention)) break;
       if (attention.reason === 'malformed_gate') {
@@ -665,7 +800,7 @@ export interface AbandonWorkflowResult {
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
    * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
    * (the hook only fires from inside the child's own execution) — the user should
-   * resume it (fails the node cleanly) or abandon it too.
+   * resume it (it reads this sub-run's outcome) or abandon it too.
    */
   blockedParentRunId: string | null;
 }
@@ -798,6 +933,17 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
   return approval;
 }
 
+/**
+ * Read-only precheck for `approve`, `reject` and `respond <decision>` on every surface. At
+ * an attention wait the verb is sugar for an answer in the wait's form; at a gate it must
+ * be a decision the gate accepts. The operations enforce the same rules.
+ */
+export function assertResponseAccepted(run: WorkflowRun, decision: string, text?: string): void {
+  const sugar = attentionSugarRequest(run, decision, text);
+  if (sugar !== undefined) attentionAnswerFor(run, assertAnswerable(run), sugar);
+  else assertRespondable(run, decision);
+}
+
 export interface RunActionStore {
   deleteWorkflowRun: (id: string) => Promise<void>;
 }
@@ -812,6 +958,7 @@ export interface WorkflowOperationsDeps {
     | 'cancelWorkflowRun'
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'
+    | 'answerAttentionWait'
     | 'cancelResumableRunsForConversation'
     | 'deleteWorkflowNodeSessions'
     | 'listWorkflowRuns'
@@ -869,6 +1016,12 @@ export interface WorkflowOperations {
     actor: RunActor,
     origin: GateAnswerOrigin
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
+  answerWorkflow: (
+    runId: string,
+    request: AttentionAnswerRequest,
+    actor: RunActor,
+    origin: GateAnswerOrigin
+  ) => Promise<AttentionAnswerOperationResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
   ) => Promise<{ deleted: number }>;
@@ -990,10 +1143,11 @@ export function createWorkflowOperations({
   }
 
   /**
-   * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it,
-   * return the parent's run id — abandoning the child strands that parent (nothing
-   * re-fires the auto-resume hook for a terminal-via-abandon child), so callers must
-   * tell the user to resume (fails the node cleanly) or abandon the parent too.
+   * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it —
+   * a 1:1 child, or one of the children a fan-out waits on — return the parent's run
+   * id. Abandoning the child strands that parent (nothing re-fires the auto-resume hook
+   * for a terminal-via-abandon child), so callers must tell the user to resume it (it
+   * reads this child's outcome) or abandon the parent too.
    * Best-effort: lookup failures are logged and read as "no blocked parent".
    */
   async function findParentBlockedOn(run: WorkflowRun): Promise<string | null> {
@@ -1073,7 +1227,63 @@ export function createWorkflowOperations({
         `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`
       );
     }
+    // A bare resume continues a message-form wait with empty text, which keeps waits from
+    // before answers continuable. Any other form has no answer to continue with.
+    const wait = pausedAttentionWait(run);
+    if (wait !== undefined && wait.answer === undefined && attentionForm(wait) !== 'message') {
+      throw new Error(
+        `Run ${run.id} is waiting for an answer to its '${attentionForm(wait)}' attention wait. ` +
+          'Answer it with answer instead of resuming it.'
+      );
+    }
     return run;
+  }
+
+  /**
+   * Record an answer to the attention wait `run` is paused at. The run stays paused and
+   * its answer is a due continuation, so a continuation host continues it whichever
+   * surface answered. `action` is the verb the caller used, for authorization.
+   */
+  async function answerRun(
+    run: WorkflowRun,
+    request: AttentionAnswerRequest,
+    actor: RunActor,
+    origin: GateAnswerOrigin,
+    action: RunAction
+  ): Promise<AttentionAnswerOperationResult> {
+    await assertMayAct(run, actor, action);
+    assertAnswerAdmissible(run, origin);
+    const wait = assertAnswerable(run);
+    const answer = attentionAnswerFor(run, wait, request);
+    const { answered } = await store.answerAttentionWait(run.id, {
+      ...wait,
+      answer,
+      answeredVia: origin.via,
+      answeredAt: new Date().toISOString(),
+    });
+    if (!answered) {
+      const current = await store.getWorkflowRun(run.id);
+      throw staleGateError(run.id, current);
+    }
+    return {
+      workflowName: run.workflow_name,
+      workingPath: run.working_path,
+      userMessage: run.user_message,
+      codebaseId: run.codebase_id,
+      conversationId: run.conversation_id,
+      type: 'attention',
+      answer,
+    };
+  }
+
+  async function answerWorkflow(
+    runId: string,
+    request: AttentionAnswerRequest,
+    actor: RunActor,
+    origin: GateAnswerOrigin
+  ): Promise<AttentionAnswerOperationResult> {
+    const run = await getRunOrThrow(runId, 'operations.workflow_answer_lookup_failed');
+    return answerRun(run, request, actor, origin, 'respond');
   }
 
   async function cancelRunAndCleanup(
@@ -1513,6 +1723,8 @@ export function createWorkflowOperations({
     origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
+    const sugar = attentionSugarRequest(run, 'approve', comment);
+    if (sugar !== undefined) return answerRun(run, sugar, actor, origin, 'approve');
     await assertMayAct(run, actor, 'approve');
     assertAnswerAdmissible(run, origin);
     const approval = assertApprovable(run);
@@ -1644,11 +1856,13 @@ export function createWorkflowOperations({
         break;
       }
       case 'child_workflow':
-        // Unreachable: assertApprovable already redirects a child_workflow gate to the
-        // child run before this point. Fail loud rather than silently falling through
-        // to the generic 'approval' shape above if that guard is ever bypassed.
+      case 'fan_out':
+        // Unreachable: assertApprovable already redirects a child_workflow or fan_out
+        // gate to the child runs before this point. Fail loud rather than silently
+        // falling through to the generic 'approval' shape above if that guard is ever
+        // bypassed.
         throw new Error(
-          `approveWorkflow: unexpected child_workflow gate reached resolution for run ${runId}`
+          `approveWorkflow: unexpected ${approval.type} gate reached resolution for run ${runId}`
         );
       default: {
         const unreachable: never = approval.type;
@@ -1704,6 +1918,18 @@ export function createWorkflowOperations({
     origin: GateAnswerOrigin
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
+    const sugar = attentionSugarRequest(run, 'reject', reason);
+    if (sugar !== undefined) {
+      // At an attention wait a reject is an answer like any other; it never cancels.
+      const answered = await answerRun(run, sugar, actor, origin, 'reject');
+      return {
+        ...answered,
+        cancelled: false,
+        maxAttemptsReached: false,
+        writeBack: false,
+        newMode: true,
+      };
+    }
     await assertMayAct(run, actor, 'reject');
     assertAnswerAdmissible(run, origin);
     const approval = assertRejectable(run);
@@ -1757,12 +1983,13 @@ export function createWorkflowOperations({
           };
         }
         case 'child_workflow':
-          // Unreachable: assertRejectable already redirects a child_workflow gate to
-          // the child run before this point. Fail loud rather than silently falling
-          // through to the generic rework/cancel path below if that guard is ever
-          // bypassed.
+        case 'fan_out':
+          // Unreachable: assertRejectable already redirects a child_workflow or fan_out
+          // gate to the child runs before this point. Fail loud rather than silently
+          // falling through to the generic rework/cancel path below if that guard is
+          // ever bypassed.
           throw new Error(
-            `rejectWorkflow: unexpected child_workflow gate reached resolution for run ${runId}`
+            `rejectWorkflow: unexpected ${approval.type} gate reached resolution for run ${runId}`
           );
         case 'approval':
         case 'interactive_loop':
@@ -1918,6 +2145,8 @@ export function createWorkflowOperations({
     origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
+    const sugar = attentionSugarRequest(run, decision, text);
+    if (sugar !== undefined) return answerRun(run, sugar, actor, origin, 'respond');
     await assertMayAct(run, actor, 'respond');
     assertAnswerAdmissible(run, origin);
     const approval = assertRespondable(run, decision);
@@ -2032,6 +2261,7 @@ export function createWorkflowOperations({
     approveWorkflow,
     rejectWorkflow,
     respondToWorkflow,
+    answerWorkflow,
     resetWorkflowNodeSessions,
   };
 }

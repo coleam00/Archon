@@ -23,7 +23,7 @@ function attentionState(run: RunState): AttentionState {
         JSON.stringify([call.streamId, call.toolCallId, call.raisedAt])
       );
     case 'awaiting_response':
-    case 'action_required':
+    case 'attention':
       return [JSON.stringify([attention.kind, attention.occurrence])];
     case 'terminal':
       return [attention.status];

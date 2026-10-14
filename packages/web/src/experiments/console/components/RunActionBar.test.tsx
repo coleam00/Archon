@@ -24,11 +24,13 @@ test('the attention banner Resume action dispatches one resume request and no ga
     status: 'paused',
     started_at: '2026-10-12T00:00:00.000Z',
     attention: {
-      kind: 'action_required',
+      kind: 'attention',
       runId: 'needs-resume',
       nodeId: 'hold',
       message: 'Rotate then resume',
-      occurrence: 'wait:now',
+      occurrence: 'legacy:hold',
+      form: 'message',
+      options: [],
     },
   });
   let click: (() => void) | undefined;

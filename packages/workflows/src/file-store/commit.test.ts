@@ -97,7 +97,7 @@ test('a torn UTF-8 tail is ignored, repaired by a writer, and deleting the snaps
 test('retraction hides only cancelled fan-out events without rewriting the log', async () => {
   const { store, run, dir } = await fixture();
   await store.claimPendingWorkflowRun(run.id);
-  await store.cancelFanOutRun(run.id, 'fan_out_gate');
+  await store.cancelFanOutRun(run.id, 'fan_out_orphan');
   const before = await readFile(join(dir, 'log.jsonl'), 'utf8');
   await store.recoverCancelledFanOutRun(run.id);
   expect(await store.listWorkflowEvents(run.id)).toEqual([]);

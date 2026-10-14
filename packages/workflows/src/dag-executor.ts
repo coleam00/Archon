@@ -56,8 +56,6 @@ import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './w
 import {
   assertWorkflowSourceIntegrity,
   liveSourceRoots,
-  resolveChildDiscoveryRoot,
-  resolveChildInstalledPacks,
   WorkflowSourceIntegrityError,
   type WorkflowSourceRoots,
 } from './workflow-source';
@@ -68,7 +66,7 @@ import type {
   WorkflowDeps,
   WorkflowCommandSurface,
 } from './deps';
-import { spellWorkflowCommand } from './deps';
+import { attentionAnswerLines, spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -82,7 +80,14 @@ import type { OverlayChangeSummary } from './container-context';
 import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
-import { approvalContextSchema } from './schemas/workflow-run';
+import {
+  approvalContextSchema,
+  attentionForm,
+  attentionOccurrence,
+  attentionOptions,
+  type WorkflowAttentionWaitContext,
+} from './schemas/workflow-run';
+import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
@@ -129,7 +134,7 @@ import {
   isAgentNode,
   isLoopGroupNode,
   definedOutputPaths,
-  loopGroupBodySinks,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
@@ -143,18 +148,18 @@ import {
   runMayPersistSessions,
   readSubrunMetadata,
   isApprovalContext,
+  isTerminalRunStatus,
   inputEnvKey,
   isNodeContextResume,
   mcpDeclaration,
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
-  WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { buildExecNodeEnvironment } from './exec-environment';
+import { buildAiNodeEnvironment, buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   FAN_OUT_CANCEL_REASONS,
@@ -219,7 +224,7 @@ import {
   type WorkflowUsage,
 } from './logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
-import { mapWithLimit } from './utils/map-with-limit';
+import { mapWithHeldSlots, mapWithLimit } from './utils/map-with-limit';
 import { collectComposedSuspensionPaths, instantiateResolvedInclude } from './include-expander';
 import { buildInstanceSnapshots, composeFanOutScopeSegment } from './fan-out-identity';
 import {
@@ -2225,6 +2230,16 @@ function observeNodeCheckout(ctx: RunLayersContext): Promise<CheckoutObservation
   });
 }
 
+function aiNodeEnvironment(
+  ctx: RunLayersContext,
+  execution: NodeExecutionRecord
+): Record<string, string> {
+  return buildAiNodeEnvironment(
+    execution,
+    ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
+  );
+}
+
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
@@ -2457,6 +2472,7 @@ async function executeNodeInternal(
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
+    env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
     ...(nodeMcp.kind === 'load'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
@@ -2519,7 +2535,10 @@ async function executeNodeInternal(
         reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
-        env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
+        env: {
+          ...(ctx.execContext.kind === 'host' ? process.env : {}),
+          ...nodeOptionsWithAbort.env,
+        },
         protectedEnvKeys: ctx.config.protectedEnvKeys,
         protectedCredentialValues: ctx.config.protectedCredentialValues,
       }),
@@ -4125,7 +4144,7 @@ async function finalizeLoopFromSignal(
 
 /**
  * Only a sole terminal gate or wait can resume through its enclosing group.
- * The loader warns about other placements, which have no unambiguous owner.
+ * The loader rejects other placements, which have no unambiguous owner.
  */
 function findLoopGroupTerminalSuspendNode(
   bodyNodes: readonly DagNode[]
@@ -4134,9 +4153,19 @@ function findLoopGroupTerminalSuspendNode(
   return sink !== undefined && (isGateNode(sink) || sink.kind === 'wait') ? sink : undefined;
 }
 
+/** An iteration's output: the first completed, non-empty one among its output nodes. */
+function loopGroupIterationOutput(
+  bodyNodes: readonly DagNode[],
+  outputs: ReadonlyMap<string, NodeOutput>
+): NodeOutput | undefined {
+  return loopGroupOutputNodes(bodyNodes)
+    .map(n => outputs.get(n.id))
+    .find(o => o?.state === 'completed' && o.output.trim().length > 0);
+}
+
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
- * completion condition (`until` signal in the body's terminal-node output, and/or
+ * completion condition (`until` signal in the iteration's output, and/or
  * `until_bash` exit code) or `max_iterations`.
  *
  * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
@@ -4150,8 +4179,8 @@ function findLoopGroupTerminalSuspendNode(
  * `$LOOP_PREV.<id>.output` refs in body prompts resolve against a snapshot of the
  * *previous* iteration's body outputs (empty on iteration 1).
  *
- * `$groupId.output` (visible to the outer DAG) = the final iteration's terminal-node output
- * (mirrors the top-level run's terminal-output selection).
+ * `$groupId.output` (visible to the outer DAG) = the final iteration's output, chosen by
+ * {@link loopGroupIterationOutput}.
  *
  * Key behaviors:
  * - Returns NodeExecutionResult (not void) — the outer DAG executor owns run lifecycle
@@ -4506,10 +4535,10 @@ async function executeLoopGroupBody(
   // safe to reuse as-is; only the gate's own answer needed reconstructing.
   if ((isEscalatedGateResume || isEscalatedWaitResume) && loopPrevOutputs !== undefined) {
     const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
-    const terminalSink = terminalNode ? loopPrevOutputs.get(terminalNode.id) : undefined;
-    if (terminalSink !== undefined) {
+    if (terminalNode !== undefined && loopPrevOutputs.has(terminalNode.id)) {
+      const resumedResult = loopGroupIterationOutput(bodyNodes, loopPrevOutputs);
       const resumedIteration = resumeIteration;
-      const rawIterationOutput = terminalSink.output;
+      const rawIterationOutput = resumedResult?.output ?? '';
       const resumedSignalDetected =
         group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
       let resumedBashComplete = false;
@@ -4619,7 +4648,9 @@ async function executeLoopGroupBody(
       if (resumedSignalDetected || resumedBashComplete) {
         const resumedOutput = stripCompletionTags(rawIterationOutput, group.until);
         const resumedStructuredOutput =
-          'structuredOutput' in terminalSink ? terminalSink.structuredOutput : undefined;
+          resumedResult !== undefined && 'structuredOutput' in resumedResult
+            ? resumedResult.structuredOutput
+            : undefined;
         await safeSendMessage(
           platform,
           conversationId,
@@ -4942,16 +4973,12 @@ async function executeLoopGroupBody(
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
 
-    // Determine this iteration's terminal output (first completed terminal node in
-    // definition order — mirrors the top-level run's terminal-output selection).
     // DELIBERATELY NOT `returns:`-aware (#2470): a loop_group's per-iteration output is
     // the iteration's own result, not a caller contract — `returns:` selects a WORKFLOW's
     // result and only rebinds a child run's terminal output (see executeDagWorkflow). Leave
     // this positional scan as-is; do not "fix" the inconsistency.
-    const terminalSink = loopGroupBodySinks(bodyNodes)
-      .map(n => scopedNodeOutputs.get(n.id))
-      .find(o => o?.state === 'completed' && o.output.trim().length > 0);
-    const iterationOutput = terminalSink?.output ?? '';
+    const iterationResult = loopGroupIterationOutput(bodyNodes, scopedNodeOutputs);
+    const iterationOutput = iterationResult?.output ?? '';
     // Capture the PREVIOUS iteration's (cleaned) output before overwriting — the
     // until_bash env below exposes it as LOOP_PREV_OUTPUT (previous iteration, same
     // semantics as executeLoopNode; empty on the first iteration).
@@ -4963,8 +4990,8 @@ async function executeLoopGroupBody(
     // The sink's structured payload rides along AS-IS (#2637): a JSON payload never
     // contains the completion tag, so no stripping applies to it.
     lastIterationStructuredOutput =
-      terminalSink !== undefined && 'structuredOutput' in terminalSink
-        ? terminalSink.structuredOutput
+      iterationResult !== undefined && 'structuredOutput' in iterationResult
+        ? iterationResult.structuredOutput
         : undefined;
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
@@ -5552,6 +5579,7 @@ async function executeLoopNode(
     }
   }
   ctx.currentExecution = execution;
+  const iterationEnv = { ...resolvedOptions?.env, ...aiNodeEnvironment(ctx, execution) };
   loopFinalStopReason = undefined;
   // Iterations share the loop's attempt, so they share its provider-event sequence.
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
@@ -5834,7 +5862,7 @@ async function executeLoopNode(
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
             env: {
               ...(ctx.execContext.kind === 'host' ? process.env : {}),
-              ...resolvedOptions?.env,
+              ...iterationEnv,
             },
             protectedEnvKeys: ctx.config.protectedEnvKeys,
             protectedCredentialValues: ctx.config.protectedCredentialValues,
@@ -5959,6 +5987,7 @@ async function executeLoopNode(
 
           const iterationOptions: SendQueryOptions | undefined = {
             ...resolvedOptions,
+            env: iterationEnv,
             abortSignal: iterationAbortController.signal,
           };
 
@@ -7083,18 +7112,28 @@ async function executeWaitNode(
     if (message === '') {
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
+    const options = resolveAttentionOptions(node.id, condition.options, ctx);
     context = {
       ...owner,
       kind: 'attention',
       waitingSince: now.toISOString(),
       message,
+      pauseId: randomUUID(),
+      form: condition.form,
+      ...(options !== undefined ? { options } : {}),
     };
   }
 
   const resumeAtMs = context.kind === 'attention' ? undefined : Date.parse(context.resumeAt);
   const isSignaled = context.kind === 'event' && context.signaledAt !== undefined;
   const isDue = resumeAtMs !== undefined && now.getTime() >= resumeAtMs;
-  const isAttentionResume = context.kind === 'attention' && persisted !== undefined;
+  // An answered attention wait completes with its answer. A bare `resume` completes only a
+  // message-form wait, with empty text, which keeps waits paused before answers existed
+  // continuable; any other form pauses again until it is answered.
+  const isAttentionResume =
+    context.kind === 'attention' &&
+    persisted !== undefined &&
+    (context.answer !== undefined || attentionForm(context) === 'message');
   if (!isSignaled && !isDue && !isAttentionResume) {
     let paused = false;
     try {
@@ -7118,11 +7157,11 @@ async function executeWaitNode(
       const delivered = await safeSendMessage(
         platform,
         conversationId,
-        `⏸️ **Action required for workflow run \`${workflowRun.id}\`**\n\n${context.message}\n\nResume this run after the action is complete, or abandon it if it should not continue.`,
+        attentionNotification(platform, workflowRun.id, context),
         { workflowId: workflowRun.id, nodeName: node.id }
       );
       if (!delivered) {
-        const deliveryError = `Wait node '${node.id}' could not deliver its action-required notification`;
+        const deliveryError = `Wait node '${node.id}' could not deliver its attention notification`;
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedAttentionWait(workflowRun.id, context, deliveryError),
           {
@@ -7158,7 +7197,11 @@ async function executeWaitNode(
         }
       : {}),
   } as const;
-  const output = JSON.stringify(result);
+  // An attention wait's node output is its answer; the wait outcome row keeps `result`.
+  const answer = context.kind === 'attention' ? (context.answer ?? { text: '' }) : undefined;
+  const nodeValue = answer ?? result;
+  const output = JSON.stringify(nodeValue);
+  const declaredOutputPaths = declaredOutputPathsFromSchema(waitOutputFormat(node.wait));
   const stepName = stepNamePrefix + node.id;
   const completed =
     execution === undefined
@@ -7168,17 +7211,14 @@ async function executeWaitNode(
           { status: 'completed' },
           {
             durationMs: result.waited_ms,
-            output: {
-              text: output,
-              structured: result,
-              declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
-            },
+            output: { text: output, structured: nodeValue, declaredOutputPaths },
           }
         );
   if (persisted !== undefined) {
     const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
       stepName,
       result,
+      ...(answer !== undefined ? { answer } : {}),
       execution: completed,
     });
     if (!outcome.cleared) {
@@ -7188,18 +7228,70 @@ async function executeWaitNode(
     // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
     await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
-    const rows = waitCompletionEvents(workflowRun.id, { stepName, result, execution: completed });
+    const rows = waitCompletionEvents(workflowRun.id, {
+      stepName,
+      result,
+      ...(answer !== undefined ? { answer } : {}),
+      execution: completed,
+    });
     await deps.store.createWorkflowEvent(rows.outcome);
     await persistNodeEvent(deps.store, rows.node);
     await recordDerivedNodeState({ logDir }, node, rows.node);
   }
   if (completed !== undefined) return serializeNodeOutput(completed);
-  return {
-    state: 'completed',
-    output,
-    structuredOutput: result,
-    declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
-  };
+  return { state: 'completed', output, structuredOutput: nodeValue, declaredOutputPaths };
+}
+
+/**
+ * Resolve an attention wait's options when it pauses. A whole `$node.output.<field>`
+ * reference is read here and must pass the same rules as literal options; the node fails,
+ * naming the producer, rather than pausing with options nobody can answer.
+ */
+function resolveAttentionOptions(
+  nodeId: string,
+  options: AttentionOption[] | string | undefined,
+  ctx: RunLayersContext
+): AttentionOption[] | undefined {
+  if (typeof options !== 'string') return options;
+  const ref = parseWholeOutputRef(options);
+  const producer = ref === undefined ? undefined : ctx.nodeOutputs.get(ref.nodeId);
+  if (ref === undefined || producer === undefined) {
+    throw new Error(
+      `Wait node '${nodeId}' options '${options}' name no node that has produced output`
+    );
+  }
+  const parsed = attentionOptionsSchema.safeParse(
+    wholeRefLogicalValue(producer, ref.nodeId, ref.field, options.trim())
+  );
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map(issue => (issue.path.length > 0 ? `${issue.path.join('.')}: ` : '') + issue.message)
+      .join('; ');
+    throw new Error(
+      `Wait node '${nodeId}' options '${options}' from '${ref.nodeId}' are not a valid option list ` +
+        `(an array of { id, label? } with unique kebab-case ids and at least one entry): ${problems}`
+    );
+  }
+  return parsed.data;
+}
+
+/** The message an attention wait sends when it pauses: the question and how to answer it. */
+function attentionNotification(
+  surface: IWorkflowPlatform,
+  runId: string,
+  wait: WorkflowAttentionWaitContext
+): string {
+  const answer = attentionAnswerLines(surface, {
+    runId,
+    form: attentionForm(wait),
+    options: [...attentionOptions(wait)],
+    occurrence: attentionOccurrence(wait),
+  });
+  return [
+    `⏸️ **Workflow run \`${runId}\` needs attention**`,
+    wait.message,
+    [...answer, `Abandon: \`${spellWorkflowCommand(surface, `abandon ${runId}`)}\``].join('\n'),
+  ].join('\n\n');
 }
 
 /**
@@ -7791,18 +7883,18 @@ async function executeWorkflowNode(
 /**
  * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
  * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
- * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180).
- * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
- * `fan_out_checkout_check`: a child whose path-lock or checkout-sharing store access failed
- * before it ran any node (executor.ts).
+ * recoverable on resume). `fan_out_orphan`: a child whose `child_index` fell out of range
+ * when the item list shrank. `fan_out_checkout_check`: a child whose path-lock or
+ * checkout-sharing store access failed before it ran any node (executor.ts).
  *
- * `fan_out_sibling` is READ-ONLY legacy. It marked an in-flight sibling cancelled once an
- * earlier revision's fail-fast sealed the node's fate; nothing writes it any more, because a
- * fan-out no longer ends one child's run on account of another's. It stays in the type and
- * in the recoverable set on purpose: a run that was in flight across the upgrade has rows
- * carrying it, and dropping it would make those children read as user-cancelled — terminal,
- * never re-driven, so the parent would fail every resume with no way back. Delete it only
- * once no resumable run can predate the change.
+ * `fan_out_sibling` and `fan_out_gate` are READ-ONLY legacy. `fan_out_sibling` marked an
+ * in-flight sibling cancelled once an earlier revision's fail-fast sealed the node's fate;
+ * `fan_out_gate` marked a child cancelled because it paused, before a paused child could
+ * wait as its own run (#4044). Nothing writes either any more. They stay in the type and
+ * in the recoverable set on purpose: a run from before the upgrade has rows carrying
+ * them, and dropping them would make those children read as user-cancelled — terminal,
+ * never re-driven, so the parent would fail every resume with no way back. Delete them
+ * only once no resumable run can predate the change.
  */
 const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set(FAN_OUT_CANCEL_REASONS);
 
@@ -7845,27 +7937,6 @@ function hashFanOutItem(input: string): string {
 }
 
 /**
- * #2180 pointer: a fan-out child paused at an approval gate. Fan-out children must be
- * autonomous — the parent run has a SINGLE approval-gate slot, so N concurrently-paused
- * children cannot be represented. Names the offending child + index + run id (I4) and
- * points the author at the two supported fixes. Removing the gate then resuming re-drives
- * exactly this child (its cancel is tagged `fan_out_gate` → recoverable).
- */
-function fanOutAutonomousGateMessage(
-  node: WorkflowNode,
-  childRunId: string,
-  index: number
-): string {
-  return (
-    `fan_out node '${node.id}': child ${String(index)} (run ${childRunId.slice(0, 8)}) of ` +
-    `'${node.workflow}' paused at an approval gate. Fan-out children must run autonomously — ` +
-    'the parent run has a single gate slot, so N concurrently-paused children cannot be ' +
-    `represented (#2180). Remove the gate from '${node.workflow}' and resume (this child ` +
-    "re-drives), or invoke it as a single (non-fan-out) 'workflow:' node."
-  );
-}
-
-/**
  * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
  * auto-cancelled (AGENTS.md "Do not guess lifecycle ownership"). Names the state and the
  * run to act on, with wording keyed to `last_activity_at` staleness (fresh → likely live;
@@ -7887,18 +7958,16 @@ function fanOutAmbiguousChildMessage(
         `wait for it to finish and resume, or abandon run ${child.id} if it is stuck.`;
 }
 
-/** Resolve the target at spawn time, when runtime-authored child workflows are available. */
+/**
+ * Resolve a composed fan-out's `include:` target at run time. The body may be a support
+ * workflow of its own installed pack.
+ */
 export async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string,
-  /**
-   * `include` for a composed body, which may be a support workflow of its own installed
-   * pack; `workflow` for a child run, which must be dispatchable.
-   */
-  target: 'include' | 'workflow',
-  /** Frozen source roots owned by composed execution, or a live child authoring root. */
-  source?: WorkflowSourceRoots | string
+  /** Frozen source roots owned by composed execution. */
+  source?: WorkflowSourceRoots
 ): Promise<
   | {
       definition: ResolvedWorkflow;
@@ -7908,8 +7977,7 @@ export async function resolveFanOutChildDefinition(
   | { unresolved: string }
 > {
   try {
-    const sourceRoots =
-      typeof source === 'string' ? liveSourceRoots(source) : (source ?? liveSourceRoots(cwd));
+    const sourceRoots = source ?? liveSourceRoots(cwd);
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
@@ -7919,10 +7987,7 @@ export async function resolveFanOutChildDefinition(
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
     // is reachable here only by the composition that names it.
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
-    const definition = resolveWorkflowName(
-      targetName,
-      target === 'include' ? definitions : workflows.map(w => w.workflow)
-    );
+    const definition = resolveWorkflowName(targetName, definitions);
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
@@ -7998,15 +8063,16 @@ async function findFanOutChildRuns(
  * `metadata.child_index`:
  *   - resolve `fan_out.items` → a JSON array (fail closed on non-array/malformed);
  *   - re-inspect existing children (findChildRuns by parent_node_id) by child_index, so
- *     parent resume skips completed instances and re-drives failed ones for free;
- *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel); a
- *     fan-out-cancelled (gate/sibling) child is recoverable → re-driven, a user-cancelled
- *     one stays terminal;
- *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
- *     — the single parent gate slot can't hold N children) and is cancelled tagged
- *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
- *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (AGENTS.md
- *     "Do not guess lifecycle ownership"), surfacing a staleness-keyed wait/abandon action;
+ *     re-entry skips completed instances. A recovery (resuming a failed node) re-drives
+ *     failed and fan-out-cancelled children; a continuation (re-entry after this node
+ *     paused on its children) threads every settled child as it is;
+ *   - spawn/re-drive the unsettled indices through a `max_parallel` window in which a
+ *     paused child keeps its slot (mapWithHeldSlots);
+ *   - a child that PAUSES stays paused as its own run and queue item (#4044). While any
+ *     child is unfinished, the parent pauses on a `fan_out` gate listing them, and
+ *     re-enters here when they finish. A `running`/`pending` child found on a recovery is
+ *     ambiguous → the node fails WITHOUT auto-cancel (AGENTS.md "Do not guess lifecycle
+ *     ownership"), surfacing a staleness-keyed wait/abandon action;
  *   - EVERY index is spawned and every child runs to its own terminal state — no child's
  *     outcome ends another's — and only then does the join reduce: `all_success` (any
  *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal if a
@@ -8015,8 +8081,8 @@ async function findFanOutChildRuns(
  *
  * Execution failures return a failed NodeExecutionResult; lifecycle persistence
  * rejection escapes to the run failure boundary. `node_completed` is written ONLY when the join is
- * satisfied, so a failed fan-out node re-runs and re-inspects its children on resume
- * against the durable child-run rows.
+ * satisfied, so a paused or failed fan-out node re-runs and re-inspects its children on
+ * re-entry against the durable child-run rows.
  */
 async function executeFanOutWorkflowNode(
   node: WorkflowNode,
@@ -8083,9 +8149,9 @@ async function executeFanOutWorkflowNode(
     );
   };
 
-  // Notify the platform immediately of a fan-out failure (S3). Every early-failure branch
-  // uses this — items resolution, both gate paths, the child-lookup error, the interactive
-  // preflight and the join — so a fan-out failure never reaches the user through the
+  // Notify the platform immediately of a fan-out failure or pause (S3). Every early-failure
+  // branch uses this — items resolution, the child-lookup errors, the ambiguous-child
+  // check and the join — so a fan-out failure never reaches the user through the
   // end-of-run digest alone.
   const notify = async (text: string): Promise<void> => {
     await safeSendMessage(platform, conversationId, text, msgContext);
@@ -8265,96 +8331,71 @@ async function executeFanOutWorkflowNode(
     return failResult(msg, 'unknown');
   }
 
-  // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot. Split the
-  //    non-terminal existing children by how much is actually known:
-  //    - `paused` = a gate was genuinely OBSERVED → the designed autonomous-fan-out
-  //      rejection: cancel it (tagged `fan_out_gate`, so removing the gate + resuming
-  //      re-drives it) and point the author at the gate.
-  //    - `running`/`pending` = AMBIGUOUS (a crash-orphan of a prior pass, or a live run in
-  //      another process). Per AGENTS.md "Do not guess lifecycle ownership"
-  //      we DO NOT cancel — surface the state + a one-click action, wording
-  //      keyed to `last_activity_at` staleness. NEVER the gate message for a non-gate cause.
-  const pausedExisting = [...existingByIndex.entries()].filter(([, c]) => c.status === 'paused');
-  if (pausedExisting.length > 0) {
-    const [index, child] = pausedExisting[0];
-    for (const [, c] of pausedExisting) await cancelChild(c.id, 'fan_out_gate');
-    const msg = fanOutAutonomousGateMessage(node, child.id, index);
-    await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
-  const ambiguous = [...existingByIndex.entries()].filter(
-    ([, c]) => c.status === 'running' || c.status === 'pending'
-  );
-  if (ambiguous.length > 0) {
-    const [index, child] = ambiguous[0];
-    const stale = isFanOutChildStale(child);
-    getLog().warn(
-      {
-        parentRunId: parentRun.id,
-        nodeId: node.id,
-        childRunId: child.id,
-        childIndex: index,
-        status: child.status,
-        stale,
-      },
-      'workflow.fan_out_child_nonterminal_on_resume'
+  // 4. Classify the existing children (#4044 D3). The node's own latest lifecycle record
+  //    tells a CONTINUATION — this node paused on its children, and one of them finished —
+  //    from a RECOVERY: an operator resuming a failed node, a crash, or a first run.
+  //    A continuation threads every settled child as it is, so a sibling that failed in
+  //    the first pass gets no free re-drive because another child paused. A recovery
+  //    re-drives failed and fan-out-cancelled children, as resume-through-parent always did.
+  //    A paused child is HELD in either mode: it keeps waiting for its own answer and keeps
+  //    its `max_parallel` slot. A `running`/`pending` child is held in a continuation (the
+  //    continuation host may be driving it after an answer), but is ambiguous in a
+  //    recovery — a crash-orphan or a live run in another process. Per AGENTS.md "Do not
+  //    guess lifecycle ownership" the node then fails WITHOUT cancelling it.
+  const prior = ctx.unfinishedInvocations?.get(
+    nodeInvocationKey(stepName, ctx.loopGroupPath)
+  )?.lifecycle;
+  const continuing = prior?.status === 'suspended' && prior.point === 'fan_out';
+  if (!continuing) {
+    const ambiguous = [...existingByIndex.entries()].filter(
+      ([, c]) => c.status === 'running' || c.status === 'pending'
     );
-    const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
-    await notify(
-      `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg} ` +
-        `Abandon: \`${spellWorkflowCommand(platform, `abandon ${child.id}`)}\``
-    );
-    return failResult(msg, 'unknown', undefined, undefined, child.id);
-  }
-
-  // A fan-out has one approval-gate slot, even for serial or isolated children.
-  {
-    // The fan-out target is a not-yet-started child, so it resolves from the parent's
-    // AUTHORING directory (live) rather than the parent's frozen copy — same rule as a
-    // 1:1 `workflow:` child. See resolveChildDiscoveryRoot.
-    const origin = await resolveChildDiscoveryRoot(parentRun.metadata);
-    const installed = await resolveChildInstalledPacks(parentRun.metadata);
-    const resolved = await resolveFanOutChildDefinition(
-      deps,
-      cwd,
-      node.workflow,
-      'workflow',
-      installed === undefined ? origin : liveSourceRoots(origin ?? cwd, undefined, installed)
-    );
-    if ('unresolved' in resolved) {
-      // Fail CLOSED. Skipping the check here would let a pausing target through unguarded on
-      // the strength of a lookup that did not happen, and the spawn is about to fail on
-      // this same unresolvable target anyway — so the only thing failing open buys is a
-      // worse message. Names the resolution problem, not a hazard the author cannot yet act on.
-      const msg =
-        `fan_out node '${node.id}': cannot verify that the target workflow '${node.workflow}' is ` +
-        `safe to fan out to, because it could not be resolved — ${resolved.unresolved}. Fix the ` +
-        'target name.';
+    if (ambiguous.length > 0) {
+      const [index, child] = ambiguous[0];
+      const stale = isFanOutChildStale(child);
       getLog().warn(
         {
           parentRunId: parentRun.id,
           nodeId: node.id,
-          childWorkflow: node.workflow,
-          reason: resolved.unresolved,
+          childRunId: child.id,
+          childIndex: index,
+          status: child.status,
+          stale,
         },
-        'workflow.fan_out_preflight_unresolved'
+        'workflow.fan_out_child_nonterminal_on_resume'
       );
-      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg, 'config');
+      const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
+      await notify(
+        `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg} ` +
+          `Abandon: \`${spellWorkflowCommand(platform, `abandon ${child.id}`)}\``
+      );
+      return failResult(msg, 'unknown', undefined, undefined, child.id);
     }
-    if (resolved.definition.interactive === true) {
-      const msg =
-        `fan_out node '${node.id}': target workflow '${node.workflow}' is interactive-class ` +
-        "('interactive: true') and may pause for human input — a fan-out has a single " +
-        'approval-gate slot for N children, so this is refused before any child is created. ' +
-        `Remove the pause capability from '${node.workflow}', or invoke it as a single ` +
-        "(non-fan-out) 'workflow:' node instead.";
-      getLog().warn(
-        { parentRunId: parentRun.id, nodeId: node.id, childWorkflow: node.workflow },
-        'workflow.fan_out_interactive_target'
-      );
-      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg, 'config');
+  }
+
+  const settledByIndex = new Map<number, ChildWorkflowOutcome>();
+  /** Child run id of every held (non-terminal) child, by item index. */
+  const heldByIndex = new Map<number, string>();
+  for (const [index, child] of existingByIndex) {
+    switch (child.status) {
+      case 'paused':
+      case 'running':
+      case 'pending':
+        heldByIndex.set(index, child.id);
+        break;
+      case 'completed':
+        settledByIndex.set(index, childOutcomeFromRun(child));
+        break;
+      case 'failed':
+        if (continuing) settledByIndex.set(index, childOutcomeFromRun(child));
+        break;
+      case 'cancelled':
+        // A user-cancelled child (no fan-out tag) is terminal in either mode — it fails
+        // all_success and is represented in all_done.
+        if (continuing || !isFanOutRecoverableCancel(child)) {
+          settledByIndex.set(index, childOutcomeFromRun(child));
+        }
+        break;
     }
   }
 
@@ -8365,83 +8406,155 @@ async function executeFanOutWorkflowNode(
     );
   }
 
-  // 6. Execute EVERY index through a bounded sliding window. Classification per index: an
-  //    existing completed child threads its recorded outcome (resume skip); an existing
-  //    failed OR fan-out-cancelled (recoverable) child is re-driven; a user-cancelled child
-  //    stays terminal; a missing index spawns fresh.
+  // 5. Spawn or re-drive every unsettled index through a `max_parallel` window. A failed
+  //    or fan-out-cancelled existing child is re-driven in a recovery; a missing index
+  //    spawns fresh.
   //
-  //    No child's outcome terminates another's. Every index is spawned and every child runs
-  //    to its OWN terminal state before the join reduces — a fan-out is N independent
-  //    governed runs that happen to be siblings, not a competition. An earlier revision
-  //    fail-fasted here: the first failure under all_success skipped the remaining spawns
-  //    and cancelled in-flight siblings. That saved spend by deciding one child's fate from
-  //    another's, which is not the engine's call to make, and it made the outcome of an
-  //    interrupted sibling depend on which child happened to finish first.
+  //    No child's outcome terminates another's. Every child runs to its OWN terminal state
+  //    before the join reduces — a fan-out is N independent governed runs that happen to
+  //    be siblings, not a competition. An earlier revision fail-fasted here, deciding one
+  //    child's fate from another's, which is not the engine's call to make.
   //
-  //    The cost is real and belongs to the author: a wide fan-out whose first child fails
-  //    now runs every remaining child, so worst-case spend is items.length rather than
-  //    "until the first failure". `max_parallel` bounds concurrency, not total spend —
-  //    a run-tree budget ceiling is #1961.
-  const settled = await mapWithLimit(
-    items,
-    fanOut.max_parallel,
-    async (item, i): Promise<ChildWorkflowOutcome> => {
-      // A rolled-back cancellation has not released the child's working-path lock.
-      // Let claimed siblings settle, but do not start another child against that lock.
-      if (childCancellationFailure) throw childCancellationFailure;
-      const existing = existingByIndex.get(i);
-      // Existing completed child → thread its outcome without re-spawning (resume skip).
-      if (existing?.status === 'completed') return childOutcomeFromRun(existing);
-      // A user-cancelled child (no fan-out tag) is terminal — thread it as-is (fails
-      // all_success; represented in all_done). A fan-out-tagged cancel is recoverable and
-      // falls through to re-drive.
-      if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) {
-        return childOutcomeFromRun(existing);
-      }
-      const input = itemToInput(item);
-      // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
-      // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
-      // collide with a `with:` key, so this spread order is unambiguous. The item travels
-      // LOGICALLY under `as` (#2637 — an object item stays an object for the child);
-      // `itemToInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
-      const childInputs: Record<string, JsonValue> = {
-        ...fanOutStaticInputs,
-        ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
-      };
-      const resumeChild =
-        existing?.status === 'failed'
-          ? ({ kind: 'failed', run: existing } as const)
-          : existing?.status === 'cancelled' && isFanOutRecoverableCancel(existing)
-            ? ({ kind: 'fan-out-cancelled', run: existing } as const)
-            : undefined;
-      // Whatever this child returns — completed, failed, cancelled, or paused — it is this
-      // child's outcome alone. The join reads them all once every one has settled.
-      const outcome = await runChild({
-        parentRun,
-        nodeId: stepName,
-        childWorkflowName: node.workflow,
-        input,
-        cwd,
-        conversationId,
-        userId: parentRun.user_id ?? undefined,
-        codebaseId: parentRun.codebase_id ?? undefined,
-        isolation: node.isolation,
-        childIndex: i,
-        itemHash: hashFanOutItem(input),
-        ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
-        ...(resumeChild ? { resumeChild } : {}),
-      }).catch((error: unknown) => {
-        if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
-        throw error;
-      });
-      // The parent cannot present N child gates. Make this child's pause terminal
-      // without deciding any sibling's outcome; the reason tag permits re-entry.
-      if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
-      return outcome;
-    }
-  );
+  //    The window bounds UNFINISHED children, not only executing ones: a child that pauses
+  //    keeps its slot (#4044 D2), because it may hold half-done edits in a shared checkout,
+  //    and `max_parallel: 1` promises the children run one at a time. Items past a full
+  //    window get no run row until a held child finishes and the parent continues.
+  //
+  //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
+  //    child fails still runs every remaining child. A run-tree budget ceiling is #1961.
+  const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
+    // A rolled-back cancellation has not released the child's working-path lock.
+    // Let claimed siblings settle, but do not start another child against that lock.
+    if (childCancellationFailure) throw childCancellationFailure;
+    const item = items[i];
+    const existing = existingByIndex.get(i);
+    const input = itemToInput(item);
+    // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
+    // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
+    // collide with a `with:` key, so this spread order is unambiguous. The item travels
+    // LOGICALLY under `as` (#2637 — an object item stays an object for the child);
+    // `itemToInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
+    const childInputs: Record<string, JsonValue> = {
+      ...fanOutStaticInputs,
+      ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
+    };
+    const resumeChild =
+      existing?.status === 'failed'
+        ? ({ kind: 'failed', run: existing } as const)
+        : existing?.status === 'cancelled'
+          ? ({ kind: 'fan-out-cancelled', run: existing } as const)
+          : undefined;
+    return runChild({
+      parentRun,
+      nodeId: stepName,
+      childWorkflowName: node.workflow,
+      input,
+      cwd,
+      conversationId,
+      userId: parentRun.user_id ?? undefined,
+      codebaseId: parentRun.codebase_id ?? undefined,
+      isolation: node.isolation,
+      childIndex: i,
+      itemHash: hashFanOutItem(input),
+      ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
+      ...(resumeChild ? { resumeChild } : {}),
+    }).catch((error: unknown) => {
+      if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+      throw error;
+    });
+  };
 
-  const outcomes = settledValuesOrThrow(settled, parentRun.id);
+  const unclaimed = (): number[] =>
+    items.flatMap((_, i) => (settledByIndex.has(i) || heldByIndex.has(i) ? [] : [i]));
+  for (
+    let waiting = unclaimed();
+    waiting.length > 0 && heldByIndex.size < fanOut.max_parallel;
+    waiting = unclaimed()
+  ) {
+    const settled = await mapWithHeldSlots(
+      waiting,
+      fanOut.max_parallel - heldByIndex.size,
+      spawn,
+      outcome => outcome.status === 'paused'
+    );
+    const claimed = settled.flatMap((result, k) =>
+      result === undefined ? [] : [{ index: waiting[k], result }]
+    );
+    const outcomes = settledValuesOrThrow(
+      claimed.map(c => c.result),
+      parentRun.id
+    );
+    claimed.forEach(({ index }, k) => {
+      const outcome = outcomes[k];
+      if (outcome.status === 'paused') heldByIndex.set(index, outcome.childRunId);
+      else settledByIndex.set(index, outcome);
+    });
+
+    // A held child may have finished while this pass ran (answered and continued in
+    // another process). Take its row's outcome so its slot frees for the next round.
+    if (heldByIndex.size === 0) break;
+    let rows: WorkflowRun[];
+    try {
+      rows = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
+    } catch (error) {
+      const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
+      await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg, 'unknown');
+    }
+    for (const [index, childRunId] of heldByIndex) {
+      const row = rows.find(r => r.id === childRunId);
+      if (row !== undefined && isTerminalRunStatus(row.status)) {
+        settledByIndex.set(index, childOutcomeFromRun(row));
+        heldByIndex.delete(index);
+      }
+    }
+  }
+
+  // 6. Some children are unfinished: pause the parent on them. Each child is its own run
+  //    and queue item, answered by its own run id; the engine never ends one for pausing.
+  //    The parent continues through `maybeResumeParentRun` once `isFanOutBlockReleased`
+  //    holds, re-enters here as a continuation, and joins when no child is held.
+  if (heldByIndex.size > 0) {
+    const held = [...heldByIndex.entries()].sort(([a], [b]) => a - b);
+    const unspawnedItems = unclaimed().length;
+    const message =
+      `fan_out node '${node.id}' is waiting on ${String(held.length)} unfinished sub-run(s) of ` +
+      `'${node.workflow}': ${held.map(([i, id]) => `item ${String(i)}: run ${id}`).join(', ')}` +
+      (unspawnedItems > 0 ? `; ${String(unspawnedItems)} item(s) not started yet` : '') +
+      '. Answer each paused sub-run by its own run id; this run continues when they finish.';
+    const suspended = finishNodeExecution(
+      execution,
+      { status: 'suspended', point: 'fan_out' },
+      { output: { text: '' }, diagnostics: { fanOut: true } }
+    );
+    const paused = await pauseGateRespectingExternalTransition(
+      deps,
+      parentRun.id,
+      {
+        type: 'fan_out',
+        nodeId: stepName,
+        message,
+        childRunIds: held.map(([, id]) => id),
+        unspawnedItems,
+      },
+      { suspension: serializeNodeStateRecord(suspended) }
+    );
+    if (!paused) return serializeNodeOutput(execution);
+    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+    await notify(
+      `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
+        `See them with \`${spellWorkflowCommand(platform, 'status')}\`.`
+    );
+    return serializeNodeOutput(suspended);
+  }
+
+  const outcomes = items.map((_, i) => {
+    const outcome = settledByIndex.get(i);
+    if (outcome === undefined) {
+      throw new Error(`fan_out node '${node.id}': item ${String(i)} has no settled outcome`);
+    }
+    return outcome;
+  });
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -8470,33 +8583,7 @@ async function executeFanOutWorkflowNode(
       : (subrunLogicalValue(o) as JsonValue);
   };
 
-  // 7. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
-  //    node. Cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate
-  //    is removed) and name the offending child (I4).
-  //
-  //    This is the ONE place a fan-out still cancels a child it did not have to, and it
-  //    survives the no-mutual-termination rule deliberately. A pause is not a terminal
-  //    state, so "every child runs to its own terminal state" has no answer for it: the
-  //    parent has a single approval slot and cannot hand it to N children, so the child
-  //    would wait forever for a gate it can never be given. This is an error path (#2438),
-  //    not a race: the node is failing either way, and the cancel just stops the run
-  //    dangling. A paused child never stops a sibling — everyone still runs to their own
-  //    terminal state.
-  //
-  //    The cancel that actually frees the path lock already fired mid-flight, the moment
-  //    the pause was observed. This pass is the idempotent backstop: it covers a paused
-  //    outcome that did not come from this attempt's spawn loop (a synthetic outcome from a
-  //    rejected slot), and re-cancelling an already-cancelled row is a no-op.
-  const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
-  if (pausedIdx !== -1) {
-    for (const o of outcomes)
-      if (o.status === 'paused') await cancelChild(o.childRunId, 'fan_out_gate');
-    const msg = fanOutAutonomousGateMessage(node, outcomes[pausedIdx].childRunId, pausedIdx);
-    await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config', totalCostUsd, totalTokens);
-  }
-
-  // 8. Join.
+  // 7. Join.
   if (fanOut.join === 'all_success') {
     // Every child ran to its own terminal state, so the lowest-index non-completed outcome
     // IS the causal one — nothing here is a casualty of another child's failure.
@@ -8749,7 +8836,6 @@ async function executeComposeFanOutNode(
     deps,
     cwd,
     node.include,
-    'include',
     ctx.workflowSourceRoots
   );
   if ('unresolved' in resolved) {

@@ -198,17 +198,16 @@ import {
   type CancelWorkflowResult,
   describeAbandonOwner,
   describeReleasedWorktrees,
-  assertApprovable,
-  assertRejectable,
-  assertRespondable,
   assertAnswerAdmissible,
+  assertResponseAccepted,
   expectedGateForOccurrence,
+  type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
-import { spellWorkflowCommand } from '@archon/workflows/deps';
+import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
@@ -4464,14 +4463,17 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
         ? `Run ${watchedRunId} is waiting for a response at gate '${attention.respondTo.nodeId}'.`
         : `Run ${watchedRunId} is blocked on sub-run ${attention.respondTo.runId}, which is waiting ` +
             `for a response at gate '${attention.respondTo.nodeId}'.`;
-    case 'action_required':
-      return (
-        `Run ${watchedRunId} needs an outside action: ${attention.message} ` +
-        `When it is complete, run: archon workflow resume ${attention.runId}`
-      );
+    case 'attention':
+      return [
+        `Run ${watchedRunId} needs attention: ${attention.message}`,
+        ...attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention),
+      ].join('\n');
     case 'blocked_on_child':
       // Unreachable through the waiter, which resolves the chain before returning.
       return `Run ${watchedRunId} is blocked on sub-run ${attention.childRunId}.`;
+    case 'blocked_on_children':
+      // Unreachable through the waiter, which resolves every child before returning.
+      return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -5160,6 +5162,7 @@ export async function workflowGetCommand(
     !isWorkflowWaitContext(waitMeta) &&
     isApprovalContext(gateMeta) &&
     gateMeta.type !== 'child_workflow' &&
+    gateMeta.type !== 'fan_out' &&
     !gateMeta.resolved
   ) {
     console.log(`  Choices: ${gateMeta.message}`);
@@ -5169,13 +5172,23 @@ export async function workflowGetCommand(
     }
   }
   if (run.status === 'paused' && isWorkflowWaitContext(waitMeta)) {
-    console.log(
-      waitMeta.kind === 'attention'
-        ? `  Wait:   action required — ${waitMeta.message} (resume with: archon workflow resume ${run.id})`
-        : waitMeta.kind === 'event'
+    if (waitMeta.kind === 'attention') {
+      const attention = runAttention(run);
+      console.log(
+        attention?.kind === 'attention'
+          ? `  Wait:   needs attention — ${waitMeta.message} (occurrence ${attention.occurrence})`
+          : `  Wait:   answered via ${String(waitMeta.answeredVia)} at ${String(waitMeta.answeredAt)}; awaiting continuation`
+      );
+      if (attention?.kind === 'attention')
+        for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
+          console.log(`    ${line}`);
+    } else {
+      console.log(
+        waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
           : `  Wait:   until ${waitMeta.resumeAt}`
-    );
+      );
+    }
   }
   const scheduledResume = run.metadata.scheduled_resume;
   if (
@@ -5751,7 +5764,7 @@ async function resolveDiscoveryCwdForCodebase(
   host: WorkflowHost,
   runId: string,
   codebaseId: string,
-  action: 'resume' | 'approve' | 'reject' | 'respond'
+  action: 'resume' | 'approve' | 'reject' | 'respond' | 'answer'
 ): Promise<string> {
   try {
     const codebase = await host.records.codebases.getCodebase(codebaseId);
@@ -5973,7 +5986,7 @@ function printRunTreeCancellationWarnings(
       `Warning: parent run ${blockedParentRunId} was blocked on this sub-run and stays paused.`
     );
     console.log(
-      `  Resume it to fail the node cleanly (archon workflow resume ${blockedParentRunId}) or abandon it too.`
+      `  Resume it so it reads this sub-run's outcome (archon workflow resume ${blockedParentRunId}) or abandon it too.`
     );
   }
 }
@@ -6073,6 +6086,138 @@ function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): Gate
 }
 
 /**
+ * Continue a run in this process right after this process recorded its answer, the way
+ * the CLI's answering commands do outside `--json`. A continuation host may claim the
+ * answer first; `workflowRunCommand` reports that and returns.
+ */
+async function continueAnsweredRun(
+  host: WorkflowHost,
+  resolvedId: string,
+  result: Pick<
+    ApprovalOperationResult,
+    'workflowName' | 'userMessage' | 'codebaseId' | 'conversationId'
+  >,
+  workingPath: string,
+  action: 'approve' | 'reject' | 'respond' | 'answer',
+  failure: { failurePrefix: string; recorded: string }
+): Promise<void> {
+  // Look up the original platform conversation ID to keep all messages in one thread
+  let platformConversationId: string | undefined;
+  try {
+    const originalConversation = result.conversationId
+      ? await host.records.conversations.getConversationById(result.conversationId)
+      : null;
+    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
+    if (!originalConversation) {
+      getLog().info(
+        { runId: resolvedId, conversationId: result.conversationId },
+        `cli.workflow_${action}_conversation_not_found`
+      );
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn(
+      { err, runId: resolvedId, conversationId: result.conversationId },
+      `cli.workflow_${action}_conversation_lookup_failed`
+    );
+  }
+
+  try {
+    // Use the codebase's source path for workflow YAML discovery so the file is
+    // found even when working_path is a worktree or workspace clone that does
+    // not contain the user's local (often untracked) workflow YAML.
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(host, resolvedId, result.codebaseId, action)
+      : undefined;
+
+    await workflowRunCommand(host, workingPath, result.workflowName, result.userMessage ?? '', {
+      // Continue from the source this run froze, not a fresh capture of the target.
+      continuationRun: (await host.deps.store.getWorkflowRun(resolvedId)) ?? undefined,
+      resume: true,
+      codebaseId: result.codebaseId ?? undefined,
+      conversationId: platformConversationId,
+      discoveryCwd,
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, runId: resolvedId, workflowName: result.workflowName },
+      `cli.workflow_${action}_resume_failed`
+    );
+    throw new Error(
+      `${failure.failurePrefix} failed to resume workflow '${result.workflowName}': ${err.message}\n` +
+        `The ${failure.recorded} was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`,
+      { cause: err }
+    );
+  }
+}
+
+/**
+ * Answer a paused attention wait in its declared form: `choose` holds declared option ids,
+ * `text` the free text. `occurrence` is required, so an answer prepared for an earlier
+ * pause is refused. Like approve, `--json` records the answer for a continuation host;
+ * otherwise this process continues the run inline.
+ */
+export async function workflowAnswerCommand(
+  host: WorkflowHost,
+  runId: string,
+  occurrence: string,
+  choose: readonly string[],
+  text: string | undefined,
+  json?: boolean,
+  cwd?: string
+): Promise<void> {
+  const request = { choose, ...(text !== undefined ? { text } : {}) };
+  if (json) {
+    try {
+      const resolvedId = await resolveRunIdArg(host, runId, cwd);
+      const result = await host.operations.answerWorkflow(
+        resolvedId,
+        request,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
+      await writeJsonLine({
+        ok: true,
+        runId: resolvedId,
+        action: 'answer',
+        answer: result.answer,
+        workflowName: result.workflowName,
+        resumable: true,
+      });
+    } catch (error) {
+      await printJsonWriteError(runId, 'answer', error);
+    }
+    return;
+  }
+
+  const resolvedId = await resolveRunIdArg(host, runId, cwd);
+  const result = await spelledForCli(async () =>
+    host.operations.answerWorkflow(
+      resolvedId,
+      request,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
+  );
+  const { workingPath } = result;
+  if (!workingPath) {
+    throw new Error(
+      `Workflow run '${resolvedId}' has no working path recorded.\n` +
+        'Cannot determine where to resume.'
+    );
+  }
+  console.log(`Answered workflow: ${result.workflowName}`);
+  console.log(`Path: ${workingPath}`);
+  console.log('');
+  console.log('Resuming workflow...');
+  await continueAnsweredRun(host, resolvedId, result, workingPath, 'answer', {
+    failurePrefix: 'Answer recorded but',
+    recorded: 'answer',
+  });
+}
+
+/**
  * Approve a paused workflow run by ID.
  *
  * Human mode records the approval on the still-'paused' run (the resolution
@@ -6109,7 +6254,7 @@ export async function workflowApproveCommand(
       // The SAME gates approveWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertApprovable(run);
+      assertResponseAccepted(run, 'approve', comment);
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
       // copied verbatim) so the refusal is synchronous instead of buried in a log.
@@ -6174,61 +6319,10 @@ export async function workflowApproveCommand(
   console.log('');
   console.log('Resuming workflow...');
 
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = result.conversationId
-      ? await host.records.conversations.getConversationById(result.conversationId)
-      : null;
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId: resolvedId, conversationId: result.conversationId },
-        'cli.workflow_approve_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId: resolvedId, conversationId: result.conversationId },
-      'cli.workflow_approve_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    // Use the codebase's source path for workflow YAML discovery so the file is
-    // found even when working_path is a worktree or workspace clone that does
-    // not contain the user's local (often untracked) workflow YAML.
-    const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(host, resolvedId, result.codebaseId, 'approve')
-      : undefined;
-
-    await workflowRunCommand(
-      host,
-      result.workingPath,
-      result.workflowName,
-      result.userMessage ?? '',
-      {
-        // Continue from the source this run froze, not a fresh capture of the target.
-        continuationRun: (await host.deps.store.getWorkflowRun(resolvedId)) ?? undefined,
-        resume: true,
-        codebaseId: result.codebaseId ?? undefined,
-        conversationId: platformConversationId,
-        discoveryCwd,
-      }
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId: resolvedId, workflowName: result.workflowName },
-      'cli.workflow_approve_resume_failed'
-    );
-    throw new Error(
-      `Approved but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The approval was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`,
-      { cause: err }
-    );
-  }
+  await continueAnsweredRun(host, resolvedId, result, result.workingPath, 'approve', {
+    failurePrefix: 'Approved but',
+    recorded: 'approval',
+  });
 }
 
 /**
@@ -6263,7 +6357,7 @@ export async function workflowRejectCommand(
       // The SAME gates rejectWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertRejectable(run);
+      assertResponseAccepted(run, 'reject', reason);
       return run;
     });
     return;
@@ -6338,61 +6432,10 @@ export async function workflowRejectCommand(
         : 'Resuming with on_reject prompt...'
   );
 
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = result.conversationId
-      ? await host.records.conversations.getConversationById(result.conversationId)
-      : null;
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId: resolvedId, conversationId: result.conversationId },
-        'cli.workflow_reject_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId: resolvedId, conversationId: result.conversationId },
-      'cli.workflow_reject_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    // Use the codebase's source path for workflow YAML discovery so the file is
-    // found even when working_path is a worktree or workspace clone that does
-    // not contain the user's local (often untracked) workflow YAML.
-    const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(host, resolvedId, result.codebaseId, 'reject')
-      : undefined;
-
-    await workflowRunCommand(
-      host,
-      result.workingPath,
-      result.workflowName,
-      result.userMessage ?? '',
-      {
-        // Continue from the source this run froze, not a fresh capture of the target.
-        continuationRun: (await host.deps.store.getWorkflowRun(resolvedId)) ?? undefined,
-        resume: true,
-        codebaseId: result.codebaseId ?? undefined,
-        conversationId: platformConversationId,
-        discoveryCwd,
-      }
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId: resolvedId, workflowName: result.workflowName },
-      'cli.workflow_reject_resume_failed'
-    );
-    throw new Error(
-      `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The rejection was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`,
-      { cause: err }
-    );
-  }
+  await continueAnsweredRun(host, resolvedId, result, result.workingPath, 'reject', {
+    failurePrefix: 'Rejected but',
+    recorded: 'rejection',
+  });
 }
 
 /**
@@ -6432,7 +6475,7 @@ export async function workflowRespondCommand(
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertRespondable(run, decision);
+      assertResponseAccepted(run, decision, text);
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -6492,61 +6535,10 @@ export async function workflowRespondCommand(
   console.log('');
   console.log('Resuming workflow...');
 
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = result.conversationId
-      ? await host.records.conversations.getConversationById(result.conversationId)
-      : null;
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId: resolvedId, conversationId: result.conversationId },
-        'cli.workflow_respond_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId: resolvedId, conversationId: result.conversationId },
-      'cli.workflow_respond_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    // Use the codebase's source path for workflow YAML discovery so the file is
-    // found even when working_path is a worktree or workspace clone that does
-    // not contain the user's local (often untracked) workflow YAML.
-    const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(host, resolvedId, result.codebaseId, 'respond')
-      : undefined;
-
-    await workflowRunCommand(
-      host,
-      result.workingPath,
-      result.workflowName,
-      result.userMessage ?? '',
-      {
-        // Continue from the source this run froze, not a fresh capture of the target.
-        continuationRun: (await host.deps.store.getWorkflowRun(resolvedId)) ?? undefined,
-        resume: true,
-        codebaseId: result.codebaseId ?? undefined,
-        conversationId: platformConversationId,
-        discoveryCwd,
-      }
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId: resolvedId, workflowName: result.workflowName },
-      'cli.workflow_respond_resume_failed'
-    );
-    throw new Error(
-      `Response recorded but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The response was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`,
-      { cause: err }
-    );
-  }
+  await continueAnsweredRun(host, resolvedId, result, result.workingPath, 'respond', {
+    failurePrefix: 'Response recorded but',
+    recorded: 'response',
+  });
 }
 
 /**

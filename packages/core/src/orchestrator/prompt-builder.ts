@@ -11,7 +11,11 @@ import {
   isContainerRun,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import {
+  attentionAnswerLines,
+  spellWorkflowCommand,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { isRejectableUnreadableGate } from '../operations/workflow-operations';
@@ -161,13 +165,24 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     );
   }
 
-  if (attention.kind === 'action_required') {
+  if (attention.kind === 'blocked_on_children') {
     return (
-      '## Paused action required\n\n' +
-      `Run \`${runId}\` (**${workflowName}**) is paused until someone completes this outside action:\n\n` +
+      header +
+      `Run \`${runId}\` (**${workflowName}**) is paused waiting on its fan-out sub-runs ` +
+      `${attention.childRunIds.map(id => `\`${id}\``).join(', ')}. This run has no gate you can ` +
+      'resolve — each sub-run that is waiting is answered by its own run id, and this one ' +
+      'continues on its own once they finish.'
+    );
+  }
+
+  if (attention.kind === 'attention') {
+    return (
+      '## Paused, needs attention\n\n' +
+      `Run \`${runId}\` (**${workflowName}**) is paused until it gets an answer in the '${attention.form}' form:\n\n` +
       `> ${attention.message.replace(/\n/g, '\n> ')}\n\n` +
-      `After the action is complete, run \`archon workflow resume ${runId}\`. Abandon it if it should not continue. ` +
-      'Do not approve or reject this pause.'
+      attentionAnswerLines(gate.surface ?? {}, attention).join('\n') +
+      `\nAbandon it if it should not continue: \`${cmd(`abandon ${runId}`)}\`` +
+      '\n\nOnly answer what the user actually decided; an undeclared option is refused.'
     );
   }
 

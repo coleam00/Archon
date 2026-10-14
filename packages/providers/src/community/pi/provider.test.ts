@@ -3217,6 +3217,38 @@ describe('PiProvider', () => {
     }
   });
 
+  // #3769: without maxConcurrent there is no slot to release, so the retry only needs a
+  // fresh session; the wedged one is disposed and the cached extension loader reused.
+  test('a retry after a watchdog abort on a wedged session gets a fresh session', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockPrompt.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const watchdog = new AbortController();
+    const gen = new PiProvider().sendQuery('one', '/tmp', undefined, {
+      model: 'google/gemini-2.5-pro',
+      abortSignal: watchdog.signal,
+    });
+    const abandoned = gen.next();
+    abandoned.catch(() => undefined);
+    while (mockPrompt.mock.calls.length < 1) await new Promise(resolve => setTimeout(resolve, 1));
+    watchdog.abort();
+
+    const retry = consume(
+      new PiProvider().sendQuery('retry', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+    const outcome = await Promise.race([
+      retry,
+      new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000)),
+    ]);
+
+    expect(outcome).not.toBe('stuck');
+    expect(outcome === 'stuck' ? undefined : outcome.error).toBeUndefined();
+    expect(outcome === 'stuck' ? undefined : outcome.failure).toBeUndefined();
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+    expect(mockDispose).toHaveBeenCalledTimes(2);
+    expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+  });
+
   // Semaphore tests run last — the module-level piSemaphore singleton persists
   // across tests once initialized, so these must not affect tests that run before.
   test('maxConcurrent initializes semaphore and logs pi.semaphore_initialized', async () => {
@@ -3547,6 +3579,45 @@ describe('PiProvider', () => {
       expect(loader).toBeDefined();
       expect(MockDefaultResourceLoader).toHaveBeenCalledTimes(2);
       expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
+    });
+
+    // #3769: a watchdog abort ends the attempt waiting on a slow shared reload, and the
+    // retry waits on that same reload instead of starting a second one.
+    test('a retry after a watchdog abort during a slow reload reuses it once it settles', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+      let settleReload: () => void = () => undefined;
+      mockResourceLoaderReload.mockImplementationOnce(
+        () =>
+          new Promise<undefined>(resolve => {
+            settleReload = () => resolve(undefined);
+          })
+      );
+
+      const watchdog = new AbortController();
+      const attempt = consume(
+        new PiProvider().sendQuery('one', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          abortSignal: watchdog.signal,
+        })
+      );
+      while (mockResourceLoaderReload.mock.calls.length < 1) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+      watchdog.abort();
+      expect((await attempt).error?.message).toBe('Query aborted');
+
+      const retry = consume(
+        new PiProvider().sendQuery('retry', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      // Let the retry reach the shared reload while it is still pending.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      settleReload();
+      const outcome = await retry;
+
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.failure).toBeUndefined();
+      expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
     });
   });
 

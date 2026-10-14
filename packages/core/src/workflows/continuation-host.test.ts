@@ -120,7 +120,7 @@ describe('continuation host scanner', () => {
       resumeAt: '2026-08-24T11:00:00.000Z',
     });
   });
-  test('does not schedule an action-required wait even if a malformed due query returns it', async () => {
+  test('does not schedule an attention wait even if a malformed due query returns it', async () => {
     mockListDueWorkflowContinuations.mockResolvedValue([
       run('attention-1', 'paused', {
         wait: {

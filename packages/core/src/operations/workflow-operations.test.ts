@@ -102,6 +102,7 @@ const {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
   describeAbandonOwner,
+  assertAnswerable,
   assertApprovable,
   assertRejectable,
   ChildRunRedirectError,
@@ -135,6 +136,9 @@ const store: WorkflowOperationsDeps['store'] = {
   getRunAncestry: mockGetRunAncestry,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  answerAttentionWait: async () => {
+    throw new Error('Unexpected answerAttentionWait');
+  },
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 };
 const {
@@ -1789,12 +1793,12 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       const error = thrown(verb);
       expect({
         parentRunId: error.parentRunId,
-        childRunId: error.childRunId,
+        childRunIds: error.childRunIds,
         nodeId: error.nodeId,
         action: error.action,
       }).toEqual({
         parentRunId: 'run-1',
-        childRunId: 'child-9',
+        childRunIds: ['child-9'],
         nodeId: 'sub',
         action: verb,
       });
@@ -1808,6 +1812,32 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       expect(onSlack).not.toContain('archon workflow ');
       // A surface with no spelling of its own still goes through the one mechanism.
       expect(error.messageFor({})).toContain(`/workflow ${verb} child-9`);
+    }
+  });
+
+  test('a fan-out parent redirects approve, reject and answer to every child it waits on', () => {
+    const fanOut = withMeta({
+      approval: {
+        nodeId: 'work',
+        message: 'waiting',
+        type: 'fan_out',
+        childRunIds: ['kid-0', 'kid-2'],
+        unspawnedItems: 0,
+      },
+    });
+    for (const assertFn of [assertApprovable, assertRejectable, assertAnswerable]) {
+      let error: unknown;
+      try {
+        assertFn(fanOut);
+      } catch (thrown) {
+        error = thrown;
+      }
+      if (!(error instanceof ChildRunRedirectError)) throw new Error('expected a redirect');
+      expect(error.childRunIds).toEqual(['kid-0', 'kid-2']);
+      expect(error.message).toContain("waiting on sub-runs kid-0, kid-2 ('fan_out' node 'work')");
+      const spelled = error.messageFor({});
+      expect(spelled).toContain(`/workflow ${error.action} kid-0`);
+      expect(spelled).toContain(`/workflow ${error.action} kid-2`);
     }
   });
 
@@ -1851,7 +1881,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
-  test('an action-required wait is neither approvable nor rejectable', () => {
+  test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {
         owner: 'node',
@@ -1862,8 +1892,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       },
     };
     for (const assertFn of [assertApprovable, assertRejectable]) {
-      expect(() => assertFn(withMeta(waiting))).toThrow('Complete it, then resume the run');
-      expect(() => assertFn(withMeta(waiting))).toThrow('abandon it');
+      expect(() => assertFn(withMeta(waiting))).toThrow('paused at an attention wait');
     }
   });
 });
@@ -2076,6 +2105,31 @@ describe('abandonWorkflow', () => {
     (parent.metadata as { approval: { childRunId: string } }).approval.childRunId = 'other-child';
     const second = await abandonWorkflow('child-1', operator);
     expect(second.blockedParentRunId).toBeNull();
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
+  });
+
+  test('surfaces the parent run id when abandoning one of the children a fan-out waits on', async () => {
+    const child = makePausedRun({ id: 'child-2', status: 'paused', parent_run_id: 'parent-1' });
+    const parent = makePausedRun({
+      id: 'parent-1',
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'work',
+          message: 'Waiting on sub-runs',
+          type: 'fan_out',
+          childRunIds: ['child-1', 'child-2'],
+          unspawnedItems: 0,
+        },
+      },
+    });
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(id === 'child-2' ? child : id === 'parent-1' ? parent : null)
+    );
+
+    const { blockedParentRunId } = await abandonWorkflow('child-2', operator);
+    expect(blockedParentRunId).toBe('parent-1');
     mockGetWorkflowRun.mockReset();
     mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
   });

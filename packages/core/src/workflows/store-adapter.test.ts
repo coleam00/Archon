@@ -390,8 +390,8 @@ describe('createWorkflowStore', () => {
 
   test('delegates cancelFanOutRun to DB', async () => {
     const store = createWorkflowStore();
-    await store.cancelFanOutRun('run-123', 'fan_out_gate');
-    expect(mockCancelFanOutRun).toHaveBeenCalledWith('run-123', 'fan_out_gate');
+    await store.cancelFanOutRun('run-123', 'fan_out_orphan');
+    expect(mockCancelFanOutRun).toHaveBeenCalledWith('run-123', 'fan_out_orphan');
   });
 
   test('delegates getCodebase to DB', async () => {

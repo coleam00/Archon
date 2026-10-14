@@ -1551,7 +1551,10 @@ describe('CommandHandler', () => {
           expect(mockIsolationCreate).toHaveBeenCalled();
           expect(mockIsolationEnvDbCreate).toHaveBeenCalledWith(
             expect.objectContaining({
-              metadata: { worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+              metadata: {
+                worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+                worktree_branch_created: true,
+              },
             })
           );
         });
@@ -2403,7 +2406,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Authored outcome: succeeded');
       });
 
-      test('should direct an action-required pause to resume instead of approval controls', async () => {
+      test('should direct an attention wait from before answers to resume', async () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [
             makeDashboardRun({
@@ -2432,6 +2435,41 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('/workflow abandon run-attention');
         expect(result.message).not.toContain('/workflow approve run-attention');
         expect(result.message).not.toContain('/workflow reject run-attention');
+      });
+
+      test('should list how to answer an attention wait in its form', async () => {
+        mockListDashboardRuns.mockResolvedValueOnce({
+          runs: [
+            makeDashboardRun({
+              id: 'run-ask',
+              workflow_name: 'deliver',
+              status: 'paused',
+              metadata: {
+                wait: {
+                  owner: 'node',
+                  nodeId: 'ask',
+                  kind: 'attention',
+                  waitingSince: '2026-08-31T10:00:00.000Z',
+                  message: 'Which base?',
+                  pauseId: 'pause-1',
+                  form: 'select',
+                  options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
+                },
+              },
+            }),
+          ],
+          total: 1,
+          counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
+        });
+
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
+
+        expect(result.message).toContain('Needs attention: Which base?');
+        expect(result.message).toContain(
+          'Main (use-main): `/workflow respond run-ask use-main [text]`'
+        );
+        expect(result.message).toContain('use-dev: `/workflow respond run-ask use-dev [text]`');
+        expect(result.message).not.toContain('/workflow resume run-ask');
       });
 
       test('should direct an approval pause to approve or reject', async () => {

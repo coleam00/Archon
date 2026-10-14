@@ -553,7 +553,7 @@ test('a process holding the install lock excludes competing install, update and 
   const doctor = await cli(env, ['doctor', '--json']);
   expect(doctor.output).toContain('✓ Installed providers:');
   expect(doctor.output).toContain('test-provider: Configuration: Configuration inspected');
-  expect(doctor.output).toContain('opencode: OpenCode runtime:');
+  expect(doctor.output).not.toContain('opencode:');
   expect(doctor.output).not.toContain('Plugin mutation locked');
   expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
   expect((await spawnMutation('remove', ID))[0]).toBe(0);

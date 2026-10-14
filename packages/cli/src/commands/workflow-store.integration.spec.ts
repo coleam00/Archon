@@ -14,7 +14,7 @@ import {
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
-  answeredGateContinuation,
+  answeredPauseContinuation,
   isWorkflowWaitContext,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
@@ -487,9 +487,9 @@ nodes:
 test('approve reports a run the continuation host claimed first as continuing elsewhere', async () => {
   const { host, runId, log } = await approveAfter(async (store, id) => {
     const answered = await store.getWorkflowRun(id);
-    const gate = answered ? answeredGateContinuation(answered) : undefined;
+    const gate = answered ? answeredPauseContinuation(answered) : undefined;
     if (!gate) throw new Error('Approval did not leave an answered gate');
-    await store.resumeWorkflowRun(id, { kind: 'gate', ...gate });
+    await store.resumeWorkflowRun(id, { kind: 'answered', ...gate });
   });
   try {
     const { workflowApproveCommand } = await import('./workflow');

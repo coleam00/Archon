@@ -4,6 +4,7 @@ import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalContext } from './ApprovalContext';
 import { RunActionBar } from './RunActionBar';
+import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
@@ -100,11 +101,12 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
           </div>
         </div>
 
-        {run.attention?.kind === 'action_required' ? (
+        {run.attention?.kind === 'attention' ? (
           <>
             <p className="mt-3 whitespace-pre-wrap text-sm text-text-primary">
               {run.attention.message}
             </p>
+            <AttentionAnswerPanel run={run} attention={run.attention} />
             <RunActionBar run={run} />
           </>
         ) : run.attention?.kind === 'unreadable' ? (

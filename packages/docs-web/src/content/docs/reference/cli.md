@@ -135,7 +135,7 @@ Verify your Archon setup. Runs a checklist of common failure points: installed p
 archon doctor
 ```
 
-With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port) — for every registered OpenCode provider. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
+With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port). OpenCode and Copilot are bundled but [deprecated](/getting-started/ai-assistants/#deprecated-providers): doctor runs their diagnostics only when one is your default assistant or has settings under `assistants`, and does not count them as installed providers. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
@@ -459,6 +459,10 @@ This validates deterministic engine wiring; it does not validate model reasoning
 **With `--branch`:**
 - Creates/reuses worktree at `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>/`
 - Reuses existing worktree if healthy
+- If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
+- Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.
+- To start fresh from the base, delete the branch (`git branch -D <name>`, and the remote branch if there is one) or choose another name
+- `--from` with a branch that already exists, locally or on the remote, is rejected
 
 **With `--no-worktree`:**
 - Runs in target directory directly (no isolation)
@@ -597,8 +601,9 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   run with no recorded graph (it has not started executing, or an older Archon ran it) lists
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
-  is `terminal`, `awaiting_response` (an approval or response gate), `action_required` (a
-  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), `stalled_tool_calls` (still-running
+  is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
+  `wait: attention` waiting for its answer), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  waiting on the listed child runs), `stalled_tool_calls` (still-running
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
@@ -796,22 +801,22 @@ access to the local file as access to the run's input and execution data.
 
 ### `workflow wait`
 
-Block until a run reports attention: it finished, awaits a gate response or outside
-action, has an overdue live tool call, or lost its execution owner while still
+Block until a run reports attention: it finished, awaits a gate response or an answer
+to an attention wait, has an overdue live tool call, or lost its execution owner while still
 non-terminal. Then print what it needs. This is the intended
 partner of `--detach --json`: take the `runId` from the launch ack and wait on it,
 instead of polling `workflow get` in a loop.
 
-The response a gate is waiting for does not have to come from a person. An
-orchestrating agent can supply it with `workflow respond` just as a reviewer can; the
-engine only reports that one is owed, and who answers is the waiting host's business.
-Pass the reported `attention.occurrence` back with `--occurrence` on `approve`, `reject`
-or `respond`. The answer is then refused, naming the current occurrence, if the run has
-moved to a different pause in the meantime.
-For an action-required wait, the output carries `attention.kind: "action_required"`,
-the authored message, and the paused node id. Complete the action, then run
-`archon workflow resume <run-id>`; use `archon workflow abandon <run-id>` if the run
-should not continue.
+The answer a pause is waiting for does not have to come from a person. An
+orchestrating agent can supply it with `workflow respond` or `workflow answer` just as a
+reviewer can; the engine only reports that one is owed, and who answers is the waiting
+host's business. Pass the reported `attention.occurrence` back with `--occurrence` on
+`approve`, `reject`, `respond` or `answer`. The answer is then refused, naming the current
+occurrence, if the run has moved to a different pause in the meantime.
+For an attention wait, the output carries `attention.kind: "attention"`, the authored
+message, the paused node id, the `form` and the `options` an answer may choose from.
+Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
+<run-id>` if the run should not continue.
 
 An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
@@ -829,7 +834,7 @@ its own clock would be answering a question only the run can answer. `--timeout
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, needs an outside action, has an overdue tool call while still running, or lost its execution owner. The status is data on stdout. |
+| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, needs attention, has an overdue tool call while still running, or lost its execution owner. The status is data on stdout. |
 | `3` | The timeout passed with the run still live. The `--json` payload carries `observedStatus`. |
 | `1` | The wait itself failed — unknown run id, database unreachable, or output that could not be delivered. |
 
@@ -867,13 +872,17 @@ the host the run recorded and says when it is not this one.
   a parent blocked on a `workflow:` sub-run wakes when the chain below it reaches a gate,
   and `respondTo.runId` is the child you answer. A parent blocked on a child that is
   merely still running wakes nobody.
-- `action_required` — the run needs the outside action described by `message`. Once it is
-  complete, resume `runId`; use the node id to identify the paused workflow step.
+- `attention` — a `wait: attention` needs an answer to `message`, in its `form`
+  (`message`, `approval`, `select` or `multi_select`). `options` lists the ids an answer may
+  choose (none for `message`, `approve` and `reject` for `approval`), and `occurrence`
+  identifies this pause. A wait paused before attention waits took answers reports a
+  `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
+  with `workflow resume <run-id>`.
 - `unreadable` — the run is parked but cannot describe itself (corrupt gate metadata, a
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
 
 Two pauses deliberately do **not** wake a waiter, because neither is owed a response: a
-gate that has already been approved or rejected and is awaiting auto-resume, and a
+gate or attention wait that has already been answered and is awaiting continuation, and a
 [`wait:` node](/guides/authoring-workflows/) whose timer or event has not fired.
 
 Once the wait is watching, it says so once on **stderr** — one plain sentence, or the
@@ -1083,11 +1092,42 @@ including for `approve` and `reject`. An undeclared decision is refused with the
 allowed ids, and the run stays paused. Without authored decisions, use `approve`
 or `reject`.
 
+### `workflow answer`
+
+Answer a paused [attention wait](/guides/authoring-workflows/#attention-waits) in the form
+it declares. `--occurrence` is required: pass the `occurrence` that `workflow wait --json`
+or `workflow get` reports, and an answer meant for an earlier pause is refused, naming
+the current one.
+
+```bash
+archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"           # message
+archon workflow answer <run-id> --occurrence <id> --choose reject --text "Not yet"   # approval
+archon workflow answer <run-id> --occurrence <id> --choose use-dev                   # select
+archon workflow answer <run-id> --occurrence <id> --choose lint --choose test --json # multi_select
+```
+
+`--choose` names a declared option id; repeat it for a `multi_select`, and omit it for a
+`message`. `--text` is free text recorded with the answer. An undeclared option, the wrong
+number of options, or an option on a `message` wait is refused and the run stays paused.
+The next node reads the answer as `$<wait-id>.output`: `{ text }`, `{ decision, text }`, or
+`{ decisions, text }`. In the `approval` form `reject` never cancels the run.
+
+The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, and a
+`wait_answered` event carries the surface as `via` and the `occurrence`. Like `approve`,
+human mode continues the run inline, and `--json` records the answer and returns
+`{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
+it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent
+is `POST /api/workflows/runs/<run-id>/answer` with `{ occurrence, choose?, text? }`.
+
+`approve`, `reject` and `respond <option>` also answer an attention wait, as shorthand:
+`approve [text]` answers a `message` wait with its text, and otherwise each verb chooses
+the option of the same id.
+
 ### `workflow approve`
 
 Approve a paused workflow run at an interactive approval gate. For a gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a legacy interactive-loop gate.
 
-**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id (every listed child for a fan-out).
 
 **Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
 
@@ -1270,6 +1310,13 @@ Archon's marker and Git registration in the expected repository. Replacement
 repositories, adopted checkouts, and older records without proof are retained for
 operator inspection. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
+
+Cleanup deletes an environment's local branch only when Archon created that branch.
+A branch that already existed when the run started (see `--branch` above) is kept,
+since it may hold commits that exist nowhere else. It is deleted only together with
+its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
+finished, or by `archon complete`.
+Records created before Archon tracked this are treated the same way, keeping their branch.
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
@@ -1600,8 +1647,8 @@ or storage failure, `3` revision conflict, `4` oversized value, invalid patch or
 `--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
-Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
-project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
+Inside a bash/script node, or the shell of an AI node's agent, `WORKFLOW_ID` and
+`ARCHON_NODE_EXECUTION` resolve the run's project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
 does not know it fails with exit `5` naming the opened store kind; a missing project or
 node identity also fails. A node reaches only its run's project, or install scope with
 `--install`; `--project` is refused inside a run. Outside a run, the current checkout
