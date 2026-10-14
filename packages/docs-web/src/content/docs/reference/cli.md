@@ -1271,6 +1271,13 @@ repositories, adopted checkouts, and older records without proof are retained fo
 operator inspection. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
+Cleanup deletes an environment's local branch only when Archon created that branch.
+A branch that already existed when the run started (see `--branch` above) is kept,
+since it may hold commits that exist nowhere else. It is deleted only together with
+its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
+finished, or by `archon complete`.
+Records created before Archon tracked this are treated the same way, keeping their branch.
+
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
 

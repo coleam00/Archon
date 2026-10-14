@@ -184,22 +184,37 @@ export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
 >;
 
-/** Isolation-record metadata carrying a worktree's creation proof; null when adopted. */
+/**
+ * Isolation-record metadata carrying a worktree's creation proof (null when adopted)
+ * and whether that creation made the checked-out branch.
+ */
 export interface WorktreeRegistrationMetadata {
   worktree_creation_id: string | null;
+  worktree_branch_created: boolean;
 }
 
 /** The one encoding of creation provenance every isolation-record writer persists. */
 export function worktreeRegistrationMetadata(
   metadata: WorktreeCreationEnvironment['metadata']
 ): WorktreeRegistrationMetadata {
-  return { worktree_creation_id: metadata.provenance === 'created' ? metadata.creationId : null };
+  return metadata.provenance === 'created'
+    ? { worktree_creation_id: metadata.creationId, worktree_branch_created: metadata.branchCreated }
+    : { worktree_creation_id: null, worktree_branch_created: false };
 }
 
 /** Read the creation proof that worktreeRegistrationMetadata persisted. */
 export function readWorktreeCreationId(metadata: Record<string, unknown>): string | null {
   const id = (metadata as Partial<WorktreeRegistrationMetadata>).worktree_creation_id;
   return typeof id === 'string' ? id : null;
+}
+
+/**
+ * Whether the record's creation made its branch. A record written before this was
+ * persisted reads as not created: its branch may hold work nobody else has, and a
+ * kept branch costs a `git branch -D` while a deleted one may cost the work.
+ */
+export function readWorktreeBranchCreated(metadata: Record<string, unknown>): boolean {
+  return (metadata as Partial<WorktreeRegistrationMetadata>).worktree_branch_created === true;
 }
 
 // --- Provider Interface ---

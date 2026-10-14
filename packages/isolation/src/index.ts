@@ -46,6 +46,7 @@ export {
   CONTAINER_LABELS,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
+  readWorktreeBranchCreated,
 } from './types';
 
 // --- Backend seam (folder projects) ---

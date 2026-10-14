@@ -23,7 +23,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { getGitCheckoutIdentity, readWorktreeLock, toRepoPath, toBranchName } from '@archon/git';
-import { WorktreeProvider, configureIsolation, getIsolationProvider } from '@archon/isolation';
+import {
+  WorktreeProvider,
+  configureIsolation,
+  getIsolationProvider,
+  worktreeRegistrationMetadata,
+} from '@archon/isolation';
 import type { IsolationEnvironmentRow, IIsolationStore } from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { setLogLevel } from '@archon/paths';
@@ -197,7 +202,7 @@ beforeEach(async () => {
     workflow_id: 'release',
     working_path: created.workingPath,
     branch_name: created.branchName,
-    metadata: { worktree_creation_id: created.metadata.creationId },
+    metadata: { ...worktreeRegistrationMetadata(created.metadata) },
   });
   run = {
     id: 'run',
@@ -250,7 +255,7 @@ async function useSymlinkedBase(): Promise<void> {
     workflow_id: 'linked',
     working_path: created.workingPath,
     branch_name: created.branchName,
-    metadata: { worktree_creation_id: created.metadata.creationId },
+    metadata: { ...worktreeRegistrationMetadata(created.metadata) },
   });
   run.working_path = created.workingPath;
   run.metadata = { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } };
@@ -506,6 +511,35 @@ test('ordinary cleanup removes a proven checkout and its branch', async () => {
   expect(existsSync(env.working_path)).toBe(false);
   expect(await status()).toBe('destroyed');
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
+});
+
+test('ordinary cleanup keeps an existing branch the environment checked out', async () => {
+  await git(repo, 'checkout', '-q', '-b', 'operator-work');
+  await writeFile(join(repo, 'unpushed'), 'only copy');
+  await git(repo, 'add', 'unpushed');
+  await git(repo, 'commit', '-qm', 'unpushed');
+  await git(repo, 'checkout', '-q', 'main');
+  const tip = await git(repo, 'rev-parse', 'operator-work');
+  const created = await provider.create({
+    ...request(),
+    identifier: 'operator-work',
+    taskBranch: { kind: 'new', branch: toBranchName('operator-work') },
+  });
+  if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+  const existing = await isolationDb.create({
+    codebase_id: codebaseId,
+    workflow_type: 'task',
+    workflow_id: 'operator-work',
+    working_path: created.workingPath,
+    branch_name: created.branchName,
+    metadata: { ...worktreeRegistrationMetadata(created.metadata) },
+  });
+
+  const result = await removeEnvironment(existing.id);
+
+  expect(result.worktreeRemoved).toBe(true);
+  expect(result.branchDeleted).toBeNull();
+  expect(await git(repo, 'rev-parse', 'operator-work')).toBe(tip);
 });
 
 test('listing retains a replacement directory without a Git entry', async () => {
