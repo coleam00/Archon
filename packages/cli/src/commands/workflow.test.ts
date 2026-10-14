@@ -12830,27 +12830,63 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
-  it('removes the signal handlers before the final drain reads', async () => {
-    const sigtermBaseline = process.listenerCount('SIGTERM');
-    setupWorkflowMocks();
+  /**
+   * A container run whose final progress drain receives SIGTERM. Returns how many times
+   * the container was destroyed by the time the signal's cleanup settled.
+   */
+  async function signalDuringContainerDrain(paused: boolean): Promise<number> {
+    const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+      errors: [],
+    });
+    const codebaseDb = require('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder',
+      name: 'platform',
+      default_cwd: '/test/path',
+      default_branch: null,
+      kind: 'folder',
+    });
     let runSettled = false;
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
-      return { success: true, workflowRunId: OWNED_RUN, paused: true };
+      return paused
+        ? { success: true, workflowRunId: OWNED_RUN, paused: true }
+        : { success: true, workflowRunId: OWNED_RUN };
     });
+    const exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    mockFolderBackendDestroy.mockClear();
+    const sigtermBefore = process.listeners('SIGTERM');
     const host = createTestWorkflowHost();
     const read = host.deps.store.readWorkflowEventsAfter.bind(host.deps.store);
-    const listenersAtDrain: number[] = [];
+    let destroyedAtSignal = -1;
     host.deps.store.readWorkflowEventsAfter = async (after, options) => {
-      if (runSettled) listenersAtDrain.push(process.listenerCount('SIGTERM'));
+      if (runSettled && destroyedAtSignal === -1) {
+        for (const listener of process.listeners('SIGTERM')) {
+          if (!sigtermBefore.includes(listener)) (listener as () => void)();
+        }
+        for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
+        destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
+      }
       return read(after, options);
     };
 
-    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+    try {
+      await workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+    } finally {
+      exitSpy.mockRestore();
+    }
+    return destroyedAtSignal;
+  }
 
-    expect(listenersAtDrain.length).toBeGreaterThan(0);
-    expect(listenersAtDrain.every(count => count === sigtermBaseline)).toBe(true);
+  it('a signal during the final drain keeps a paused run its container', async () => {
+    expect(await signalDuringContainerDrain(true)).toBe(0);
+  });
+
+  it('a signal during the final drain still destroys a settled run its container', async () => {
+    expect(await signalDuringContainerDrain(false)).toBe(1);
   });
 
   it('reports a failed final drain without masking the run outcome', async () => {

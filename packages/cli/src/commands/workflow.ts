@@ -3312,6 +3312,9 @@ async function runWorkflowWithOwnedSource(
     // share parent_conversation_id).
     const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
     if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
+    // Set once the settled run's container is kept (paused, or an un-applied write-back),
+    // so a signal during the final progress drain does not destroy it.
+    let containerPreserved = false;
     const deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
       runId: ownedRunId,
@@ -3323,7 +3326,7 @@ async function runWorkflowWithOwnedSource(
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
-        if (containerBackend && containerEnvId) {
+        if (containerBackend && containerEnvId && !containerPreserved) {
           try {
             await containerBackend.destroy(containerEnvId);
           } catch (destroyErr) {
@@ -3515,27 +3518,6 @@ async function runWorkflowWithOwnedSource(
         });
       }
     } finally {
-      // Deregister the signal handlers now that the run's lifecycle is settled
-      // (paused / completed / failed, or the throw propagating out of this
-      // finally). A signal from here on gets default handling — the destructive
-      // failWorkflowRun cleanup must never fire against a settled run (#1123),
-      // and removal keeps repeated workflowRunCommand calls in one process from
-      // stacking handlers.
-      // Before the progress drain: a signal during it must not tear down a paused
-      // run's preserved container.
-      deregisterTermination();
-
-      // Renders the rows the run committed since the last poll, up to its settled state.
-      await progress?.close().catch((drainErr: unknown) => {
-        getLog().warn(
-          { err: drainErr as Error, runId: ownedRunId },
-          'cli.workflow_progress_drain_failed'
-        );
-        process.stderr.write(
-          `[workflow] Progress output may be incomplete: ${(drainErr as Error).message}\n`
-        );
-      });
-
       // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
       // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
       // can't orphan a privileged container+volume. A PAUSED run keeps its (already
@@ -3553,6 +3535,9 @@ async function runWorkflowWithOwnedSource(
       // silently discard the changes despite the "reconcile manually" message. A failed
       // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
       let unresolvedWriteback = false;
+      // Kept until the lookup below proves it may go: a signal mid-lookup must not
+      // destroy an overlay that may be the only copy of the changes.
+      containerPreserved = true;
       if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
         try {
           const finalRun = await deps.store.getWorkflowRun(result.workflowRunId);
@@ -3569,6 +3554,29 @@ async function runWorkflowWithOwnedSource(
           );
         }
       }
+      containerPreserved = runPaused || unresolvedWriteback;
+
+      // Renders the rows the run committed since the last poll, up to its settled state.
+      // The signal handlers stay registered through it, so a Ctrl-C here still destroys
+      // a container this process would destroy below.
+      await progress?.close().catch((drainErr: unknown) => {
+        getLog().warn(
+          { err: drainErr as Error, runId: ownedRunId },
+          'cli.workflow_progress_drain_failed'
+        );
+        process.stderr.write(
+          `[workflow] Progress output may be incomplete: ${(drainErr as Error).message}\n`
+        );
+      });
+
+      // Deregister the signal handlers now that the run's lifecycle is settled
+      // (paused / completed / failed, or the throw propagating out of this
+      // finally). A signal from here on gets default handling — the destructive
+      // failWorkflowRun cleanup must never fire against a settled run (#1123),
+      // and removal keeps repeated workflowRunCommand calls in one process from
+      // stacking handlers.
+      deregisterTermination();
+
       if (containerBackend && containerEnvId && unresolvedWriteback) {
         console.error(
           '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
