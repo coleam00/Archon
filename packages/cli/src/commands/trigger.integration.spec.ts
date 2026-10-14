@@ -1569,14 +1569,6 @@ test('poll-style CLI fires deduplicate keyed event inputs and reject bad ones', 
   expect(JSON.parse(stored.intent)).not.toHaveProperty('eventInputs');
   expect(JSON.parse(stored.event_input_names)).toEqual(['order_id']);
 
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
-  const conflict = await cli(keyed, false);
-  expect(conflict.exitCode).not.toBe(0);
-  expect(conflict.stderr).toContain(
-    "Delivery ID 'order-123@1' was already used with different inputs"
-  );
-  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
-
   for (const invalid of ['[]', 'null', '{bad json', '{"":1}']) {
     writeFileSync(inputsPath, invalid);
     const result = await cli(fire, false);
@@ -1594,6 +1586,24 @@ test('poll-style CLI fires deduplicate keyed event inputs and reject bad ones', 
       "SELECT preparation_status FROM remote_agent_start_receipt_bindings WHERE preparation_status='rejected'"
     )
   ).toHaveLength(1);
+  expect(runs()).toHaveLength(1);
+
+  // A recorded delivery answers replay or conflict even after its run-as user is removed.
+  const users = new Database(databasePath);
+  try {
+    users.query('DELETE FROM remote_agent_users WHERE id = ?').run(config.binding.runAsUserId);
+  } finally {
+    users.close();
+  }
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
+  await cli(keyed);
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
+  const conflict = await cli(keyed, false);
+  expect(conflict.exitCode).not.toBe(0);
+  expect(conflict.stderr).toContain(
+    "Delivery ID 'order-123@1' was already used with different inputs"
+  );
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
   expect(runs()).toHaveLength(1);
 });
 
