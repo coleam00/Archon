@@ -455,6 +455,10 @@ This validates deterministic engine wiring; it does not validate model reasoning
 **With `--branch`:**
 - Creates/reuses worktree at `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>/`
 - Reuses existing worktree if healthy
+- If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
+- Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.
+- To start fresh from the base, delete the branch (`git branch -D <name>`, and the remote branch if there is one) or choose another name
+- `--from` with a branch that already exists, locally or on the remote, is rejected
 
 **With `--no-worktree`:**
 - Runs in target directory directly (no isolation)
