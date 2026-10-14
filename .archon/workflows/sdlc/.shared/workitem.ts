@@ -32,7 +32,8 @@ export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blo
 export const TRUSTS = ['maintainer', 'outside'] as const;
 export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
-export type RequestAction = 'opened' | 'edited' | 'reopened' | 'added';
+export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
+export type RequestAction = (typeof REQUEST_ACTIONS)[number];
 
 /** One event intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {

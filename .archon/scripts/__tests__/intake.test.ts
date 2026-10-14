@@ -24,8 +24,10 @@ import {
   parseWorkItem,
   RANKS,
   sortCandidates,
+  statePut,
   TRUSTS,
   type TriageFacts,
+  updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
@@ -701,6 +703,25 @@ describe('the intake scripts', () => {
     ]);
   }, 60_000);
 
+  test('a request label added while the item is claimed stays on the issue for the next pickup', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    const retriage = {
+      action: 'added',
+      label: 'archon-triage',
+      actor: 'Maintainer',
+      issueLabels: ['archon-triage'],
+    };
+    facts(at, { ...retriage, runId: 'run-2', statuses: { 'run-1': 'running' } });
+
+    const applied = outcome(at, { ...retriage, runId: 'run-1' }, decided, READY_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
+    expect(stored(at).value.requests).toEqual([
+      expect.objectContaining({ run_id: 'run-2', label: 'archon-triage' }),
+    ]);
+  }, 60_000);
+
   test('a claim keeps the newest label requests and one other request', () => {
     const at = install();
     facts(at, { runId: 'run-1' });
@@ -718,6 +739,20 @@ describe('the intake scripts', () => {
     const { revision } = stored(at);
     const doc = inProcess(at, () => claimItem({ name: 'work/7', revision, doc: waiting }, AT, 'r'));
     expect(doc?.claim?.requests).toEqual([...labels.slice(-49), edit('b')]);
+  }, 60_000);
+
+  test('a claimed item written by its run keeps the newest label requests', () => {
+    const at = install();
+    facts(at, { runId: 'run-1' });
+    const labels = Array.from({ length: 60 }, (_, index) =>
+      labelRequest('archon-triage', `account-${String(index)}`)
+    );
+    const { revision, value } = stored(at);
+    inProcess(at, () => {
+      expect(statePut('work/7', { ...value, requests: labels }, revision)).toBe('ok');
+      updateClaimed(SUBJECT, 'run-1', doc => doc);
+    });
+    expect(stored(at).value.requests).toEqual(labels.slice(-50));
   }, 60_000);
 
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {

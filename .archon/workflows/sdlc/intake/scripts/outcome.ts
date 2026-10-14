@@ -86,10 +86,12 @@ function main(): void {
         ? triage.labels
         : mirrorLabels(next);
     assertNoSelfPromotion(next, add);
+    // A request label added while this run worked is read by the next pickup.
+    const requested = new Set(next.requests.map(request => request.label));
     labels = writeLabels(
       item,
       add,
-      OWNED_LABEL_NAMES.filter(name => !add.includes(name))
+      OWNED_LABEL_NAMES.filter(name => !add.includes(name) && !requested.has(name))
     );
   }
   // Clearing the claim is what marks this run's requests honored; a run that stops

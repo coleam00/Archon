@@ -18,10 +18,9 @@ import {
   type IntakeRequest,
   parseOrder,
   readMaintainers,
+  REQUEST_ACTIONS,
   type RequestAction,
 } from '../../.shared/workitem.ts';
-
-const ACTIONS: readonly RequestAction[] = ['opened', 'edited', 'reopened', 'added'];
 
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
@@ -36,8 +35,8 @@ function main(): void {
     throw new Error('repo_host, repo_path and a positive issue number are required');
   }
   const action = trimmed(process.env.INPUTS_ACTION) as RequestAction;
-  if (!ACTIONS.includes(action)) {
-    throw new Error(`action must be one of ${ACTIONS.join(', ')}, not "${action}"`);
+  if (!REQUEST_ACTIONS.includes(action)) {
+    throw new Error(`action must be one of ${REQUEST_ACTIONS.join(', ')}, not "${action}"`);
   }
   const order = parseOrder(text(process.env.INPUTS_ORDER));
   // Read before any write, so a broken list refuses the run with nothing recorded.
