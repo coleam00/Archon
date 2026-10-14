@@ -127,20 +127,6 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
 }
 
-/**
- * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
- * not need it — the adapter serializes transactions on one connection, and a
- * cross-process writer that commits between our read and our write makes the
- * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY, which the adapter
- * answers by rerunning the whole transaction, rather than let a stale snapshot
- * through). Used to pin rows across a read-then-write pair so
- * the values read are the values the mutation acts on. Dialect-branched here
- * rather than in SqlDialect because this lock is local DB policy.
- */
-function rowLockClause(): string {
-  return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
-}
-
 function parseJsonObject(raw: unknown): Record<string, unknown> | null {
   let value = raw;
   if (typeof value === 'string') {
@@ -178,27 +164,16 @@ function readScheduledResume(raw: unknown): ScheduledWorkflowResume | null {
 
 /**
  * SQL predicate matching a run whose approval gate is still OPEN: the row is
- * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
- * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
- * cannot drift — mirrors resumableStatusClause and the local jsonIntExtract
- * helper. `->>'resolved'` / `json_extract(...)` both return SQL NULL for a JSON
- * null AND for an absent key, so `IS NULL` matches exactly "not yet resolved".
- * This is the compare-and-swap guard resolveApprovalGate uses to serialize
- * concurrent approve/reject.
+ * 'paused' AND metadata.approval.resolved is JSON null or absent, which `jsonText`
+ * reads as SQL NULL, so `IS NULL` matches exactly "not yet resolved". This is the
+ * compare-and-swap guard resolveApprovalGate uses to serialize concurrent
+ * approve/reject.
  */
 function unresolvedGateClause(expectedNodeParamIndex?: number): string {
-  const resolvedExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval'->>'resolved'"
-      : "json_extract(metadata, '$.approval.resolved')";
-  const nodeExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval'->>'nodeId'"
-      : "json_extract(metadata, '$.approval.nodeId')";
-  const pauseExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval'->>'pauseId'"
-      : "json_extract(metadata, '$.approval.pauseId')";
+  const dialect = getDialect();
+  const resolvedExpr = dialect.jsonText('metadata', 'approval.resolved');
+  const nodeExpr = dialect.jsonText('metadata', 'approval.nodeId');
+  const pauseExpr = dialect.jsonText('metadata', 'approval.pauseId');
   const expectedNodeClause =
     expectedNodeParamIndex === undefined
       ? ''
@@ -232,18 +207,16 @@ function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string
 function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: number): string {
   const merge = `$${String(mergeParamIndex)}`;
   const approval = `$${String(approvalParamIndex)}`;
+  const withoutWait = getDialect().jsonRemove('metadata', 'wait');
   return getDatabaseType() === 'postgresql'
-    ? `jsonb_set((metadata - 'wait') || ${merge}::jsonb, '{approval}', ${approval}::jsonb, true)`
-    : `json_set(json_patch(json_remove(metadata, '$.wait'), ${merge}), '$.approval', json(${approval}))`;
+    ? `jsonb_set((${withoutWait}) || ${merge}::jsonb, '{approval}', ${approval}::jsonb, true)`
+    : `json_set(json_patch(${withoutWait}, ${merge}), '$.approval', json(${approval}))`;
 }
 
 /** Replace the engine-owned wait object and remove any stale human approval. */
 function replaceWaitMetadata(paramIndex: number): string {
   const value = `$${String(paramIndex)}`;
-  const metadata =
-    getDatabaseType() === 'postgresql'
-      ? "metadata - 'approval'"
-      : "json_remove(metadata, '$.approval')";
+  const metadata = getDialect().jsonRemove('metadata', 'approval');
   return getDatabaseType() === 'postgresql'
     ? `jsonb_set(${metadata}, '{wait}', ${value}::jsonb, true)`
     : `json_set(${metadata}, '$.wait', json(${value}))`;
@@ -563,10 +536,7 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
  * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
  */
 export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
-  const extract =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->>'isolation_env_id'"
-      : "json_extract(metadata, '$.isolation_env_id')";
+  const extract = getDialect().jsonText('metadata', 'isolation_env_id');
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -701,7 +671,7 @@ export async function cancelResumableRunsForConversation(
       const snapshot = await query<WorkflowRunRow>(
         `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
          WHERE conversation_id = $1 OR parent_conversation_id = $2
-         ORDER BY started_at DESC${rowLockClause()}`,
+         ORDER BY started_at DESC${dialect.rowLock()}`,
         [conversationId, conversationId]
       );
       const resumable = snapshot.rows.filter(
@@ -1048,7 +1018,7 @@ export async function resumeWorkflowRun(
     // needs no such preservation: `failWorkflowRun` wrote the same category onto the
     // terminal `workflow_failed` event, which a resume never touches. The read,
     // the CAS and the event INSERT are one transaction (mirroring
-    // resolveApprovalGate, #2146): the row is pinned by rowLockClause() so the
+    // resolveApprovalGate, #2146): the row is pinned by dialect.rowLock() so the
     // value read is the value cleared, and the event is written ONLY by the
     // caller whose CAS matched — a losing concurrent resumer writes nothing.
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
@@ -1069,7 +1039,7 @@ export async function resumeWorkflowRun(
            FROM remote_agent_workflow_runs w
            LEFT JOIN remote_agent_resource_start_requests q
              ON q.id = w.id AND q.status = 'admitted'
-          WHERE w.id = $1${getDatabaseType() === 'postgresql' ? ' FOR UPDATE OF w' : ''}`,
+          WHERE w.id = $1${getDialect().rowLock('w')}`,
         [id]
       );
       const prior = priorRows.rows[0];
@@ -1214,16 +1184,9 @@ export async function resumeWorkflowRun(
 
 export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {
   const dialect = getDialect();
-  const cancelledReason =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->>'cancelled_reason'"
-      : "json_extract(metadata, '$.cancelled_reason')";
-  const metadataWithoutCancelledReason =
-    getDatabaseType() === 'postgresql'
-      ? "metadata - 'cancelled_reason'"
-      : "json_remove(metadata, '$.cancelled_reason')";
-  const eventReason =
-    getDatabaseType() === 'postgresql' ? "data->>'reason'" : "json_extract(data, '$.reason')";
+  const cancelledReason = dialect.jsonText('metadata', 'cancelled_reason');
+  const metadataWithoutCancelledReason = dialect.jsonRemove('metadata', 'cancelled_reason');
+  const eventReason = dialect.jsonText('data', 'reason');
   // Placeholders follow the reason list, so a new fan-out cancel reason needs no SQL edit.
   const reasonPlaceholders = (first: number): string =>
     FAN_OUT_CANCEL_REASONS.map((_, i) => `$${String(first + i)}`).join(', ');
@@ -1306,14 +1269,7 @@ export async function setToolCallAttention(
     throw new Error('Tool attention stream mismatch');
   const dialect = getDialect();
   const changed = await getDatabase().withTransaction(async query => {
-    if (getDatabaseType() === 'sqlite') {
-      await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [runId]);
-    }
-    const result = await query<{ status: string; metadata: unknown }>(
-      `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
-      [runId]
-    );
-    const row = result.rows[0];
+    const row = await lockedRunRow(query, runId);
     if (row?.status !== 'running') return false;
     const metadata = normalizeMetadata(row.metadata);
     const previous = toolCallAttentionArraySchema.parse(
@@ -1500,10 +1456,11 @@ export async function failWorkflowRun(
   // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
   // recovery) — under json_patch alone that would leave a previous signal attached to
   // a new reason, the #2673 defect through the same mechanism.
-  const metadataWithoutPriorFailure =
-    getDatabaseType() === 'postgresql'
-      ? `metadata - 'scheduled_resume' - '${RUN_STOP_REASON_METADATA_KEY}'`
-      : `json_remove(metadata, '$.scheduled_resume', '$.${RUN_STOP_REASON_METADATA_KEY}')`;
+  const metadataWithoutPriorFailure = dialect.jsonRemove(
+    'metadata',
+    'scheduled_resume',
+    RUN_STOP_REASON_METADATA_KEY
+  );
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
@@ -1749,17 +1706,14 @@ export async function clearWorkflowWaitContext(
   waitContext: WorkflowWaitContext,
   completion: WorkflowWaitCompletion
 ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }> {
-  const nodeExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'nodeId'"
-      : "json_extract(metadata, '$.wait.nodeId')";
-  const cursorExpr =
-    getDatabaseType() === 'postgresql'
-      ? `metadata->'wait'->>'${waitContext.kind === 'attention' ? 'waitingSince' : 'resumeAt'}'`
-      : `json_extract(metadata, '$.wait.${waitContext.kind === 'attention' ? 'waitingSince' : 'resumeAt'}')`;
+  const dialect = getDialect();
+  const nodeExpr = dialect.jsonText('metadata', 'wait.nodeId');
+  const cursorExpr = dialect.jsonText(
+    'metadata',
+    `wait.${waitContext.kind === 'attention' ? 'waitingSince' : 'resumeAt'}`
+  );
   const cursor = waitContext.kind === 'attention' ? waitContext.waitingSince : waitContext.resumeAt;
-  const clearWait =
-    getDatabaseType() === 'postgresql' ? "metadata - 'wait'" : "json_remove(metadata, '$.wait')";
+  const clearWait = dialect.jsonRemove('metadata', 'wait');
   try {
     return await getDatabase().withTransaction(async query => {
       const result = await query(
@@ -1790,38 +1744,14 @@ export async function listDueWorkflowContinuations(
   now: Date,
   limit: number
 ): Promise<WorkflowRun[]> {
-  const resumeAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'resumeAt'"
-      : "json_extract(metadata, '$.wait.resumeAt')";
-  const signaledAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'signaledAt'"
-      : "json_extract(metadata, '$.wait.signaledAt')";
-  const waitKind =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'kind'"
-      : "json_extract(metadata, '$.wait.kind')";
-  const scheduledResumeAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'scheduled_resume'->>'resumeAt'"
-      : "json_extract(metadata, '$.scheduled_resume.resumeAt')";
-  const scheduledTriggeredAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'scheduled_resume'->>'triggeredAt'"
-      : "json_extract(metadata, '$.scheduled_resume.triggeredAt')";
-  const retryAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->>'continuation_retry_at'"
-      : "json_extract(metadata, '$.continuation_retry_at')";
-  // Text of a dotted metadata path, e.g. `approval.pauseId`.
-  const metadataText = (path: string): string =>
-    getDatabaseType() === 'postgresql'
-      ? `metadata${path
-          .split('.')
-          .map((key, i, keys) => `${i === keys.length - 1 ? '->>' : '->'}'${key}'`)
-          .join('')}`
-      : `json_extract(metadata, '$.${path}')`;
+  const dialect = getDialect();
+  const metadataText = (path: string): string => dialect.jsonText('metadata', path);
+  const resumeAt = metadataText('wait.resumeAt');
+  const signaledAt = metadataText('wait.signaledAt');
+  const waitKind = metadataText('wait.kind');
+  const scheduledResumeAt = metadataText('scheduled_resume.resumeAt');
+  const scheduledTriggeredAt = metadataText('scheduled_resume.triggeredAt');
+  const retryAt = metadataText('continuation_retry_at');
   const answeredGate = `status = 'paused' AND ${metadataText('wait')} IS NULL
                AND COALESCE(${metadataText('isolation')}, '') <> 'container'
                AND ${metadataText('approval.resolved')} IN ('approved', 'rejected')
@@ -1869,14 +1799,13 @@ export async function listWorkflowEventSignalCandidates(
   now: Date
 ): Promise<WorkflowEventSignalCandidate[]> {
   const postgres = getDatabaseType() === 'postgresql';
+  const dialect = getDialect();
+  // SQLite stores JSON as TEXT, so a malformed row must read as NULL instead of failing the scan.
+  const validJson = (column: string, expr: string): string =>
+    postgres ? expr : `CASE WHEN json_valid(${column}) THEN ${expr} END`;
   const runJson = (path: string): string =>
-    postgres
-      ? `r.metadata->'wait'->>'${path}'`
-      : `CASE WHEN json_valid(r.metadata) THEN json_extract(r.metadata, '$.wait.${path}') END`;
-  const eventJson = (path: string): string =>
-    postgres
-      ? `e.data->>'${path}'`
-      : `CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.${path}') END`;
+    validJson('r.metadata', dialect.jsonText('r.metadata', `wait.${path}`));
+  const eventJson = (path: string): string => validJson('e.data', dialect.jsonText('e.data', path));
   const structuredOutputType = postgres
     ? "CASE WHEN e.data ? 'structured_output' THEN jsonb_typeof(e.data->'structured_output') END"
     : "CASE WHEN json_valid(e.data) THEN json_type(e.data, '$.structured_output') END";
@@ -1950,38 +1879,15 @@ export async function deferWorkflowContinuation(
   cursor: WorkflowContinuationCursor
 ): Promise<void> {
   const dialect = getDialect();
-  const waitResumeAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'resumeAt'"
-      : "json_extract(metadata, '$.wait.resumeAt')";
-  const scheduledResumeAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'scheduled_resume'->>'resumeAt'"
-      : "json_extract(metadata, '$.scheduled_resume.resumeAt')";
-  const scheduledTriggeredAt =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'scheduled_resume'->>'triggeredAt'"
-      : "json_extract(metadata, '$.scheduled_resume.triggeredAt')";
-  const waitNodeId =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'nodeId'"
-      : "json_extract(metadata, '$.wait.nodeId')";
-  const scheduledAttempt =
-    getDatabaseType() === 'postgresql'
-      ? "(metadata->'scheduled_resume'->>'attempt')::integer"
-      : "json_extract(metadata, '$.scheduled_resume.attempt')";
-  const gatePauseId =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval'->>'pauseId'"
-      : "json_extract(metadata, '$.approval.pauseId')";
-  const gateNodeId =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'approval'->>'nodeId'"
-      : "json_extract(metadata, '$.approval.nodeId')";
-  const waitPauseId =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'pauseId'"
-      : "json_extract(metadata, '$.wait.pauseId')";
+  const metadataText = (path: string): string => dialect.jsonText('metadata', path);
+  const waitResumeAt = metadataText('wait.resumeAt');
+  const scheduledResumeAt = metadataText('scheduled_resume.resumeAt');
+  const scheduledTriggeredAt = metadataText('scheduled_resume.triggeredAt');
+  const waitNodeId = metadataText('wait.nodeId');
+  const scheduledAttempt = jsonIntExtract('metadata', 'scheduled_resume.attempt');
+  const gatePauseId = metadataText('approval.pauseId');
+  const gateNodeId = metadataText('approval.nodeId');
+  const waitPauseId = metadataText('wait.pauseId');
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs
@@ -2060,8 +1966,8 @@ export async function labelAttentionWait(
 }
 
 /**
- * Read one run row for a read-merge-write of its wait. SQLite takes its write lock
- * before the read, as `setToolCallAttention` does, so the merge acts on the row it read.
+ * Read one run row for a read-merge-write of its metadata. SQLite takes its write
+ * lock before the read, so the merge acts on the row it read.
  */
 async function lockedRunRow(
   query: TransactionQuery,
@@ -2071,7 +1977,7 @@ async function lockedRunRow(
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const result = await query<{ status: WorkflowRunStatus; metadata: unknown }>(
-    `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+    `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
     [id]
   );
   return result.rows[0];
@@ -2102,22 +2008,11 @@ export async function signalWorkflowWait(
   if (parsedWaitContext.kind !== 'event') {
     throw new Error('Cannot signal a non-event workflow wait');
   }
-  const eventExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'event'"
-      : "json_extract(metadata, '$.wait.event')";
-  const nodeExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'nodeId'"
-      : "json_extract(metadata, '$.wait.nodeId')";
-  const signaledExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'signaledAt'"
-      : "json_extract(metadata, '$.wait.signaledAt')";
-  const resumeAtExpr =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->'wait'->>'resumeAt'"
-      : "json_extract(metadata, '$.wait.resumeAt')";
+  const dialect = getDialect();
+  const eventExpr = dialect.jsonText('metadata', 'wait.event');
+  const nodeExpr = dialect.jsonText('metadata', 'wait.nodeId');
+  const signaledExpr = dialect.jsonText('metadata', 'wait.signaledAt');
+  const resumeAtExpr = dialect.jsonText('metadata', 'wait.resumeAt');
   const signaledAt = new Date().toISOString();
   const metadataWrite =
     payload === undefined
@@ -2187,10 +2082,7 @@ export async function signalWorkflowWait(
  */
 export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
   const dialect = getDialect();
-  const extract =
-    getDatabaseType() === 'postgresql'
-      ? "metadata->>'writeback_apply_claimed'"
-      : "json_extract(metadata, '$.writeback_apply_claimed')";
+  const extract = getDialect().jsonText('metadata', 'writeback_apply_claimed');
   try {
     const result = await pool.query(
       `UPDATE remote_agent_workflow_runs
@@ -2292,14 +2184,9 @@ function toCount(value: number | string | null): number | null {
   return value === null ? null : Number(value);
 }
 
-/**
- * Returns a SQL fragment to extract and cast an integer from a JSON data column.
- * Handles SQLite (`json_extract`) and PostgreSQL (`->>`/`::INTEGER`) dialects.
- */
-function jsonIntExtract(col: string, key: string): string {
-  return getDatabaseType() === 'postgresql'
-    ? `(${col}->>'${key}')::INTEGER`
-    : `CAST(json_extract(${col}, '$.${key}') AS INTEGER)`;
+/** SQL fragment reading an integer from a JSON column at a dotted key path. */
+function jsonIntExtract(col: string, path: string): string {
+  return `CAST(${getDialect().jsonText(col, path)} AS INTEGER)`;
 }
 
 /**
@@ -2605,17 +2492,12 @@ export async function updateWorkflowActivity(id: string): Promise<void> {
  * Returns the count of deleted runs.
  */
 export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
-  // Validate olderThanDays is a safe non-negative integer before SQL interpolation.
-  // The dialect has no "date subtract" helper, so we must interpolate — but only after validation.
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(
       `Invalid olderThanDays: ${String(olderThanDays)} (must be a non-negative integer)`
     );
   }
-  const cutoff =
-    getDatabaseType() === 'postgresql'
-      ? `NOW() - INTERVAL '${String(olderThanDays)} days'`
-      : `datetime('now', '-${String(olderThanDays)} days')`;
+  const cutoff = getDialect().nowMinusDays(1);
   try {
     return await getDatabase().withTransaction(async query => {
       // Delete events first (FK reference)
@@ -2625,13 +2507,13 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
           WHERE status IN ('completed', 'failed', 'cancelled')
             AND started_at < ${cutoff}
         )`,
-        []
+        [olderThanDays]
       );
       const result = await query(
         `DELETE FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
            AND started_at < ${cutoff}`,
-        []
+        [olderThanDays]
       );
       return { count: result.rowCount ?? 0 };
     });
@@ -2689,10 +2571,7 @@ export async function listConversationDetachBlockers(
 }
 
 export async function listNotifiedTerminalRuns(): Promise<WorkflowRun[]> {
-  const field = (alias: string, key: string): string =>
-    getDatabaseType() === 'postgresql'
-      ? `${alias}.data->>'${key}'`
-      : `json_extract(${alias}.data, '$.${key}')`;
+  const field = (alias: string, key: string): string => getDialect().jsonText(`${alias}.data`, key);
   const nonBaseline =
     getDatabaseType() === 'postgresql'
       ? "COALESCE(e.data->>'baseline', 'false') <> 'true'"
