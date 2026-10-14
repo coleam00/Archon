@@ -15,6 +15,7 @@ import {
   isLoopGroupNode,
   isIncludeDirective,
   isTriggerRule,
+  loopGroupOutputNodes,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
@@ -1759,6 +1760,26 @@ describe('dagNodeSchema — loop_group', () => {
       expect(isLoopGroupNode(inner as never)).toBe(true);
       expect(inner?.loop_group?.nodes).toHaveLength(1);
     }
+  });
+});
+
+describe('loopGroupOutputNodes', () => {
+  const body = (sink: Record<string, unknown>): DagNode[] =>
+    [
+      { id: 'work', bash: 'echo work' },
+      { ...sink, id: 'end', depends_on: ['work'] },
+    ].map(n => dagNodeSchema.parse(n) as DagNode);
+  const outputIds = (sink: Record<string, unknown>): string[] =>
+    loopGroupOutputNodes(body(sink)).map(n => n.id);
+
+  test('reads past a sink that asks a human to the work it depends on', () => {
+    expect(outputIds({ approval: { message: 'ok?' } })).toEqual(['work']);
+    expect(outputIds({ wait: { attention: 'Check it.' } })).toEqual(['work']);
+  });
+
+  test('keeps any other wait as the output, as before #4043', () => {
+    expect(outputIds({ wait: { duration_ms: 1 } })).toEqual(['end']);
+    expect(outputIds({ wait: { event: 'checks.complete', deadline_ms: 1 } })).toEqual(['end']);
   });
 });
 
