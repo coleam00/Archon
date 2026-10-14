@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, realpath, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { WorktreeProvider } from '@archon/isolation';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { setPlatformPolicies } from '../platforms/registry';
 import {
   canonicalizeProjectPath,
   getProjectStoragePaths,
@@ -22,6 +24,10 @@ const archonHome = join(root, 'home');
 process.env.ARCHON_HOME = archonHome;
 await mkdir(archonHome);
 await writeFile(join(archonHome, 'config.yaml'), 'defaultAssistant: claude\n');
+
+setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+registerBuiltinProviders();
+registerCommunityProviders();
 
 const db = new SqliteAdapter(':memory:');
 mock.module('./connection', () => ({
@@ -308,4 +314,133 @@ test('rename checks the configured worktree location instead of the unused defau
   expect(renamed.id).toBe(project.id);
   expect(renamed.name).toBe(newName);
   expect(renamed.default_cwd).toBe(repoPath);
+});
+
+async function gitAt(path: string, ...args: string[]): Promise<void> {
+  const child = Bun.spawn(
+    [
+      'git',
+      '-C',
+      path,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      '-c',
+      'commit.gpgsign=false',
+      ...args,
+    ],
+    {
+      stdout: 'ignore',
+      stderr: 'pipe',
+    }
+  );
+  const stderr = await new Response(child.stderr).text();
+  expect(await child.exited, stderr).toBe(0);
+}
+
+async function linkedCheckout(primary: string, linked: string): Promise<void> {
+  await mkdir(primary, { recursive: true });
+  await gitAt(primary, 'init');
+  await gitAt(primary, 'commit', '--allow-empty', '-m', 'initial');
+  await gitAt(primary, 'worktree', 'add', '-b', 'linked', linked);
+}
+
+test('rename preserves the primary checkout worktree base as well as the registered base', async () => {
+  const codebases = await import('./codebases');
+  const primary = join(root, 'linked-rename', 'primary');
+  const linked = join(root, 'linked-rename', 'source');
+  await linkedCheckout(primary, linked);
+  await mkdir(join(linked, '.archon'));
+  await writeFile(join(linked, '.archon', 'config.yaml'), 'worktree:\n  path: .worktrees\n');
+  const project = await codebases.createCodebase({ name: 'primary', default_cwd: linked });
+  const nextName = '_local/source';
+  expect(getWorktreeBase(toRepoPath(primary), project.name).base).not.toBe(
+    getWorktreeBase(toRepoPath(primary), nextName).base
+  );
+  await expect(codebases.renameCodebase(project.id, nextName)).rejects.toThrow('would move');
+  expect((await codebases.getCodebase(project.id))?.name).toBe(project.name);
+});
+
+test('legacy repair preserves worktrees anchored to each primary checkout', async () => {
+  const codebases = await import('./codebases');
+  const { handleMessage } = await import('../orchestrator/orchestrator-agent');
+  const current = join(root, 'linked-repair', 'old', 'db');
+  const replacement = join(root, 'linked-repair', 'new', 'db');
+  for (const linked of [current, replacement]) {
+    const primary = join(linked, '..', 'primary');
+    await linkedCheckout(primary, linked);
+    await mkdir(join(primary, '.archon'));
+    await writeFile(join(primary, '.archon', 'config.yaml'), 'worktree:\n  path: .worktrees\n');
+  }
+  const project = await codebases.createCodebase({ name: 'linked repair', default_cwd: current });
+  const stored = relative(process.cwd(), current);
+  await db.query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+    stored,
+    project.id,
+  ]);
+  const platform = createMockPlatform();
+  await handleMessage(
+    platform,
+    'linked-repair',
+    `/register-project ${quoteCommandArg(project.name)} ${quoteCommandArg(replacement)}`,
+    { actor: { kind: 'operator' } }
+  );
+  expect(platform.sendMessage.mock.calls[0]?.[1]).toContain('would move its Archon storage');
+  expect(
+    (await codebases.listCodebaseRegistrations()).find(row => row.id === project.id)
+      ?.stored_default_cwd
+  ).toBe(stored);
+});
+
+for (const invalid of ['malformed', 'unreadable'] as const) {
+  for (const side of ['current', 'replacement'] as const) {
+    test(`repair refuses ${invalid} config on ${side} checkout`, async () => {
+      const codebases = await import('./codebases');
+      const current = join(root, invalid, side, 'old', 'db');
+      const replacement = join(root, invalid, side, 'new', 'db');
+      for (const path of [current, replacement]) await mkdir(path, { recursive: true });
+      const badPath = side === 'current' ? current : replacement;
+      await mkdir(join(badPath, '.archon'));
+      const configPath = join(badPath, '.archon', 'config.yaml');
+      if (invalid === 'malformed') await writeFile(configPath, 'worktree: [');
+      else await mkdir(configPath);
+      const project = await codebases.createCodebase({
+        name: `${invalid} ${side}`,
+        default_cwd: current,
+      });
+      await expect(
+        codebases.repairCodebaseRegistration(project.id, {
+          default_cwd: replacement,
+          kind: 'repo',
+        })
+      ).rejects.toThrow();
+      expect((await codebases.getCodebase(project.id))?.default_cwd).toBe(current);
+      if (side === 'current') {
+        await expect(codebases.renameCodebase(project.id, '_local/db')).rejects.toThrow();
+        expect((await codebases.getCodebase(project.id))?.name).toBe(project.name);
+      }
+    });
+  }
+}
+
+test('rename retains the linked checkout anchor for a separate Git directory', async () => {
+  const codebases = await import('./codebases');
+  const { CanonicalRepoPathUnavailableError, getCanonicalRepoPath } = await import('@archon/git');
+  const primary = join(root, 'separate', 'primary');
+  const linked = join(root, 'separate', 'separate-db');
+  await mkdir(primary, { recursive: true });
+  await gitAt(primary, 'init', '--separate-git-dir', join(root, 'separate', 'metadata'));
+  await gitAt(primary, 'commit', '--allow-empty', '-m', 'initial');
+  await gitAt(primary, 'worktree', 'add', '-b', 'linked', linked);
+  await expect(getCanonicalRepoPath(linked)).rejects.toBeInstanceOf(
+    CanonicalRepoPathUnavailableError
+  );
+  await mkdir(join(linked, '.archon'));
+  await writeFile(join(linked, '.archon', 'config.yaml'), 'worktree:\n  path: .worktrees\n');
+  const project = await codebases.createCodebase({
+    name: 'separate directory',
+    default_cwd: linked,
+  });
+  expect((await codebases.renameCodebase(project.id, '_local/separate-db')).id).toBe(project.id);
 });

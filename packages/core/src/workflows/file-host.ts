@@ -136,7 +136,11 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         return codebaseRowSchema.parse(row);
       },
       updateCodebase: (target, input) =>
-        updateCodebase(target.id, row => Object.assign(row, input)),
+        updateCodebase(target.id, row => {
+          if (input.default_cwd !== undefined) row.default_cwd = input.default_cwd;
+          if (input.repository_url !== undefined) row.repository_url = input.repository_url;
+          if (input.default_branch !== undefined) row.default_branch = input.default_branch;
+        }),
       getCodebaseCommands: async id => (await records.codebases.getCodebase(id))?.commands ?? {},
       updateCodebaseCommands: (id, commands) =>
         updateCodebase(id, row => {

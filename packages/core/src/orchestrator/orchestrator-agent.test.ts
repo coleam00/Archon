@@ -197,6 +197,9 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 const mockDeleteCodebase = mock<typeof CodebaseDb.deleteCodebase>(() => Promise.resolve());
 class MockCodebaseNotFoundError extends Error {
@@ -217,6 +220,7 @@ mock.module('../db/codebases', () => ({
     })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
   deleteCodebase: mockDeleteCodebase,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
@@ -7416,13 +7420,10 @@ describe('handleMessage — legacy registration recovery', () => {
       `/register-project My-App ${quoteCommandArg(replacement)}`,
       { actor: operator }
     );
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
-      {
-        default_cwd: await canonicalizeProjectPath(replacement),
-        kind: 'repo',
-      }
-    );
+    expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith('id-my-app', {
+      default_cwd: await canonicalizeProjectPath(replacement),
+      kind: 'repo',
+    });
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'

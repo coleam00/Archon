@@ -121,6 +121,9 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
@@ -135,6 +138,7 @@ mock.module('../db/codebases', () => ({
     })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
 }));
 
 const mockGetActiveSession = mock<typeof SessionDb.getActiveSession>(() => Promise.resolve(null));
@@ -649,6 +653,7 @@ function clearAllMocks(): void {
   mockLoadConfig.mockClear();
   mockExistsSync.mockClear();
   mockUpdateCodebase.mockClear();
+  mockRepairCodebaseRegistration.mockClear();
   // Reset, not clear: a `mockImplementationOnce` that its test never reached
   // (because the handler returned early) would otherwise be consumed by the
   // next test and report a second, misleading failure.
@@ -1878,6 +1883,7 @@ describe('orchestrator-agent handleMessage', () => {
             );
             expect(mockCreateCodebase).not.toHaveBeenCalled();
             expect(mockUpdateCodebase).not.toHaveBeenCalled();
+            expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
           } finally {
             await removeTempTree(projectPath);
           }
@@ -1907,6 +1913,7 @@ describe('orchestrator-agent handleMessage', () => {
           );
           expect(mockCreateCodebase).not.toHaveBeenCalled();
           expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
         } finally {
           await removeTempTree(projectPath);
         }
@@ -1930,6 +1937,7 @@ describe('orchestrator-agent handleMessage', () => {
         );
         expect(mockCreateCodebase).not.toHaveBeenCalled();
         expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
       } finally {
         repoSpy.mockRestore();
         mockExistsSync.mockReturnValue(true);
@@ -1937,11 +1945,14 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     for (const kind of ['repo', 'folder'] as const) {
-      test(`/register-project refuses repair from the opposite kind to ${kind}`, async () => {
+      test(`/register-project reports a persistence refusal when repairing to ${kind}`, async () => {
         const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
           kind === 'repo' ? git.toRepoPath('/new/path') : null
         );
         try {
+          mockRepairCodebaseRegistration.mockRejectedValueOnce(
+            new Error('would move its Archon storage')
+          );
           mockExistsSync.mockReturnValue(true);
           mockListCodebases.mockResolvedValue([
             {
@@ -1953,6 +1964,10 @@ describe('orchestrator-agent handleMessage', () => {
           ]);
           await handleMessage(platform, 'chat-456', '/register-project my-app /new/path', {
             actor: operator,
+          });
+          expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith(mockCodebase.id, {
+            default_cwd: '/new/path',
+            kind,
           });
           expect(mockUpdateCodebase).not.toHaveBeenCalled();
           expect(mockCreateCodebase).not.toHaveBeenCalled();

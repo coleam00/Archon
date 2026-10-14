@@ -1,4 +1,3 @@
-import { getProjectLocations } from '../services/project-locations';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -3547,15 +3546,14 @@ Kind: folder project (runs in place)`;
     return toError(err).message;
   }
   if (alreadyExists) {
-    const current = { ...alreadyExists, default_cwd: alreadyExists.stored_default_cwd };
-    const replacement = { ...current, default_cwd: canonicalPath, kind };
-    const currentPaths = await getProjectLocations(current);
-    const replacementPaths = await getProjectLocations(replacement);
-    const moved = currentPaths.findIndex((path, i) => path !== replacementPaths[i]);
-    if (moved !== -1) {
-      return `Repairing "${projectName}" would move its Archon storage (worktrees, state, logs, artifacts) from ${currentPaths[moved]} to ${replacementPaths[moved]}. Nothing was changed; use a replacement path and kind that keep the same storage location.`;
+    try {
+      await codebaseDb.repairCodebaseRegistration(alreadyExists.id, {
+        default_cwd: canonicalPath,
+        kind,
+      });
+    } catch (error) {
+      return `Could not repair project: ${toError(error).message}`;
     }
-    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath, kind });
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 

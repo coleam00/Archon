@@ -200,11 +200,6 @@ export async function updateCodebase(
     values.push(data.default_branch);
   }
 
-  if (data.kind !== undefined) {
-    updates.push(`kind = $${paramIndex++}`);
-    values.push(data.kind);
-  }
-
   if (updates.length === 0) return;
 
   updates.push(`updated_at = ${dialect.now()}`);
@@ -217,6 +212,32 @@ export async function updateCodebase(
   if ((result.rowCount ?? 0) === 0) {
     throw new CodebaseNotFoundError(target.id);
   }
+}
+
+export async function repairCodebaseRegistration(
+  id: string,
+  replacement: Pick<Codebase, 'default_cwd' | 'kind'>
+): Promise<void> {
+  const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases WHERE id = $1', [
+    id,
+  ]);
+  const current = result.rows[0];
+  if (!current) throw new CodebaseNotFoundError(id);
+  assertAbsoluteDefaultCwd(replacement.default_cwd, current.name);
+  const currentPaths = await getProjectLocations(current);
+  const replacementPaths = await getProjectLocations({ ...current, ...replacement });
+  const moved = currentPaths.findIndex((path, i) => path !== replacementPaths[i]);
+  if (moved !== -1 || currentPaths.length !== replacementPaths.length) {
+    throw new Error(
+      `Repairing "${current.name}" would move its Archon storage (worktrees, state, logs, artifacts). ` +
+        'Nothing was changed; use a replacement path and kind that keep the same storage location.'
+    );
+  }
+  const updated = await pool.query(
+    `UPDATE remote_agent_codebases SET default_cwd = $1, kind = $2, updated_at = ${getDialect().now()} WHERE id = $3`,
+    [replacement.default_cwd, replacement.kind, id]
+  );
+  if ((updated.rowCount ?? 0) === 0) throw new CodebaseNotFoundError(id);
 }
 
 export class CodebaseNameTakenError extends Error {
@@ -252,11 +273,8 @@ const CODEBASE_RENAME_LOCK = JSON.stringify(['codebase-rename']);
 /**
  * Change a codebase's display name.
  *
- * The name doubles as the project's storage identity (see
- * `resolveProjectStorageKey` and `getWorktreeBase`): worktrees, `$STATE_DIR`,
- * logs and artifacts of future runs live under roots derived from it. A rename
- * that would change any of them is refused rather than silently splitting the
- * project across two trees.
+ * Refuse changes to managed locations rather than splitting existing state
+ * and future runs across different roots.
  *
  * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
  * for `--project` and `/update-project`, so a duplicate is refused too. The
