@@ -47,6 +47,7 @@ Archon provides a unified directory and configuration system with:
 ├── temp/                           # Ephemeral scratch (per-simulation dry-run dirs; removed when the run ends)
 ├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
 ├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
+├── plugins/                        # Installed plugins: executables, installed/**/receipt.json, packs/
 ├── server/<version>/               # Cached server executable (archon serve, binary only)
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
 ├── update-check.json               # Update check cache (binary builds only, 1h release-data TTL; 24h CLI notice interval)
@@ -74,6 +75,12 @@ Archon provides a unified directory and configuration system with:
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
   workflow in the project. Survives worktree teardown; never visible to git.
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
+- `plugins/` - Everything `archon plugin install` and `archon provider install` write.
+  Plugin executables such as `archon-provider-codex-<os>-<arch>` sit at the top,
+  each plugin's receipt is `installed/<owner>/<repo>[/<path>]/receipt.json`, and
+  workflow pack trees live under `packs/`. Release binaries load the Claude, Codex
+  and Pi providers only from these receipts; source checkouts and Docker run them
+  from source and ignore receipts for those three.
 - `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
   service consumers may use its absolute `binary` path when the user has not
   configured one explicitly. Source/Bun runs do not write this file.
