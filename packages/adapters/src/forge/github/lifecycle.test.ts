@@ -26,6 +26,7 @@ interface PullState {
   state: 'open' | 'closed';
   draft: boolean;
   merged?: boolean;
+  user?: { id: number; login: string } | null;
   head: { ref: string; sha: string; repo: { full_name: string } | null };
   base: { ref: string; sha: string };
 }
@@ -205,6 +206,26 @@ describe('GitHub lifecycle reads', () => {
     // A closed pull request on the same branch must not answer for the head, so
     // the query never widens past GitHub's default open state.
     expect(github.calls.some(call => call.url.includes('state=all'))).toBe(false);
+  });
+
+  test('a pull request view returns its author, and a response without one reports none', async () => {
+    const view = {
+      operationId: 'author',
+      op: 'pr.view',
+      selector: { kind: 'number', ref },
+    } as const;
+    expect(
+      await run(view, fakeGitHub({ pull: pull({ user: { id: 42, login: 'octo' } }) }))
+    ).toMatchObject({
+      ok: true,
+      result: { value: { author: { host: 'github.com', id: '42', login: 'octo' } } },
+    });
+    expect(await run(view, fakeGitHub({ pull: pull({ user: null }) }))).toMatchObject({
+      ok: true,
+      result: { value: { author: null } },
+    });
+    const legacy = await run(view, fakeGitHub());
+    expect(legacy.ok && legacy.result.value).not.toHaveProperty('author');
   });
 
   test('reports no pull request for a head that has none', async () => {

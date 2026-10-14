@@ -49,6 +49,9 @@ archon forge workitem.view --data '{"ref":{"repo":{"host":"github.com","path":"o
 archon forge pr.view --data '{"selector":{"kind":"number","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}}'
 archon forge workitem.create --data-file ./issue.json
 archon forge workitem.labels.set --data-file ./labels.json
+archon forge workitem.label.add --data '{"subject":{"kind":"pr","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}},"name":"queued"}'
+archon forge workitem.label.remove --data '{"subject":{"kind":"issue","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":31}},"name":"queued"}'
+archon forge workitem.list --data '{"repo":{"host":"github.com","path":"owner/repository"},"label":"queued"}'
 archon forge repo.labels.list --data-file ./repository.json
 archon forge repo.label.ensure --data-file ./label.json
 archon forge pr.create --data-file ./create.json
@@ -61,7 +64,7 @@ archon forge checks.rerun --data-file ./rerun.json
 archon forge pr.reviews --data-file ./reviews.json
 ```
 
-Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation and repository-label operations and for a `pr.view` head selector, a qualified repository and number otherwise. None is inferred from the checkout.
+Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation, repository-label operations, listing by label and a `pr.view` head selector; a subject `{kind: "issue" | "pr", ref}` for single-label writes; a qualified repository and number otherwise. None is inferred from the checkout.
 
 `pr.view` accepts either selector: `{"kind":"number","ref":…}`, or `{"kind":"head","repo":…,"headRepo":…,"head":"branch"}` with an optional `base`. The head form answers "does this branch have a pull request", so it resolves the **open** one and returns `null` when there is none. A head matching more than one open pull request is a conflict rather than a guess.
 
@@ -71,7 +74,7 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 
 ## What a write reports
 
-`workitem.create`, `workitem.labels.set`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
+`workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
 
 | Outcome | Shape | What it means |
 | --- | --- | --- |
@@ -159,7 +162,7 @@ It also exports `runForgeMutationConformance` for write fixtures. Pass the plugi
 
 The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities, enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.create`, `workitem.labels.set`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
 A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 
@@ -179,11 +182,16 @@ Pass these request objects through `--data-file`. The host supplies `operationId
 
 - `workitem.create`: `{repo: {host, path}, title, body, marker}`. The one-line marker must be the body's exact first line. The plugin enumerates issues across all states, excluding PRs, and compares the exact first line. A failed lookup or multiple matches refuses before writing. One match is read directly and returned with `changed:false`, including when closed; recovery never edits or reopens it. Otherwise one create is followed by an independent read. Fresh creation proves open state and requested title/body digests; recovery proves issue identity and marker digest while returning existing content digests.
 - `workitem.labels.set`: `{ref: {repo: {host, path}, number}, labels: [name]}`. This replaces the complete label set; `[]` clears it. Every name must exist in the repository. It never creates labels. The result carries the independently observed exact set, and equal sets submit no write.
+- `workitem.label.add`: `{subject: {kind: "issue" | "pr", ref: {repo: {host, path}, number}}, name}`. Adds one label and leaves every other label on the item alone. The subject's kind must match the item: a pull request is labelled by its pull-request reference, and a mismatch is refused before writing. The name must already exist in the repository with exact case; adding never creates a label. An item that already carries the label returns `changed:false` without writing. The result carries the item's complete label set as read back after the write.
+- `workitem.label.remove`: the same request shape. Removes one label and leaves the others. An item that does not carry the label returns `changed:false`, including when another writer removed it between this call's read and its write.
+- `workitem.list`: `{repo: {host, path}, label}`. Returns `{repo, label, items}`, every open issue and pull request that carries the exact label, each with `{ref, kind, url, state}`. The GitHub plugin follows every page and refuses a label name containing a comma, which its filter cannot express.
 - `repo.labels.list`: `{repo: {host, path}}`. Returns complete repository label names as `{repo, labels: [{name}]}`.
 - `repo.label.ensure`: `{repo: {host, path}, name, color, description}`. Explicitly ensure one repository label. Color is six hexadecimal digits. An existing name returns `changed:false` without changing operator metadata. Creation performs one write and verifies name, color and description digest by a separate read.
 
-Work-item mutation evidence contains `{ref, kind:'issue', url, state}`, never authored title/body. Label metadata evidence contains name, color and description digest. `workitem.view` may omit labels for older protocol-1 plugins; triage requires label facts and fails if absent.
+Work-item mutation evidence contains `{ref, kind, url, state}`, never authored title/body. `kind` is `issue` for `workitem.create` and `workitem.labels.set`, and the subject's kind for single-label writes. Label metadata evidence contains name, color and description digest. `workitem.view` may omit labels for older protocol-1 plugins; triage requires label facts and fails if absent.
 
-Marker recovery guarantees sequential reuse of a visible item, including after an unknown create outcome. It does not provide atomic uniqueness for concurrent creates: GitHub has no marker uniqueness constraint. Callers must reconcile unknown outcomes, never retry automatically inside a call. Whole-set label replacement preserves labels observed before writing, but cannot preserve concurrent edits between that read and the write.
+`workitem.view` and `pr.view` return `author: {host, id, login}` when the plugin reports one. `null` means the forge has no author for the item, such as a deleted account. An older protocol-1 plugin may omit the field.
+
+Marker recovery guarantees sequential reuse of a visible item, including after an unknown create outcome. It does not provide atomic uniqueness for concurrent creates: GitHub has no marker uniqueness constraint. Callers must reconcile unknown outcomes, never retry automatically inside a call. Whole-set label replacement preserves labels observed before writing, but cannot preserve concurrent edits between that read and the write. Two writers that each need one label should use `workitem.label.add` and `workitem.label.remove`: the GitHub plugin submits one label through GitHub's single-label endpoints, so a concurrent writer's labels survive.
 
 Delivery uses an exact-content SHA-256 marker derived from title, claim, evidence and relation. Run provenance does not affect identity. Semantic duplicate detection is separate work. Triage explicitly ensures only missing wanted pack labels, omits nonexistent area labels, then replaces labels while preserving observed unrelated names. The default `gh` source remains supported; its issue creation retains the existing URL sidecar behavior.

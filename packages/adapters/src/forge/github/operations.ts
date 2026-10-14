@@ -26,6 +26,7 @@ import {
   handleGithubMutation,
   handleGithubPrView,
   handleGithubWorkItemView,
+  handleGithubWorkItemList,
   handleGithubRepoLabelsList,
 } from './lifecycle';
 
@@ -41,6 +42,9 @@ export const githubPluginMetadata = {
     'workitem.view',
     'workitem.create',
     'workitem.labels.set',
+    'workitem.label.add',
+    'workitem.label.remove',
+    'workitem.list',
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
@@ -177,6 +181,8 @@ export async function handleGithubOperation(
     if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
     if (request.op === 'workitem.view')
       return await handleGithubWorkItemView(request, fetchImpl, token);
+    if (request.op === 'workitem.list')
+      return await handleGithubWorkItemList(request, fetchImpl, token);
     if (request.op === 'repo.labels.list')
       return await handleGithubRepoLabelsList(request, fetchImpl, token);
     if (request.op === 'pr.reviews') return await handleGithubPrReviews(request, fetchImpl, token);
