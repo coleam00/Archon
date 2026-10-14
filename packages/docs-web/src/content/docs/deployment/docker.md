@@ -599,6 +599,8 @@ A workflow pack, from a public GitHub repository that publishes one:
 docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 ```
 
+The bundled SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`) reach GitHub through this plugin by default, so they also need `GH_TOKEN` in the compose `.env` (or [GitHub App mode](/adapters/github-app-setup/)). To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+
 Both land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
 
 The image has `git` and Bun, but not `uv`, Python, or the tools a pack's own scripts call (such as ffmpeg). Add those in [`Dockerfile.user`](#customizing-the-image).

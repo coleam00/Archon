@@ -31,6 +31,8 @@ import {
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
+import type { ForgeResponse } from '@archon/forge/operations';
+import { forgeCommand } from './forge';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -215,6 +217,79 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
       message: `gh auth status failed: ${(err as Error).message}. Run \`gh auth login\`.`,
     };
   }
+}
+
+const FORGE_PLUGIN_INSTALL = 'archon plugin add coleam00/Archon/plugins/forge-github';
+
+/** One forge read, answered with the response `archon forge` would print. */
+export type RunForge = (op: string, data: unknown) => Promise<ForgeResponse>;
+
+async function runForgeCommand(op: string, data: unknown): Promise<ForgeResponse> {
+  let response: ForgeResponse | undefined;
+  await forgeCommand(
+    op,
+    { data: JSON.stringify(data) },
+    {
+      write: async value => {
+        response = value as ForgeResponse;
+      },
+    }
+  );
+  if (!response) throw new Error(`archon forge ${op} printed no response`);
+  return response;
+}
+
+/**
+ * Whether the SDLC workflows' default forge path works: the GitHub forge plugin is
+ * installed and accepts the configured token. A missing step is a warning, since an
+ * install that never runs the SDLC workflows needs neither.
+ */
+export async function checkGithubForge(
+  env: NodeJS.ProcessEnv,
+  runForge: RunForge = runForgeCommand
+): Promise<CheckResult> {
+  const label = 'GitHub forge plugin';
+  if ((env.ARCHON_SDLC_FORGE ?? '').trim() === 'gh') {
+    return { label, status: 'skip', message: 'ARCHON_SDLC_FORGE=gh: the SDLC workflows use gh' };
+  }
+  const hasToken = Boolean(env.GH_TOKEN || env.GITHUB_TOKEN);
+  const appMode = Boolean(env.GITHUB_APP_ID);
+  // A public repository, the plugin's own source, so any valid token can read it.
+  const response = await runForge('repo.labels.list', {
+    repo: { host: 'github.com', path: 'coleam00/Archon' },
+  });
+  if (response.ok) return { label, status: 'pass', message: 'installed; the token is accepted' };
+  const { kind, message } = response.error;
+  if (kind === 'no_plugin_for_host') {
+    return hasToken || appMode
+      ? { label, status: 'warn', message: `not installed. Run \`${FORGE_PLUGIN_INSTALL}\`.` }
+      : {
+          label,
+          status: 'skip',
+          message: `not set up. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ~/.archon/.env (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
+        };
+  }
+  if (kind === 'unsupported_op') {
+    return {
+      label,
+      status: 'warn',
+      message: `${message}: the installed plugin predates the SDLC workflows. Run \`archon plugin update coleam00/Archon/plugins/forge-github\`.`,
+    };
+  }
+  if (kind === 'no_credential') {
+    return appMode
+      ? {
+          label,
+          status: 'skip',
+          message: 'installed; GitHub App mode supplies the token inside runs',
+        }
+      : {
+          label,
+          status: 'warn',
+          message: 'installed, but no token. Set GH_TOKEN in ~/.archon/.env.',
+        };
+  }
+  return { label, status: 'fail', message };
 }
 
 export interface AssistantLoginDeps {
@@ -828,6 +903,7 @@ export async function doctorCommand(
         checkInstalledProviders(),
         ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
         checkGhAuth(env),
+        checkGithubForge(env),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
         checkDatabase(),

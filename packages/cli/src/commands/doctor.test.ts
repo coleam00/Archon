@@ -22,6 +22,7 @@ import {
   checkDatabase,
   checkConnectedProviders,
   checkGhAuth,
+  checkGithubForge,
   checkAssistantLogin,
   type AssistantLoginDeps,
   checkWorkspaceWritable,
@@ -53,6 +54,69 @@ const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
+
+describe('checkGithubForge', () => {
+  const answering =
+    (response: Record<string, unknown>) =>
+    async (op: string): Promise<never> =>
+      ({ operationId: 'op', ...response, ...(response.ok ? { result: { op } } : {}) }) as never;
+  const refusing = (kind: string, message = `${kind} message`) =>
+    answering({ ok: false, error: { kind, message } });
+
+  it('skips without a forge read when the operator selected gh', async () => {
+    const runForge = mock(answering({ ok: true }));
+    const result = await checkGithubForge({ ARCHON_SDLC_FORGE: 'gh' }, runForge);
+    expect(result.status).toBe('skip');
+    expect(runForge).not.toHaveBeenCalled();
+  });
+
+  it('passes when the plugin answers an authenticated read', async () => {
+    const runForge = mock(answering({ ok: true }));
+    expect((await checkGithubForge({ GH_TOKEN: 'ghp_x' }, runForge)).status).toBe('pass');
+    expect(runForge).toHaveBeenCalledWith('repo.labels.list', {
+      repo: { host: 'github.com', path: 'coleam00/Archon' },
+    });
+  });
+
+  it('warns with the install command when a token is set but no plugin is installed', async () => {
+    const result = await checkGithubForge({ GH_TOKEN: 'ghp_x' }, refusing('no_plugin_for_host'));
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+  });
+
+  it('skips naming both steps when neither is set up', async () => {
+    const result = await checkGithubForge({}, refusing('no_plugin_for_host'));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+    expect(result.message).toContain('GH_TOKEN in ~/.archon/.env');
+  });
+
+  it('warns about a missing token, unless GitHub App mode supplies it in runs', async () => {
+    const withoutApp = await checkGithubForge({}, refusing('no_credential'));
+    expect(withoutApp.status).toBe('warn');
+    expect(withoutApp.message).toContain('GH_TOKEN in ~/.archon/.env');
+    expect((await checkGithubForge({ GITHUB_APP_ID: '1' }, refusing('no_credential'))).status).toBe(
+      'skip'
+    );
+  });
+
+  it('warns with the update command when the installed plugin lacks the operation', async () => {
+    const result = await checkGithubForge(
+      { GH_TOKEN: 'ghp_x' },
+      refusing('unsupported_op', 'plugin github does not support repo.labels.list')
+    );
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('archon plugin update coleam00/Archon/plugins/forge-github');
+  });
+
+  it('fails with the forge message when the token is rejected', async () => {
+    const result = await checkGithubForge(
+      { GH_TOKEN: 'ghp_x' },
+      refusing('forge_error', 'GitHub rejected the token (401)')
+    );
+    expect(result).toMatchObject({ status: 'fail', message: 'GitHub rejected the token (401)' });
+  });
+});
 
 describe('checkGhAuth', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;

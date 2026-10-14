@@ -131,6 +131,24 @@ ARCHON_CODEX_ACCOUNT_ID=account1
       expect(checkExistingConfig(envPath)?.hasCodex).toBe(false);
     });
 
+    it('tells a forge-plugin token apart from the GitHub webhook platform', () => {
+      const envDir = join(TEST_DIR, '.archon-forge');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(envPath, 'GH_TOKEN=ghp_forge\n');
+      expect(checkExistingConfig(envPath)).toMatchObject({
+        forgeToken: true,
+        platforms: { github: false },
+      });
+
+      writeFileSync(envPath, 'GH_TOKEN=ghp_x\nGITHUB_TOKEN=ghp_x\nWEBHOOK_SECRET=secret\n');
+      expect(checkExistingConfig(envPath)).toMatchObject({
+        forgeToken: true,
+        platforms: { github: true },
+      });
+    });
+
     it('detects existing Pi configuration from a Pi API key env var', () => {
       const envDir = join(TEST_DIR, '.archon-pi');
       mkdirSync(envDir, { recursive: true });
@@ -148,6 +166,18 @@ ARCHON_CODEX_ACCOUNT_ID=account1
   });
 
   describe('generateEnvContent', () => {
+    it('writes the forge token as GH_TOKEN alone, never the webhook adapter keys', () => {
+      const content = generateEnvContent({
+        ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
+        platforms: { github: false, telegram: false, slack: false },
+        forgeToken: 'ghp_forge',
+        botDisplayName: 'Archon',
+      });
+      expect(content).toContain('GH_TOKEN=ghp_forge');
+      expect(content).not.toContain('GITHUB_TOKEN=');
+      expect(content).not.toContain('WEBHOOK_SECRET=');
+    });
+
     it('does not write a default when no assistant was selected', () => {
       const content = generateEnvContent({
         ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
