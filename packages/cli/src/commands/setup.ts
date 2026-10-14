@@ -204,10 +204,14 @@ type GitHubConfig = {
 );
 
 const GITHUB_PAT_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
-const GITHUB_APP_KEYS = [
-  'GITHUB_APP_ID',
+const GITHUB_APP_PRIVATE_KEY_KEYS = [
   'GITHUB_APP_PRIVATE_KEY',
   'GITHUB_APP_PRIVATE_KEY_PATH',
+] as const;
+const GITHUB_APP_CREDENTIAL_KEYS = ['GITHUB_APP_ID', ...GITHUB_APP_PRIVATE_KEY_KEYS] as const;
+const GITHUB_APP_KEYS = [
+  ...GITHUB_APP_CREDENTIAL_KEYS,
+  'GITHUB_APP_CLIENT_ID',
   'GITHUB_APP_SLUG',
   'GITHUB_APP_INSTALLATION_ID',
 ] as const;
@@ -384,7 +388,8 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
 
   const content = readFileSync(path, 'utf-8');
   // Counts the deprecated unprefixed names too: the server still reads them this release.
-  const codex = readCodexSetupEnv(parseDotenv(content)).values;
+  const env = parseDotenv(content);
+  const codex = readCodexSetupEnv(env).values;
 
   return {
     hasClaude:
@@ -398,7 +403,10 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
-      github: [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS].some(key => hasEnvValue(content, key)),
+      github:
+        GITHUB_PAT_KEYS.some(key => Boolean(env[key]?.trim())) ||
+        (Boolean(env.GITHUB_APP_ID?.trim()) &&
+          GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key]?.trim()))),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -1812,18 +1820,32 @@ export function serializeEnv(entries: Record<string, string>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(entries)) {
     const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    const candidates = [
-      `${key}=${value}`,
-      `${key}="${encodedLineBreaks}"`,
-      `${key}='${value}'`,
-      `${key}=\`${value}\``,
-    ];
+    const candidates: string[] = [];
+    // A leading quote on a bare value can consume later entries as a multiline value.
+    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
+    for (const [quote, contents] of [
+      ['"', encodedLineBreaks],
+      ["'", value],
+      ['`', value],
+    ]) {
+      if (!contents.replaceAll(`\\${quote}`, '').includes(quote) && !contents.endsWith('\\')) {
+        candidates.push(`${key}=${quote}${contents}${quote}`);
+      }
+    }
     const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
     if (line === undefined)
       throw new Error(`Cannot serialize env key ${key} without changing its value`);
     lines.push(line);
   }
-  return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+  const content = lines.join('\n') + (lines.length > 0 ? '\n' : '');
+  const parsed = parseDotenv(content);
+  if (
+    Object.keys(parsed).length !== Object.keys(entries).length ||
+    Object.entries(entries).some(([key, value]) => parsed[key] !== value)
+  ) {
+    throw new Error('Cannot serialize env without changing its values');
+  }
+  return content;
 }
 
 /**
@@ -1846,8 +1868,8 @@ interface WriteScopedEnvResult {
  * Write env content to exactly one archon-owned file, selected by scope.
  * Merge-only by default (existing non-empty values win, user-added keys
  * survive). Backs up the existing file (if any) before every rewrite, even
- * when `--force` is set. A confirmed GitHub mode switch replaces auth keys
- * while keeping shared webhook settings and unrelated values.
+ * when `--force` is set. Without force, a confirmed GitHub mode switch replaces
+ * auth keys while keeping shared webhook settings and unrelated values.
  */
 export function writeScopedEnv(
   content: string,
@@ -1892,6 +1914,12 @@ export function writeScopedEnv(
     const proposed = parseDotenv(content);
     if (options.replaceGitHubAuth) {
       for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+    }
+    const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
+    if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
+      // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
+      preservedKeys.push(existingPrivateKey);
+      for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
     }
     const merged: Record<string, string> = { ...existing };
     for (const [key, value] of Object.entries(proposed)) {
@@ -2252,10 +2280,26 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   let replaceGitHubAuth = false;
-  if (config.github && existsSync(targetEnvPath)) {
-    const saved = parseDotenv(readFileSync(targetEnvPath, 'utf8'));
-    const oppositeKeys = config.github.mode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_KEYS;
-    if (oppositeKeys.some(key => key in saved)) {
+  if (config.platforms.github) {
+    const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
+    const githubMode =
+      config.github?.mode ?? (GITHUB_PAT_KEYS.some(key => saved[key]?.trim()) ? 'pat' : 'app');
+    const otherEnvPath = resolveScopedEnvPath(
+      scope === 'home' ? 'project' : 'home',
+      options.repoPath
+    );
+    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
+      const other = parseDotenv(readFileSync(otherEnvPath, 'utf8'));
+      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+      if (conflictingKeys.some(key => other[key]?.trim())) {
+        cancel(
+          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
+        );
+        exitSetup(1);
+      }
+    }
+    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_KEYS;
+    if (config.github && oppositeKeys.some(key => key in saved)) {
       const approved = await confirm({
         message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
         initialValue: false,

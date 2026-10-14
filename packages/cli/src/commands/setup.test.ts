@@ -786,8 +786,25 @@ describe('writeScopedEnv (#1303)', () => {
       WEBHOOK_SECRET: 'secret"with#quotes',
       CUSTOM_KEY: `value'with"both#quotes`,
       LITERAL_NEWLINE: String.raw`literal \n`,
+      ESCAPED_QUOTE: String.raw`has \" and ' and ${'`'} # hash`,
     };
     expect(parseDotenv(serializeEnv(entries))).toEqual(entries);
+  });
+
+  it.each(["'", '"', '`'])('merge preserves adjacent values that start and end with %s', quote => {
+    const wrapper = quote === "'" ? '"' : "'";
+    const original = `FIRST=${wrapper}${quote}start${wrapper}\nSECOND=${wrapper}end${quote}${wrapper}\n`;
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, original);
+    const result = writeScopedEnv('NEW_KEY=new\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    expect(parseDotenv(readFileSync(result.targetPath, 'utf8'))).toEqual({
+      ...parseDotenv(original),
+      NEW_KEY: 'new',
+    });
   });
 
   it('serializeEnv escapes \\r so bare CRs survive round-trip', () => {
@@ -1159,6 +1176,7 @@ describe('GitHub setup wizard', () => {
   let keySource: 'path' | 'inline';
   let switchAnswer: boolean | symbol;
   let setupMode: 'update' | 'add';
+  let scope: 'home' | 'project';
   let output: string[];
   let restore: (() => void)[];
   let initialAuthMode: unknown;
@@ -1178,6 +1196,7 @@ describe('GitHub setup wizard', () => {
     keySource = 'path';
     switchAnswer = true;
     setupMode = 'update';
+    scope = 'project';
     output = [];
     initialAuthMode = undefined;
     const cancellation = spyOn(prompts, 'isCancel').mockImplementation(
@@ -1223,9 +1242,13 @@ describe('GitHub setup wizard', () => {
     const success = spyOn(prompts.log, 'success').mockImplementation(message => {
       output.push(message);
     });
+    const cancellationOutput = spyOn(prompts, 'cancel').mockImplementation(message => {
+      output.push(message ?? '');
+    });
     const gh = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
     restore = [
       cancellation,
+      cancellationOutput,
       selection,
       input,
       secret,
@@ -1245,8 +1268,7 @@ describe('GitHub setup wizard', () => {
     await removeTempTree(root);
   });
 
-  const run = (force = false) =>
-    setupCommand({ repoPath: root, scope: 'project', providers: [], force });
+  const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
 
   it.each(['path', 'inline'] as const)(
@@ -1330,6 +1352,91 @@ describe('GitHub setup wizard', () => {
     }
   );
 
+  it.each(['path', 'inline'] as const)(
+    'same-mode reruns preserve the effective %s key across both proposed sources unless forced',
+    async existingSource => {
+      const oldKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+        .privateKey.export({ type: 'pkcs8', format: 'pem' })
+        .toString();
+      const oldPath = join(root, 'old.pem');
+      writeFileSync(oldPath, oldKey);
+      const original = serializeEnv({
+        GITHUB_APP_ID: '999',
+        [existingSource === 'path' ? 'GITHUB_APP_PRIVATE_KEY_PATH' : 'GITHUB_APP_PRIVATE_KEY']:
+          existingSource === 'path' ? oldPath : oldKey,
+      });
+      for (const proposedSource of ['path', 'inline'] as const) {
+        keySource = proposedSource;
+        for (const force of [false, true]) {
+          writeFileSync(target, original);
+          expect(await run(force)).toBe(0);
+          expect(loadGitHubAppConfig(read())?.privateKey).toBe(force ? privateKey : oldKey);
+        }
+      }
+    }
+  );
+
+  it.each([
+    ['GITHUB_APP_SLUG', 'old-app'],
+    ['GITHUB_APP_INSTALLATION_ID', '999'],
+    ['GITHUB_APP_CLIENT_ID', 'Iv1.old'],
+    ['GITHUB_APP_ID', '999'],
+    ['GITHUB_APP_PRIVATE_KEY_PATH', 'path'],
+    ['GITHUB_APP_PRIVATE_KEY', 'inline'],
+  ])('Add collects usable App authentication when only %s exists', async (key, value) => {
+    setupMode = 'add';
+    writeFileSync(
+      target,
+      serializeEnv({
+        [key]: value === 'path' ? keyPath : value === 'inline' ? privateKey : value,
+      })
+    );
+    expect(checkExistingConfig(target)?.platforms.github).toBe(false);
+    expect(await run()).toBe(0);
+    expect(loadGitHubAppConfig(read())?.privateKey).toBe(privateKey);
+  });
+
+  it.each(['home', 'project'] as const)(
+    'refuses conflicting credentials in the other scope when writing %s',
+    async selectedScope => {
+      scope = selectedScope;
+      target = resolveScopedEnvPath(scope, root);
+      const other = resolveScopedEnvPath(scope === 'home' ? 'project' : 'home', root);
+      for (const [selectedMode, opposite] of [
+        ['app', `GITHUB_TOKEN=${pat}\n`],
+        ['app', `GH_TOKEN=${pat}\n`],
+        ['pat', `GITHUB_APP_ID=999\nGITHUB_APP_PRIVATE_KEY_PATH=${keyPath}\n`],
+      ] as const) {
+        authMode = selectedMode;
+        for (const force of [false, true]) {
+          writeFileSync(target, 'CUSTOM_KEY=keep\n');
+          writeFileSync(other, opposite);
+          expect(await run(force)).toBe(1);
+          expect(readFileSync(target, 'utf8')).toBe('CUSTOM_KEY=keep\n');
+          expect(readFileSync(other, 'utf8')).toBe(opposite);
+          expect(output.join('\n')).toContain(other);
+          expect(
+            Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(join(root, '.archon')))
+          ).toHaveLength(0);
+          expect(
+            Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(join(root, 'home')))
+          ).toHaveLength(0);
+        }
+      }
+    }
+  );
+
+  it('Add still checks the other scope when retaining existing App credentials', async () => {
+    setupMode = 'add';
+    const original = `GITHUB_APP_ID=999\nGITHUB_APP_PRIVATE_KEY_PATH=${keyPath}\n`;
+    writeFileSync(target, original);
+    const other = join(root, 'home', '.env');
+    writeFileSync(other, `GITHUB_TOKEN=${pat}\n`);
+    expect(await run()).toBe(1);
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(output.join('\n')).toContain(other);
+  });
+
   it('add mode recognizes and retains existing App configuration', async () => {
     setupMode = 'add';
     writeFileSync(
@@ -1367,7 +1474,7 @@ describe('GitHub setup wizard', () => {
     authMode = 'pat';
     writeFileSync(
       target,
-      `GITHUB_APP_ID=999\nGITHUB_APP_PRIVATE_KEY_PATH=${keyPath}\nGITHUB_APP_SLUG=old-app\nGITHUB_APP_INSTALLATION_ID=456\nCUSTOM_KEY=keep\n`
+      `GITHUB_APP_ID=999\nGITHUB_APP_PRIVATE_KEY_PATH=${keyPath}\nGITHUB_APP_SLUG=old-app\nGITHUB_APP_INSTALLATION_ID=456\nGITHUB_APP_CLIENT_ID=Iv1.old\nTOKEN_ENCRYPTION_KEY=keep-encryption\nWEBHOOK_SECRET=keep-webhook\nCUSTOM_KEY=keep\n`
     );
     expect(await run()).toBe(0);
     expect(read()).toMatchObject({ GITHUB_TOKEN: pat, GH_TOKEN: pat, CUSTOM_KEY: 'keep' });
@@ -1375,6 +1482,9 @@ describe('GitHub setup wizard', () => {
     expect(read().GITHUB_APP_PRIVATE_KEY_PATH).toBeUndefined();
     expect(read().GITHUB_APP_SLUG).toBeUndefined();
     expect(read().GITHUB_APP_INSTALLATION_ID).toBeUndefined();
+    expect(read().GITHUB_APP_CLIENT_ID).toBeUndefined();
+    expect(read().TOKEN_ENCRYPTION_KEY).toBe('keep-encryption');
+    expect(read().WEBHOOK_SECRET).toBe('keep-webhook');
     expect(initialAuthMode).toBe('pat');
     expect(output.join('\n')).not.toContain(pat);
     expect(output.join('\n')).not.toContain(read().WEBHOOK_SECRET);
