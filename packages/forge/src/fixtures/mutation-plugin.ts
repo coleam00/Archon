@@ -18,6 +18,8 @@ const OPS = [
   'workitem.create',
   'workitem.labels.set',
   'workitem.label.add',
+  'workitem.comment.upsert',
+  'workitem.close',
   'workitem.label.remove',
   'workitem.list',
   'repo.labels.list',
@@ -57,6 +59,7 @@ else {
     ref?: PluginRef;
     subject?: { kind: 'issue' | 'pr'; ref: PluginRef };
     label?: string;
+    reason?: string;
     selector?: { kind: string; ref?: PluginRef };
     repo?: PluginRef['repo'];
     headRepo?: PluginRef['repo'];
@@ -147,6 +150,13 @@ else {
       return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
+    if (input.op === 'workitem.comment.upsert')
+      return answer(ref, {
+        workitem: subject,
+        comment: { ...comment, bodyDigest: digest('something else') },
+      });
+    if (input.op === 'workitem.close')
+      return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: 'not_planned' });
     return answer(ref, { pr, bodyDigest: digest('something else') });
   };
 
@@ -237,6 +247,9 @@ else {
     if (input.op === 'pr.create') return answer(repo, { pr });
     if (input.op === 'pr.ready' || input.op === 'pr.draft') return answer(ref, { pr });
     if (input.op === 'comment.upsert') return answer(ref, { comment });
+    if (input.op === 'workitem.comment.upsert') return answer(ref, { workitem: subject, comment });
+    if (input.op === 'workitem.close')
+      return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason });
     return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
   };
 
@@ -260,7 +273,9 @@ else {
       JSON.stringify(
         answer(ref, {
           workitem: { ...subject, kind: subject.kind === 'pr' ? 'issue' : 'pr' },
-          labels: input.op === 'workitem.label.add' ? [input.name] : [],
+          ...(input.op === 'workitem.comment.upsert'
+            ? { comment }
+            : { labels: input.op === 'workitem.label.add' ? [input.name] : [] }),
         })
       )
     );

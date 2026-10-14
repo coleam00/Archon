@@ -88,6 +88,7 @@ const issueSchema = z.object({
   title: z.string(),
   body: z.string().nullable(),
   state: z.enum(['open', 'closed']),
+  state_reason: z.string().nullable().optional(),
   pull_request: z.unknown().optional(),
   user: userSchema.optional(),
 });
@@ -428,7 +429,7 @@ function commentRecord(ref: PrRef, comment: Comment): ForgeCommentRecord {
 }
 
 async function upsertComment(
-  request: Extract<ForgeMutationRequest, { op: 'comment.upsert' }>,
+  request: Extract<ForgeMutationRequest, { op: 'comment.upsert' | 'workitem.comment.upsert' }>,
   fetchImpl: Fetch,
   token: string,
   submit: (phase: 'submitted' | 'acknowledged') => void
@@ -441,8 +442,15 @@ async function upsertComment(
       message: 'Comment body must begin with the exact canonical marker',
     });
   }
-  const { root, path } = location(request.ref.repo);
-  const issue = `${root}/repos/${path}/issues/${String(request.ref.number)}`;
+  const ref = request.op === 'comment.upsert' ? request.ref : request.subject.ref;
+  // GitHub serves issue and pull-request comments from one endpoint, so a subject's
+  // kind is proved against the item before anything is written to it.
+  const subject =
+    request.op === 'workitem.comment.upsert'
+      ? { workitem: subjectRecord(request.subject, await readIssue(fetchImpl, token, ref)) }
+      : {};
+  const { root, path } = location(ref.repo);
+  const issue = `${root}/repos/${path}/issues/${String(ref.number)}`;
   const comments = await githubPages(fetchImpl, token, `${issue}/comments`, raw =>
     z.array(commentSchema).parse(raw)
   );
@@ -452,13 +460,17 @@ async function upsertComment(
   if (marked.length > 1) {
     return refused(request, {
       kind: 'conflict',
-      message: 'Multiple comments on this pull request carry the canonical marker',
+      message: 'Multiple comments on this item carry the canonical marker',
     });
   }
   const previous = marked[0];
   if (previous && (previous.body ?? '') === request.body) {
     // The listing is the read-back: the canonical comment already carries this body.
-    return applied(request, { changed: false, comment: commentRecord(request.ref, previous) });
+    return applied(request, {
+      changed: false,
+      ...subject,
+      comment: commentRecord(ref, previous),
+    });
   }
   submit('submitted');
   const raw = await githubRequest(
@@ -477,7 +489,8 @@ async function upsertComment(
     return unverified(
       request,
       'Comment write response was malformed',
-      'a comment may have changed'
+      'a comment may have changed',
+      subject
     );
   }
   const leaveBehind = `comment ${String(written.id)} may have changed`;
@@ -491,18 +504,21 @@ async function upsertComment(
       )
     );
   } catch {
-    return unverified(request, 'Comment could not be read back', leaveBehind);
+    return unverified(request, 'Comment could not be read back', leaveBehind, subject);
   }
-  const comment = commentRecord(request.ref, observed);
+  const comment = commentRecord(ref, observed);
   if (
     String(observed.id) !== String(written.id) ||
     // GitHub echoes owner/name in its registered case (see sameRepo).
     observed.issue_url.toLowerCase() !== issue.toLowerCase() ||
     (observed.body ?? '') !== request.body
   ) {
-    return unverified(request, 'Comment read-back did not match', leaveBehind, { comment });
+    return unverified(request, 'Comment read-back did not match', leaveBehind, {
+      ...subject,
+      comment,
+    });
   }
-  return applied(request, { changed: true, comment });
+  return applied(request, { changed: true, ...subject, comment });
 }
 
 type Issue = z.infer<typeof issueSchema>;
@@ -846,6 +862,44 @@ async function removeLabel(
     : applied(request, { changed, workitem: observed, labels: labelNames(after) });
 }
 
+async function closeWorkItem(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.close' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: (phase: 'submitted' | 'acknowledged') => void
+): Promise<ForgeResponse> {
+  const issue = { kind: 'issue', ref: request.ref } as const;
+  const before = await readIssue(fetchImpl, token, request.ref);
+  const workitem = subjectRecord(issue, before);
+  if (before.state === 'closed') {
+    // GitHub ignores a new reason on an issue that is already closed.
+    return before.state_reason === request.reason
+      ? applied(request, { changed: false, workitem, reason: request.reason })
+      : refused(request, {
+          kind: 'conflict',
+          message: `The issue is already closed as ${before.state_reason ?? 'unspecified'}`,
+        });
+  }
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(request.ref.number)}`,
+    { method: 'PATCH', body: JSON.stringify({ state: 'closed', state_reason: request.reason }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const after = await readIssue(fetchImpl, token, request.ref);
+  const observed = subjectRecord(issue, after);
+  return observed.state === 'closed' && after.state_reason === request.reason
+    ? applied(request, { changed: true, workitem: observed, reason: request.reason })
+    : unverified(request, 'Issue close read-back did not match', 'the issue may be closed', {
+        workitem: observed,
+      });
+}
+
 export async function handleGithubMutation(
   request: ForgeMutationRequest,
   fetchImpl: Fetch,
@@ -880,7 +934,10 @@ export async function handleGithubMutation(
       case 'pr.draft':
         return await setDraftState(request, fetchImpl, token, submit);
       case 'comment.upsert':
+      case 'workitem.comment.upsert':
         return await upsertComment(request, fetchImpl, token, submit);
+      case 'workitem.close':
+        return await closeWorkItem(request, fetchImpl, token, submit);
     }
   } catch (cause) {
     const error = githubErrorDetail(cause);

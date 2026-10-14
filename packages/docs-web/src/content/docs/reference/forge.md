@@ -59,12 +59,14 @@ archon forge pr.edit-body --data-file ./body.json
 archon forge pr.ready --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge pr.draft --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge comment.upsert --data-file ./comment.json
+archon forge workitem.comment.upsert --data-file ./issue-comment.json
+archon forge workitem.close --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":31},"reason":"duplicate"}'
 archon forge pr.merge --data-file ./merge.json
 archon forge checks.rerun --data-file ./rerun.json
 archon forge pr.reviews --data-file ./reviews.json
 ```
 
-Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation, repository-label operations, listing by label and a `pr.view` head selector; a subject `{kind: "issue" | "pr", ref}` for single-label writes; a qualified repository and number otherwise. None is inferred from the checkout.
+Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation, repository-label operations, listing by label and a `pr.view` head selector; a subject `{kind: "issue" | "pr", ref}` for single-label writes and `workitem.comment.upsert`; a qualified repository and number otherwise. None is inferred from the checkout.
 
 `pr.view` accepts either selector: `{"kind":"number","ref":…}`, or `{"kind":"head","repo":…,"headRepo":…,"head":"branch"}` with an optional `base`. The head form answers "does this branch have a pull request", so it resolves the **open** one and returns `null` when there is none. A head matching more than one open pull request is a conflict rather than a guess.
 
@@ -74,7 +76,7 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 
 ## What a write reports
 
-`workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
+`workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
 
 | Outcome | Shape | What it means |
 | --- | --- | --- |
@@ -88,6 +90,8 @@ A read-back never claims to have *prevented* a wrong write; it only reports what
 `pr.draft` converts an open pull request to draft and returns its verified PR record. An already-draft PR returns `applied` with `changed: false`; closed or merged PRs are refused with the observed record. A plugin that does not advertise `pr.draft` returns `unsupported_op` before execution. The forge source never falls back to `gh`. The GitHub plugin uses [the GraphQL draft mutation](https://docs.github.com/en/graphql/reference/pulls#convertpullrequesttodraft) and reads the PR back before reporting success.
 
 `comment.upsert` writes the one comment whose first line is the exact `marker`, creating it when absent and replacing it in place when present. A body that does not begin with that marker is refused, and more than one marked comment is a conflict.
+
+`workitem.comment.upsert` does the same on an issue or a pull request. It takes `{subject: {kind: "issue" | "pr", ref}, marker, body}`, and the subject's kind must match the item, so a mismatch is refused before writing. Its result adds the item's `workitem` record to the `comment`. `comment.upsert` keeps its pull-request `ref` form for existing callers and for installed plugins that predate subjects.
 
 ## Pinned merges, failed-check reruns and reviews
 
@@ -162,7 +166,7 @@ It also exports `runForgeMutationConformance` for write fixtures. Pass the plugi
 
 The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities, enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
 A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 
@@ -185,10 +189,11 @@ Pass these request objects through `--data-file`. The host supplies `operationId
 - `workitem.label.add`: `{subject: {kind: "issue" | "pr", ref: {repo: {host, path}, number}}, name}`. Adds one label and leaves every other label on the item alone. The subject's kind must match the item: a pull request is labelled by its pull-request reference, and a mismatch is refused before writing. The name must already exist in the repository with exact case; adding never creates a label. An item that already carries the label returns `changed:false` without writing. The result carries the item's complete label set as read back after the write.
 - `workitem.label.remove`: the same request shape. Removes one label and leaves the others. An item that does not carry the label returns `changed:false`, including when another writer removed it between this call's read and its write.
 - `workitem.list`: `{repo: {host, path}, label}`. Returns `{repo, label, items}`, every open issue and pull request that carries the exact label, each with `{ref, kind, url, state}`. The GitHub plugin follows every page and refuses a label name containing a comma, which its filter cannot express.
+- `workitem.close`: `{ref: {repo: {host, path}, number}, reason}`, where `reason` is `completed`, `not_planned` or `duplicate`. Closes an issue and records the reason; a pull request is refused before writing. An issue already closed for the same reason returns `changed:false` without writing. One closed for another reason is refused as a conflict; a close never rewrites an earlier reason. The result carries the closed `workitem` and the `reason` as read back. A duplicate's link belongs in a comment written with `workitem.comment.upsert`.
 - `repo.labels.list`: `{repo: {host, path}}`. Returns complete repository label names as `{repo, labels: [{name}]}`.
 - `repo.label.ensure`: `{repo: {host, path}, name, color, description}`. Explicitly ensure one repository label. Color is six hexadecimal digits. An existing name returns `changed:false` without changing operator metadata. Creation performs one write and verifies name, color and description digest by a separate read.
 
-Work-item mutation evidence contains `{ref, kind, url, state}`, never authored title/body. `kind` is `issue` for `workitem.create` and `workitem.labels.set`, and the subject's kind for single-label writes. Label metadata evidence contains name, color and description digest. `workitem.view` may omit labels for older protocol-1 plugins; triage requires label facts and fails if absent.
+Work-item mutation evidence contains `{ref, kind, url, state}`, never authored title/body. `kind` is `issue` for `workitem.create`, `workitem.labels.set` and `workitem.close`, and the subject's kind for single-label writes and `workitem.comment.upsert`. Label metadata evidence contains name, color and description digest. `workitem.view` may omit labels for older protocol-1 plugins; triage requires label facts and fails if absent.
 
 `workitem.view` and `pr.view` return `author: {host, id, login}` when the plugin reports one. `null` means the forge has no author for the item, such as a deleted account. An older protocol-1 plugin may omit the field.
 

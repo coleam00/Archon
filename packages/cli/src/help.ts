@@ -63,6 +63,8 @@ const forgeOperationDescriptions = {
   'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
   'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
   'workitem.list': 'List open issues and pull requests that carry one label',
+  'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
+  'workitem.close': 'Close an issue with a reason and verify the result',
   'repo.labels.list': 'List repository label names',
   'repo.label.ensure': 'Explicitly ensure one repository label exists',
   'pr.view': 'Read a pull request by number or by qualified head',

@@ -98,6 +98,23 @@ export const githubConformanceFixtures = [
       },
     }))
   ),
+  ...(
+    [
+      ['issue', issue],
+      ['pr', { ...issue, pull_request: { url: 'https://api.github.com/pulls/12' } }],
+    ] as const
+  ).map(([kind, commented]) => ({
+    name: `issue_comment.created.${kind}`,
+    eventName: 'issue_comment',
+    payload: {
+      action: 'created',
+      repository,
+      sender,
+      issue: commented,
+      comment: { id: 900, user: sender, created_at: '2026-09-22T10:00:00Z' },
+    },
+    capability: { kind: 'comment.changed' as const, action: 'created' as const },
+  })),
   {
     name: 'check_run.completed',
     eventName: 'check_run',

@@ -518,3 +518,159 @@ test('an item view returns its author, and a response without one reports none',
   const response = await runOn({ operationId: 'view', op: 'workitem.view', ref }, legacy);
   expect(response.ok && response.result.value).not.toHaveProperty('author');
 });
+
+/** One GitHub item with its conversation comments and close state. */
+function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = {}) {
+  const item = {
+    number: 1,
+    repository_url: root,
+    html_url: 'https://github.com/owner/repo/issues/1',
+    title: 'Title',
+    body: 'Body',
+    state: 'open',
+    state_reason: null as string | null,
+    labels: [],
+    ...(options.kind === 'pr' ? { pull_request: {} } : {}),
+  };
+  const comments: { id: number; html_url: string; issue_url: string; body: string }[] = [];
+  const calls: string[] = [];
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    const path = url.origin + url.pathname;
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${path}`);
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, string>) : {};
+    if (path === `${root}/issues/1`) {
+      if (method === 'PATCH' && !options.lose)
+        Object.assign(item, { state: body.state, state_reason: body.state_reason });
+      return Response.json(item);
+    }
+    if (path === `${root}/issues/1/comments`) {
+      if (method === 'GET')
+        return Response.json(url.searchParams.get('page') === '1' ? comments : []);
+      const comment = {
+        id: 900 + comments.length,
+        html_url: `https://github.com/owner/repo/issues/1#issuecomment-${String(900 + comments.length)}`,
+        issue_url: `${root}/issues/1`,
+        body: body.body,
+      };
+      if (!options.lose) comments.push(comment);
+      return Response.json(comment, { status: 201 });
+    }
+    if (path.startsWith(`${root}/issues/comments/`)) {
+      const comment = comments.find(row => String(row.id) === url.pathname.split('/').pop());
+      if (!comment) return Response.json({}, { status: 404 });
+      if (method === 'PATCH') comment.body = body.body;
+      return Response.json(comment);
+    }
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  const writes = (): number => calls.filter(call => !call.startsWith('GET')).length;
+  return { item, comments, fetch, calls, writes };
+}
+const commentOn = (kind: 'issue' | 'pr', body: string) =>
+  ({
+    operationId: `comment-${kind}`,
+    op: 'workitem.comment.upsert',
+    subject: { kind, ref },
+    marker,
+    body: `${marker}\n${body}`,
+  }) satisfies ForgeMutationRequest;
+const close = (reason: 'completed' | 'not_planned' | 'duplicate') =>
+  ({
+    operationId: `close-${reason}`,
+    op: 'workitem.close',
+    ref,
+    reason,
+  }) satisfies ForgeMutationRequest;
+
+test('an issue is commented on by its issue reference, and the marked comment is updated in place', async () => {
+  const fake = conversationForge();
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: true,
+    result: {
+      value: {
+        outcome: 'applied',
+        changed: true,
+        workitem: { kind: 'issue', ref },
+        comment: { ref },
+      },
+    },
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { changed: false } },
+  });
+  expect(await runOn(commentOn('issue', 'second'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { changed: true } },
+  });
+  expect(fake.comments.map(comment => comment.body)).toEqual([`${marker}\nsecond`]);
+  expect(fake.calls.filter(call => !call.startsWith('GET'))).toEqual([
+    `POST ${root}/issues/1/comments`,
+    `PATCH ${root}/issues/comments/900`,
+  ]);
+});
+
+test('a comment whose subject kind does not match the item is refused before writing', async () => {
+  const fake = conversationForge({ kind: 'pr' });
+  expect(await runOn(commentOn('issue', 'text'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_request' },
+    mutation: { outcome: 'refused' },
+  });
+  expect(await runOn(commentOn('pr', 'text'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { workitem: { kind: 'pr' } } },
+  });
+  expect(fake.writes()).toBe(1);
+});
+
+test('closing an issue records its reason, and a different earlier reason is refused', async () => {
+  const fake = conversationForge();
+  expect(await runOn(close('duplicate'), fake)).toMatchObject({
+    ok: true,
+    result: {
+      value: {
+        outcome: 'applied',
+        changed: true,
+        reason: 'duplicate',
+        workitem: { kind: 'issue', state: 'closed' },
+      },
+    },
+  });
+  expect(fake.calls).toContain(`PATCH ${root}/issues/1`);
+  expect(await runOn(close('duplicate'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { changed: false } },
+  });
+  expect(await runOn(close('completed'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'conflict' },
+    mutation: { outcome: 'refused' },
+  });
+  expect(fake.writes()).toBe(1);
+
+  const pr = conversationForge({ kind: 'pr' });
+  expect(await runOn(close('not_planned'), pr)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_request' },
+    mutation: { outcome: 'refused' },
+  });
+  expect(pr.writes()).toBe(0);
+});
+
+test('issue comments and closes pass conformance for applied and verification failure', async () => {
+  for (const request of [commentOn('issue', 'text'), close('completed')])
+    for (const [lose, expectedOutcome] of [
+      [false, 'applied'],
+      [true, 'verification_failed'],
+    ] as const)
+      expect(
+        await runForgeMutationConformance(
+          req => runOn(req, conversationForge({ lose })),
+          githubPluginMetadata,
+          [{ name: `${request.op}:${expectedOutcome}`, request, expectedOutcome }]
+        )
+      ).toEqual([]);
+});

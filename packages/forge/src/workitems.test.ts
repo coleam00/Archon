@@ -325,3 +325,22 @@ test('item and pull request views accept an author and still parse without one',
     ).toBe(true);
   }
 });
+
+test('close proof verifies the issue, its closed state and the requested reason', () => {
+  const close = {
+    operationId: 'close',
+    op: 'workitem.close',
+    ref,
+    reason: 'duplicate',
+  } satisfies ForgeRequest;
+  const closed = { ...item, state: 'closed' } as const;
+  expect(matches(close, response(close.op, ref, { workitem: closed, reason: 'duplicate' }))).toBe(
+    true
+  );
+  for (const wrong of [
+    { workitem: item, reason: 'duplicate' },
+    { workitem: closed, reason: 'completed' },
+    { workitem: { ...closed, ref: { ...ref, number: 4 } }, reason: 'duplicate' },
+  ])
+    expect(matches(close, response(close.op, ref, wrong))).toBe(false);
+});
