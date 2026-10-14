@@ -16,12 +16,14 @@ synthesize:
   findings_summary: "stub: a selected lens did not complete"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 publish:
   ready: false
   action: correct
   findings_summary: "stub: a selected lens did not complete"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: failed

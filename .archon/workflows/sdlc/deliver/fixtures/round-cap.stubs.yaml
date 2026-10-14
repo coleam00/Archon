@@ -25,12 +25,14 @@ review__synthesize:
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 ci: { state: pr_caused, rerun: none, summary: "stub: conflicts with dev in src/a.ts; marked draft" }

@@ -160,6 +160,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
           INPUTS_SUMMARY: 'summary',
           INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
           INPUTS_DISCOVERIES: '[]',
+          INPUTS_CONTRACT_LEFT: '[]',
           INPUTS_ROUTE: 'null',
           INPUTS_MODE: JSON.stringify({ seams: false, code: true, tests: false, errors: false, docs: false }),
         },
