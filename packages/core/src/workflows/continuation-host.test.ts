@@ -11,7 +11,12 @@ const mockWarn = mock((_fields: unknown, _message: string) => undefined);
 const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...paths,
-  createLogger: () => ({ warn: mockWarn, error: mock(() => undefined) }),
+  createLogger: () => ({
+    warn: mockWarn,
+    error: mock(() => undefined),
+    info: mock(() => undefined),
+    debug: mock(() => undefined),
+  }),
 }));
 const trackTempRoot = trackTempRoots();
 const { WorkflowSourceUnavailableError, loadWorkflowSource, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
@@ -413,6 +418,90 @@ for (const read of ['manifest', 'directory', 'file'] as const) {
     expect(resume).toHaveBeenCalledTimes(6);
     expect(outcomes[0]?.kind).toBe('accepted');
     expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(5);
+  });
+}
+
+for (const failure of [
+  'json',
+  'shape',
+  'identity',
+  'config',
+  'record',
+  'record-path',
+  'workflow',
+] as const) {
+  test(`structural ${failure} refusal survives resolution and stops retrying`, async () => {
+    const root = await sourceFixture();
+    const manifestPath = join(root, 'manifest.json');
+    const manifest = (await loadWorkflowSource(root)).manifest;
+    const candidate = run(`structural-${failure}`, 'paused', {
+      wait: {
+        owner: 'node',
+        kind: 'time',
+        nodeId: 'delay',
+        waitingSince: '2026-08-24T10:00:00Z',
+        resumeAt: '2026-08-24T11:00:00Z',
+      },
+      workflow_source: {
+        ...manifest,
+        root,
+        ...(failure === 'identity' ? { digest: 'different-run-digest' } : {}),
+        ...(failure === 'config'
+          ? { source_config: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, command_folder: 'different' } }
+          : {}),
+      },
+    });
+    if (failure === 'json') await fs.writeFile(manifestPath, '{');
+    if (failure === 'shape') await fs.writeFile(manifestPath, JSON.stringify({ version: 99 }));
+    if (failure === 'record') candidate.metadata.workflow_source = { version: 99 };
+    if (failure === 'record-path') candidate.metadata.workflow_source = { version: 99, root };
+    const reasons = {
+      json: 'not valid JSON',
+      shape: 'not a shape this build understands',
+      identity: 'not the one this run recorded',
+      config: 'different resolution settings',
+      record: 'source record cannot be read',
+      'record-path': 'source record cannot be read',
+      workflow: 'no longer contains that workflow',
+    };
+    const { resolveRunWorkflow } = await import('./resolve-run-workflow');
+    const { createWorkflowDeps } = await import('./store-adapter');
+    const deps = createWorkflowDeps();
+    mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+    mockDeferWorkflowContinuation.mockClear();
+    mockWarn.mockClear();
+    const resume = mock(async () => {
+      const result = await resolveRunWorkflow(deps, candidate, root, {});
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('invalid source admitted');
+      expect(result.message).toContain(reasons[failure]);
+      return {
+        kind: 'unavailable' as const,
+        reason: result.message,
+        sourceError: result.sourceError,
+      };
+    });
+    for (let i = 0; i < 8; i++)
+      await wakeDueWorkflowContinuations(store, new Date('2026-08-24T12:00:00Z'), resume);
+    expect(resume).toHaveBeenCalledTimes(3);
+    expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+    const warnings = mockWarn.mock.calls.filter(([, message]) =>
+      message.includes('This host stopped')
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.[0]).toMatchObject({
+      runId: candidate.id,
+      path:
+        failure === 'record'
+          ? undefined
+          : failure === 'json' || failure === 'shape'
+            ? manifestPath
+            : root,
+    });
+    expect(warnings[0]?.[1]).toContain(`archon workflow resume ${candidate.id}`);
+    expect(warnings[0]?.[1]).toContain(`archon workflow abandon ${candidate.id}`);
+    if (failure === 'record') expect(warnings[0]?.[1]).toContain('path unavailable');
+    expect(candidate.status).toBe('paused');
   });
 }
 

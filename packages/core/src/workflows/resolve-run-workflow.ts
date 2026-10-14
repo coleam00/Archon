@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
 import {
-  WorkflowSourceUnavailableError,
+  WorkflowSourceIntegrityError,
   resolveContinuationWorkflow,
 } from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -34,7 +34,7 @@ export async function resolveRunWorkflow(
       ok: false;
       message: string;
       resumeHint?: string;
-      sourceError?: WorkflowSourceUnavailableError;
+      sourceError?: WorkflowSourceIntegrityError;
     }
 > {
   try {
@@ -42,13 +42,13 @@ export async function resolveRunWorkflow(
     if (continuation) return { ok: true, workflow: continuation.workflow };
   } catch (error) {
     const err = toError(error);
-    if (!(error instanceof WorkflowSourceUnavailableError))
+    if (!(error instanceof WorkflowSourceIntegrityError))
       log.error({ err, runId: run.id }, 'workflow.continuation_source_failed');
     return {
       ok: false,
       message: `its recorded workflow source is unavailable: ${err.message}`,
       resumeHint: 'Start a fresh run to execute the current workflow.',
-      ...(error instanceof WorkflowSourceUnavailableError ? { sourceError: error } : {}),
+      ...(error instanceof WorkflowSourceIntegrityError ? { sourceError: error } : {}),
     };
   }
 

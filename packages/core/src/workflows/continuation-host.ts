@@ -1,4 +1,4 @@
-import { WorkflowSourceUnavailableError } from '@archon/workflows/executor';
+import { WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import type { WorkflowHost } from './host-store';
 import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
@@ -21,7 +21,7 @@ type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
-  | { kind: 'unavailable'; reason: string; sourceError?: WorkflowSourceUnavailableError };
+  | { kind: 'unavailable'; reason: string; sourceError?: WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
   | { kind: 'unavailable'; reason: string };
@@ -164,14 +164,14 @@ export async function wakeDueWorkflowContinuations(
       try {
         outcome = { runId: run.id, ...(await resume(run, cursor)) };
       } catch (error) {
-        if (!(error instanceof WorkflowSourceUnavailableError))
+        if (!(error instanceof WorkflowSourceIntegrityError))
           log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
       }
       const sourceError =
         outcome.kind === 'unavailable'
           ? outcome.sourceError
-          : outcome.kind === 'failed' && outcome.error instanceof WorkflowSourceUnavailableError
+          : outcome.kind === 'failed' && outcome.error instanceof WorkflowSourceIntegrityError
             ? outcome.error
             : undefined;
       if (sourceError) {
@@ -180,7 +180,7 @@ export async function wakeDueWorkflowContinuations(
         if (count >= MAX_SOURCE_FAILURES) {
           log.warn(
             { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
-            `This host stopped automatically resuming run ${run.id}: frozen workflow source at ${sourceError.path} is unreadable. Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+            `This host stopped automatically resuming run ${run.id}: frozen workflow source cannot be verified (${sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
           );
           return outcome;
         }

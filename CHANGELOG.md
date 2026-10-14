@@ -95,7 +95,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Fixed
 
-- Long-lived `workflow wake --watch` and server processes stop retrying unreadable frozen workflow source on this host after three attempts and warn once with the run, path, and resume or abandon actions. Other hosts can still resume the run; transient failures keep retrying. The bound resets on process restart, so one-shot timer invocations do not accumulate it. (#3404)
+- Long-lived `workflow wake --watch` and server processes stop retrying missing, unreadable, or unverifiable frozen workflow source on this host after three attempts and warn once with the run, path when available, and resume or abandon actions. Other hosts can still resume the run; transient failures keep retrying. The bound resets on process restart, so one-shot timer invocations do not accumulate it. (#3404)
 
 - On a database shared by several machines, `archon workflow wait` no longer reports `owner_lost` for a run that another machine, or another user on this machine, is executing. It reports on its `waiting` line that the owner's liveness is unknown and keeps waiting on the run's stored state. (#4079)
 - The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)

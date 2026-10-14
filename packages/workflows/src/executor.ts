@@ -111,6 +111,7 @@ import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
 export {
+  WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
   recordSelectedWorkflow,
   capturedSourceRoots,
@@ -931,7 +932,8 @@ export async function resolveContinuationWorkflow(
   if (!workflow) {
     throw new WorkflowSourceIntegrityError(
       `Cannot continue run of '${run.workflow_name}': its captured source at ` +
-        `${capture.anchor.root} no longer contains that workflow.`
+        `${capture.anchor.root} no longer contains that workflow.`,
+      capture.anchor.root
     );
   }
   return { workflow, roots, workflows, errors };

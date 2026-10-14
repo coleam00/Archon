@@ -109,7 +109,7 @@ export async function resumeWorkflowRunFromServer(
     if (admission.kind === 'unavailable' && admission.sourceError) {
       log.warn(
         { err: admission.sourceError, runId: run.id, path: admission.sourceError.path },
-        `Cannot resume run ${run.id}: frozen workflow source at ${admission.sourceError.path} is unreadable. Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+        `Cannot resume run ${run.id}: frozen workflow source cannot be verified (${admission.sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
       );
     }
     return admission.kind === 'accepted';
