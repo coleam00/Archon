@@ -1,0 +1,51 @@
+import { afterEach, expect, spyOn, test } from 'bun:test';
+import { realpathSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import * as defaults from '../packages/workflows/src/defaults/bundled-defaults';
+import { captureWorkflowSource } from '../packages/workflows/src/workflow-source';
+
+/**
+ * A run's triage node finds the SDLC pack's default policy inside the run's own captured
+ * source, whether the bundle came from a source checkout or from a binary's embedded
+ * constants. Importing the captured module gives the same `import.meta.dir` the
+ * `policy` script node runs with.
+ */
+const track = trackTempRoots();
+const originalHome = process.env.ARCHON_HOME;
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = originalHome;
+});
+
+for (const binary of [true, false]) {
+  test(`a ${binary ? 'binary' : 'source'} capture carries the default triage policy`, async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'archon-sdlc-policy-')));
+    process.env.ARCHON_HOME = join(root, 'home');
+    const mode = spyOn(defaults, 'isBinaryBuild').mockReturnValue(binary);
+    try {
+      const project = join(root, 'project');
+      await mkdir(project);
+      const { anchor } = await captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(root, 'capture'),
+      });
+      const captured: { policyDefaultsDir(): string } = await import(
+        join(anchor.root, 'bundled/workflows/sdlc/.shared/policy.ts')
+      );
+      const directory = realpathSync(captured.policyDefaultsDir());
+      expect(directory.startsWith(realpathSync(anchor.root) + sep)).toBe(true);
+      expect(await readFile(join(directory, 'triage.md'), 'utf8')).toBe(
+        await readFile(
+          join(import.meta.dir, '../.archon/workflows/sdlc/.shared/policy/triage.md'),
+          'utf8'
+        )
+      );
+    } finally {
+      mode.mockRestore();
+    }
+  });
+}

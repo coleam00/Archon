@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Any service that signs webhooks with the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC scheme can now start a workflow run, through a bundled source plugin you configure with a signing-secret environment variable and trigger bindings. Archon checks the signature over the exact received bytes and a timestamp within 300 seconds before it records anything; an unsigned, tampered or stale delivery gets HTTP 401 and leaves no record. A retried delivery with the same `webhook-id` and body starts nothing new, and reusing a `webhook-id` with different content gets HTTP 409. The delivery body can only fill the inputs a binding maps from it with JSON Pointers, and only inputs the workflow declares; the binding alone chooses the workflow, checkout, isolation, host, resource and run-as user. See [Start workflows from any signed webhook](https://archon.diy/guides/workflow-triggers/#start-workflows-from-any-signed-webhook). (#3975, #3980)
 
+- A pack can ship `.md` documents in its `.shared/` directory. They are bundled with the pack's modules, so a binary install has them too, and a script finds them relative to its own location. See [Share code within a pack](https://archon.diy/guides/script-nodes/#share-code-within-a-pack). (#4100)
+
 ### Changed
+
+- SDLC triage reads the project's `.archon/sdlc/policy/triage.md` and falls back to a default the pack ships. Under the default, triage closes an item without a person only when it duplicates an open item or a merged change already delivered it; any other item that looks closable, such as an obsolete or out-of-scope one, is `BLOCKED` for a maintainer. Copy the default from the pack's `.shared/policy/triage.md` to change it. (#4100)
 
 - Slack is available as an optional Socket Mode chat plugin: `archon plugin install coleam00/Archon/plugins/chat-slack`. Restart the server after installing. In the plugin, `/archon connect github` now points to the Web UI or `archon auth github`; the bundled Slack adapter remains available during the transition. (#3646)
 
