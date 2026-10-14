@@ -435,7 +435,7 @@ import {
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
-import { introspectOpencodeCredentials } from '@archon/providers/in-process';
+import { introspectOpencodeCredentials } from '@archon/providers/community/opencode';
 import { messageSchema } from './schemas/conversation.schemas';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {

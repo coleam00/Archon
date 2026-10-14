@@ -46,7 +46,11 @@ import {
 } from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
-import { isMaintainedProvider, providerVersionMismatchMessage } from '@archon/provider-contract';
+import {
+  isMaintainedProvider,
+  MAINTAINED_PROVIDER_IDS,
+  providerVersionMismatchMessage,
+} from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishPlugin } from './publish-plugin';
@@ -56,8 +60,13 @@ import {
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 import { removeUnlocked } from './unlocked-file';
-import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import {
+  assertProviderRegistrationAllowed,
+  getRegisteredProviders,
+  maintainedDescriptors,
+} from '@archon/providers';
+import { registerCopilotProvider } from '@archon/providers/community/copilot';
+import { registerOpencodeProvider } from '@archon/providers/community/opencode';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
@@ -317,11 +326,16 @@ async function inspectInstallableProvider(
     throw new Error(providerVersionMismatchMessage(descriptor.id, descriptor.version, version));
   }
   const registration = processProviderRegistration(descriptor, [stagedBinary]);
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  registerOpencodeProvider();
+  registerCopilotProvider();
+  // Maintained ids stay reserved whether this host runs them from source or from receipts.
+  const reserved = MAINTAINED_PROVIDER_IDS.filter(entry => entry !== descriptor.id).map(entry =>
+    processProviderRegistration(maintainedDescriptors[entry], [stagedBinary])
+  );
   const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
   const registrations = [
-    ...getRegisteredProviders().filter(provider => !maintained || provider.id !== descriptor.id),
+    ...getRegisteredProviders().filter(provider => !isMaintainedProvider(provider.id)),
+    ...reserved,
     ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
   ];
   assertProviderRegistrationAllowed(registration, registrations);

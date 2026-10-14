@@ -1,4 +1,5 @@
 import {
+  hasInstalledProvider,
   noDefaultProviderMessage,
   MAINTAINED_PROVIDER_IDS,
   isMaintainedProvider,
@@ -124,11 +125,16 @@ export async function checkInstalledProviders(
               : 'version not reported'));
       return `${provider.id} (${version})`;
     });
+    // Only deprecated bundled providers remain: they can still run when configured, so
+    // the missing selection is a warning rather than a failure.
+    const selected = hasInstalledProvider(registry);
     return {
       label,
-      status: installed.length === 0 || unavailable.length > 0 ? 'fail' : 'pass',
+      status:
+        installed.length === 0 || unavailable.length > 0 ? 'fail' : selected ? 'pass' : 'warn',
       message: [
-        installed.length === 0 ? noDefaultProviderMessage(registry) : lines.join(', '),
+        ...(installed.length > 0 ? [lines.join(', ')] : []),
+        ...(selected ? [] : [noDefaultProviderMessage(registry)]),
         ...unavailable,
       ].join('\n    '),
     };
