@@ -30,7 +30,7 @@ interface Fixture {
   archonHome: string;
   /** Written by `hold` on its first pass, so the second pass can succeed instead. */
   marker: string;
-  /** The pid of the `hold` node's own process, so the forced exit strands nothing. */
+  /** A background descendant of the `hold` node, which only the owner's interrupt ends. */
   pidFile: string;
 }
 
@@ -66,8 +66,9 @@ function makeFixture(): Fixture {
       '    bash: |',
       `      if [ -f '${marker}' ]; then echo resumed; exit 0; fi`,
       `      touch '${marker}'`,
-      `      echo $$ > '${pidFile}'`,
-      '      exec sleep 60',
+      '      sleep 60 &',
+      `      echo $! > '${pidFile}'`,
+      '      wait',
       '',
     ].join('\n')
   );
@@ -274,12 +275,11 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
   test('records why it stopped and still resumes to completion', async () => {
     const fixture = makeFixture();
     const owner = startForegroundRun(fixture);
-    let holdPid: number | undefined;
 
     try {
       // The pidfile exists only once `hold` is executing, which is also the point at which
       // `settle` has completed and the owner's signal handlers are installed.
-      holdPid = await waitFor(
+      const holdPid = await waitFor(
         'the hold node to start',
         () => {
           if (!existsSync(fixture.pidFile)) return undefined;
@@ -303,6 +303,13 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
         return run?.status === 'failed' ? run : undefined;
       });
       expect(interrupted.id).toBe(started.id);
+      // A resume must never overlap the interrupted attempt.
+      await waitFor(
+        'the interrupted node tree to exit',
+        () => (!processExists(holdPid) ? true : undefined),
+        undefined,
+        3000
+      );
 
       // Between the interrupt and the resume: the reason is readable, and the run is
       // still `failed` — the resumable status. Recording `cancelled` here would have
@@ -328,14 +335,6 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
       const completed = getRunJson(fixture, started.id);
       expect((completed.metadata as { stop_reason?: unknown }).stop_reason).toBeUndefined();
     } finally {
-      // The forced exit skips the owner's teardown, so its `sleep` outlives it.
-      if (holdPid !== undefined) {
-        try {
-          process.kill(holdPid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
-      }
       if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
       await owner.settled;
     }

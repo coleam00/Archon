@@ -108,6 +108,51 @@ export function redactSubprocessError(
   return e;
 }
 
+interface NodeProcessRecorder {
+  roots: Set<number>;
+  ended: boolean;
+}
+let nodeProcessRecorder: NodeProcessRecorder | undefined;
+
+/**
+ * Record the root of every host node subprocess this process starts, so the run
+ * owner's interrupt can end those trees before it exits (#3552). Each root leads its
+ * own process group on POSIX; `taskkill /T` walks the tree from the PID on Windows.
+ *
+ * Process-scoped on purpose: only a foreground CLI owner, which drives exactly one run
+ * and holds the process-wide signal handlers for it, turns this on. A detached owner
+ * must not: the cancel controller ends its nodes by killing the owner's process group,
+ * which a node in its own group would escape. `archon serve` never records.
+ *
+ * `end()` refuses every later node subprocess, so a sibling or retry the executor
+ * starts while the owner exits never runs.
+ */
+export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
+  const recorder: NodeProcessRecorder = { roots: new Set(), ended: false };
+  nodeProcessRecorder = recorder;
+  return {
+    end: async () => {
+      recorder.ended = true;
+      const failed: string[] = [];
+      await Promise.all(
+        [...recorder.roots].map(pid =>
+          terminateTree(pid).catch((error: unknown) => {
+            failed.push(
+              `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
+            );
+          })
+        )
+      );
+      if (failed.length > 0) {
+        throw new Error(`could not end node process trees: ${failed.join(', ')}`);
+      }
+    },
+    release: () => {
+      if (nodeProcessRecorder === recorder) nodeProcessRecorder = undefined;
+    },
+  };
+}
+
 interface SubprocessRetention {
   logDir: string;
   workflowRunId: string;
@@ -187,11 +232,18 @@ export async function runSubprocess(
               timeout: options.timeout,
               env: subprocessEnv,
             })
-          : await execFileAsync(cmd, args, {
-              cwd: options.cwd,
-              timeout: options.timeout,
-              env: subprocessEnv,
-            });
+          : nodeProcessRecorder
+            ? await execOwnedProcessGroup(cmd, args, {
+                cwd: options.cwd,
+                timeout: options.timeout,
+                env: subprocessEnv,
+                recorder: nodeProcessRecorder,
+              })
+            : await execFileAsync(cmd, args, {
+                cwd: options.cwd,
+                timeout: options.timeout,
+                env: subprocessEnv,
+              });
 
     result.stderr = redactCredentialValues(result.stderr, credentialValues);
     // Retention is the EVIDENCE copy, taken from a redacted-then-capped copy of the
@@ -261,16 +313,34 @@ async function confirmGroupGone(pid: number): Promise<void> {
 async function execOwnedProcessGroup(
   cmd: string,
   args: string[],
-  options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
+  options: {
+    cwd: string;
+    timeout: number;
+    env: NodeJS.ProcessEnv;
+    /**
+     * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
+     * jobs outlive the command, a deadline SIGTERMs the root only, as documented for
+     * `exit_code`) and only make the tree endable through the recorder.
+     */
+    recorder?: NodeProcessRecorder;
+  }
 ): Promise<{ stdout: string; stderr: string }> {
+  const { recorder } = options;
+  if (recorder?.ended) throw new Error('The run owner is terminating; node subprocess not started');
   const posix = process.platform !== 'win32';
-  const child = spawn(cmd, posix ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
+  const lifeline = posix && !recorder;
+  const child = spawn(cmd, lifeline ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
     cwd: options.cwd,
     env: options.env,
     windowsHide: true,
     detached: posix,
-    stdio: [posix ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    stdio: [lifeline || recorder ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
+  const rootPid = child.pid;
+  if (recorder && rootPid !== undefined) {
+    recorder.roots.add(rootPid);
+    child.once('exit', () => recorder.roots.delete(rootPid));
+  }
   const maxBuffer = 1024 * 1024;
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
@@ -282,6 +352,10 @@ async function execOwnedProcessGroup(
   const stop = (): void => {
     // Never signal a group after its leader exited: that PID may already be reused.
     if (termination || exited || child.pid === undefined) return;
+    if (recorder) {
+      child.kill('SIGTERM');
+      return;
+    }
     termination = terminateTree(child.pid).catch((error: unknown) => {
       terminationError = error instanceof Error ? error : new Error(String(error));
     });
@@ -323,7 +397,7 @@ async function execOwnedProcessGroup(
   clearTimeout(timer);
   child.stdin?.destroy();
   await termination;
-  if (posix && child.pid !== undefined) {
+  if (lifeline && child.pid !== undefined) {
     try {
       await confirmGroupGone(child.pid);
     } catch (error) {

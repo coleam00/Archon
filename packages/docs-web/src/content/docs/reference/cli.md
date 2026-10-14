@@ -675,6 +675,12 @@ categorical `reason` and the `signal` that arrived. Resuming the run clears it, 
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.
 
+After recording why the run stopped, the owner ends the process tree of every `bash:` or
+`script:` node still running, including an `until_bash` check, so a resume never overlaps the
+interrupted attempt. On macOS and Linux those subprocesses run in their own session during a
+foreground run, so they have no controlling terminal. A process that starts its own session or
+process group (`setsid`, a daemon) escapes this.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`

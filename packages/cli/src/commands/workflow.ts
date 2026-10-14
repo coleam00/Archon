@@ -1,5 +1,6 @@
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
+import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -3292,6 +3293,7 @@ async function runWorkflowWithOwnedSource(
     // Set once the settled run's container is kept (paused, or an un-applied write-back),
     // so a signal during the final progress drain does not destroy it.
     let containerPreserved = false;
+    const nodeTrees = detachedProcessOwner ? undefined : recordNodeProcessTrees();
     const deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
       runId: ownedRunId,
@@ -3301,6 +3303,16 @@ async function runWorkflowWithOwnedSource(
         close: closeRunLiveOwner,
       },
       teardown: async signal => {
+        // Runs after the failed status is written: ending a tree first lets the executor
+        // fail the run through its own path and win the status write, losing stop_reason.
+        try {
+          await nodeTrees?.end();
+        } catch (endErr) {
+          console.error(
+            `\nWARNING: ${(endErr as Error).message} on ${signal}. ` +
+              'Stop them before resuming this run.'
+          );
+        }
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
         if (containerBackend && containerEnvId && !containerPreserved) {
@@ -3564,6 +3576,7 @@ async function runWorkflowWithOwnedSource(
       // and removal keeps repeated workflowRunCommand calls in one process from
       // stacking handlers.
       deregisterTermination();
+      nodeTrees?.release();
 
       if (containerBackend && containerEnvId && unresolvedWriteback) {
         console.error(

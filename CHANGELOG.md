@@ -95,6 +95,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Fixed
 
+- Pressing Ctrl-C on a foreground `archon workflow run` or `workflow resume` now also ends the process tree of the `bash:` or `script:` node that was running, so a later `workflow resume` no longer runs that node while the interrupted attempt is still alive. The run is still recorded `failed` with its `stop_reason` and stays resumable. (#3552)
 - On a database shared by several machines, `archon workflow wait` no longer reports `owner_lost` for a run that another machine, or another user on this machine, is executing. It reports on its `waiting` line that the owner's liveness is unknown and keeps waiting on the run's stored state. (#4079)
 - The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)
 - Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
