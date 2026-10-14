@@ -391,7 +391,7 @@ export function describeWorkflowStoreConformance(
       expect(refusal).toBeInstanceOf(WorkflowResourceBusyError);
       expect(refusal).toMatchObject({
         blocker: { kind: 'run', id: b.launch.run.id },
-        waitsForCapacity: true,
+        refusal: 'waiting',
       });
       const waiting = await store.getWorkflowRun(a);
       expect(waiting?.status).toBe('paused');
@@ -419,7 +419,6 @@ export function describeWorkflowStoreConformance(
       expect(await rejection(store.resumeWorkflowRun(a))).toMatchObject({
         blocker: { kind: 'run', id: holder.launch.run.id },
         refusal: 'paused',
-        waitsForCapacity: false,
       });
       const refused = await store.getWorkflowRun(a);
       expect(refused?.status).toBe('paused');
@@ -493,7 +492,7 @@ export function describeWorkflowStoreConformance(
       expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: true });
       const holder = start();
       expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
-      expect(await rejection(claimAnswered(a))).toMatchObject({ waitsForCapacity: true });
+      expect(await rejection(claimAnswered(a))).toMatchObject({ refusal: 'waiting' });
       await end(holder.launch.run.id);
       expect(await store.cancelWorkflowRun(a)).toEqual({ cancelled: true });
       expect(await store.admitResourceStart(start())).toMatchObject({ status: 'admitted' });
@@ -521,7 +520,6 @@ export function describeWorkflowStoreConformance(
       expect(await rejection(store.resumeWorkflowRun(holderId))).toMatchObject({
         blocker: { kind: 'run', id: first },
         refusal: 'failed',
-        waitsForCapacity: false,
       });
       expect((await store.resumeWorkflowRun(first, answeredCursor)).status).toBe('running');
       expect(await rejection(store.resumeWorkflowRun(second, answeredCursor))).toMatchObject({

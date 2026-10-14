@@ -231,7 +231,7 @@ export function createInMemoryWorkflowStore(
         const blocker = await admission.resume(run);
         if (!blocker) return view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
-        if (!busy.waitsForCapacity || !view.recordCapacityWait(id)) throw busy;
+        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;

@@ -879,7 +879,6 @@ export class WorkflowNotResumableError extends Error {
 export type ResumeRefusal = 'failed' | 'paused' | 'waiting';
 
 export class WorkflowResourceBusyError extends Error {
-  public readonly waitsForCapacity: boolean;
   constructor(
     public readonly runId: string,
     public readonly blocker: ResourceBlocker,
@@ -893,7 +892,6 @@ export class WorkflowResourceBusyError extends Error {
           ? `${reason} It stays paused; a continuation host continues it once its wait ends and capacity frees.`
           : reason
     );
-    this.waitsForCapacity = refusal === 'waiting';
     this.name = 'WorkflowResourceBusyError';
   }
 }

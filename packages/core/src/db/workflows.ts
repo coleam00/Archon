@@ -1088,7 +1088,7 @@ export async function resumeWorkflowRun(
             resumeRefusal({ status, metadata }, cursor)
           );
           // Committed with the refusal, so the paused run keeps its place as a waiter.
-          if (busy.waitsForCapacity && readCapacityWait(metadata) === undefined)
+          if (busy.refusal === 'waiting' && readCapacityWait(metadata) === undefined)
             await query(
               `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)}
                 WHERE id = $1`,
