@@ -12894,6 +12894,22 @@ describe('workflowRunCommand — progress rendering', () => {
     ]);
     expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
   });
+
+  it('runs the workflow when the progress subscription cannot start', async () => {
+    setupWorkflowMocks();
+    executeCommitting(commitProgressRows);
+    const host = createTestWorkflowHost();
+    host.deps.store.getWorkflowEventHead = async () => {
+      throw new Error('event feed unavailable');
+    };
+
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+
+    expect(progressLines()).toEqual([
+      '[workflow] Progress output unavailable: event feed unavailable',
+    ]);
+    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
+  });
 });
 
 // ---------------------------------------------------------------------------

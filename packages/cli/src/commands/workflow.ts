@@ -3375,13 +3375,24 @@ async function runWorkflowWithOwnedSource(
     try {
       // Progress lines render from the run's committed rows, its sub-runs' included.
       // Subscribed before submit or resume so the run's first row cannot be missed.
+      // Progress is output only: a subscription that cannot start never stops the run.
       if (!options.quiet) {
         const openToolCalls: OpenToolCalls = new Map();
         const verbose = options.verbose ?? false;
-        progress = await engine.subscribe(ownedRunId, ({ event }) => {
-          const line = workflowEventLine(event, verbose, openToolCalls);
-          if (line !== undefined) process.stderr.write(`${line}\n`);
-        });
+        try {
+          progress = await engine.subscribe(ownedRunId, ({ event }) => {
+            const line = workflowEventLine(event, verbose, openToolCalls);
+            if (line !== undefined) process.stderr.write(`${line}\n`);
+          });
+        } catch (subscribeErr) {
+          getLog().warn(
+            { err: subscribeErr as Error, runId: ownedRunId },
+            'cli.workflow_progress_subscribe_failed'
+          );
+          process.stderr.write(
+            `[workflow] Progress output unavailable: ${(subscribeErr as Error).message}\n`
+          );
+        }
       }
       runLiveOwner ??= await startRunLiveOwner(ownedRunId, {
         ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
