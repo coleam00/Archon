@@ -3855,15 +3855,17 @@ async function buildWaitResumeAttempt(
 /**
  * True when a resume attempt lost the run to another owner rather than failing.
  *
- * Both signals mean the row already moved — another host claimed it (the
- * compare-and-swap) or still holds its endpoint — so the winner finishes it and
- * this process should say so and stop instead of reporting a failure.
+ * Both signals mean another process is executing the run — it won the claim (the
+ * compare-and-swap left the row `running`) or still holds its endpoint — so this
+ * process should say so and stop instead of reporting a failure. A claim lost to a
+ * cancel, failure or completion is not that: nothing continues the run, so it stays
+ * an error.
  */
 function isResumeSuperseded(error: unknown): boolean {
   const MAX_CAUSE_DEPTH = 5;
   for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
     if (
-      current instanceof WorkflowNotResumableError ||
+      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
       current instanceof RunLiveOwnerAlreadyOwnedError
     ) {
       return true;
