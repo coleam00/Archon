@@ -855,6 +855,7 @@ describe('manage_run — gate continuation', () => {
             completedNodeOutputs: new Map(),
             fanOutSnapshots: new Map(),
             unresolvedNodeStarts: new Set<string>(),
+            budget: { workUnits: 0, spendUsd: 0 },
             costUsd: 0,
           }),
           listWorkflowRunNodeSessions: async () => [],

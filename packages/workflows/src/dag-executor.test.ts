@@ -402,6 +402,7 @@ function createMockStore(): MockWorkflowStore {
         completedNodeOutputs: new Map<string, { output: string }>(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })
@@ -4651,6 +4652,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
       unfinishedInvocations: new Map([[nodeInvocationKey('work', []), original]]),
     });
@@ -39694,6 +39696,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       ]),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39744,6 +39747,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), snapshots]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39795,6 +39799,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot!]]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39844,6 +39849,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
       unresolvedNodeStarts: new Set([`${composeScope()}__${snapshot.identity}`]),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -40379,6 +40385,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs,
       fanOutSnapshots,
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
     parentPaused = false;
@@ -40797,6 +40804,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs,
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     }));
 
@@ -41018,6 +41026,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: stale,
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     }));
 
@@ -42085,6 +42094,7 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
       ]),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -42885,5 +42895,381 @@ describe('executeDagWorkflow -- substituted values reach the node verbatim (#404
 
     expect(prompts()).toEqual(['Prior: []', `Prior: [${quoted}]`]);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- run budget (#2814)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-budget-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  const ai = (id: string, depends_on?: string[], extra?: Partial<AgentNode>): AgentNode => ({
+    id,
+    kind: 'agent',
+    source: { kind: 'inline', prompt: `Do ${id}` },
+    ...(depends_on ? { depends_on } : {}),
+    ...extra,
+  });
+  const sh = (id: string, depends_on?: string[]): DagNode => ({
+    id,
+    kind: 'exec',
+    runtime: 'sh',
+    script: 'echo ok',
+    ...(depends_on ? { depends_on } : {}),
+  });
+
+  /** Every provider call reports `cost` (or none when undefined). */
+  function providerCosts(cost: number | undefined): void {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: 's', ...(cost !== undefined ? { cost } : {}) };
+    });
+  }
+
+  /** A store whose resume read folds the rows written so far, as the real stores do. */
+  function durableStore(): MockWorkflowStore {
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    return store;
+  }
+
+  async function run(
+    workflow: TestWorkflowDefinition,
+    store = durableStore(),
+    extra: Partial<DagOptionsOverrides> = {}
+  ): Promise<MockWorkflowStore> {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('budget-run'),
+        ...extra,
+      })
+    );
+    return store;
+  }
+
+  const refusals = (store: MockWorkflowStore) =>
+    persistedEvents(store).filter(e => e.event_type === 'run_budget_refused');
+  const started = (store: MockWorkflowStore, step: string) =>
+    persistedEvents(store).filter(e => e.event_type === 'node_started' && e.step_name === step);
+  const exitReason = (store: MockWorkflowStore) =>
+    (store.failWorkflowRun.mock.calls[0]?.[2] as { exitReason?: string } | undefined)?.exitReason;
+
+  /** What a cold resume hands the executor, read through the same store handoff. */
+  async function resumeOptions(store: MockWorkflowStore): Promise<Partial<DagOptionsOverrides>> {
+    const inspection = await inspectResumableRun(
+      createMockDeps(store),
+      makeWorkflowRun('budget-run')
+    );
+    if (!inspection) throw new Error('Expected the refused run to be resumable');
+    return {
+      priorCompletedNodes: inspection.priorCompletedNodes,
+      priorUsage: inspection.priorUsage,
+    };
+  }
+
+  it('refuses the next attempt once the work ceiling is reached, before it starts', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'units',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(started(store, 'c')).toHaveLength(0);
+    expect(
+      persistedEvents(store).some(e => e.step_name === 'c' && e.event_type === 'node_failed')
+    ).toBe(false);
+    expect(refusals(store)).toHaveLength(1);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'work_units_exhausted',
+      node: 'c',
+      consumed: { work_units: 2 },
+    });
+  });
+
+  it('lets an admitted attempt overshoot the spend ceiling and refuses the next one', async () => {
+    providerCosts(0.6);
+    const store = await run({
+      name: 'spend',
+      budget: { max_spend_usd: 1 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'spend_exhausted',
+      node: 'c',
+      consumed: { work_units: 2, spend_usd: 1.2 },
+    });
+  });
+
+  it('counts a retry as a work unit and refuses it once the spend is gone', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['crash'],
+        failure: { class: 'transient', evidence: 'crash' },
+        sessionId: 's',
+        cost: 0.6,
+      };
+    });
+    const store = await run({
+      name: 'retry',
+      budget: { max_spend_usd: 0.5 },
+      nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(refusals(store)[0].data).toMatchObject({ reason: 'spend_exhausted', node: 'a' });
+    // The refused retry's earlier attempt still counts toward the run's recorded spend.
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.6);
+  });
+
+  it('admits exactly the remaining units from a parallel layer and lets them finish', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'parallel',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b'), ai('c')],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(persistedEvents(store).filter(e => e.event_type === 'node_completed')).toHaveLength(2);
+    expect(
+      persistedEvents(store).filter(e => e.event_type === 'run_budget_work_unit')
+    ).toHaveLength(2);
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('fails a spend-limited run as soon as an attempt reports no cost', async () => {
+    providerCosts(undefined);
+    const store = await run({
+      name: 'unknown-cost',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(started(store, 'b')).toHaveLength(0);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'not_reported' },
+    });
+
+    // A work ceiling alone does not need cost, so the same run completes.
+    const unitsOnly = await run({
+      name: 'unknown-cost-units',
+      budget: { max_work_units: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(unitsOnly.completeWorkflowRun).toHaveBeenCalled();
+    expect(refusals(unitsOnly)).toHaveLength(0);
+  });
+
+  it('treats an attempt that reported only part of its cost as unknown', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: 's', cost: 0.2 };
+      yield { type: 'result', sessionId: 's' };
+    });
+    const store = await run({
+      name: 'partial',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'partial' },
+    });
+    const completed = persistedEvents(store).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'a'
+    );
+    expect(completed?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.2, partial: true },
+    });
+    // Run telemetry keeps the reported value exactly as before.
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.2);
+  });
+
+  it('rebuilds the same totals on cold resume and refuses again without calling the provider', async () => {
+    providerCosts(0.1);
+    const workflow = {
+      name: 'resume-units',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    };
+    const store = await run(workflow);
+    const consumed = refusals(store)[0].data?.consumed;
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'budget-run');
+    expect({ work_units: snapshot.budget.workUnits, spend_usd: snapshot.budget.spendUsd }).toEqual(
+      consumed as { work_units: number; spend_usd: number }
+    );
+
+    // Cold resume: a new pass over the same durable rows.
+    store.failWorkflowRun.mockClear();
+    await run(workflow, store, await resumeOptions(store));
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('refuses a resumed spend-limited run at start when recorded spend is unknown', async () => {
+    providerCosts(undefined);
+    const workflow = {
+      name: 'resume-unknown',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    };
+    const store = await run(workflow);
+    store.failWorkflowRun.mockClear();
+    mockSendQueryDag.mockClear();
+    await run(workflow, store, await resumeOptions(store));
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('treats an attempt that started and never finished as unknown spend on resume', async () => {
+    providerCosts(0.1);
+    const seeded = createMockStore();
+    const workflow = {
+      name: 'interrupted',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a')],
+    };
+    // A first pass that stopped after `a` started: its unit and start row, no terminal.
+    await run({ ...workflow, budget: { max_work_units: 99 } }, seeded);
+    const rows = persistedEvents(seeded).filter(
+      e => e.event_type === 'run_budget_work_unit' || e.event_type === 'node_started'
+    );
+
+    const spendLimited = durableStore();
+    spendLimited.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(rows, id)
+    );
+    mockSendQueryDag.mockClear();
+    await run(workflow, spendLimited, { priorCompletedNodes: new Map() });
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(refusals(spendLimited)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'interrupted' },
+    });
+
+    const unitsOnly = durableStore();
+    unitsOnly.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
+    await run({ ...workflow, budget: { max_work_units: 5 } }, unitsOnly, {
+      priorCompletedNodes: new Map(),
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(unitsOnly.completeWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('never starts an attempt whose work-unit record cannot be written', async () => {
+    providerCosts(0.1);
+    const store = durableStore();
+    store.persistWorkflowEvent.mockImplementation(async event => {
+      if (event.event_type === 'run_budget_work_unit') throw new Error('disk full');
+      await store.createWorkflowEvent(event);
+    });
+    await expect(
+      run({ name: 'required-write', budget: { max_work_units: 3 }, nodes: [ai('a')] }, store)
+    ).rejects.toBeInstanceOf(NodeEventWriteError);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(started(store, 'a')).toHaveLength(0);
+  });
+
+  it('counts deterministic nodes as work but charges them no spend', async () => {
+    const free = await run({
+      name: 'bash-spend',
+      budget: { max_spend_usd: 0.01 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(free.completeWorkflowRun).toHaveBeenCalled();
+
+    const counted = await run({
+      name: 'bash-units',
+      budget: { max_work_units: 1 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(refusals(counted)[0].data).toMatchObject({ reason: 'work_units_exhausted', node: 'y' });
+  });
+
+  it('admits an approval rework attempt like any other attempt', async () => {
+    providerCosts(0.1);
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async () => ({
+      completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
+      costUsd: 0.1,
+      budget: { workUnits: 1, spendUsd: 0.1 },
+    }));
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'rework',
+          budget: { max_work_units: 1 },
+          nodes: [
+            {
+              id: 'review',
+              kind: 'gate',
+              message: 'Approve?',
+              decisions: [
+                { id: 'approve' },
+                { id: 'reject', rework: { prompt: 'Fix: $REJECTION_REASON', maxAttempts: 3 } },
+              ],
+              captureResponse: false,
+              decisionsAuthored: false,
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('rework-run', {
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'review',
+              message: 'Approve?',
+              onRejectPrompt: 'Fix: $REJECTION_REASON',
+              onRejectMaxAttempts: 3,
+            },
+            rejection_reason: 'wrong',
+            rejection_count: 1,
+          },
+        }),
+      })
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unbudgeted run untouched', async () => {
+    providerCosts(0.1);
+    const store = await run({ name: 'plain', nodes: [ai('a'), ai('b', ['a'])] });
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store).filter(
+        e => e.event_type === 'run_budget_work_unit' || e.event_type === 'run_budget_refused'
+      )
+    ).toHaveLength(0);
+    expect(store.getDagResumeSnapshot).not.toHaveBeenCalled();
   });
 });

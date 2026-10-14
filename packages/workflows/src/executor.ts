@@ -96,7 +96,7 @@ import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
-import { validateWorkflowOutcomeDeclaration } from './loader';
+import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
 import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
 import { formatDeprecationNotice } from './deprecation';
 import { resolveWorkflowName } from './router';
@@ -1929,6 +1929,10 @@ export async function executeWorkflow(
   const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
   if (outcomeDeclarationError !== null) {
     throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
+  }
+  const runBudgetShapeError = validateRunBudgetShape(workflow);
+  if (runBudgetShapeError !== null) {
+    throw new Error(`Invalid workflow '${workflow.name}': ${runBudgetShapeError}`);
   }
 
   const {

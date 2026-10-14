@@ -168,6 +168,19 @@ import {
 } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import {
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
+  RunBudgetRefusedError,
+  admitRunBudgetAttempt,
+  createRunBudgetLedger,
+  describeRunBudgetRefusal,
+  runBudgetRefusalEventData,
+  runBudgetStartRefusal,
+  runBudgetWorkUnitEvent,
+  settleRunBudgetAttempt,
+  type RunBudgetLedger,
+  type RunBudgetRefusal,
+} from './run-budget';
+import {
   createAttemptEventSequence,
   createProviderEventHandler,
   type ProviderEventHandler,
@@ -1060,6 +1073,40 @@ function retryableFailureClass(
   if (retryClass === 'fatal') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
+}
+
+/**
+ * Run one governed attempt under the run budget: admit and reserve a work unit, write
+ * its durable record, run the attempt, then charge its spend. The reservation precedes
+ * the first await so parallel siblings cannot share the last unit; the record precedes
+ * the attempt so a crash over-counts rather than under-counts.
+ */
+async function runBudgetedAttempt(
+  ctx: RunLayersContext,
+  node: AgentNode | ExecNode,
+  attempt: () => Promise<NodeExecutionResult>
+): Promise<NodeExecutionResult> {
+  const ledger = ctx.runBudget;
+  if (ledger === undefined) return attempt();
+  const path = ctx.stepNamePrefix + node.id;
+  const refusal = admitRunBudgetAttempt(ledger, path);
+  if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
+  await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  const executionBefore = ctx.currentExecution;
+  let result: NodeExecutionResult;
+  try {
+    result = await attempt();
+  } catch (error) {
+    // An agent attempt that started and then threw never reported its cost. One that
+    // threw before starting made no provider call.
+    if (node.kind === 'agent' && ctx.currentExecution !== executionBefore) {
+      ledger.usage.costUnavailable ??= { path, reason: 'interrupted' };
+    }
+    throw error;
+  }
+  const settlement = settleRunBudgetAttempt(ledger, node.kind, path, result.execution);
+  if (settlement !== undefined) throw new RunBudgetRefusedError(settlement);
+  return result;
 }
 
 /**
@@ -2346,6 +2393,10 @@ async function executeNodeInternal(
   let nodeTokens: TokenUsage | undefined;
   let nodeTokensUnknown = false;
   let nodeCostUsd: number | undefined;
+  // Attempt-wide: some stream pass ended without a result, or a result without a
+  // finite cost, so `nodeCostUsd` is at most a floor of what the attempt spent.
+  let costReportMissing = false;
+  let passSawResult = false;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
@@ -2375,6 +2426,7 @@ async function executeNodeInternal(
           tokens: nodeTokens,
           tokensUnknown: nodeTokensUnknown,
           costUsd: nodeCostUsd,
+          costPartial: costReportMissing,
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
@@ -2523,6 +2575,7 @@ async function executeNodeInternal(
     }
     batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
+    passSawResult = false;
     nodeTokens = undefined;
     nodeIdleTimedOut = false;
     streamSettled = false;
@@ -2657,6 +2710,8 @@ async function executeNodeInternal(
               nodeId: node.id,
             });
           }
+          passSawResult = true;
+          if (msg.cost === undefined || !Number.isFinite(msg.cost)) costReportMissing = true;
           if (msg.cost !== undefined) {
             if (Number.isFinite(msg.cost)) {
               nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
@@ -2797,6 +2852,7 @@ async function executeNodeInternal(
         );
       } finally {
         await watchdogResets.flush();
+        if (!passSawResult) costReportMissing = true;
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
@@ -3055,6 +3111,7 @@ async function executeNodeInternal(
         tokens: nodeTokens,
         tokensUnknown: nodeTokensUnknown,
         costUsd: nodeCostUsd,
+        costPartial: costReportMissing,
         stopReason: nodeStopReason,
         numTurns: nodeNumTurns,
         resolvedModel: nodeResolvedModel?.id,
@@ -7402,21 +7459,23 @@ async function executeApprovalNode(
       execContext
     );
 
-    const output = await executeNodeInternal(
-      ctx,
-      syntheticNode,
-      provider,
-      nodeOptions,
-      undefined, // fresh session
-      resolvedNodeModel,
-      resolvedTier,
-      resolvedEffort,
-      stepNamePrefix,
-      iteration,
-      undefined, // synthetic on_reject node never carries a session checkpoint
-      typedArtifactsFile,
-      'ordinary',
-      rejectionReason
+    const output = await runBudgetedAttempt(ctx, syntheticNode, () =>
+      executeNodeInternal(
+        ctx,
+        syntheticNode,
+        provider,
+        nodeOptions,
+        undefined, // fresh session
+        resolvedNodeModel,
+        resolvedTier,
+        resolvedEffort,
+        stepNamePrefix,
+        iteration,
+        undefined, // synthetic on_reject node never carries a session checkpoint
+        typedArtifactsFile,
+        'ordinary',
+        rejectionReason
+      )
     );
 
     if (output.state === 'failed') {
@@ -8383,7 +8442,8 @@ async function executeFanOutWorkflowNode(
   //    window get no run row until a held child finishes and the parent continues.
   //
   //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
-  //    child fails still runs every remaining child. A run-tree budget ceiling is #1961.
+  //    child fails still runs every remaining child. The workflow `budget:` does not cover
+  //    fan-out yet; a budgeted workflow rejects it at load (#2815).
   const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
     // A rolled-back cancellation has not released the child's working-path lock.
     // Let claimed siblings settle, but do not start another child against that lock.
@@ -9388,6 +9448,8 @@ interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  /** The run budget's live ledger; set only when the workflow declares `budget:`. */
+  runBudget?: RunBudgetLedger;
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: GraphPlan['layers'];
@@ -9576,6 +9638,7 @@ function settledValuesOrThrow<T>(
   const selected =
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
     failures[0];
   if (selected === undefined) return values;
   for (const failure of failures) {
@@ -9986,15 +10049,17 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.deps.store,
                     ctx.stepNamePrefix + node.id,
                     () =>
-                      executeBashNode(
-                        ctx,
-                        node,
-                        ctx.config.envVars,
-                        ctx.config.protectedEnvKeys,
-                        ctx.config.protectedCredentialValues,
-                        ctx.stepNamePrefix,
-                        iteration,
-                        ctx.bodyLoopUserInput ?? ''
+                      runBudgetedAttempt(ctx, node, () =>
+                        executeBashNode(
+                          ctx,
+                          node,
+                          ctx.config.envVars,
+                          ctx.config.protectedEnvKeys,
+                          ctx.config.protectedCredentialValues,
+                          ctx.stepNamePrefix,
+                          iteration,
+                          ctx.bodyLoopUserInput ?? ''
+                        )
                       ),
                     iteration
                   );
@@ -10028,15 +10093,17 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.deps.store,
                   ctx.stepNamePrefix + node.id,
                   () =>
-                    executeScriptNode(
-                      ctx,
-                      node,
-                      ctx.config.envVars,
-                      ctx.config.protectedEnvKeys,
-                      ctx.config.protectedCredentialValues,
-                      ctx.stepNamePrefix,
-                      iteration,
-                      ctx.bodyLoopUserInput ?? ''
+                    runBudgetedAttempt(ctx, node, () =>
+                      executeScriptNode(
+                        ctx,
+                        node,
+                        ctx.config.envVars,
+                        ctx.config.protectedEnvKeys,
+                        ctx.config.protectedCredentialValues,
+                        ctx.stepNamePrefix,
+                        iteration,
+                        ctx.bodyLoopUserInput ?? ''
+                      )
                     ),
                   iteration
                 );
@@ -10468,30 +10535,31 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.deps.store,
               ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
-              async () => {
-                // Fresh per attempt: an attempt after a transient failure observes
-                // artifacts published in the interval, and never reuses the
-                // listing handed to AI-configuration substitution above.
-                const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
-                  ctx.artifactsDir,
-                  ctx.workflowRun.id
-                );
-                return executeNodeInternal(
-                  ctx,
-                  node,
-                  provider,
-                  nodeOptions,
-                  resumeSessionId,
-                  resolvedNodeModel,
-                  resolvedTier,
-                  resolvedEffort,
-                  ctx.stepNamePrefix,
-                  iteration,
-                  checkpointSessionForProvider(provider),
-                  attemptTypedArtifactsFile,
-                  resumeIntent
-                );
-              },
+              () =>
+                runBudgetedAttempt(ctx, node, async () => {
+                  // Fresh per attempt: an attempt after a transient failure observes
+                  // artifacts published in the interval, and never reuses the
+                  // listing handed to AI-configuration substitution above.
+                  const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
+                    ctx.artifactsDir,
+                    ctx.workflowRun.id
+                  );
+                  return executeNodeInternal(
+                    ctx,
+                    node,
+                    provider,
+                    nodeOptions,
+                    resumeSessionId,
+                    resolvedNodeModel,
+                    resolvedTier,
+                    resolvedEffort,
+                    ctx.stepNamePrefix,
+                    iteration,
+                    checkpointSessionForProvider(provider),
+                    attemptTypedArtifactsFile,
+                    resumeIntent
+                  );
+                }),
               { state: 'failed', output: '', error: 'Node did not execute' },
               iteration
             );
@@ -10601,8 +10669,13 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output, sessionProvider: provider };
           } catch (error) {
             // This dispatch boundary also owns provider/binding preparation failures.
-            // Durable-write rejection must reach run recovery without becoming a node outcome.
-            if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+            // Durable-write rejection and a budget refusal must reach run recovery
+            // without becoming a node outcome: a refused node never started.
+            if (
+              error instanceof TerminalStatusWriteError ||
+              error instanceof NodeEventWriteError ||
+              error instanceof RunBudgetRefusedError
+            )
               throw error;
 
             const err = error as Error;
@@ -11706,13 +11779,22 @@ export async function executeDagWorkflow(
   // step_names are the raw node ids (identical to pre-refactor behavior). Fields stay
   // explicit because spreading options would also copy executor-only state into this
   // context without an excess-property check.
+  // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
+  // run can arrive without prior usage, and a reset ledger would replay spent work.
+  const resumeSnapshot =
+    priorCompletedNodes !== undefined || workflow.budget !== undefined
+      ? await deps.store.getDagResumeSnapshot(workflowRun.id)
+      : undefined;
   const unfinishedInvocations =
-    priorCompletedNodes === undefined
-      ? undefined
-      : (await deps.store.getDagResumeSnapshot(workflowRun.id)).unfinishedInvocations;
+    priorCompletedNodes === undefined ? undefined : resumeSnapshot?.unfinishedInvocations;
+  const runBudget =
+    workflow.budget !== undefined && resumeSnapshot !== undefined
+      ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
+      : undefined;
   const runCtx: RunLayersContext = {
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    runBudget,
     deps,
     platform,
     conversationId,
@@ -11888,6 +11970,56 @@ export async function executeDagWorkflow(
     return scheduled;
   };
 
+  /**
+   * Fail the run on a budget refusal. Returns normally, like the other engine refusals,
+   * so the outer executor catch does not emit a second failure. A run paused or cancelled
+   * meanwhile keeps its status; its next pass rebuilds the ledger and refuses again.
+   */
+  const failRunForBudget = async (
+    ledger: RunBudgetLedger,
+    refusal: RunBudgetRefusal
+  ): Promise<void> => {
+    if (await skipIfStatusChanged('dag.run_budget_refusal_status_changed')) return;
+    const failMsg = describeRunBudgetRefusal(refusal, workflow.name);
+    getLog().error({ workflowRunId: workflowRun.id, refusal }, 'dag.run_budget_refused');
+    await deps.store.createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: RUN_BUDGET_REFUSED_EVENT_TYPE,
+      step_name: refusal.path,
+      data: runBudgetRefusalEventData(refusal, ledger.limits, ledger.usage),
+    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg, {
+      ...(runCtx.totalCostUsd !== undefined ? { cost_usd: runCtx.totalCostUsd } : {}),
+      ...(runCtx.totalTokens !== undefined ? { tokens: runCtx.totalTokens } : {}),
+    }).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitter = getWorkflowEventEmitter();
+    emitter.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: failMsg,
+    });
+    emitter.unregisterRun(workflowRun.id);
+    await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'budget_refused' }),
+      { workflowRunId: workflowRun.id, site: 'dag.run_budget_refused_fail' }
+    );
+  };
+
+  const startRefusal = runBudget && runBudgetStartRefusal(runBudget);
+  if (runBudget !== undefined && startRefusal !== undefined) {
+    await failRunForBudget(runBudget, startRefusal);
+    return;
+  }
+
   await persistAuthoredOutcome();
   try {
     await runLayers(runCtx);
@@ -11896,7 +12028,23 @@ export async function executeDagWorkflow(
     // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
-    // execution error already in flight.
+    // execution error already in flight. A run-budget refusal also escapes the join; it
+    // fails the run here instead of propagating.
+    if (error instanceof RunBudgetRefusedError) {
+      // The refused node's thunk threw, so spend its attempts already made never reached
+      // the in-memory totals. The durable rows hold all of it.
+      try {
+        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+        runCtx.totalCostUsd = durable.costUsd;
+        runCtx.totalTokens = durable.tokens;
+        runCtx.totalTokensUnknown = durable.tokensUnknown;
+      } catch (readError) {
+        getLog().error(
+          { err: readError as Error, workflowRunId: workflowRun.id },
+          'dag.run_budget_usage_refresh_failed'
+        );
+      }
+    }
     await persistRunUsage();
     try {
       await persistAuthoredOutcome();
@@ -11905,6 +12053,10 @@ export async function executeDagWorkflow(
         { err: outcomeError as Error, workflowRunId: workflowRun.id },
         'dag.authored_outcome_persist_failed_during_unwind'
       );
+    }
+    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
+      await failRunForBudget(runBudget, error.refusal);
+      return;
     }
     throw error;
   } finally {

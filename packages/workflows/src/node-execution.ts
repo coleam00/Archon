@@ -143,6 +143,8 @@ export interface ExecutionObservations {
   tokensUnknown?: boolean;
   tokens?: TokenUsage;
   costUsd?: number;
+  /** Some provider call in the attempt reported no cost, so `costUsd` is a floor. */
+  costPartial?: boolean;
   stopReason?: string;
   numTurns?: number;
   resolvedModel?: string;
@@ -203,7 +205,10 @@ export function finishNodeExecution(
             start.spend.tokens,
             value => tokenUsageSchema.safeParse(value).success
           ),
-      costUsd: observed(result.costUsd, start.spend.costUsd, Number.isFinite),
+      costUsd: withCostPartial(
+        observed(result.costUsd, start.spend.costUsd, Number.isFinite),
+        result.costPartial === true
+      ),
       stopReason: observed(result.stopReason, start.spend.stopReason),
       numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),
     },
@@ -211,6 +216,12 @@ export function finishNodeExecution(
     ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
     ...(result.sessionId ? { sessionId: result.sessionId } : {}),
   };
+}
+
+type CostMeasurement = NodeExecutionRecord['spend']['costUsd'];
+
+function withCostPartial(cost: CostMeasurement, partial: boolean): CostMeasurement {
+  return partial && cost.source === 'provider' ? { ...cost, partial: true } : cost;
 }
 
 /** Excludes output bodies and diagnostics from the shared public execution facts. */

@@ -31,6 +31,9 @@ import {
 import { workflowNodeSessionSchema } from './schemas/workflow-node-session';
 import { workflowRunNodeSessionSchema } from './schemas/workflow-run-node-session';
 import { terminalRecordSchema } from './schemas/terminal-record';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
+import { runBudgetWorkUnitEvent } from './run-budget';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
@@ -1675,6 +1678,55 @@ export function describeWorkflowStoreConformance(
       expect(snapshot.unresolvedNodeStarts).toEqual(new Set(['unfinished']));
       expect(snapshot.tokens).toMatchObject({ input: 9, output: 12 });
       expect(snapshot.costUsd).toBe(1);
+    });
+    test('resume reduction rebuilds run-budget work units and spend, failing closed on unknown cost', async () => {
+      const run = await create(store);
+      const agentStart = (path: string) =>
+        startNodeExecution({
+          runId: run.id,
+          path,
+          node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+          invocation: newNodeInvocation(),
+          provider: 'claude',
+        });
+      const priced = agentStart('priced');
+      const unpriced = agentStart('unpriced');
+      const open = agentStart('open');
+      const rows = [
+        runBudgetWorkUnitEvent(run.id, 'priced'),
+        serializeNodeStateRecord(priced),
+        serializeNodeStateRecord(
+          finishNodeExecution(priced, { status: 'completed' }, { costUsd: 0.25 })
+        ),
+        runBudgetWorkUnitEvent(run.id, 'unpriced'),
+        serializeNodeStateRecord(unpriced),
+        serializeNodeStateRecord(finishNodeExecution(unpriced, { status: 'failed', error: 'x' })),
+        serializeNodeStateRecord(open),
+      ];
+      for (const row of rows) await store.persistWorkflowEvent(row);
+      const snapshot = await store.getDagResumeSnapshot(run.id);
+      expect(snapshot.budget).toEqual({
+        workUnits: 2,
+        spendUsd: 0.25,
+        costUnavailable: { path: 'unpriced', reason: 'unknown' },
+      });
+
+      // An attempt that started and never finished never reported its cost.
+      const interrupted = await create(store);
+      const lone = startNodeExecution({
+        runId: interrupted.id,
+        path: 'lone',
+        node: { id: 'lone', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+        invocation: newNodeInvocation(),
+        provider: 'claude',
+      });
+      await store.persistWorkflowEvent(runBudgetWorkUnitEvent(interrupted.id, 'lone'));
+      await store.persistWorkflowEvent(serializeNodeStateRecord(lone));
+      expect((await store.getDagResumeSnapshot(interrupted.id)).budget).toEqual({
+        workUnits: 1,
+        spendUsd: 0,
+        costUnavailable: { path: 'lone', reason: 'interrupted' },
+      });
     });
     test('provider events follow emission order within attempts and honor the node cursor', async () => {
       const run = await create(store);

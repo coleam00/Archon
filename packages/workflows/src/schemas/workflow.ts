@@ -128,6 +128,32 @@ export const workflowEvidencePolicySchema = z.object({
 export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
 
 // ---------------------------------------------------------------------------
+// Workflow-level run budget (#2814)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ceilings on a run's total consumption. One work unit is one started attempt
+ * of an AI or deterministic (bash/script) node, retries included; spend is the
+ * provider-reported cost of AI attempts. The engine refuses to start a new
+ * attempt once a ceiling is reached, and fails a spend-limited run whose spend
+ * it cannot measure. Attempts already admitted may finish, so spend can
+ * overshoot by the attempts in flight.
+ *
+ * Strict: a misspelt ceiling is a load error, never a silently absent one.
+ */
+export const workflowRunBudgetSchema = z
+  .object({
+    max_work_units: z.number().int().positive().optional(),
+    max_spend_usd: z.number().positive().optional(),
+  })
+  .strict()
+  .refine(b => b.max_work_units !== undefined || b.max_spend_usd !== undefined, {
+    message: 'budget must declare max_work_units, max_spend_usd, or both',
+  });
+
+export type WorkflowRunBudget = z.infer<typeof workflowRunBudgetSchema>;
+
+// ---------------------------------------------------------------------------
 // Workflow signature — declared inputs (#2470, Signature Phase 2)
 // ---------------------------------------------------------------------------
 
@@ -187,6 +213,13 @@ export const workflowBaseSchema = z.object({
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
   evidence_policy: workflowEvidencePolicySchema.optional(),
+  /**
+   * Run-wide ceiling on total work and spend (#2814). Bounds total consumption,
+   * not concurrency (that is `fan_out.max_parallel`), and applies alongside a
+   * node's own `maxBudgetUsd`. Loops, `workflow:` children and fan-out are
+   * rejected at load time while a budget is declared.
+   */
+  budget: workflowRunBudgetSchema.optional(),
   /**
    * When `false`, the engine skips the path-exclusive lock for this workflow,
    * allowing N concurrent runs on the same live checkout. The author asserts
