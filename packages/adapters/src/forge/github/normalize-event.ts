@@ -29,6 +29,7 @@ export const githubSourceCapabilities = {
       ] as const
     ).map(action => ({ kind: 'pr.lifecycle' as const, action })),
     ...(['added', 'removed'] as const).map(action => ({ kind: 'label.changed' as const, action })),
+    { kind: 'comment.changed', action: 'created' } as const,
     { kind: 'check.changed', action: 'changed', unitKind: 'check' } as const,
     { kind: 'check.changed', action: 'changed', unitKind: 'commit_status' } as const,
   ],
@@ -95,6 +96,17 @@ const pullRequestSchema = baseSchema.extend({
       name: z.string().min(1),
     })
     .optional(),
+});
+const issueCommentSchema = baseSchema.extend({
+  issue: z.object({
+    number: z.number().int().positive(),
+    pull_request: z.unknown().optional(),
+  }),
+  comment: z.object({
+    id: z.union([z.string().min(1), z.number().int()]),
+    user: senderSchema.nullable(),
+    created_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  }),
 });
 const checkRunSchema = baseSchema.extend({
   check_run: z.object({
@@ -180,6 +192,8 @@ export function normalizeGitHubWebhook(
           },
         },
         label: { name: value.label.name, id: id(value.label.id) },
+        // GitHub's sender on a labeled delivery is whoever changed the label.
+        actor: sourceActor ?? null,
       };
     } else if (['opened', 'edited', 'closed', 'reopened'].includes(value.action)) {
       event = {
@@ -216,6 +230,8 @@ export function normalizeGitHubWebhook(
           },
         },
         label: { name: value.label.name, id: id(value.label.id) },
+        // GitHub's sender on a labeled delivery is whoever changed the label.
+        actor: sourceActor ?? null,
       };
     } else {
       const action =
@@ -261,6 +277,32 @@ export function normalizeGitHubWebhook(
           : null,
       };
     }
+  } else if (context.eventName === 'issue_comment') {
+    const parsed = issueCommentSchema.safeParse(payload);
+    if (!parsed.success) return malformed(parsed.error);
+    const value = parsed.data;
+    if (value.action !== 'created')
+      return {
+        status: 'unsupported',
+        reason: `Unsupported GitHub issue_comment action: ${value.action}`,
+      };
+    sourceActor = actor(value.sender, context.host);
+    occurredAt = value.comment.created_at ?? null;
+    const ref = {
+      repo: { host: context.host, path: value.repository.full_name },
+      number: value.issue.number,
+    };
+    event = {
+      kind: 'comment.changed',
+      action: 'created',
+      // GitHub delivers pull-request conversation comments as issue comments.
+      subject:
+        value.issue.pull_request === undefined ? { kind: 'issue', ref } : { kind: 'pr', ref },
+      comment: {
+        id: String(value.comment.id),
+        author: actor(value.comment.user ?? undefined, context.host) ?? null,
+      },
+    };
   } else if (context.eventName === 'check_run') {
     const parsed = checkRunSchema.safeParse(payload);
     if (!parsed.success) return malformed(parsed.error);

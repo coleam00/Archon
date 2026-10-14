@@ -44,6 +44,16 @@ export const labelChangedEventSchema = z.object({
   action: z.enum(['added', 'removed']),
   subject: forgeSubjectRefSchema,
   label: z.object({ name: z.string().min(1), id: z.string().min(1).nullable() }),
+  // Who added or removed the label; null when the forge did not say.
+  actor: sourceActorSchema.nullable(),
+});
+
+/** A comment posted on an issue or pull request. Its text stays on the forge. */
+export const commentChangedEventSchema = z.object({
+  kind: z.literal('comment.changed'),
+  action: z.enum(['created']),
+  subject: forgeSubjectRefSchema,
+  comment: z.object({ id: z.string().min(1), author: sourceActorSchema.nullable() }),
 });
 
 export const checkResultSchema = z.enum([
@@ -81,6 +91,7 @@ export const forgeEventSchema = z.discriminatedUnion('kind', [
   issueLifecycleEventSchema,
   prLifecycleEventSchema,
   labelChangedEventSchema,
+  commentChangedEventSchema,
   checkChangedEventSchema,
 ]);
 export type ForgeEvent = z.infer<typeof forgeEventSchema>;
