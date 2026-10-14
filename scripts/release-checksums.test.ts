@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { serverReleaseAsset } from '../packages/paths/src/server-launch';
+import { pluginReleaseAsset, providerManifestSchema } from '../packages/plugin-manifest/src/index';
+import { MAINTAINED_PROVIDER_IDS } from '../packages/provider-contract/src/registration';
 
 // `* text=auto` checks this workflow out with CRLF on Windows CI. Normalizing here lets every
 // pattern below anchor on LF, so a stray `\r` can never reach a capture.
@@ -9,6 +11,23 @@ const workflow = readFileSync(
   resolve(import.meta.dir, '../.github/workflows/release.yml'),
   'utf8'
 ).replace(/\r\n/g, '\n');
+
+// build-binaries.sh names each maintained provider plugin from its manifest's executable.
+const providerExecutables = MAINTAINED_PROVIDER_IDS.map(
+  id =>
+    providerManifestSchema.parse(
+      JSON.parse(
+        readFileSync(
+          resolve(import.meta.dir, `../plugins/provider-${id}/archon-plugin.json`),
+          'utf8'
+        )
+      )
+    ).executable
+);
+
+function providerPluginAssets(target: string): string[] {
+  return providerExecutables.map(executable => pluginReleaseAsset(executable, target));
+}
 
 test('release checksums include each release artifact once', () => {
   const targets = [...workflow.matchAll(/^ +target: (\S+)$/gm)].map(match => match[1]);
@@ -26,7 +45,12 @@ test('release checksums include each release artifact once', () => {
     throw new Error('release.yml no longer declares the artifacts or checksum command read here');
   }
 
-  const releaseArtifacts = [...binaries, ...targets.map(serverReleaseAsset), webDist];
+  const releaseArtifacts = [
+    ...binaries,
+    ...targets.map(serverReleaseAsset),
+    ...targets.flatMap(providerPluginAssets),
+    webDist,
+  ];
   const operands = checksumOperands.split(/\s+/).map(operand => new Bun.Glob(operand));
 
   // `sha256sum` writes one row per operand that names a file, so an artifact covered by two
@@ -43,7 +67,7 @@ test('release checksums include each release artifact once', () => {
   );
 });
 
-test('build job uploads the server asset for every release target', () => {
+test('build job uploads the server and provider plugin assets for every release target', () => {
   const buildJob = workflow.match(/^  build:\n([\s\S]*?)(?=^  \S)/m)?.[1];
   if (buildJob === undefined) throw new Error('Missing release build job');
   const targets = [...buildJob.matchAll(/^ +target: (\S+)$/gm)].map(match => match[1]);
@@ -58,7 +82,8 @@ test('build job uploads the server asset for every release target', () => {
     .split(/\s*\n\s*/)
     .map(pattern => new Bun.Glob(pattern));
   for (const target of targets) {
-    const asset = `dist/${serverReleaseAsset(target)}`;
-    expect(paths.some(pattern => pattern.match(asset))).toBe(true);
+    for (const asset of [serverReleaseAsset(target), ...providerPluginAssets(target)]) {
+      expect(paths.some(pattern => pattern.match(`dist/${asset}`))).toBe(true);
+    }
   }
 });

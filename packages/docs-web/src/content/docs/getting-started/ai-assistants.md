@@ -13,6 +13,16 @@ You must configure **at least one** AI assistant. All five can be configured and
 
 For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
 
+## Install a provider
+
+Release binaries (quick install, Homebrew) ship without Claude, Codex and Pi. Install the ones you use:
+
+```bash
+archon provider install claude codex pi   # any subset
+```
+
+`archon setup` asks which to install and then configures their authentication. Each provider is a separate executable from the same Archon release; it must match the CLI version, so reinstall after upgrading Archon. Your native provider configuration and login (`~/.claude`, `~/.codex`, Pi's `auth.json`) are used as before. Source checkouts and Docker run all three from source with no install step. OpenCode and GitHub Copilot stay bundled (see below). See [Installation → Providers](/getting-started/installation/#providers).
+
 ## Deprecated providers
 
 OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.

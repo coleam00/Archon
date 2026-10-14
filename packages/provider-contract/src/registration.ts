@@ -27,13 +27,17 @@ export function missingProviderMessage(registry: ProviderRegistry, id: string): 
 export const NO_DEFAULT_PROVIDER_MESSAGE =
   "No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup";
 
-/** Deprecated providers stay bundled whether or not anyone uses them; they are not an installed provider. */
+/** Deprecated providers stay bundled in release binaries (#3684); they are not an installed selection. */
 export function installedProviders(registry: ProviderRegistry): ProviderDescriptor[] {
   return registry.list().filter(provider => provider.deprecationNotice === undefined);
 }
 
+export function hasInstalledProvider(registry: ProviderRegistry): boolean {
+  return installedProviders(registry).length > 0;
+}
+
 export function noDefaultProviderMessage(registry: ProviderRegistry): string {
-  return installedProviders(registry).length === 0
+  return !hasInstalledProvider(registry)
     ? `No providers installed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
     : NO_DEFAULT_PROVIDER_MESSAGE;
 }

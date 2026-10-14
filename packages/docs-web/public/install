@@ -5,10 +5,17 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
 #
+# Options:
+#   --providers <ids> - Comma-separated providers to install (claude, codex, pi).
+#                       An empty value installs none. Without it, the installer asks.
+#                       Releases up to 0.11.1 bundle their providers and have no
+#                       `archon provider`; pin one with `--providers=`.
+#
 # Options (via environment variables):
-#   VERSION       - Specific version to install (default: latest)
-#   INSTALL_DIR   - Installation directory (default: /usr/local/bin)
-#   SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
+#   VERSION          - Specific version to install (default: latest)
+#   INSTALL_DIR      - Installation directory (default: /usr/local/bin)
+#   SKIP_CHECKSUM    - Set to "true" to skip checksum verification (not recommended)
+#   ARCHON_PROVIDERS - Same as --providers; the flag wins
 #
 # Examples:
 #   # Install latest
@@ -19,6 +26,9 @@
 #
 #   # Install to custom directory
 #   curl -fsSL ... | INSTALL_DIR=~/.local/bin bash
+#
+#   # Install with the Codex provider, without asking
+#   curl -fsSL ... | bash -s -- --providers codex
 #
 # NOTE: the variable must prefix `bash`, not `curl`. In `VAR=x cmd1 | cmd2` the
 # assignment applies only to cmd1, so `VERSION=... curl ... | bash` sets it on the
@@ -31,6 +41,9 @@ REPO="coleam00/Archon"
 BINARY_NAME="archon"
 VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+# Must match MAINTAINED_PROVIDER_IDS in packages/provider-contract/src/registration.ts;
+# scripts/test-install.sh enforces it.
+PROVIDER_IDS="claude codex pi"
 
 # Colors
 RED='\033[0;31m'
@@ -199,8 +212,99 @@ verify_checksum() {
   success "Checksum verified"
 }
 
+# Turn a comma- or space-separated selection into space-separated ids, rejecting
+# anything that is not a maintained provider.
+normalize_providers() {
+  local id normalized="" ids=()
+
+  IFS=', ' read -ra ids <<<"$1"
+  for id in ${ids[@]+"${ids[@]}"}; do
+    [ -n "$id" ] || continue
+    case " $PROVIDER_IDS " in
+      *" $id "*) normalized="${normalized:+$normalized }$id" ;;
+      *)
+        error "Unknown provider '$id'. Choose from: ${PROVIDER_IDS// /, }"
+        return 1
+        ;;
+    esac
+  done
+  echo "$normalized"
+}
+
+# Ask on the terminal, not stdin: under `curl | bash` stdin is the script itself.
+# Returns 1 when there is no terminal to ask.
+prompt_providers() {
+  local tty="${ARCHON_TTY:-/dev/tty}"
+  local answer normalized
+
+  ( : <"$tty" ) 2>/dev/null || return 1
+  while true; do
+    printf 'Which providers should Archon install? (%s, comma-separated; empty for none): ' \
+      "${PROVIDER_IDS// /, }" >&2
+    answer=""
+    IFS= read -r answer <&3 || true
+    if normalized=$(normalize_providers "$answer"); then
+      echo "$normalized"
+      return 0
+    fi
+  done 3<"$tty"
+}
+
+install_providers() {
+  local archon="$1"
+  local providers="$2"
+  local install_command="archon provider install <${PROVIDER_IDS// /|}>"
+
+  if [ -z "$providers" ]; then
+    warn "No providers installed. AI workflows and chat need one; install it with:"
+    echo "  $install_command"
+    echo "  (or run: archon setup)"
+    return 0
+  fi
+
+  info "Installing providers: $providers"
+  # shellcheck disable=SC2086 # one argument per provider id
+  if ! "$archon" provider install $providers; then
+    error "Archon is installed, but installing providers failed."
+    error "Retry with: archon provider install $providers"
+    exit 1
+  fi
+  success "Providers installed: $providers"
+}
+
 # Main installation
 main() {
+  local providers_arg="" providers_given=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --providers)
+        [ "$#" -ge 2 ] || { error "--providers needs a value"; exit 1; }
+        providers_arg="$2"
+        providers_given=true
+        shift 2
+        ;;
+      --providers=*)
+        providers_arg="${1#--providers=}"
+        providers_given=true
+        shift
+        ;;
+      *)
+        error "Unknown option: $1"
+        exit 1
+        ;;
+    esac
+  done
+  if [ "$providers_given" = false ] && [ -n "${ARCHON_PROVIDERS+set}" ]; then
+    providers_arg="$ARCHON_PROVIDERS"
+    providers_given=true
+  fi
+
+  # Validate an explicit selection before anything is downloaded or replaced.
+  local providers=""
+  if [ "$providers_given" = true ]; then
+    providers=$(normalize_providers "$providers_arg") || exit 1
+  fi
+
   echo ""
   echo "  ╔═══════════════════════════════════════╗"
   echo "  ║      Archon CLI Installer             ║"
@@ -321,6 +425,12 @@ main() {
     echo ""
     echo "Or add to your shell config (~/.bashrc, ~/.zshrc, etc.)"
   fi
+
+  if [ "$providers_given" = false ]; then
+    providers=$(prompt_providers) \
+      || info "No terminal to ask which providers to install; installing none."
+  fi
+  install_providers "$INSTALL_DIR/$BINARY_NAME" "$providers"
 
   echo ""
   echo "Get started:"

@@ -121,11 +121,19 @@ export async function checkInstalledProviders(
             (provider.builtIn ? BUNDLED_VERSION : 'version not reported'));
       return `${provider.id} (${version})`;
     });
+    // Only deprecated bundled providers remain: they can still run when configured, so
+    // the missing selection is a warning rather than a failure.
+    const status =
+      registry.list().length === 0 || unavailable.length > 0
+        ? 'fail'
+        : installed.length > 0
+          ? 'pass'
+          : 'warn';
     return {
       label,
-      status: installed.length === 0 || unavailable.length > 0 ? 'fail' : 'pass',
+      status,
       message: [
-        installed.length === 0 ? noDefaultProviderMessage(registry) : lines.join(', '),
+        installed.length > 0 ? lines.join(', ') : noDefaultProviderMessage(registry),
         ...unavailable,
       ].join('\n    '),
     };

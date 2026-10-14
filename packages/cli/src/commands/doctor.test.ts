@@ -1103,6 +1103,23 @@ describe('provider diagnostics', () => {
     expect(await doctorCommand([async () => check])).toBe(1);
   });
 
+  it('only deprecated bundled providers warns and names the install command', async () => {
+    const { registerOpencodeProvider } = await import('@archon/providers/community/opencode');
+    const { providerRegistry } = await import('@archon/providers');
+    registerOpencodeProvider();
+    const opencode = providerRegistry.get('opencode');
+    if (!opencode) throw new Error('OpenCode did not register');
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [opencode] },
+      async () => new Map()
+    );
+    expect(check).toEqual({
+      label: 'Installed providers',
+      status: 'warn',
+      message: 'No providers installed. Run: archon provider install <claude|codex|pi>',
+    });
+  });
+
   it('maps provider statuses, preserves remedies, and forwards its configured defaults', async () => {
     const diagnose = mock(async (_request: unknown) => ({
       checks: [
@@ -1246,19 +1263,6 @@ describe('bundled deprecated providers', () => {
     expect(check.status).toBe('pass');
     expect(check.message).toContain('claude');
     expect(check.message).not.toMatch(/opencode|copilot|old/);
-  });
-
-  it('with only deprecated providers left, the line says none are installed', async () => {
-    const deprecatedOnly = providerRegistry.list().filter(provider => provider.deprecationNotice);
-    const check = await checkInstalledProviders(
-      { get: () => undefined, list: () => deprecatedOnly },
-      async () => new Map()
-    );
-    expect(check).toEqual({
-      label: 'Installed providers',
-      status: 'fail',
-      message: 'No providers installed. Run: archon provider install <claude|codex|pi>',
-    });
   });
 });
 
