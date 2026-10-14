@@ -12830,11 +12830,17 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
+  type ContainerRunEnd = 'paused' | 'settled' | 'unresolved-writeback' | 'lookup-fails';
+
   /**
-   * A container run whose final progress drain receives SIGTERM. Returns how many times
-   * the container was destroyed by the time the signal's cleanup settled.
+   * A container run that receives SIGTERM during its final progress drain, or with
+   * `signalAt: 'lookup'` while the CLI reads the settled run's write-back state. Returns
+   * how many times the container was destroyed by the time the signal's cleanup settled.
    */
-  async function signalDuringContainerDrain(paused: boolean): Promise<number> {
+  async function signalDuringContainerDrain(
+    end: ContainerRunEnd,
+    signalAt: 'drain' | 'lookup' = 'drain'
+  ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
@@ -12852,7 +12858,7 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
-      return paused
+      return end === 'paused'
         ? { success: true, workflowRunId: OWNED_RUN, paused: true }
         : { success: true, workflowRunId: OWNED_RUN };
     });
@@ -12860,16 +12866,45 @@ describe('workflowRunCommand — progress rendering', () => {
     mockFolderBackendDestroy.mockClear();
     const sigtermBefore = process.listeners('SIGTERM');
     const host = createTestWorkflowHost();
-    const read = host.deps.store.readWorkflowEventsAfter.bind(host.deps.store);
     let destroyedAtSignal = -1;
-    host.deps.store.readWorkflowEventsAfter = async (after, options) => {
-      if (runSettled && destroyedAtSignal === -1) {
-        for (const listener of process.listeners('SIGTERM')) {
-          if (!sigtermBefore.includes(listener)) (listener as () => void)();
-        }
-        for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
-        destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
+    const signalOnce = async (): Promise<void> => {
+      if (!runSettled || destroyedAtSignal !== -1) return;
+      for (const listener of process.listeners('SIGTERM')) {
+        if (!sigtermBefore.includes(listener)) (listener as () => void)();
       }
+      for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
+      destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
+    };
+    const getRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
+    host.deps.store.getWorkflowRun = async id => {
+      if (signalAt === 'lookup') await signalOnce();
+      if (end === 'lookup-fails') throw new Error('store unavailable');
+      if (end !== 'unresolved-writeback') return getRun(id);
+      return {
+        id,
+        workflow_name: 'assist',
+        conversation_id: null,
+        parent_conversation_id: null,
+        codebase_id: 'cb-folder',
+        status: 'failed',
+        outcome: null,
+        user_message: 'go',
+        metadata: { pending_writeback: { envId: 'env-1' } },
+        started_at: new Date(),
+        completed_at: new Date(),
+        last_activity_at: null,
+        working_path: '/test/path',
+        user_id: null,
+        parent_run_id: null,
+        adopted_from_run_id: null,
+        output_root: null,
+        checkout_baseline: null,
+        origin: null,
+      };
+    };
+    const read = host.deps.store.readWorkflowEventsAfter.bind(host.deps.store);
+    host.deps.store.readWorkflowEventsAfter = async (after, options) => {
+      if (signalAt === 'drain') await signalOnce();
       return read(after, options);
     };
 
@@ -12882,11 +12917,23 @@ describe('workflowRunCommand — progress rendering', () => {
   }
 
   it('a signal during the final drain keeps a paused run its container', async () => {
-    expect(await signalDuringContainerDrain(true)).toBe(0);
+    expect(await signalDuringContainerDrain('paused')).toBe(0);
+  });
+
+  it('a signal during the final drain keeps the container of an unresolved write-back', async () => {
+    expect(await signalDuringContainerDrain('unresolved-writeback')).toBe(0);
+  });
+
+  it('a signal during the final drain keeps the container when the write-back lookup fails', async () => {
+    expect(await signalDuringContainerDrain('lookup-fails')).toBe(0);
+  });
+
+  it('a signal during the write-back lookup keeps the container', async () => {
+    expect(await signalDuringContainerDrain('settled', 'lookup')).toBe(0);
   });
 
   it('a signal during the final drain still destroys a settled run its container', async () => {
-    expect(await signalDuringContainerDrain(false)).toBe(1);
+    expect(await signalDuringContainerDrain('settled')).toBe(1);
   });
 
   it('reports a failed final drain without masking the run outcome', async () => {

@@ -3589,7 +3589,7 @@ async function runWorkflowWithOwnedSource(
           'workflow.container_preserved_unresolved_writeback'
         );
       }
-      if (containerBackend && containerEnvId && !runPaused && !unresolvedWriteback) {
+      if (containerBackend && containerEnvId && !containerPreserved) {
         try {
           await containerBackend.destroy(containerEnvId);
           // Persist a container_destroyed event (console timeline) and emit for any
