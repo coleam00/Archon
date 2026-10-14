@@ -117,7 +117,10 @@ export interface IntakeDecision {
   readonly promoted: Promotion | null;
   readonly stage: Stage;
   readonly body_digest: string;
-  /** The issue's labels at pickup; the outcome removes only owned labels among them. */
+  /**
+   * The issue's labels at pickup that are this run's to remove; the outcome removes
+   * only owned labels among them.
+   */
   readonly labels: readonly string[];
   readonly notes: readonly HistoryEntry[];
 }
@@ -384,6 +387,13 @@ export function decideIntake(
   let trust = doc.trust;
   let promoted = doc.promoted;
   const notes: HistoryEntry[] = [];
+  const mirror = new Set<string>(mirrorLabels(doc));
+  const claimed = new Set((doc.claim?.requests ?? []).map(request => request.label));
+  // A request label this run neither claimed a request for nor wrote itself has a
+  // request still on its way, which may land at any point of this run or after it.
+  const labels = issue.labels.filter(
+    label => !isRequestLabel(label) || mirror.has(label) || claimed.has(label)
+  );
   const noted = (outcome: string, summary: string): void => {
     notes.push({ at, stage: 'intake', run_id: runId, outcome, summary });
   };
@@ -393,7 +403,7 @@ export function decideIntake(
     promoted,
     stage,
     body_digest: issue.digest,
-    labels: issue.labels,
+    labels,
     notes,
   });
   if (issue.state === 'closed') {
@@ -417,7 +427,6 @@ export function decideIntake(
     promoted = null;
   }
 
-  const mirror = new Set<string>(mirrorLabels(doc));
   let retriage = false;
   let promotedNow = false;
   for (const request of doc.claim?.requests ?? []) {

@@ -86,9 +86,8 @@ function main(): void {
         ? triage.labels
         : mirrorLabels(next);
     assertNoSelfPromotion(next, add);
-    // A request label added while this run worked is the next pickup's to read: one
-    // added after pickup is not in decision.labels, and one already there whose request
-    // queued after the claim waits in next.requests.
+    // A request label added again after this run claimed its request is the next
+    // pickup's to read, when its new request already waits in next.requests.
     const requested = new Set(next.requests.map(request => request.label));
     labels = writeLabels(
       item,
