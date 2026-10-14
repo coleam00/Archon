@@ -19,6 +19,16 @@ export function checkForgeAccess(): { readonly source: ForgeSource } {
 }
 
 function checkGh(): void {
+  // Per-user GitHub mode hands an unconnected user's run an empty `GH_TOKEN`. gh reads
+  // an empty token as unset and falls back to the host's stored login, so without
+  // this refusal the run would push and write as the host's identity.
+  if (process.env.GH_TOKEN === '') {
+    throw new Error(
+      'ARCHON_SDLC_FORGE=gh selects the GitHub CLI, but this run has no GitHub credential: ' +
+        'per-user GitHub is enabled and the user who started it has not connected their identity. ' +
+        'Connect it with `archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page'
+    );
+  }
   let result: ReturnType<typeof Bun.spawnSync>;
   try {
     result = Bun.spawnSync(['gh', 'auth', 'status'], { stdout: 'pipe', stderr: 'pipe' });
