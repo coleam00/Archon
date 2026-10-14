@@ -361,7 +361,21 @@ describe('IsolationResolver', () => {
   });
 
   test('create new — returns resolved with created method', async () => {
-    const resolver = createResolver();
+    // A canonical path distinct from defaultCwd proves the rollback proof
+    // carries the canonical repo path, not the codebase's working path.
+    const canonicalRepoPath = git.toRepoPath('/repos/canonical-myrepo');
+    getCanonicalSpy.mockResolvedValue(canonicalRepoPath);
+    let capturedRequest: { canonicalRepoPath?: unknown } | undefined;
+    const provider = makeMockProvider();
+    const resolver = createResolver({
+      provider: {
+        ...provider,
+        create: async request => {
+          capturedRequest = request as { canonicalRepoPath?: unknown };
+          return provider.create(request);
+        },
+      },
+    });
 
     const result = await resolver.resolve({
       existingEnvId: null,
@@ -370,9 +384,14 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(capturedRequest?.canonicalRepoPath).toBe(canonicalRepoPath);
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
-      expect(result.method.type).toBe('created');
+      expect(result.method).toEqual({
+        type: 'created',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        canonicalRepoPath,
+      });
     }
   });
 
