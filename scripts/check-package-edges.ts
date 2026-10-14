@@ -2,13 +2,16 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
 
-export interface PackageManifest {
+const dependencySections = [
+  'dependencies',
+  'peerDependencies',
+  'devDependencies',
+  'optionalDependencies',
+] as const;
+
+export type PackageManifest = {
   path: string;
-  dependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}
+} & Partial<Record<(typeof dependencySections)[number], Record<string, string>>>;
 
 export interface SourceFile {
   path: string;
@@ -91,12 +94,7 @@ export function findEdgeViolations(input: {
     input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
   );
   const workflows = packages.get('workflows');
-  for (const field of [
-    'dependencies',
-    'peerDependencies',
-    'devDependencies',
-    'optionalDependencies',
-  ] as const) {
+  for (const field of dependencySections) {
     if (workflows && '@hono/zod-openapi' in (workflows[field] ?? {})) {
       violations.push({
         file: workflows.path,
