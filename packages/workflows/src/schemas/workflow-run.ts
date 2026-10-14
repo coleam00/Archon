@@ -185,8 +185,7 @@ const LEGACY_OCCURRENCE_PREFIX = 'legacy:';
 
 /**
  * The step a `legacy:<step>` occurrence names, or undefined for a pause id. A legacy
- * occurrence identifies a pause from before pause identities existed, which takes no
- * typed answer.
+ * occurrence identifies a pause from before pause identities existed.
  */
 export function legacyOccurrenceStep(occurrence: string): string | undefined {
   return occurrence.startsWith(LEGACY_OCCURRENCE_PREFIX)
