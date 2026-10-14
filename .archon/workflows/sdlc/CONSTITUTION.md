@@ -53,3 +53,9 @@ A failure the pack has no answer for doesn't end the run. The run pauses as an a
 When a class recurs, write a small handler workflow for it. A trigger on the class label starts the handler, and the handler answers the pause through the normal answer channel. A class with no handler waits for any answerer. The count of attention items per label shows which handler to build next.
 
 Adding a handler changes neither the pack's main path nor the engine.
+
+## 12. Policy is a project document
+
+Pack policy, such as what triage accepts or when a pull request may merge, lives in markdown policy documents the project can reword. They work like the project's other sidecar documents: a judging node reads them where the project has them, at the root, in a config directory such as `.archon/`, or wherever its steering files point. The pack ships a default for each, and the project's own document replaces it. A policy document may be nothing but a pointer to documents the project already has, such as "Triage against `.archon/direction.md`, and against `docs/product/` for feature scope", and the agent reads what it points to.
+
+Each node names only the policy documents its decision needs; no policy goes to every node. Agents interpret policy prose, and nothing parses it. Anything that must be exact, such as label names, allow-lists of users or numeric caps, stays typed configuration.
