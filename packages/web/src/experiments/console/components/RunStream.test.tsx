@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RunStream, pairProviderToolCalls } from './RunStream';
 import type { ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
+import { mergeProviderEventRecords } from '../lib/provider-events';
 import type { Message } from '../primitives/message';
 import type { NodeTransitionEvent } from '../primitives/event';
 import { StreamContextProvider } from '../lib/stream-context';
@@ -146,7 +147,11 @@ describe('RunStream tool rendering', () => {
     workflowResult: null,
   };
 
-  const render = (providerEvents: RunProviderEvents, selectedNodeId = 'all'): string =>
+  const render = (
+    providerEvents: RunProviderEvents,
+    selectedNodeId = 'all',
+    showToolCalls = true
+  ): string =>
     renderToStaticMarkup(
       <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
         <RunStream
@@ -154,12 +159,128 @@ describe('RunStream tool rendering', () => {
           events={[nodeStarted]}
           nodes={[{ node_id: 'implement', state: 'running' }]}
           providerEvents={providerEvents}
-          showToolCalls
+          showToolCalls={showToolCalls}
           showSystem={false}
           selectedNodeId={selectedNodeId}
         />
       </StreamContextProvider>
     );
+
+  test('renders recorded hook lifecycle events in order beside tool calls', () => {
+    const records: ProviderEventRecord[] = [
+      record('implement', 'a1', 0, '2026-10-02T10:00:00.100Z', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'check-policy',
+        hookEvent: 'PreToolUse',
+        status: 'started',
+      }),
+      record('implement', 'a1', 1, '2026-10-02T10:00:00.200Z', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'check-policy',
+        hookEvent: 'PreToolUse',
+        status: 'succeeded',
+        exitCode: 0,
+      }),
+      record('implement', 'a1', 2, '2026-10-02T10:00:00.300Z', {
+        type: 'tool_call',
+        toolCallId: 't1',
+        name: 'Bash',
+        rawInput: { command: 'git commit' },
+      }),
+      record('implement', 'a1', 3, '2026-10-02T10:00:00.400Z', {
+        type: 'hook',
+        hookId: 'h2',
+        hookName: 'lint-check',
+        hookEvent: 'PostToolUse',
+        status: 'failed',
+        exitCode: 2,
+      }),
+      record('implement', 'a1', 4, '2026-10-02T10:00:00.500Z', {
+        type: 'hook',
+        hookId: 'h3',
+        hookName: 'cleanup',
+        hookEvent: 'Stop',
+        status: 'cancelled',
+      }),
+      record('implement', 'a1', 5, '2026-10-02T10:00:00.600Z', {
+        type: 'tool_call_update',
+        toolCallId: 't1',
+        status: 'failed',
+        exitCode: 1,
+      }),
+    ];
+    const events: RunProviderEvents = new Map([
+      ['implement', mergeProviderEventRecords([], records, 'load')],
+      [
+        'review',
+        [
+          record('review', 'a2', 0, '2026-10-02T10:00:00.700Z', {
+            type: 'hook',
+            hookId: 'h1',
+            hookName: 'review-hook',
+            hookEvent: 'PreToolUse',
+            status: 'started',
+          }),
+        ],
+      ],
+    ]);
+    const html = render(events, 'implement');
+    for (const text of [
+      'Hook',
+      'check-policy',
+      'PreToolUse',
+      'started',
+      'succeeded',
+      'exit 0',
+      'lint-check',
+      'PostToolUse',
+      'failed',
+      'exit 2',
+      'cleanup',
+      'Stop',
+      'cancelled',
+      'Bash',
+      'git commit',
+      'exit 1',
+    ]) {
+      expect(html).toContain(text);
+    }
+    expect(html).toContain('failed (exit 2)');
+    expect(html).toContain('dateTime="2026-10-02T10:00:00.400Z"');
+    expect(html.indexOf('started')).toBeLessThan(html.indexOf('succeeded'));
+    expect(html.indexOf('succeeded')).toBeLessThan(html.indexOf('Bash'));
+    expect(html.indexOf('Bash')).toBeLessThan(html.indexOf('lint-check'));
+    expect(html.indexOf('lint-check')).toBeLessThan(html.indexOf('cleanup'));
+    expect(html).not.toContain('review-hook');
+    expect(html).not.toContain('InlineOnly');
+    expect(render(events, 'review')).toContain('review-hook');
+    expect(render(events, 'review')).not.toContain('lint-check');
+    expect(render(events, 'implement', false)).toContain('lint-check');
+    expect(render(events, 'implement', false)).not.toContain('Bash');
+  });
+
+  test('hook records do not suppress message-inline tool calls', () => {
+    const html = render(
+      new Map([
+        [
+          'implement',
+          [
+            record('implement', 'a1', 0, '2026-10-02T10:00:00.100Z', {
+              type: 'hook',
+              hookId: 'h1',
+              hookName: 'native-hook',
+              hookEvent: 'PreToolUse',
+              status: 'failed',
+            }),
+          ],
+        ],
+      ])
+    );
+    expect(html).toContain('native-hook');
+    expect(html).toContain('InlineOnly');
+  });
 
   test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
     'renders and preserves non-object tool input %j',

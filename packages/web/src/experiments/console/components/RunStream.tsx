@@ -1,6 +1,7 @@
 import { useMemo, type ReactElement } from 'react';
 import { MessageItem } from './MessageItem';
 import { ToolCallItem } from './ToolCallItem';
+import { HookEventItem } from './HookEventItem';
 import { NodeDivider } from './NodeDivider';
 import { ArtifactItem } from './ArtifactItem';
 import type { InlineToolCall, Message } from '../primitives/message';
@@ -14,7 +15,7 @@ import type {
   SystemEvent,
   ErrorEvent,
 } from '../primitives/event';
-import type { RunProviderEvents } from '../lib/provider-events';
+import type { ProviderEvent, RunProviderEvents } from '../lib/provider-events';
 import { StreamCard } from './StreamCard';
 
 interface RunStreamProps {
@@ -61,6 +62,14 @@ type TimelineEntry =
       nodeId: string | null;
     }
   | { kind: 'node'; key: string; at: number; node: NodeRun; showDetail: boolean }
+  | {
+      kind: 'hook';
+      key: string;
+      at: number;
+      event: Extract<ProviderEvent, { type: 'hook' }>;
+      timestamp: string;
+      nodeId: string;
+    }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
@@ -252,6 +261,20 @@ export function RunStream({
       });
     }
 
+    for (const [stepName, records] of providerEvents) {
+      for (const record of records) {
+        if (record.event.type !== 'hook') continue;
+        entries.push({
+          kind: 'hook',
+          key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
+          at: Date.parse(record.observedAt),
+          event: record.event,
+          timestamp: record.observedAt,
+          nodeId: stepName,
+        });
+      }
+    }
+
     // One divider per node, positioned at its first transition so it heads that
     // node's events in the stream.
     for (const nr of nodeRuns) {
@@ -274,7 +297,7 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, nodeRuns, toolCalls, showSystem]);
+  }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
   // a positional fallback so node-blind entries (prose, artifacts, system rows, and
@@ -293,12 +316,13 @@ export function RunStream({
     if (e.kind === 'tool' && !showToolCalls) return false;
     if (e.kind === 'system' && !showSystem) return false;
     if (e.kind === 'system_row' && !showSystem) return false;
-    // Node filter: isolate one node. Node markers and tools from provider events
+    // Node filter: isolate one node. Node markers, hooks and tools from provider events
     // match by identity; every node-blind entry (prose, artifacts, system rows,
     // legacy message-inline tools) falls back to the node's time window so a
     // node's whole slice of the timeline stays visible.
     if (selectedNodeId !== 'all') {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
+      if (e.kind === 'hook') return e.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
       return nodeWindow !== null && e.at >= nodeWindow.start && e.at < nodeWindow.end;
     }
@@ -328,6 +352,9 @@ export function RunStream({
         }
         if (entry.kind === 'tool') {
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
+        }
+        if (entry.kind === 'hook') {
+          return <HookEventItem key={entry.key} event={entry.event} timestamp={entry.timestamp} />;
         }
         if (entry.kind === 'node') {
           return (
