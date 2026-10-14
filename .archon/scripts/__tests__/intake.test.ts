@@ -14,6 +14,7 @@ import {
   claimDisposition,
   claimItem,
   decideIntake,
+  INTAKE_PATHS,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -23,6 +24,7 @@ import {
   parseWorkItem,
   RANKS,
   sortCandidates,
+  TRUSTS,
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
@@ -276,6 +278,29 @@ describe('pickup', () => {
       workflow.nodes.find(node => node.id === 'triage')?.output_format?.properties ?? {};
     for (const [key, ranks] of Object.entries(RANKS))
       expect(fields[key]?.properties.value.enum).toEqual([...ranks]);
+  });
+
+  test("the path and trust vocabularies are archon-intake's own enums", () => {
+    type Enum = { enum: (string | null)[] };
+    const workflow = Bun.YAML.parse(
+      readFileSync(join(PACK, 'intake/archon-intake.yaml'), 'utf8')
+    ) as {
+      nodes: {
+        id: string;
+        output_format?: {
+          properties: {
+            path: Enum;
+            decision?: { properties: { path: Enum; trust: Enum } };
+          };
+        };
+      }[];
+    };
+    const output = (id: string) => workflow.nodes.find(node => node.id === id)?.output_format;
+    const decision = output('facts')?.properties.decision?.properties;
+    expect(output('facts')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
+    expect(decision?.path.enum).toEqual([...INTAKE_PATHS]);
+    expect(decision?.trust.enum).toEqual([...TRUSTS, null]);
+    expect(output('outcome')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
   });
 
   test("a claim is released only when its run's status is one the engine calls terminal", () => {

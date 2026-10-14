@@ -28,7 +28,10 @@ import {
 import { remoteFor } from './remote.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
-export type Trust = 'maintainer' | 'outside';
+/** The trust and path vocabularies; a test proves archon-intake.yaml's enums agree. */
+export const TRUSTS = ['maintainer', 'outside'] as const;
+export type Trust = (typeof TRUSTS)[number];
+export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
 export type RequestAction = 'opened' | 'edited' | 'reopened' | 'added';
 
 /** One event intake has not yet processed. A label request carries who added the label. */
@@ -108,7 +111,7 @@ export interface WorkItem {
 
 /** What the facts node decided for the item it claimed, handed to the outcome node. */
 export interface IntakeDecision {
-  readonly path: 'quiet' | 'closed' | 'outside' | 'triage';
+  readonly path: (typeof INTAKE_PATHS)[number];
   readonly trust: Trust | null;
   readonly promoted: Promotion | null;
   readonly stage: Stage;
