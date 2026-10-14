@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { getSourceProviderEntry } from '../packages/paths/src/archon-paths';
 import * as bundledBuild from '../packages/paths/src/bundled-build';
+import { MAINTAINED_PROVIDER_IDS } from '../packages/provider-contract/src/registration';
 
 const repoRoot = join(import.meta.dir, '..');
 const CLI_ENTRY = join(repoRoot, 'packages/cli/src/cli.ts');
@@ -82,11 +84,9 @@ function forbiddenBundleInput(input: string): boolean {
 // and Copilot stay bundled in process until community plugins replace them (#3684).
 // Codex has no bundled npm SDK (its provider drives the spawned codex binary), so its
 // in-process provider module is the evidence that Codex was bundled.
-const MAINTAINED_PROVIDER_IMPLEMENTATIONS = [
-  'packages/providers/src/claude/provider.ts',
-  'packages/providers/src/codex/provider.ts',
-  'packages/providers/src/community/pi/provider.ts',
-];
+const MAINTAINED_PROVIDER_IMPLEMENTATIONS = MAINTAINED_PROVIDER_IDS.map(id =>
+  relative(repoRoot, join(dirname(getSourceProviderEntry(id)), 'provider.ts')).replaceAll('\\', '/')
+);
 
 function maintainedProviderInput(input: string): boolean {
   const internal = repositoryInput(input);

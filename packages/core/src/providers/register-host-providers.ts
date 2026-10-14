@@ -1,11 +1,6 @@
 import { BUNDLED_IS_BINARY, getPluginsPath, getSourceProviderEntry } from '@archon/paths';
 import { MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
-import {
-  claudeDescriptor,
-  codexDescriptor,
-  piDescriptor,
-  registerProvider,
-} from '@archon/providers';
+import { maintainedDescriptors, registerProvider } from '@archon/providers';
 import { registerCopilotProvider } from '@archon/providers/community/copilot';
 import { registerOpencodeProvider } from '@archon/providers/community/opencode';
 import { getVendorCatalog } from '../credentials/catalog';
@@ -18,10 +13,9 @@ import { processProviderRegistration } from './process-registration';
  */
 export async function registerHostProviders(): Promise<void> {
   if (!BUNDLED_IS_BINARY) {
-    const descriptors = { claude: claudeDescriptor, codex: codexDescriptor, pi: piDescriptor };
     for (const id of MAINTAINED_PROVIDER_IDS) {
       registerProvider(
-        processProviderRegistration(descriptors[id], [
+        processProviderRegistration(maintainedDescriptors[id], [
           process.execPath,
           '--no-env-file',
           getSourceProviderEntry(id),

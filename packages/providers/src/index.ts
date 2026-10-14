@@ -44,6 +44,7 @@ export {
   LEGACY_VENDOR_ALIASES,
 } from './credential-catalog';
 
+export { maintainedDescriptors } from './maintained-descriptors';
 export { descriptor as claudeDescriptor } from './claude/descriptor';
 export { descriptor as codexDescriptor } from './codex/descriptor';
 export { descriptor as piDescriptor } from './community/pi/descriptor';
