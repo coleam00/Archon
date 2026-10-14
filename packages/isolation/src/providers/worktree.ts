@@ -40,6 +40,7 @@ import type { WorktreeBaseOverride } from '@archon/git';
 import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo, WorktreePath } from '@archon/git';
 import {
+  ExistingBranchDivergedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
   recordCleanupFailure,
@@ -982,7 +983,7 @@ export class WorktreeProvider implements IIsolationProvider {
     // recursively is enough.
     await mkdirAsync(worktreeBase, { recursive: true });
 
-    // Only a branch this call cuts or resets to its start point has a cut-from commit,
+    // Only a branch this call cuts from its start point has a cut-from commit,
     // so it says nothing about who owns the branch; `branchCreated` does.
     let cutFromCommit: string | undefined;
     let branchCreated = false;
@@ -1782,8 +1783,11 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree with new branch. Returns the commit the branch was cut from, and
-   * whether the branch was created here rather than an existing one reset to the start point.
+   * Create a worktree for a named branch. A branch that exists nowhere yet is cut from
+   * the start point. A branch that already exists, locally or on the remote, is checked
+   * out at its current head and never moved backwards: its commits may exist nowhere
+   * else. Returns the cut-from commit (only for a branch cut here) and whether the local
+   * branch was created here.
    */
   private async createNewBranch(
     request: IsolationRequest,
@@ -1793,37 +1797,16 @@ export class WorktreeProvider implements IIsolationProvider {
     baseBranch: string,
     setupLockReason: string,
     remote = 'origin'
-  ): Promise<{ cutFromCommit: string; branchCreated: boolean }> {
-    // Determine start-point: explicit fromBranch overrides base branch
-    const startPoint =
+  ): Promise<{ cutFromCommit?: string; branchCreated: boolean }> {
+    const fromBranch =
       request.workflowType === 'task' && request.taskBranch?.kind === 'new'
-        ? (request.taskBranch.fromBranch ?? `${remote}/${baseBranch}`)
-        : `${remote}/${baseBranch}`;
+        ? request.taskBranch.fromBranch
+        : undefined;
+    const startPoint = fromBranch ?? `${remote}/${baseBranch}`;
 
-    const branchExisted = await this.localBranchExists(repoPath, branchName);
-    if (branchExisted) {
-      const taskFromBranch =
-        request.workflowType === 'task' && request.taskBranch?.kind === 'new'
-          ? request.taskBranch.fromBranch
-          : undefined;
-      if (taskFromBranch) {
-        throw new Error(
-          `Branch "${branchName}" already exists. Cannot create it from "${taskFromBranch}". ` +
-            'Either choose a different --branch name or omit --from.'
-        );
-      }
-      getLog().warn(
-        { branchName, startPoint, repoPath },
-        'worktree.branch_exists_resetting_to_start_point'
-      );
-      await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
-        timeout: 10000,
-      });
-      await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
-        worktreePath,
-        branchName,
-      ]);
-    } else {
+    const localExists = await this.localBranchExists(repoPath, branchName);
+    const remoteExists = await this.remoteBranchExists(repoPath, remote, branchName);
+    if (!localExists && !remoteExists) {
       // --no-track prevents gh from resolving this branch to the base branch's PR.
       await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
         '--no-track',
@@ -1832,20 +1815,122 @@ export class WorktreeProvider implements IIsolationProvider {
         branchName,
         startPoint,
       ]);
+      // The branch was created at its start point a moment ago and nothing has written to
+      // it since, so its commit IS the cut-from commit -- read from the branch itself rather
+      // than re-resolving a start ref that may have moved in between.
+      const { stdout: cutFrom } = await this.rollBackOnFailure(
+        toRepoPath(repoPath),
+        worktreePath,
+        setupLockReason,
+        () =>
+          execFileAsync('git', ['-C', worktreePath, 'rev-parse', '--verify', 'HEAD^{commit}'], {
+            timeout: GIT_OPERATION_TIMEOUT_MS,
+          })
+      );
+      return { cutFromCommit: cutFrom.trim(), branchCreated: true };
     }
-    // The branch was created at its start point a moment ago and nothing has written to
-    // it since, so its commit IS the cut-from commit -- read from the branch itself rather
-    // than re-resolving a start ref that may have moved in between.
-    const { stdout: cutFrom } = await this.rollBackOnFailure(
-      toRepoPath(repoPath),
+
+    if (fromBranch) {
+      throw new Error(
+        `Branch "${branchName}" already exists. Cannot create it from "${fromBranch}". ` +
+          'Either choose a different --branch name or omit --from.'
+      );
+    }
+
+    const remoteRef = `${remote}/${branchName}`;
+    let source: 'local' | 'remote' | 'fast_forwarded' = 'local';
+    if (remoteExists) {
+      await fetchWithRefLockRetry(
+        toRepoPath(repoPath),
+        remote,
+        `+refs/heads/${branchName}:refs/remotes/${remoteRef}`,
+        { timeoutMs: GIT_OPERATION_TIMEOUT_MS }
+      );
+      if (!localExists) {
+        source = 'remote';
+      } else if (
+        !(await this.isAncestorRef(
+          repoPath,
+          `refs/remotes/${remoteRef}`,
+          `refs/heads/${branchName}`
+        ))
+      ) {
+        if (
+          !(await this.isAncestorRef(
+            repoPath,
+            `refs/heads/${branchName}`,
+            `refs/remotes/${remoteRef}`
+          ))
+        ) {
+          const { stdout: counts } = await execFileAsync(
+            'git',
+            [
+              '-C',
+              repoPath,
+              'rev-list',
+              '--left-right',
+              '--count',
+              `refs/heads/${branchName}...refs/remotes/${remoteRef}`,
+            ],
+            { timeout: GIT_OPERATION_TIMEOUT_MS }
+          );
+          const [localOnly, remoteOnly] = counts.trim().split(/\s+/).map(Number);
+          throw new ExistingBranchDivergedError(branchName, remoteRef, localOnly, remoteOnly);
+        }
+        // A local-repo fetch without `+` only fast-forwards, and git refuses it for a
+        // branch checked out in another worktree, so it cannot discard or move work
+        // that changed after the ancestry check.
+        await execFileAsync(
+          'git',
+          ['-C', repoPath, 'fetch', '.', `refs/remotes/${remoteRef}:refs/heads/${branchName}`],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
+        source = 'fast_forwarded';
+      }
+    }
+
+    getLog().info({ branchName, source, repoPath }, 'worktree.existing_branch_checked_out');
+    await this.addLockedWorktree(
+      repoPath,
       worktreePath,
       setupLockReason,
-      () =>
-        execFileAsync('git', ['-C', worktreePath, 'rev-parse', '--verify', 'HEAD^{commit}'], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        })
+      source === 'remote'
+        ? ['--track', worktreePath, '-b', branchName, remoteRef]
+        : [worktreePath, branchName]
     );
-    return { cutFromCommit: cutFrom.trim(), branchCreated: !branchExisted };
+    return { branchCreated: source === 'remote' };
+  }
+
+  private async remoteBranchExists(
+    repoPath: string,
+    remote: string,
+    branchName: string
+  ): Promise<boolean> {
+    const ref = `refs/heads/${branchName}`;
+    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'ls-remote', remote, ref], {
+      timeout: GIT_OPERATION_TIMEOUT_MS,
+    });
+    // ls-remote patterns match ref tails, so `feature/pr` also lists `refs/heads/x/feature/pr`.
+    return stdout.split('\n').some(line => line.split('\t')[1] === ref);
+  }
+
+  /** Exit 1 from `merge-base --is-ancestor` means "not an ancestor"; any other failure throws. */
+  private async isAncestorRef(
+    repoPath: string,
+    ancestor: string,
+    descendant: string
+  ): Promise<boolean> {
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', repoPath, 'merge-base', '--is-ancestor', ancestor, descendant],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 1) return false;
+      throw error;
+    }
   }
 
   /**

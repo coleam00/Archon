@@ -601,40 +601,30 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('resets and reuses existing branch when it already exists and no fromBranch', async () => {
-      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
+    test('refuses --from when the branch exists only on the remote', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) =>
+        args.includes('ls-remote')
+          ? { stdout: 'remote-sha\trefs/heads/archon/task-test-adapters\n', stderr: '' }
+          : { stdout: '', stderr: '' }
+      );
 
       const request: IsolationRequest = {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'test-adapters',
+        taskBranch: {
+          kind: 'new',
+          fromBranch: git.toBranchName('feature/extract-adapters'),
+        },
       };
 
-      await provider.create(request);
-
-      // Verify branch was reset to start-point
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'branch', '-f', 'archon/task-test-adapters', 'origin/main'],
-        expect.any(Object)
+      await expect(provider.create(request)).rejects.toThrow(
+        'Branch "archon/task-test-adapters" already exists. Cannot create it from "feature/extract-adapters".'
       );
-
-      // Fallback call should not include a start-point
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
-          '-C',
-          '/workspace/repo',
-          'worktree',
-          'add',
-          '--lock',
-          '--reason',
-          expect.stringMatching(/^archon: worktree setup in progress: .+/),
-          expect.any(String),
-          'archon/task-test-adapters',
-        ],
-        expect.any(Object)
+      const worktreeAdds = execSpy.mock.calls.filter((call: unknown[]) =>
+        (call[1] as string[]).includes('worktree')
       );
+      expect(worktreeAdds).toHaveLength(0);
     });
 
     test('creates worktree for same-repo PR (uses actual branch)', async () => {
@@ -1044,76 +1034,26 @@ describe('WorktreeProvider', () => {
       await expect(provider.create(request)).rejects.toThrow(/belongs to a different clone/);
     });
 
-    test('resets stale branch to start-point when it already exists', async () => {
+    test('checks out an existing issue branch as it is', async () => {
       execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const env = await provider.create(baseRequest);
 
-      // A reset branch still has a cut-from commit, but this creation did not make it.
       expect(env.metadata).toHaveProperty('branchCreated', false);
-
-      // Verify branch was reset to start-point before checkout
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'branch', '-f', 'archon/issue-42', 'origin/main'],
-        expect.any(Object)
-      );
-
-      // Verify final call used existing (reset) branch
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        expect.arrayContaining([
-          '-C',
-          '/workspace/repo',
-          'worktree',
-          'add',
-          expect.any(String),
-          'archon/issue-42',
-        ]),
-        expect.any(Object)
-      );
-
-      // --no-track must NOT be in the fallback call (only applies to new-branch -b creation)
-      const fallbackWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return (
-          args.includes('worktree') &&
-          args.includes('add') &&
-          !args.includes('-b') &&
-          args.includes('archon/issue-42')
-        );
-      });
-      expect(fallbackWorktreeAdd).toHaveLength(1);
-      expect(fallbackWorktreeAdd[0][1]).not.toContain('--no-track');
-    });
-
-    test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('--verify')) return { stdout: 'existing-branch-sha\n', stderr: '' };
-        // Reset call fails (e.g., branch checked out elsewhere, update hook refused)
-        if (args.includes('branch') && args.includes('-f')) {
-          const error = new Error('fatal: cannot force update the branch') as Error & {
-            stderr?: string;
-          };
-          error.stderr = "fatal: cannot force update the current branch 'archon/issue-42'";
-          throw error;
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await expect(provider.create(baseRequest)).rejects.toThrow(/cannot force update/);
-
-      // Verify we did NOT retry the worktree add after reset failure
-      const secondWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return (
-          args.includes('worktree') &&
-          args.includes('add') &&
-          !args.includes('-b') &&
-          args.includes('archon/issue-42')
-        );
-      });
-      expect(secondWorktreeAdd).toHaveLength(0);
+      expect(env.metadata).not.toHaveProperty('cutFromCommit');
+      const calls = execSpy.mock.calls.map((call: unknown[]) => call[1] as string[]);
+      expect(calls.some(args => args.includes('branch') && args.includes('-f'))).toBe(false);
+      expect(calls).toContainEqual([
+        '-C',
+        '/workspace/repo',
+        'worktree',
+        'add',
+        '--lock',
+        '--reason',
+        expect.stringMatching(/^archon: worktree setup in progress: .+/),
+        expect.any(String),
+        'archon/issue-42',
+      ]);
     });
 
     test('throws error if PR fetch fails (same-repo PR)', async () => {

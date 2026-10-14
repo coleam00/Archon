@@ -64,6 +64,7 @@ export type { IIsolationStore } from './store';
 
 // --- Errors ---
 export {
+  ExistingBranchDivergedError,
   IsolationBlockedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
