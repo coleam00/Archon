@@ -12,6 +12,7 @@ description: |
   NOT for: implementing (implement), reviewing (review), or merging (always human).
 
 model: medium
+
 inputs:
   draft:
     default: "true"

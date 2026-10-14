@@ -31,7 +31,7 @@ import {
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
-import type { ForgeResponse } from '@archon/forge/operations';
+import { forgeResponseSchema, type ForgeResponse } from '@archon/forge/operations';
 import { forgeCommand } from './forge';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -231,7 +231,7 @@ async function runForgeCommand(op: string, data: unknown): Promise<ForgeResponse
     { data: JSON.stringify(data) },
     {
       write: async value => {
-        response = value as ForgeResponse;
+        response = forgeResponseSchema.parse(value);
       },
     }
   );
