@@ -8450,7 +8450,7 @@ async function executeFanOutWorkflowNode(
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
     await notify(
       `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
-        held.map(([, id]) => `\`${spellWorkflowCommand(platform, `status ${id}`)}\``).join(' ')
+        `See them with \`${spellWorkflowCommand(platform, 'status')}\`.`
     );
     return serializeNodeOutput(suspended);
   }

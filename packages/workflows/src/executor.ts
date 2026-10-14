@@ -2500,11 +2500,7 @@ export async function executeWorkflow(
                 ? [attention.childRunId]
                 : attention.childRunIds;
             stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
-            actionLines = childRunIds
-              .map(
-                id => `• Check sub-run \`${id}\`: \`${formatRunCommand(platform, 'status', id)}\`\n`
-              )
-              .join('');
+            actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
           } else {
             stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
             actionLines =

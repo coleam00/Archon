@@ -1770,7 +1770,8 @@ describe('executeWorkflow', () => {
         expect(result.success).toBe(false);
         const message = sendMessage.mock.calls[0][1];
         expect(message).toContain('paused waiting on sub-runs');
-        for (const id of childRunIds) expect(message).toContain(`/workflow status ${id}`);
+        for (const id of childRunIds) expect(message).toContain(`\`${id}\``);
+        expect(message).toContain('/workflow status`');
         expect(message).toContain('/workflow abandon abc12345');
         expect(message).not.toContain('user input');
         expect(message).not.toContain('/workflow approve');
