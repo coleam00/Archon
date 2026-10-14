@@ -45,6 +45,9 @@ beforeEach(async () => {
   setPlatformPolicies([]);
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-bg-pause-')));
   process.env.ARCHON_HOME = join(root, 'home');
+  // The dispatch records a provider on the worker conversation; no node calls it.
+  await mkdir(process.env.ARCHON_HOME, { recursive: true });
+  await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
   delete process.env.DATABASE_URL;
   resetDatabase();
 });
