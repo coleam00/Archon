@@ -24,7 +24,7 @@ Ground the plan in the code as it is, not as the request describes it. Read the 
 
 When a prior report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
 
-Design calls are judged against the project's own guidance, and nothing hands it to you. Read the repository's agent guidance (`AGENTS.md` or its equivalent) and every document it points to that bears on a call you are about to make: product direction, engineering values, design rules for a language, API, or configuration surface, reference documents. A call those documents already rule on is settled by them, not by your preference.
+Design calls are judged against the project's own guidance. Read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on a call you are about to make, such as design rules for a language, API, or configuration surface. A call those documents already rule on is settled by them, not by your preference.
 
 When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
 

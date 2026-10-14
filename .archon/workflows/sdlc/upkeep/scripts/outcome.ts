@@ -9,8 +9,8 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ACTION / INPUTS_SUMMARY: the assessment's verdict.
- * - INPUTS_DELIVERED / INPUTS_DELIVERY: deliver's `ready` and `summary`, or "null"
- *   when the deliver branch was skipped (no_action).
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_PR_URL: deliver's `ready`, `summary`
+ *   and `pr_url`, or "null" when the deliver branch was skipped (no_action).
  *
  * A failed delivery cannot reach this node: the failure
  * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
@@ -28,6 +28,7 @@ const summary = text(process.env.INPUTS_SUMMARY);
 if (action === 'no_action') {
   emit({
     delivered: false,
+    pr_url: '',
     summary:
       `No update needed: ${summary}\nReport: ${artifacts}/upkeep-assessment.md` +
       caveats(artifacts, { listingFile }),
@@ -36,6 +37,7 @@ if (action === 'no_action') {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.
   emit({
     delivered: text(process.env.INPUTS_DELIVERED) === 'true',
+    pr_url: text(process.env.INPUTS_PR_URL),
     summary: text(process.env.INPUTS_DELIVERY),
   });
 }

@@ -2850,6 +2850,7 @@ describe('executeWorkflow', () => {
         userId: 'user-1',
         userMessage: 'persisted input',
         origin: 'web',
+        transcriptPath: expect.stringMatching(/run-123\.jsonl$/),
       });
     });
 
