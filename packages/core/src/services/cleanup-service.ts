@@ -841,8 +841,11 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // The staleness sweep below deletes the branch on age alone, so only work
         // git or the PR settled as unmerged may reach it. An open PR or an
-        // unverifiable merge state is reported and kept.
-        const skipReason = skipReasonFor(verdict);
+        // unverifiable merge state is reported and kept. The exception is a failed
+        // run's environment with both worktree and branch gone: nothing local is
+        // left to lose, so only the stale window settles its lock.
+        const nothingLocalLeft = !pathExists && verdict === 'unjudgeable';
+        const skipReason = nothingLocalLeft ? null : skipReasonFor(verdict);
         if (skipReason) {
           report.skipped.push({ id: env.id, reason: skipReason });
           continue;

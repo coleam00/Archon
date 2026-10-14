@@ -3431,25 +3431,30 @@ describe('failed-run lock release', () => {
     }
   );
 
-  test('the scheduled sweep releases a failed run whose worktree is gone once it is stale', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
-    mockWorktreeExists.mockResolvedValue(false);
-    mockGetLiveRunOwningEnv
-      .mockResolvedValueOnce(FAILED_RUN)
-      .mockResolvedValueOnce(FAILED_RUN)
-      .mockResolvedValueOnce(null);
+  test.each([
+    ['its branch is left', true, ['refs/heads/stale-failed']],
+    ['its branch is gone too', false, []],
+  ] as const)(
+    'the scheduled sweep releases a failed run whose worktree is gone once it is stale and %s',
+    async (_shape, branchLeft, countRevs) => {
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+      mockWorktreeExists.mockResolvedValue(false);
+      mockLocalBranchExists.mockResolvedValue(branchLeft);
+      mockGetLiveRunOwningEnv
+        .mockResolvedValueOnce(FAILED_RUN)
+        .mockResolvedValueOnce(FAILED_RUN)
+        .mockResolvedValueOnce(null);
 
-    const report = await runScheduledCleanup();
+      const report = await runScheduledCleanup();
 
-    expect(report.removed).toEqual(['env-stale-failed (stale)']);
-    expect(report.releasedFailedRuns).toEqual([
-      { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
-    ]);
-    expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/repo', [
-      'refs/heads/stale-failed',
-    ]);
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-failed', 'destroyed');
-  });
+      expect(report.removed).toEqual(['env-stale-failed (stale)']);
+      expect(report.releasedFailedRuns).toEqual([
+        { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+      ]);
+      expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/repo', countRevs);
+      expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-failed', 'destroyed');
+    }
+  );
 
   test('the scheduled sweep keeps a failed run whose worktree is gone while inside the window', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
