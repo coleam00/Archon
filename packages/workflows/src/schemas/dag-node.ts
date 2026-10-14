@@ -2188,7 +2188,7 @@ export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefin
  * one (#2707 step 3) — see `loopGroupSoleTerminalSink`. Load-time checks and the
  * runtime share this so the two can never disagree about which node a body ends on.
  */
-export function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
+function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
   body: readonly T[]
 ): T[] {
   const dependedOn = new Set(body.flatMap(n => n.depends_on ?? []));
