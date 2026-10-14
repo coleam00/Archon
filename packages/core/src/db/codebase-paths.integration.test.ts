@@ -393,6 +393,31 @@ test('legacy repair preserves worktrees anchored to each primary checkout', asyn
   ).toBe(stored);
 });
 
+test('legacy repair refuses malformed config on a linked checkout primary before writing', async () => {
+  const codebases = await import('./codebases');
+  const primary = join(root, 'linked-invalid-config', 'primary');
+  const linked = join(root, 'linked-invalid-config', 'db');
+  await linkedCheckout(primary, linked);
+  await mkdir(join(primary, '.archon'));
+  await writeFile(join(primary, '.archon', 'config.yaml'), 'worktree: [');
+  const project = await codebases.createCodebase({
+    name: 'linked invalid config',
+    default_cwd: linked,
+  });
+  const stored = relative(process.cwd(), linked);
+  await db.query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+    stored,
+    project.id,
+  ]);
+  await expect(
+    codebases.repairCodebaseRegistration(project.id, { default_cwd: linked, kind: 'repo' })
+  ).rejects.toThrow();
+  expect(
+    (await codebases.listCodebaseRegistrations()).find(row => row.id === project.id)
+      ?.stored_default_cwd
+  ).toBe(stored);
+});
+
 for (const invalid of ['malformed', 'unreadable'] as const) {
   for (const side of ['current', 'replacement'] as const) {
     test(`repair refuses ${invalid} config on ${side} checkout`, async () => {

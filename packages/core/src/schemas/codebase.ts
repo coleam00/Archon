@@ -59,6 +59,10 @@ export type CreateCodebaseInput = Pick<Codebase, 'name' | 'default_cwd'> &
   Partial<Pick<Codebase, 'default_branch' | 'ai_assistant_type' | 'kind'>> & {
     repository_url?: string;
   };
-export type UpdateCodebaseInput = Partial<
-  Pick<Codebase, 'default_cwd' | 'repository_url' | 'default_branch'>
->;
+export const codebaseUpdateFields = [
+  'default_cwd',
+  'repository_url',
+  'default_branch',
+] as const satisfies readonly (keyof Codebase)[];
+
+export type UpdateCodebaseInput = Partial<Pick<Codebase, (typeof codebaseUpdateFields)[number]>>;

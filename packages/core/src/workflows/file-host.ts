@@ -18,7 +18,7 @@ import {
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
-import { codebaseRowSchema, type Codebase } from '../schemas/codebase';
+import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
@@ -137,9 +137,10 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       },
       updateCodebase: (target, input) =>
         updateCodebase(target.id, row => {
-          if (input.default_cwd !== undefined) row.default_cwd = input.default_cwd;
-          if (input.repository_url !== undefined) row.repository_url = input.repository_url;
-          if (input.default_branch !== undefined) row.default_branch = input.default_branch;
+          for (const field of codebaseUpdateFields) {
+            const value = input[field];
+            if (value !== undefined) Object.assign(row, { [field]: value });
+          }
         }),
       getCodebaseCommands: async id => (await records.codebases.getCodebase(id))?.commands ?? {},
       updateCodebaseCommands: (id, commands) =>

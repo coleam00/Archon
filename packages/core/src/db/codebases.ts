@@ -5,7 +5,12 @@ import { resolve } from 'node:path';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
-import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
+import {
+  codebaseUpdateFields,
+  type Codebase,
+  type CreateCodebaseInput,
+  type UpdateCodebaseInput,
+} from '../schemas/codebase';
 import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
 import { getProjectLocations } from '../services/project-locations';
 
@@ -185,19 +190,11 @@ export async function updateCodebase(
   const values: (string | null)[] = [];
   let paramIndex = 1;
 
-  if (data.default_cwd !== undefined) {
-    updates.push(`default_cwd = $${paramIndex++}`);
-    values.push(data.default_cwd);
-  }
-
-  if (data.repository_url !== undefined) {
-    updates.push(`repository_url = $${paramIndex++}`);
-    values.push(data.repository_url);
-  }
-
-  if (data.default_branch !== undefined) {
-    updates.push(`default_branch = $${paramIndex++}`);
-    values.push(data.default_branch);
+  for (const field of codebaseUpdateFields) {
+    const value = data[field];
+    if (value === undefined) continue;
+    updates.push(`${field} = $${paramIndex++}`);
+    values.push(value);
   }
 
   if (updates.length === 0) return;
