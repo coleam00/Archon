@@ -38,11 +38,13 @@ for (const binary of [true, false]) {
       const emitted: { defaults: string } = JSON.parse(String(output.mock.calls[0]?.[0]));
       const directory = realpathSync(emitted.defaults);
       expect(directory.startsWith(realpathSync(anchor.root) + sep)).toBe(true);
+      // The bundle stores LF; a Windows checkout of the authored file is CRLF.
+      const authored = await readFile(
+        join(import.meta.dir, '../.archon/workflows/sdlc/.shared/policy/triage.md'),
+        'utf8'
+      );
       expect(await readFile(join(directory, 'triage.md'), 'utf8')).toBe(
-        await readFile(
-          join(import.meta.dir, '../.archon/workflows/sdlc/.shared/policy/triage.md'),
-          'utf8'
-        )
+        authored.replace(/\r\n/g, '\n')
       );
     } finally {
       output.mockRestore();
