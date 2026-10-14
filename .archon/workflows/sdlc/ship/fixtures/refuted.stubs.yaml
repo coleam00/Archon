@@ -4,7 +4,11 @@
 # investigator's words, completing with delivered: false rather than failing.
 triage__triage:
   decision: { contract: READY, route: investigate }
-  complexity: risky
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: m, reason: "stub: size" }
+  complexity: { value: medium, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   summary: "stub: reported failure still needs a proven cause"

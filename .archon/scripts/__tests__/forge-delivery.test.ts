@@ -223,7 +223,11 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
     INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
     INPUTS_PUBLISH: 'true',
     INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
-    INPUTS_COMPLEXITY: 'small',
+    INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
+    INPUTS_SIZE: '{"value":"s","reason":"one script"}',
+    INPUTS_COMPLEXITY: '{"value":"low","reason":"clear change"}',
+    INPUTS_IMPORTANCE: '{"value":"medium","reason":"on direction"}',
+    INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
     INPUTS_SUMMARY: 'Ready',
     INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
     INPUTS_REPORT: '{"path":"triage.md"}',
@@ -234,7 +238,7 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
   expect(triage.gh).toEqual([]);
   expect(JSON.parse(triage.stdout)).toMatchObject({
     published: true,
-    labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
+    labels: ['archon-ready', 'archon-size-s', 'archon-type-feature', 'area', 'constructor'],
   });
   const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
     issues: { number: number; labels: (string | { name: string })[] }[];
@@ -246,7 +250,14 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
     typeof label === 'string' ? label : label.name
   );
   expect(labels.sort()).toEqual(
-    ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
+    [
+      'archon-ready',
+      'archon-size-s',
+      'archon-type-feature',
+      'area',
+      'operator',
+      ...operatorLabels,
+    ].sort()
   );
   expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
 }, 120_000);

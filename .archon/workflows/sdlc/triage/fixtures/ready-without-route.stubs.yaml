@@ -4,7 +4,11 @@
 # rejected at the node that produced it, where a provider can re-ask.
 triage:
   decision: { contract: READY, route: no_action }
-  complexity: small
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }

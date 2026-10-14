@@ -16,19 +16,26 @@
 import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
-  COMPLEXITY_LABEL,
-  type Complexity,
   type Contract,
-  isPackLabel,
-  PACK_LABEL_NAMES,
+  isOwnedLabel,
+  OWNED_LABEL_NAMES,
   type PackLabel,
   type Route,
   ROUTE_LABEL,
+  SIZE_LABEL,
+  type Size,
   STATE_LABEL,
+  TYPE_LABEL,
+  type WorkType,
   writeLabels,
 } from '../../.shared/labels.ts';
 
 type Item = QualifiedPr;
+/** One of triage's judged fields: a value and the one-line reason for it. */
+interface Field<Value extends string> {
+  readonly value: Value;
+  readonly reason: string;
+}
 interface Edits {
   readonly title: string;
   readonly body: string;
@@ -65,7 +72,12 @@ function main(): void {
   const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
   const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
   const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
-  const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
+  const type = bound(process.env.INPUTS_TYPE) as Field<WorkType>;
+  const size = bound(process.env.INPUTS_SIZE) as Field<Size>;
+  // Passed through for the caller; no label mirrors these three.
+  const complexity = bound(process.env.INPUTS_COMPLEXITY) as Field<string>;
+  const importance = bound(process.env.INPUTS_IMPORTANCE) as Field<string>;
+  const urgency = bound(process.env.INPUTS_URGENCY) as Field<string>;
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
@@ -108,25 +120,26 @@ function main(): void {
     invalid('area_labels must be label names');
     return;
   }
-  if (area.some(isPackLabel)) {
-    // The state and size labels are derived below; a pack label smuggled in as an
-    // area label would be added beside the derived state or removed as stale.
+  if (area.some(isOwnedLabel)) {
+    // The state, type and size labels are derived below; a pack label smuggled in
+    // as an area label would be added beside the derived ones or removed as stale.
     invalid('area_labels may not name a pack label; those derive from the verdict');
     return;
   }
 
   const wanted: PackLabel[] = [
     decision.contract === 'READY' ? ROUTE_LABEL[decision.route] : STATE_LABEL[decision.contract],
+    TYPE_LABEL[type.value],
   ];
   // Size only matters on an item that can still be worked; a close verdict carries none.
-  if (contract !== 'NO_ACTION') wanted.push(COMPLEXITY_LABEL[complexity]);
+  if (contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size.value]);
 
   const published = publish && item !== undefined;
   const labels = published
     ? writeLabels(
         item,
         [...wanted, ...area],
-        PACK_LABEL_NAMES.filter(name => !wanted.includes(name))
+        OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name))
       )
     : [...new Set([...wanted, ...area])].sort();
 
@@ -135,7 +148,11 @@ function main(): void {
     route,
     pull_request: pullRequest,
     ready: contract === 'READY',
+    type,
+    size,
     complexity,
+    importance,
+    urgency,
     labels,
     published,
     proposed_edits: { title: edits.title, body: edits.body },
