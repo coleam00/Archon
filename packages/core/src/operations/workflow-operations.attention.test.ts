@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import type { WorkflowAttentionWaitContext } from '@archon/workflows/schemas/workflow-run';
+import { ATTENTION_OUTPUT_FORMATS } from '@archon/workflows/schemas/dag-node';
+import {
+  attentionAnswerSchema,
+  type WorkflowAttentionWaitContext,
+} from '@archon/workflows/schemas/workflow-run';
+import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import {
   StaleGateAnswerError,
   createWorkflowOperations,
@@ -103,6 +108,12 @@ describe('answering an attention wait', () => {
       const id = await paused(form);
       const result = await operations.answerWorkflow(id, valid, operator, cli);
       expect(result.answer).toEqual(output);
+      // The answer the operation builds is what the form's output contract declares,
+      // and what the persisted wait accepts.
+      expect(validateStructuredOutput(result.answer, ATTENTION_OUTPUT_FORMATS[form])).toEqual({
+        valid: true,
+      });
+      expect(attentionAnswerSchema.safeParse(result.answer).success).toBe(true);
       expect(await storedWait(id)).toMatchObject({
         answer: output,
         answeredVia: 'cli',

@@ -786,7 +786,7 @@ export const ATTENTION_OUTPUT_FORMATS = {
   approval: {
     type: 'object',
     properties: {
-      decision: { type: 'string', enum: ['approve', 'reject'] },
+      decision: { type: 'string', enum: APPROVAL_ATTENTION_OPTIONS.map(option => option.id) },
       text: attentionTextOutput,
     },
     required: ['decision', 'text'],
