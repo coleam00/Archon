@@ -1099,6 +1099,8 @@ export class PiProvider implements IAgentProvider {
       // doc on getOrCreateReloadedExtensionLoader). When extensions are OFF there
       // is no re-entrancy hazard, so a fresh per-call loader can reload safely.
       // That reload is still required for Pi to discover its native context files.
+      // A node aborted while the shared reload is pending marks it abandoned, so
+      // later nodes fail fast instead of waiting on it (issue #3769).
       // Build the shared options once so the two paths can't drift.
       const loaderOptions = {
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -1110,7 +1112,8 @@ export class PiProvider implements IAgentProvider {
       if (enableExtensions) {
         const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
           cwd,
-          loaderOptions
+          loaderOptions,
+          requestOptions?.abortSignal
         );
         resourceLoader = loader;
         extensionPaths = loader

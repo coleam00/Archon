@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, expect, test } from 'bun:test';
 
+import { ClassifiedProviderError } from '../../shared/failure';
 import {
   getOrCreateReloadedExtensionLoader,
   resetReloadedExtensionLoaderCache,
@@ -62,4 +63,37 @@ test("loads native guidance and only the workflow node's declared skill", async 
     ])
   );
   expect(loader.getSkills().skills.map(skill => skill.name)).toEqual(['declared-skill']);
+});
+
+// An extension factory that never settles wedges the one shared reload (issue #3769).
+// The retry must neither wait on it again nor start a second reload().
+test('a retry after an abort during a pending extension reload fails fast', async () => {
+  scratchDir = mkdtempSync(join(tmpdir(), 'archon-pi-hung-'));
+  const agentDir = join(scratchDir, 'agent');
+  const cwd = join(scratchDir, 'project');
+  mkdirSync(join(agentDir, 'extensions'), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(
+    join(agentDir, 'extensions', 'hang.ts'),
+    'export default async function () { await new Promise(() => {}); }\n'
+  );
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const watchdog = new AbortController();
+  const attempt = getOrCreateReloadedExtensionLoader(cwd, {}, watchdog.signal);
+  attempt.catch(() => undefined);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  watchdog.abort();
+  await expect(attempt).rejects.toThrow('Query aborted');
+
+  const retry = getOrCreateReloadedExtensionLoader(cwd, {}, new AbortController().signal);
+  const outcome = await Promise.race([
+    retry.then(
+      () => 'resolved',
+      (error: unknown) => error
+    ),
+    new Promise(resolve => setTimeout(() => resolve('still waiting'), 1000)),
+  ]);
+  expect(outcome).toBeInstanceOf(ClassifiedProviderError);
+  expect((outcome as ClassifiedProviderError).failureClass).toBe('misconfigured');
 });
