@@ -101,6 +101,7 @@ export {
   NoDefaultProviderError,
   providerVersionMismatchMessage,
   CREDENTIAL_KINDS,
+  STORED_CREDENTIAL_KINDS,
   credentialSpecSchema,
   UnknownProviderError,
   InvalidProviderRunConfigError,

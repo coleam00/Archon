@@ -125,11 +125,17 @@ export type ProviderCredentialCatalog =
   | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
 
 /** How a user's stored credential was connected: a pasted key, or a subscription login. */
-export type StoredCredentialKind = 'api_key' | 'oauth';
+export const STORED_CREDENTIAL_KINDS = ['api_key', 'oauth'] as const;
+
+export type StoredCredentialKind = (typeof STORED_CREDENTIAL_KINDS)[number];
+
+const CONSUMED_KIND: Record<StoredCredentialKind, CredentialKind> = {
+  api_key: 'api_key',
+  oauth: 'subscription',
+};
 
 /**
- * Whether a provider can use a stored `vendor` credential connected as `kind`. A stored
- * OAuth grant is the `subscription` kind. A dynamic catalog declares no vendors, so it
+ * Whether a provider can use a stored `vendor` credential connected as `kind`. A dynamic catalog declares no vendors, so it
  * consumes no stored credential.
  */
 export function consumesStoredCredential(
@@ -137,10 +143,9 @@ export function consumesStoredCredential(
   vendor: string,
   kind: StoredCredentialKind
 ): boolean {
-  const consumed: CredentialKind = kind === 'oauth' ? 'subscription' : 'api_key';
   return (
     catalog.kind === 'static' &&
-    catalog.specs.some(spec => spec.vendor === vendor && spec.kinds.includes(consumed))
+    catalog.specs.some(spec => spec.vendor === vendor && spec.kinds.includes(CONSUMED_KIND[kind]))
   );
 }
 
