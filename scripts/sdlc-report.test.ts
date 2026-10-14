@@ -136,3 +136,60 @@ describe('failed', () => {
     expect(text).not.toContain('Ready');
   });
 });
+
+/**
+ * Each tail's `report` node, run as the engine runs it: the outcome binding as env
+ * text and this run's listing, with stdout as the node's result.
+ */
+describe.each([
+  {
+    tail: 'deliver',
+    result: 'ready',
+    passed: {
+      ready: true,
+      reason: 'delivered',
+      pr_url: 'https://pr/1',
+      ci_rerun: 'none',
+      summary: 'Ready.',
+    },
+  },
+  {
+    tail: 'ship',
+    result: 'delivered',
+    passed: { delivered: true, reason: 'delivered', pr_url: 'https://pr/1', summary: 'Ready.' },
+  },
+])('$tail report node', ({ tail, result, passed }) => {
+  const script = join(import.meta.dir, '..', '.archon/workflows/sdlc', tail, 'scripts/report.ts');
+
+  async function run(outcome: string): Promise<Record<string, unknown>> {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'discoveries'));
+    writeFileSync(
+      join(dir, 'discoveries', 'implement.json'),
+      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
+    );
+    const child = Bun.spawnSync([process.execPath, script], {
+      env: {
+        ...process.env,
+        ARTIFACTS_DIR: dir,
+        TYPED_ARTIFACTS_FILE: await writeNodeArtifactsListing(dir, 'run'),
+        INPUTS_OUTCOME: outcome,
+      },
+    });
+    expect(child.stderr.toString()).toBe('');
+    expect(child.exitCode).toBe(0);
+    return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
+  }
+
+  it('reports a failed run as not done, with the discoveries it recorded', async () => {
+    const report = await run('null');
+    expect(report[result]).toBe(false);
+    expect(report.reason).toBe('failed');
+    expect(String(report.summary)).toStartWith('Not done:');
+    expect(String(report.summary)).toContain('- Guard refuses an empty diff [unreviewed]');
+  });
+
+  it("relays the outcome node's report unchanged when it ran", async () => {
+    expect(await run(JSON.stringify(passed))).toEqual(passed);
+  });
+});
