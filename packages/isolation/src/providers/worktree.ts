@@ -1852,34 +1852,36 @@ export class WorktreeProvider implements IIsolationProvider {
       );
       if (!localExists) {
         source = 'remote';
-      } else if (!(await this.isAncestorRef(repoPath, remoteRefName, localRefName))) {
-        if (!(await this.isAncestorRef(repoPath, localRefName, remoteRefName))) {
-          const { stdout: counts } = await execFileAsync(
-            'git',
-            [
-              '-C',
-              repoPath,
-              'rev-list',
-              '--left-right',
-              '--count',
-              `${localRefName}...${remoteRefName}`,
-            ],
-            { timeout: GIT_OPERATION_TIMEOUT_MS }
-          );
-          const [localOnly, remoteOnly] = counts.trim().split(/\s+/).map(Number);
+      } else {
+        const { stdout: counts } = await execFileAsync(
+          'git',
+          [
+            '-C',
+            repoPath,
+            'rev-list',
+            '--left-right',
+            '--count',
+            `${localRefName}...${remoteRefName}`,
+          ],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
+        const [localOnly, remoteOnly] = counts.trim().split(/\s+/).map(Number);
+        if (localOnly > 0 && remoteOnly > 0) {
           throw new ExistingBranchDivergedError(branchName, remoteRef, localOnly, remoteOnly);
         }
-        // A local-repo fetch without `+` only fast-forwards, and git refuses it for a
-        // branch checked out in another worktree, so it cannot discard or move work
-        // that changed after the ancestry check.
-        await execFileAsync(
-          'git',
-          ['-C', repoPath, 'fetch', '.', `${remoteRefName}:${localRefName}`],
-          {
-            timeout: GIT_OPERATION_TIMEOUT_MS,
-          }
-        );
-        source = 'fast_forwarded';
+        if (remoteOnly > 0) {
+          // A local-repo fetch without `+` only fast-forwards, and git refuses it for a
+          // branch checked out in another worktree, so it cannot discard or move work
+          // that changed after the commit count.
+          await execFileAsync(
+            'git',
+            ['-C', repoPath, 'fetch', '.', `${remoteRefName}:${localRefName}`],
+            {
+              timeout: GIT_OPERATION_TIMEOUT_MS,
+            }
+          );
+          source = 'fast_forwarded';
+        }
       }
     }
 
@@ -1913,25 +1915,6 @@ export class WorktreeProvider implements IIsolationProvider {
           'Check your network connection and remote configuration, then retry.',
         { cause: err }
       );
-    }
-  }
-
-  /** Exit 1 from `merge-base --is-ancestor` means "not an ancestor"; any other failure throws. */
-  private async isAncestorRef(
-    repoPath: string,
-    ancestor: string,
-    descendant: string
-  ): Promise<boolean> {
-    try {
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'merge-base', '--is-ancestor', ancestor, descendant],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      );
-      return true;
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 1) return false;
-      throw error;
     }
   }
 
