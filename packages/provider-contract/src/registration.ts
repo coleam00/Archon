@@ -171,8 +171,12 @@ export interface ProviderRegistration {
   ownsUnprefixedModelRefs?: true;
 }
 
+export function hasValidProviderCapabilities(capabilities: ProviderCapabilities): boolean {
+  return capabilities.sessionFork !== true || capabilities.sessionResume;
+}
+
 function assertValidCapabilities(entry: ProviderRegistration): void {
-  if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
+  if (!hasValidProviderCapabilities(entry.capabilities)) {
     throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
   }
 }
