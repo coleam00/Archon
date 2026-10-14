@@ -147,12 +147,13 @@ export function registerChatInbound(
           const run = await workflowDb.getWorkflowRun(action.runId);
           if (run) {
             const target = await workflowResumeTargetForRun(run, platforms);
-            resumed = await resumeWorkflowRunFromServer(
+            const outcome = await resumeWorkflowRunFromServer(
               createSqlWorkflowHost(),
               run,
               actor.kind === 'user' ? actor.userId : undefined,
               target
             );
+            resumed = outcome.kind === 'resumed';
           }
         } catch {
           getLog().warn({ plugin: descriptor.id, action: action.action }, 'chat.run_resume_failed');

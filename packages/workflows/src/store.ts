@@ -629,9 +629,10 @@ export interface IWorkflowStore
   ): Promise<{ signaled: boolean }>;
   /**
    * A resume of a run admitted through a resource start takes a slot or throws
-   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused that way
-   * records its first refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown,
-   * so it keeps its place while the continuation host retries.
+   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused on the
+   * continuation host's claim (a `cursor`) records its first refusal
+   * (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place while
+   * the host retries (`resumeRefusal`).
    */
   resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
   /**
@@ -871,19 +872,28 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
+/**
+ * What a refused resume leaves behind: a failed run stays failed; a paused run stays
+ * paused, and `waiting` means it also keeps its place as a capacity waiter.
+ */
+export type ResumeRefusal = 'failed' | 'paused' | 'waiting';
+
 export class WorkflowResourceBusyError extends Error {
+  public readonly waitsForCapacity: boolean;
   constructor(
     public readonly runId: string,
     public readonly blocker: ResourceBlocker,
-    /** The refused run is paused and keeps its place as a capacity waiter. */
-    public readonly waitsForCapacity = false
+    public readonly refusal: ResumeRefusal = 'failed'
   ) {
     const reason = `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`;
     super(
-      waitsForCapacity
+      refusal === 'waiting'
         ? `${reason} It stays paused and keeps its place; a continuation host continues it once capacity frees.`
-        : reason
+        : refusal === 'paused'
+          ? `${reason} It stays paused; a continuation host continues it once its wait ends and capacity frees.`
+          : reason
     );
+    this.waitsForCapacity = refusal === 'waiting';
     this.name = 'WorkflowResourceBusyError';
   }
 }

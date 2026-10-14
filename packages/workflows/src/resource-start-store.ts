@@ -10,6 +10,7 @@ import type {
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
 import { readCapacityWait, type WorkflowRun, type WorkflowRunStatus } from './schemas/workflow-run';
+import type { ResumeRefusal, WorkflowResumeCursor } from './store';
 
 export class SourceReceiptDigestConflictError extends Error {}
 
@@ -186,6 +187,20 @@ export function resourceResumeBlocker(
   }
   if (slot.waiters[0]) return { kind: 'run', id: slot.waiters[0].id };
   return slot.queued === undefined ? null : { kind: 'request', id: slot.queued };
+}
+
+/**
+ * What a refused resume leaves behind. Only the continuation host's claim of a due wait or
+ * an answered pause (a resume cursor) makes a paused run a capacity waiter: an early
+ * manual resume must not hold capacity for a run that is not ready to continue.
+ */
+export function resumeRefusal(
+  status: WorkflowRunStatus,
+  metadata: WorkflowRun['metadata'],
+  cursor: WorkflowResumeCursor | undefined
+): ResumeRefusal {
+  if (status !== 'paused') return 'failed';
+  return cursor !== undefined || readCapacityWait(metadata) !== undefined ? 'waiting' : 'paused';
 }
 
 export interface IResourceStartStore {

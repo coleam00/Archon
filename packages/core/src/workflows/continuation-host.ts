@@ -25,7 +25,12 @@ export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
   /** The run's resource is full; it stays paused or failed and is retried after a deferral. */
-  | { kind: 'waiting_for_capacity'; blocker: WorkflowResourceBusyError['blocker'] }
+  | {
+      kind: 'waiting_for_capacity';
+      blocker: WorkflowResourceBusyError['blocker'];
+      /** The refusal as an operator reads it (`WorkflowResourceBusyError`). */
+      message: string;
+    }
   | { kind: 'unavailable'; reason: string };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -111,7 +116,7 @@ export async function resumeWorkflowContinuation(
     )
       return { kind: 'not-accepted' };
     if (error instanceof WorkflowResourceBusyError)
-      return { kind: 'waiting_for_capacity', blocker: error.blocker };
+      return { kind: 'waiting_for_capacity', blocker: error.blocker, message: error.message };
     throw error;
   }
 }

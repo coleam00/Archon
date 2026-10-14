@@ -129,7 +129,12 @@ test('reports refusal, deferral and settlement failures instead of admission-onl
 
 test('a continuation waiting for capacity is reported and the pass succeeds', async () => {
   scan.mockResolvedValue([
-    { runId: 'full', kind: 'waiting_for_capacity', blocker: { kind: 'run', id: 'holder' } },
+    {
+      runId: 'full',
+      kind: 'waiting_for_capacity',
+      blocker: { kind: 'run', id: 'holder' },
+      message: 'busy',
+    },
   ]);
   expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(0);
   expect(output[0]).toMatchObject({

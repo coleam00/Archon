@@ -1,4 +1,5 @@
 import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
+import { resumeRefusal } from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   WorkflowResourceBusyError,
@@ -207,8 +208,12 @@ export async function createFileWorkflowStore(
         const run = view.resumableRun(id, cursor);
         const blocker = await admission.resume(run);
         if (!blocker) return await view.resumeWorkflowRun(id, cursor);
-        const busy = new WorkflowResourceBusyError(id, blocker, run.status === 'paused');
-        if (!view.recordCapacityWait(id)) throw busy;
+        const busy = new WorkflowResourceBusyError(
+          id,
+          blocker,
+          resumeRefusal(run.status, run.metadata, cursor)
+        );
+        if (!busy.waitsForCapacity || !view.recordCapacityWait(id)) throw busy;
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;

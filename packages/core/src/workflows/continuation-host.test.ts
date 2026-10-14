@@ -270,9 +270,11 @@ test('a row waiting for capacity is deferred and keeps its outcome', async () =>
   const outcomes = await wakeDueWorkflowContinuations(
     store,
     new Date('2026-08-24T11:00:00.000Z'),
-    async () => ({ kind: 'waiting_for_capacity', blocker })
+    async () => ({ kind: 'waiting_for_capacity', blocker, message: 'busy' })
   );
-  expect(outcomes).toEqual([{ runId: 'full', kind: 'waiting_for_capacity', blocker }]);
+  expect(outcomes).toEqual([
+    { runId: 'full', kind: 'waiting_for_capacity', blocker, message: 'busy' },
+  ]);
   expect(mockDeferWorkflowContinuation).toHaveBeenCalledWith('full', '2026-08-24T11:01:00.000Z', {
     kind: 'wait',
     nodeId: 'delay',

@@ -2238,6 +2238,28 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(cwd).toBe('/tmp/worktrees/run-uuid-4');
   });
 
+  test('returns 409 with the refusal when the run resource is busy', async () => {
+    const { WorkflowResourceBusyError } = await import('@archon/workflows/store');
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_FAILED_RUN,
+      origin: null,
+      conversation_id: null,
+      parent_conversation_id: null,
+      working_path: '/tmp/worktrees/run-busy',
+    });
+    mockHydrateResumableRun.mockRejectedValueOnce(
+      new WorkflowResourceBusyError('run-busy', { kind: 'run', id: 'holder' })
+    );
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-busy/resume', { method: 'POST' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe(
+      "Workflow run 'run-busy' cannot resume while resource owner 'holder' has priority."
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('resumes an origin-free run without looking up a conversation', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
@@ -3868,6 +3890,32 @@ describe('approve/reject auto-resume', () => {
     const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
     expect(opts?.resolveChildIsolation).toBeDefined();
     expect(opts?.baseBranch).toBe('main');
+  });
+
+  test('approve: says the run waits for capacity when its resource is busy', async () => {
+    const { WorkflowResourceBusyError } = await import('@archon/workflows/store');
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
+    mockGetWorkflowRun.mockResolvedValue({ ...MOCK_PAUSED_RUN, parent_conversation_id: null });
+    mockHydrateResumableRun.mockRejectedValueOnce(
+      new WorkflowResourceBusyError('run-paused-1', { kind: 'run', id: 'holder' }, 'paused')
+    );
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain("resource owner 'holder' has priority. It stays paused");
+    expect(body.message).not.toContain('archon workflow resume');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   test('approve: falls back to the CLI-hint response when headless resume cannot resolve the workflow', async () => {

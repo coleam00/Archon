@@ -43,7 +43,7 @@ test('a continuation refused for capacity waits for capacity instead of failing'
       throw new Error('not invoked');
     },
     async resume() {
-      throw new WorkflowResourceBusyError(run.id, blocker, true);
+      throw new WorkflowResourceBusyError(run.id, blocker, 'waiting');
     },
     async subscribe() {
       throw new Error('not invoked');
@@ -58,6 +58,10 @@ test('a continuation refused for capacity waits for capacity instead of failing'
     run.id,
     async () => ({ kind: 'ready', platform: new HeadlessPlatform(), conversationId: 'conv' })
   );
-  expect(admission).toEqual({ kind: 'waiting_for_capacity', blocker });
+  expect(admission).toEqual({
+    kind: 'waiting_for_capacity',
+    blocker,
+    message: expect.stringContaining('keeps its place'),
+  });
   expect(close).toHaveBeenCalledTimes(1);
 });

@@ -12,7 +12,7 @@ import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
-import type { WorkflowResumeTarget } from './services/workflow-resume-service';
+import type { ServerResumeOutcome, WorkflowResumeTarget } from './services/workflow-resume-service';
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
@@ -65,7 +65,9 @@ const mockWorkflowResumeTargetForRun = mock(
     _platforms: ReadonlyMap<string, IWorkflowPlatform>
   ): Promise<WorkflowResumeTarget> => resumeTarget
 );
-const mockResumeWorkflowRunFromServer = mock(async (): Promise<boolean> => true);
+const mockResumeWorkflowRunFromServer = mock(
+  async (): Promise<ServerResumeOutcome> => ({ kind: 'resumed' })
+);
 
 const hostedPlugins: string[][] = [];
 const mockChatHostStart = mock(() => {});

@@ -139,7 +139,10 @@ import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
-import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
+import {
+  resumeWorkflowRunFromServer,
+  type ServerResumeOutcome,
+} from '../services/workflow-resume-service';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -1112,6 +1115,7 @@ const resumeWorkflowRunRoute = createRoute({
     400: jsonError('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('Resource busy; the run keeps its state'),
     500: jsonError('Server error'),
   },
 });
@@ -2681,12 +2685,12 @@ export function registerApiRoutes(
    * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
    * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
    *
-   * Returns `true` when a resume dispatch was initiated, `false` otherwise (no
-   * usable path to resume the run — see below — parent conversation deleted,
-   * parent was on a non-web platform, or dispatch threw). Failures are
-   * non-fatal: the gate decision is recorded regardless; when this returns
-   * `false` the response text instructs the user to re-run the workflow
-   * command.
+   * Returns `resumed` when a resume dispatch was initiated, `waiting_for_capacity`
+   * when a headless resume was refused because the run's resource is busy, and
+   * `not_resumed` otherwise (no usable path to resume the run — see below — parent
+   * conversation deleted, parent was on a non-web platform, or dispatch threw).
+   * Failures are non-fatal: the gate decision is recorded regardless; when nothing
+   * resumed, the response text says what continues the run.
    *
    * **No parent conversation at all** (`parent_conversation_id` is `NULL` —
    * every CLI-launched run): falls back to `resumeWorkflowRunFromServer`, which
@@ -2707,7 +2711,7 @@ export function registerApiRoutes(
     // turn executes as THIS user (sender-first, #1976/#1982) — without it the
     // dispatch would fall back to the conversation creator's prefs/credentials.
     actor: RunActor
-  ): Promise<boolean> {
+  ): Promise<ServerResumeOutcome> {
     const gateActorUserId = actor.kind === 'user' ? actor.userId : undefined;
     // Literal event names per action — greppable for ops tooling. Keeping the
     // branch explicit rather than templating avoids the earlier 3-segment
@@ -2722,6 +2726,8 @@ export function registerApiRoutes(
             failed: 'api.workflow_approve_auto_resume_failed' as const,
             headlessDispatched: 'api.workflow_approve_auto_resume_headless_dispatched' as const,
             headlessSkipped: 'api.workflow_approve_auto_resume_headless_skipped' as const,
+            headlessWaitingForCapacity:
+              'api.workflow_approve_auto_resume_headless_waiting_for_capacity' as const,
           }
         : action === 'reject'
           ? {
@@ -2733,6 +2739,8 @@ export function registerApiRoutes(
               failed: 'api.workflow_reject_auto_resume_failed' as const,
               headlessDispatched: 'api.workflow_reject_auto_resume_headless_dispatched' as const,
               headlessSkipped: 'api.workflow_reject_auto_resume_headless_skipped' as const,
+              headlessWaitingForCapacity:
+                'api.workflow_reject_auto_resume_headless_waiting_for_capacity' as const,
             }
           : {
               dispatched: 'api.workflow_respond_auto_resume_dispatched' as const,
@@ -2743,20 +2751,26 @@ export function registerApiRoutes(
               failed: 'api.workflow_respond_auto_resume_failed' as const,
               headlessDispatched: 'api.workflow_respond_auto_resume_headless_dispatched' as const,
               headlessSkipped: 'api.workflow_respond_auto_resume_headless_skipped' as const,
+              headlessWaitingForCapacity:
+                'api.workflow_respond_auto_resume_headless_waiting_for_capacity' as const,
             };
     if (!run.parent_conversation_id) {
       // No parent conversation to dispatch a chat message through at all —
       // every CLI-launched run (#2008). Execute directly instead of skipping.
-      const headlessResumed = await resumeWorkflowRunFromServer(
+      const outcome = await resumeWorkflowRunFromServer(
         createSqlWorkflowHost(),
         run,
         gateActorUserId
       );
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name },
-        headlessResumed ? events.headlessDispatched : events.headlessSkipped
+        outcome.kind === 'resumed'
+          ? events.headlessDispatched
+          : outcome.kind === 'waiting_for_capacity'
+            ? events.headlessWaitingForCapacity
+            : events.headlessSkipped
       );
-      return headlessResumed;
+      return outcome;
     }
     try {
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
@@ -2777,7 +2791,7 @@ export function registerApiRoutes(
           },
           events.skippedNoPlatformConv
         );
-        return false;
+        return { kind: 'not_resumed' };
       }
       if (parentConv.platform_type !== 'web') {
         getLog().debug(
@@ -2788,7 +2802,7 @@ export function registerApiRoutes(
           },
           events.skippedNonWebParent
         );
-        return false;
+        return { kind: 'not_resumed' };
       }
       // Explicit resume targeting: `/workflow resume <id>` routes through the
       // command handler's resume path, which validates the run and hands the
@@ -2801,10 +2815,10 @@ export function registerApiRoutes(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
       );
-      return true;
+      return { kind: 'resumed' };
     } catch (err) {
       getLog().warn({ err: err as Error, runId: run.id }, events.failed);
-      return false;
+      return { kind: 'not_resumed' };
     }
   }
 
@@ -4022,12 +4036,13 @@ export function registerApiRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        const headlessResumed = await resumeWorkflowRunFromServer(
+        const headless = await resumeWorkflowRunFromServer(
           createSqlWorkflowHost(),
           run,
           actor.kind === 'user' ? actor.userId : undefined
         );
-        if (!headlessResumed) {
+        if (headless.kind === 'waiting_for_capacity') return apiError(c, 409, headless.message);
+        if (headless.kind === 'not_resumed') {
           return apiError(
             c,
             400,
@@ -4278,13 +4293,16 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', actor);
+      const autoResume = await tryAutoResumeAfterGate(run, 'approve', actor);
 
       return c.json({
         success: true,
-        message: autoResumed
-          ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
+        message:
+          autoResume.kind === 'waiting_for_capacity'
+            ? `Workflow approved: ${run.workflow_name}. ${autoResume.message}`
+            : autoResume.kind === 'resumed'
+              ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
+              : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4352,18 +4370,22 @@ export function registerApiRoutes(
       // structured resolution) without requiring the user to re-run the
       // workflow command. Mirrors what `workflowRejectCommand` does in the
       // CLI. Same cross-adapter guard as approve — only web parents auto-resume.
-      const autoResumed = await tryAutoResumeAfterGate(run, 'reject', actor);
+      const autoResume = await tryAutoResumeAfterGate(run, 'reject', actor);
+      const autoResumed = autoResume.kind === 'resumed';
       const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
 
       return c.json({
         success: true,
-        message: result.newMode
-          ? autoResumed
-            ? `Workflow rejected: ${run.workflow_name}. Continuing.`
-            : `Workflow rejected: ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`
-          : autoResumed
-            ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — ${resumeHint}.`,
+        message:
+          autoResume.kind === 'waiting_for_capacity'
+            ? `Workflow rejected: ${run.workflow_name}. ${autoResume.message}`
+            : result.newMode
+              ? autoResumed
+                ? `Workflow rejected: ${run.workflow_name}. Continuing.`
+                : `Workflow rejected: ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`
+              : autoResumed
+                ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
+                : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — ${resumeHint}.`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4434,14 +4456,17 @@ export function registerApiRoutes(
       // Auto-resume: dispatch to the orchestrator so the resolution actually takes
       // effect, mirroring approve/reject. Same cross-adapter guard — only web
       // parents auto-resume.
-      const autoResumed = await tryAutoResumeAfterGate(run, 'respond', actor);
+      const autoResume = await tryAutoResumeAfterGate(run, 'respond', actor);
       const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
 
       return c.json({
         success: true,
-        message: autoResumed
-          ? `Workflow responded '${decision}': ${run.workflow_name}. Continuing.`
-          : `Workflow responded '${decision}': ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`,
+        message:
+          autoResume.kind === 'waiting_for_capacity'
+            ? `Workflow responded '${decision}': ${run.workflow_name}. ${autoResume.message}`
+            : autoResume.kind === 'resumed'
+              ? `Workflow responded '${decision}': ${run.workflow_name}. Continuing.`
+              : `Workflow responded '${decision}': ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4479,12 +4504,15 @@ export function registerApiRoutes(
         return apiError(c, 400, (refusal as Error).message);
       }
       await answerWorkflow(runId, request, actor, origin);
-      const autoResumed = await tryAutoResumeAfterGate(run, 'respond', actor);
+      const autoResume = await tryAutoResumeAfterGate(run, 'respond', actor);
       return c.json({
         success: true,
-        message: autoResumed
-          ? `Workflow answered: ${run.workflow_name}. Continuing.`
-          : `Workflow answered: ${run.workflow_name}. A continuation host (archon serve or workflow wake) continues it.`,
+        message:
+          autoResume.kind === 'waiting_for_capacity'
+            ? `Workflow answered: ${run.workflow_name}. ${autoResume.message}`
+            : autoResume.kind === 'resumed'
+              ? `Workflow answered: ${run.workflow_name}. Continuing.`
+              : `Workflow answered: ${run.workflow_name}. A continuation host (archon serve or workflow wake) continues it.`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);

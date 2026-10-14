@@ -3909,10 +3909,11 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });
 
-  /** Drive the lost-resume-race path with an optional supplied-input map. */
+  /** Drive a refused resume (a lost race by default) with an optional supplied-input map. */
   async function dispatchLosingResumeRace(
     platform: ReturnType<typeof makePlatform>,
-    workflowInputs?: Record<string, string>
+    workflowInputs?: Record<string, string>,
+    refusal?: Error
   ): Promise<void> {
     // `mock.module` MERGES, so `WorkflowNotResumableError` is the real class here.
     const { WorkflowNotResumableError } = await import('../db/workflows');
@@ -3931,7 +3932,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
     mockHydrateResumableRun.mockReturnValueOnce(
-      Promise.reject(new WorkflowNotResumableError('raced-run-1', 'running'))
+      Promise.reject(refusal ?? new WorkflowNotResumableError('raced-run-1', 'running'))
     );
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
@@ -3964,6 +3965,22 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(sent).toContain('already being resumed');
     expect(sent).not.toContain('--input');
     expect(sent).not.toContain("requires input 'diff'");
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('a resume refused for capacity says so and starts no fresh run', async () => {
+    const { WorkflowResourceBusyError } = await import('../db/workflows');
+    const platform = makePlatform();
+    await dispatchLosingResumeRace(
+      platform,
+      undefined,
+      new WorkflowResourceBusyError('raced-run-1', { kind: 'run', id: 'holder-1' }, 'paused')
+    );
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('**test-workflow** cannot resume yet.');
+    expect(sent).toContain("resource owner 'holder-1' has priority. It stays paused");
+    expect(sent).not.toContain('Error:');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 

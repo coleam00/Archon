@@ -1,5 +1,6 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
+import { resumeRefusal } from '@archon/workflows/resource-start-store';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isPathInside } from '@archon/paths';
@@ -229,8 +230,12 @@ export function createInMemoryWorkflowStore(
         const run = view.resumableRun(id, cursor);
         const blocker = await admission.resume(run);
         if (!blocker) return view.resumeWorkflowRun(id, cursor);
-        const busy = new WorkflowResourceBusyError(id, blocker, run.status === 'paused');
-        if (!view.recordCapacityWait(id)) throw busy;
+        const busy = new WorkflowResourceBusyError(
+          id,
+          blocker,
+          resumeRefusal(run.status, run.metadata, cursor)
+        );
+        if (!busy.waitsForCapacity || !view.recordCapacityWait(id)) throw busy;
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;

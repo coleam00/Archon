@@ -40,7 +40,11 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
-import { WorkflowNotResumableError, PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
+import {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  PROVIDER_EVENT_ROW_TYPES,
+} from '@archon/workflows/store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -3454,6 +3458,11 @@ async function runWorkflowWithOwnedSource(
             options: commonOptions,
           });
         } catch (error) {
+          // The run is intact; only its resource is busy, so say that and nothing else.
+          if (error instanceof WorkflowResourceBusyError)
+            throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
+              cause: error,
+            });
           const err = error as Error;
           getLog().error(
             { err, workflowName, runId: resumable.id },

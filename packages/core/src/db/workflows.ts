@@ -72,7 +72,7 @@ import {
   CAPACITY_WAIT_METADATA_KEY,
   readCapacityWait,
 } from '@archon/workflows/schemas/workflow-run';
-import { resourceResumeBlocker } from '@archon/workflows/resource-start-store';
+import { resourceResumeBlocker, resumeRefusal } from '@archon/workflows/resource-start-store';
 import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
@@ -1082,8 +1082,13 @@ export async function resumeWorkflowRun(
           { id, status, metadata }
         );
         if (blocker) {
+          const busy = new WorkflowResourceBusyError(
+            id,
+            blocker,
+            resumeRefusal(status, metadata, cursor)
+          );
           // Committed with the refusal, so the paused run keeps its place as a waiter.
-          if (status === 'paused' && readCapacityWait(metadata) === undefined)
+          if (busy.waitsForCapacity && readCapacityWait(metadata) === undefined)
             await query(
               `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)}
                 WHERE id = $1`,
@@ -1094,7 +1099,7 @@ export async function resumeWorkflowRun(
                 }),
               ]
             );
-          return { busy: new WorkflowResourceBusyError(id, blocker, status === 'paused') };
+          return { busy };
         }
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }

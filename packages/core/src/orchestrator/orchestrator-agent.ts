@@ -1450,6 +1450,13 @@ async function dispatchOrchestratorWorkflowOwned(
             });
           }
         } catch (err) {
+          // The gate deferred a contract violation because this looked like a
+          // continuation; when the run does not continue here it is never surfaced
+          // anywhere else. Say it rather than let an already-computed, actionable error die.
+          const deferredNote =
+            deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
+              ? `\n\nAlso note: ${deferredInputError.message}`
+              : '';
           // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
           // a concurrent re-dispatch, the CLI) already claimed this run, it throws
           // WorkflowNotResumableError. Surface a friendly note instead of leaking the
@@ -1464,12 +1471,19 @@ async function dispatchOrchestratorWorkflowOwned(
               conversationId,
               `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
                 'No action taken — follow the existing run for progress.' +
-                // The gate deferred a contract violation because this looked like a
-                // continuation; losing the race means it never got surfaced anywhere else.
-                // Say it here rather than let an already-computed, actionable error die.
-                (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
-                  ? `\n\nAlso note: ${deferredInputError.message}`
-                  : '')
+                deferredNote
+            );
+            return;
+          }
+          // The run keeps its state; only its resource is busy. Never fall through to a fresh run.
+          if (err instanceof workflowDb.WorkflowResourceBusyError) {
+            getLog().info(
+              { workflowName: workflow.name, runId: resumableRun.id, blocker: err.blocker },
+              'orchestrator.resume_waiting_for_capacity'
+            );
+            await platform.sendMessage(
+              conversationId,
+              `⏳ **${workflow.name}** cannot resume yet. ${err.message}` + deferredNote
             );
             return;
           }

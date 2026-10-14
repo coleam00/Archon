@@ -1915,6 +1915,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Resource busy; the run keeps its state */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {

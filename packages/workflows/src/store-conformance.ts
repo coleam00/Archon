@@ -364,6 +364,16 @@ export function describeWorkflowStoreConformance(
     };
     const drain = (): ReturnType<IWorkflowStore['drainResourceStarts']> =>
       store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+    const answeredCursor = {
+      kind: 'answered' as const,
+      nodeId: approval.nodeId,
+      pauseId: 'first',
+    };
+    /** Answers the gate and makes the continuation host's claim of the answered pause. */
+    const claimAnswered = async (id: string): Promise<WorkflowRun> => {
+      await store.resolveApprovalGate(id, { approval: { ...approval, resolved: 'approved' } }, []);
+      return store.resumeWorkflowRun(id, answeredCursor);
+    };
     test('a released paused run waits for capacity ahead of queued new starts', async () => {
       const a = await admitPaused(start());
       const b = start(),
@@ -377,7 +387,7 @@ export function describeWorkflowStoreConformance(
       expect(await drain()).toEqual([
         { status: 'admitted', requestId: b.launch.run.id, runId: b.launch.run.id },
       ]);
-      const refusal = await rejection(store.resumeWorkflowRun(a));
+      const refusal = await rejection(claimAnswered(a));
       expect(refusal).toBeInstanceOf(WorkflowResourceBusyError);
       expect(refusal).toMatchObject({
         blocker: { kind: 'run', id: b.launch.run.id },
@@ -387,19 +397,47 @@ export function describeWorkflowStoreConformance(
       expect(waiting?.status).toBe('paused');
       const since = readCapacityWait(waiting?.metadata);
       expect(since).toBeDefined();
-      await rejection(store.resumeWorkflowRun(a));
+      await rejection(store.resumeWorkflowRun(a, answeredCursor));
       expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
       // The waiter counts against capacity, so the new start queues behind the holder.
       expect(await store.admitResourceStart(c)).toMatchObject({ status: 'queued' });
       await end(b.launch.run.id);
       expect(await drain()).toEqual([]);
-      expect((await store.resumeWorkflowRun(a)).status).toBe('running');
+      expect((await store.resumeWorkflowRun(a, answeredCursor)).status).toBe('running');
       expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toBeUndefined();
       expect(await drain()).toEqual([]);
       expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
       expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
         { id: c.launch.run.id },
       ]);
+    });
+    test('an early resume of a released pause does not hold capacity', async () => {
+      const a = await admitPaused(start());
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: true });
+      const holder = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await rejection(store.resumeWorkflowRun(a))).toMatchObject({
+        blocker: { kind: 'run', id: holder.launch.run.id },
+        refusal: 'paused',
+        waitsForCapacity: false,
+      });
+      const refused = await store.getWorkflowRun(a);
+      expect(refused?.status).toBe('paused');
+      expect(readCapacityWait(refused?.metadata)).toBeUndefined();
+      await end(holder.launch.run.id);
+      expect(await store.admitResourceStart(start())).toMatchObject({ status: 'admitted' });
+      expect(await drain()).toEqual([]);
+    });
+    test('a cancelled capacity waiter stops counting against capacity', async () => {
+      const a = await admitPaused(start());
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: true });
+      const holder = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await rejection(claimAnswered(a))).toMatchObject({ waitsForCapacity: true });
+      await end(holder.launch.run.id);
+      expect(await store.cancelWorkflowRun(a)).toEqual({ cancelled: true });
+      expect(await store.admitResourceStart(start())).toMatchObject({ status: 'admitted' });
+      expect(await drain()).toEqual([]);
     });
     test('capacity waiters keep their refusal order and block a failed run resume', async () => {
       const first = await admitPaused(start());
@@ -410,22 +448,23 @@ export function describeWorkflowStoreConformance(
       expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
       const holderId = holder.launch.run.id;
       for (const id of [first, second]) {
-        expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+        expect(await rejection(claimAnswered(id))).toMatchObject({
           blocker: { kind: 'run', id: holderId },
         });
         await Bun.sleep(2);
       }
       await store.claimPendingWorkflowRun(holderId);
       await store.failWorkflowRun(holderId, 'failed');
-      expect(await rejection(store.resumeWorkflowRun(second))).toMatchObject({
+      expect(await rejection(store.resumeWorkflowRun(second, answeredCursor))).toMatchObject({
         blocker: { kind: 'run', id: first },
       });
       expect(await rejection(store.resumeWorkflowRun(holderId))).toMatchObject({
         blocker: { kind: 'run', id: first },
+        refusal: 'failed',
         waitsForCapacity: false,
       });
-      expect((await store.resumeWorkflowRun(first)).status).toBe('running');
-      expect(await rejection(store.resumeWorkflowRun(second))).toMatchObject({
+      expect((await store.resumeWorkflowRun(first, answeredCursor)).status).toBe('running');
+      expect(await rejection(store.resumeWorkflowRun(second, answeredCursor))).toMatchObject({
         blocker: { kind: 'run', id: first },
       });
     });

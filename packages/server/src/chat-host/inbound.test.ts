@@ -18,7 +18,7 @@ mock.module('@archon/core', () => ({
   handleMessage,
   classifyAndFormatError: () => 'Message processing failed',
 }));
-const resume = mock(async (..._args: unknown[]) => true);
+const resume = mock(async (..._args: unknown[]) => ({ kind: 'resumed' }));
 const target = { kind: 'unavailable', reason: 'test destination' };
 mock.module('../services/workflow-resume-service', () => ({
   workflowResumeTargetForRun: async () => target,
