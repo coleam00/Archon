@@ -1,5 +1,10 @@
 // @archon-test-isolated
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 const mockWarn = mock((_fields: unknown, _message: string) => undefined);
@@ -8,7 +13,9 @@ mock.module('@archon/paths', () => ({
   ...paths,
   createLogger: () => ({ warn: mockWarn, error: mock(() => undefined) }),
 }));
-const { WorkflowSourceUnavailableError } = await import('../../../workflows/src/workflow-source');
+const trackTempRoot = trackTempRoots();
+const { WorkflowSourceUnavailableError, loadWorkflowSource, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
+  await import('../../../workflows/src/workflow-source');
 const mockListDueWorkflowContinuations = mock(
   async (_now: Date, _limit: number) => [] as WorkflowRun[]
 );
@@ -331,8 +338,88 @@ test('bounds structural source failures locally and warns once', async () => {
   expect(await child.exited).toBe(0);
 });
 
-test('transient failures keep the 60 second retry beyond the structural bound', async () => {
-  const candidate = run('transient-source', 'paused', {
+async function sourceFixture(): Promise<string> {
+  const root = trackTempRoot(await fs.mkdtemp(join(tmpdir(), 'continuation-source-')));
+  const content = 'frozen';
+  await fs.writeFile(join(root, 'source.txt'), content);
+  const hash = createHash('sha256').update(content).digest('hex');
+  await fs.writeFile(
+    join(root, 'manifest.json'),
+    JSON.stringify({
+      version: 1,
+      engine_version: 'test',
+      origin: root,
+      captured_at: new Date().toISOString(),
+      digest: createHash('sha256').update(`source.txt\0${hash}\n`).digest('hex'),
+      file_count: 1,
+      byte_count: content.length,
+      scopes: [],
+      source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
+    })
+  );
+  return root;
+}
+
+for (const read of ['manifest', 'directory', 'file'] as const) {
+  test(`temporary ${read} read failures keep retrying and recover`, async () => {
+    const root = await sourceFixture();
+    const manifest = await fs.readFile(join(root, 'manifest.json'), 'utf8');
+    const candidate = run(`transient-${read}`, 'paused', {
+      wait: {
+        owner: 'node',
+        kind: 'time',
+        nodeId: 'delay',
+        waitingSince: '2026-08-24T10:00:00Z',
+        resumeAt: '2026-08-24T11:00:00Z',
+      },
+    });
+    mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+    mockDeferWorkflowContinuation.mockClear();
+    const resume = mock(async () => {
+      await loadWorkflowSource(root);
+      return {
+        kind: 'accepted' as const,
+        run: candidate,
+        settled: Promise.resolve({ success: true as const, workflowRunId: candidate.id }),
+      };
+    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const cause = Object.assign(new Error('temporary descriptor shortage'), { code: 'EMFILE' });
+      const reader =
+        read === 'directory'
+          ? spyOn(fs, 'readdir').mockRejectedValue(cause)
+          : (() => {
+              const fileReader = spyOn(fs, 'readFile').mockRejectedValue(cause);
+              if (read === 'file') fileReader.mockResolvedValueOnce(manifest);
+              return fileReader;
+            })();
+      const now = new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000);
+      try {
+        await wakeDueWorkflowContinuations(store, now, resume);
+        expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
+          candidate.id,
+          new Date(now.getTime() + 60_000).toISOString(),
+          { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
+        );
+      } finally {
+        reader.mockRestore();
+      }
+    }
+    const outcomes = await wakeDueWorkflowContinuations(
+      store,
+      new Date('2026-08-24T12:00:00Z'),
+      resume
+    );
+    expect(resume).toHaveBeenCalledTimes(6);
+    expect(outcomes[0]?.kind).toBe('accepted');
+    expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(5);
+  });
+}
+
+test('a missing captured file reaches the bound and warns once', async () => {
+  const root = await sourceFixture();
+  await fs.unlink(join(root, 'source.txt'));
+  const candidate = run('missing-entry', 'paused', {
     wait: {
       owner: 'node',
       kind: 'time',
@@ -343,19 +430,18 @@ test('transient failures keep the 60 second retry beyond the structural bound', 
   });
   mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
   mockDeferWorkflowContinuation.mockClear();
+  mockWarn.mockClear();
   const resume = mock(async () => {
-    throw new Error('Workflow source ENOENT');
+    await loadWorkflowSource(root);
+    return { kind: 'not-accepted' as const };
   });
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const now = new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000);
-    await wakeDueWorkflowContinuations(store, now, resume);
-    expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
-      candidate.id,
-      new Date(now.getTime() + 60_000).toISOString(),
-      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
-    );
-  }
-  expect(resume).toHaveBeenCalledTimes(8);
+  for (let i = 0; i < 8; i++)
+    await wakeDueWorkflowContinuations(store, new Date('2026-08-24T12:00:00Z'), resume);
+  expect(resume).toHaveBeenCalledTimes(3);
+  expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+  expect(mockWarn).toHaveBeenCalledTimes(1);
+  expect(mockWarn.mock.calls[0]?.[0]).toMatchObject({ path: root, runId: candidate.id });
+  expect(candidate.status).toBe('paused');
 });
 
 test('blocked rows do not starve later continuations in the same database', async () => {

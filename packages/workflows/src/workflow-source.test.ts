@@ -1084,3 +1084,27 @@ test('an unreadable capture directory remains a typed read failure with its caus
     readDirectory.mockRestore();
   }
 });
+
+test('an unreadable captured file preserves the structural type and cause', async () => {
+  const { source, runArtifacts } = await createSandbox();
+  await writeFile(join(source, '.archon', 'commands', 'review.md'), 'review');
+  const capture = await captureWorkflowSource({
+    sourceRoot: source,
+    captureRoot: captureRootIn(runArtifacts),
+  });
+  const manifest = await readFile(join(capture.anchor.root, 'manifest.json'), 'utf8');
+  const cause = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  const reader = spyOn(fs, 'readFile').mockResolvedValueOnce(manifest).mockRejectedValue(cause);
+  try {
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toMatchObject({
+      name: 'WorkflowSourceUnavailableError',
+      path: capture.anchor.root,
+      cause,
+    });
+    expect(reader.mock.calls[1]?.[0]).toBe(
+      join(capture.anchor.root, 'project', '.archon', 'commands', 'review.md')
+    );
+  } finally {
+    reader.mockRestore();
+  }
+});

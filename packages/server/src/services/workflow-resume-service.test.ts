@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { captureLogLines } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -586,6 +587,32 @@ describe('workflow continuation scanner', () => {
     expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('manual resume reports the frozen-source path and recovery actions without a due cursor', async () => {
+    const paused = run('manual-source-missing', 'paused', {});
+    const sourceError = new WorkflowSourceUnavailableError(
+      '/foreign/source/manifest.json',
+      Object.assign(new Error('missing'), { code: 'ENOENT' })
+    );
+    mockResumeWorkflow.mockResolvedValue(paused);
+    mockResolveRunWorkflow.mockResolvedValue({
+      ok: false,
+      message: sourceError.message,
+      sourceError,
+    });
+    const logs = captureLogLines();
+    try {
+      expect(await resumeWorkflowRunFromServer(host, paused)).toBe(false);
+      expect(logs.lines).toHaveLength(1);
+      expect(logs.lines[0]).toMatchObject({ level: 40, runId: paused.id, path: sourceError.path });
+      expect(logs.lines[0]?.msg).toContain(`archon workflow resume ${paused.id}`);
+      expect(logs.lines[0]?.msg).toContain(`archon workflow abandon ${paused.id}`);
+    } finally {
+      logs.restore();
+    }
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
   });
 

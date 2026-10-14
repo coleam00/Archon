@@ -106,6 +106,12 @@ export async function resumeWorkflowRunFromServer(
 ): Promise<boolean> {
   try {
     const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
+    if (admission.kind === 'unavailable' && admission.sourceError) {
+      log.warn(
+        { err: admission.sourceError, runId: run.id, path: admission.sourceError.path },
+        `Cannot resume run ${run.id}: frozen workflow source at ${admission.sourceError.path} is unreadable. Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+      );
+    }
     return admission.kind === 'accepted';
   } catch (error) {
     log.warn({ err: error, runId: run.id }, 'workflow_resume_headless_unexpected_error');

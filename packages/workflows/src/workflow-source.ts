@@ -476,6 +476,21 @@ export class WorkflowSourceUnavailableError extends WorkflowSourceIntegrityError
   }
 }
 
+function sourceReadError(path: string, error: unknown): unknown {
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  switch (code) {
+    case 'ENOENT':
+    case 'ENOTDIR':
+    case 'EISDIR':
+    case 'EACCES':
+    case 'EPERM':
+    case 'ELOOP':
+      return new WorkflowSourceUnavailableError(path, error);
+    default:
+      return error;
+  }
+}
+
 /** Where a run's executable source came from, and what was frozen. */
 export interface WorkflowSourceCapture {
   /** The authoring directory this was captured from. */
@@ -871,11 +886,6 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   return entries;
 }
 
-/** Content digest over every captured file. */
-async function digestTree(root: string): Promise<string> {
-  return foldDigest(await digestEntries(root));
-}
-
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
   await writeFile(join(captureRoot, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
 }
@@ -1045,7 +1055,7 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
-    throw new WorkflowSourceUnavailableError(join(captureRoot, MANIFEST_FILE), error);
+    throw sourceReadError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;
   try {
@@ -1070,7 +1080,7 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
  * Throws {@link WorkflowSourceIntegrityError} when the manifest is missing, unreadable, of
  * an unknown shape, or when the digest no longer matches. Every one of those means the
  * run's executable source cannot be established, which is a reason to stop rather than to
- * quietly execute something else.
+ * quietly execute something else. Temporary I/O errors propagate unchanged for retry.
  */
 export async function loadWorkflowSource(
   captureRoot: string,
@@ -1106,12 +1116,21 @@ export async function loadWorkflowSource(
         'run recorded. The capture manifest has changed.'
     );
   }
-  let digest: string;
+  let entries: DigestEntry[];
   try {
-    digest = await digestTree(captureRoot);
+    entries = await digestEntries(captureRoot);
   } catch (error) {
-    throw new WorkflowSourceUnavailableError(captureRoot, error);
+    throw sourceReadError(captureRoot, error);
   }
+  if (entries.length < manifest.file_count) {
+    throw new WorkflowSourceUnavailableError(
+      captureRoot,
+      new Error(
+        `Captured source is incomplete: expected ${manifest.file_count} files, found ${entries.length}`
+      )
+    );
+  }
+  const digest = foldDigest(entries);
   if (digest !== manifest.digest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
