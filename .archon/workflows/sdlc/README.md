@@ -181,6 +181,14 @@ declines a finding by the same standard. Each read is conditional on the file
 existing, so the pack stays portable: a repository without one loses nothing. A
 new pack prompt that writes or judges code carries the same sentence.
 
+A project's policy for a decision the pack makes, such as what triage accepts, is
+one more sidecar document, found in the same places. The pack ships a default for
+each policy document a prompt names, and the project's own document replaces it.
+A policy document may be only a pointer to documents the project already has, and
+the agent reads what it points to. A prompt names only the policy documents its
+decision needs, and agents interpret them; anything that must be exact, such as
+label names, stays typed configuration.
+
 ## A node's streams are the operator's channel
 
 Retention is not the only reader. Anything a node writes to stderr is sent to the

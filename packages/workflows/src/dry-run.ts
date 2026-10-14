@@ -22,6 +22,7 @@ import { evaluateCondition } from './condition-evaluator';
 import {
   COMPILED_LOOP_COMMAND,
   readComposedBindings,
+  resolveIncludeOutputAliases,
   type LoopWithCompiledCommand,
 } from './compiled-command';
 import { canonicalValueText, parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
@@ -579,7 +580,11 @@ interface DryRunContext {
   aiProfile?: ResolvedAiProfile;
 }
 
-async function loadDryRunCommand(ctx: DryRunContext, command: string): Promise<string> {
+async function loadDryRunCommand(
+  ctx: DryRunContext,
+  node: DagNode,
+  command: string
+): Promise<string> {
   await assertWorkflowSourceIntegrity(ctx.sourceRoots);
   const result = await loadCommandPrompt(
     {
@@ -598,7 +603,7 @@ async function loadDryRunCommand(ctx: DryRunContext, command: string): Promise<s
     ctx.sourceRoots
   );
   if (!result.success) throw new Error(result.message);
-  return result.content;
+  return resolveIncludeOutputAliases(node, result.content);
 }
 
 function resolveText(
@@ -953,7 +958,7 @@ async function simulateLoop(
         `Loop node '${node.id}' has malformed compiled command metadata for '${command}' — expected exactly one string prompt or error.`
       );
     } else {
-      template = await loadDryRunCommand(ctx, command);
+      template = await loadDryRunCommand(ctx, node, command);
     }
   }
   let resolvedText = template;
@@ -1293,7 +1298,11 @@ async function simulateNode(
 
     const sourceText = isAgentNode(node)
       ? node.source.kind === 'command'
-        ? await loadDryRunCommand(ctx, substituteLoopBodyText(node.source.name, ctx.loopBodyScopes))
+        ? await loadDryRunCommand(
+            ctx,
+            node,
+            substituteLoopBodyText(node.source.name, ctx.loopBodyScopes)
+          )
         : node.source.prompt
       : isExecNode(node)
         ? node.script

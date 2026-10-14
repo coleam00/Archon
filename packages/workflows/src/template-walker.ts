@@ -14,13 +14,11 @@ import {
   isWorkflowNode,
 } from './schemas';
 import {
-  COMPOSED_NODE,
   COMPILED_LOOP_COMMAND,
-  attachComposedBindings,
+  cloneNodeWithEngineMetadata,
   type LoopWithCompiledCommand,
   readComposedBindings,
   readComposedMeta,
-  type NodeWithComposedMeta,
 } from './compiled-command';
 
 export type TemplateSurface =
@@ -367,7 +365,7 @@ export function mapNodeTemplateSlots(
   node: DagNode,
   mapper: (slot: TemplateSlot) => string
 ): DagNode {
-  const clone = cloneNode(node);
+  const clone = cloneNodeWithEngineMetadata(node);
   walk(clone, (slot, replace) => {
     replace(mapper(slot));
   });
@@ -379,7 +377,7 @@ export function mapNodeTemplateValueSlots(
   node: DagNode,
   mapper: (slot: TemplateValueSlot) => JsonValue
 ): DagNode {
-  const clone = cloneNode(node);
+  const clone = cloneNodeWithEngineMetadata(node);
   walk(
     clone,
     () => undefined,
@@ -389,36 +387,4 @@ export function mapNodeTemplateValueSlots(
     undefined
   );
   return clone;
-}
-
-function cloneNode(node: DagNode): DagNode {
-  const clone = structuredClone(node);
-  preserveInternalMetadata(node, clone);
-  return clone;
-}
-
-function preserveInternalMetadata(source: DagNode, target: DagNode): void {
-  const meta = readComposedMeta(source);
-  if (meta !== undefined)
-    (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
-  const bindings = readComposedBindings(source);
-  if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
-  if (isLoopNode(source) && isLoopNode(target)) {
-    const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
-      COMPILED_LOOP_COMMAND
-    ];
-    if (compiled !== undefined)
-      (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
-        structuredClone(compiled);
-  }
-  if (isLoopGroupNode(source) && isLoopGroupNode(target))
-    for (const [index, sourceBody] of source.loop_group.nodes.entries()) {
-      const targetBody = target.loop_group.nodes[index];
-      if (
-        targetBody !== undefined &&
-        !isIncludeDirective(sourceBody) &&
-        !isIncludeDirective(targetBody)
-      )
-        preserveInternalMetadata(sourceBody, targetBody);
-    }
 }

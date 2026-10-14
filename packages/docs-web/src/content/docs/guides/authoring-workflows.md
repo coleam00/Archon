@@ -1652,8 +1652,9 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   definition order (the same terminal-selection rule `loop_group` uses). For a
   single-sink block like the review block the two coincide; they differ only when a block
   has multiple leaf nodes.
-- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink.
-  In the example, `$review.output` is the output of the block's `implement-fixes` node.
+- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink,
+  including when it appears in that node's `command:` or `loop.command` file body. In the
+  example, `$review.output` is the output of the block's `implement-fixes` node.
 - **Inside a `loop_group` body.** An include expands inside that sealed body at load time.
   Its nodes keep the usual `<includeId>__<nodeId>` names, then the loop runtime prefixes
   persisted step names with the group id (for example `fix-loop.review__synthesize`). Every
