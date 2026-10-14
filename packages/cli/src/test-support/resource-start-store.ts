@@ -1,33 +1,41 @@
 import {
   validateStartReceiptLimit,
   compareStartReceipts,
+  capacityWaiters,
+  freeResourceSlots,
+  resourceResumeBlocker,
+  resourceStartBlocker,
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
+  type ResourceBlocker,
+  type ResourceSlotOccupancy,
   type ResourceStartRequestInspection,
   type StartReceiptInspection,
   type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
-import type { IWorkflowStore } from '@archon/workflows/store';
-import { isTerminalRunStatus } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
+import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
   type ResourceStartDisposition,
   type ResourceStartIntent,
 } from '@archon/workflows/schemas/resource-start';
 
-type ResourceBlocker = NonNullable<ResourceStartRequestInspection['blocker']>;
-
 export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
   getRun: IWorkflowStore['getWorkflowRun']
 ): IResourceStartStore & {
-  /** What keeps an admitted failed or paused run from resuming, as the SQL and file stores decide. */
-  resumeBlocker(id: string, status: 'failed' | 'paused'): Promise<ResourceBlocker | null>;
+  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
+  /** Give back the slot of an admitted run; whether it held one. */
+  release(id: string): Promise<boolean>;
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
   const capacities = new Map<string, number>();
+  // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
+  const released = new Set<string>();
   const decision = (request: ResourceStartRequestInspection): ResourceStartDisposition => {
     if (request.status === 'admitted')
       return { status: 'admitted', requestId: request.id, runId: request.id };
@@ -43,14 +51,24 @@ export function createInMemoryResourceStartStore(
     blockerRunStatus:
       request.blocker?.kind === 'run' ? ((await getRun(request.blocker.id))?.status ?? null) : null,
   });
-  const holders = async (resource: string): Promise<ResourceStartRequestInspection[]> => {
-    const live: ResourceStartRequestInspection[] = [];
+  const occupancy = async (resource: string): Promise<ResourceSlotOccupancy> => {
+    const holders: { id: string }[] = [];
+    const candidates: WorkflowRun[] = [];
     for (const request of requests.values()) {
       if (request.resource !== resource || request.status !== 'admitted') continue;
       const run = await getRun(request.id);
-      if (run && !isTerminalRunStatus(run.status)) live.push(request);
+      if (!run || isTerminalRunStatus(run.status)) continue;
+      if (released.has(run.id)) candidates.push(run);
+      else holders.push({ id: run.id });
     }
-    return live;
+    return {
+      capacity: capacities.get(resource) ?? 1,
+      holders,
+      waiters: capacityWaiters(candidates),
+      queued: [...requests.values()].find(
+        request => request.resource === resource && request.status === 'queued'
+      )?.id,
+    };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
     const capacity = capacities.get(intent.resource);
@@ -59,15 +77,10 @@ export function createInMemoryResourceStartStore(
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const older = [...requests.values()].find(
-      request => request.resource === intent.resource && request.status === 'queued'
-    );
-    const live = await holders(intent.resource);
-    const blocker: ResourceStartRequestInspection['blocker'] = older
-      ? { kind: 'request', id: older.id }
-      : live.length >= intent.capacity && live[0]
-        ? { kind: 'run', id: live[0].id }
-        : null;
+    const blocker = resourceStartBlocker({
+      ...(await occupancy(intent.resource)),
+      capacity: intent.capacity,
+    });
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -111,25 +124,29 @@ export function createInMemoryResourceStartStore(
     return copy;
   };
   return {
-    resumeBlocker: async (id, status) => {
-      const request = requests.get(id);
+    resume: async run => {
+      const request = requests.get(run.id);
       if (request?.status !== 'admitted') return null;
-      const others = (await holders(request.resource)).filter(holder => holder.id !== id);
-      if (others[0] && others.length >= (capacities.get(request.resource) ?? 1))
-        return { kind: 'run', id: others[0].id };
-      // A failed run released its slot and must not bypass promised queued work; a paused
-      // run still holds it.
-      const queued = [...requests.values()].find(
-        row => row.resource === request.resource && row.status === 'queued'
-      );
-      return status === 'failed' && queued ? { kind: 'request', id: queued.id } : null;
+      if (run.status !== 'failed' && run.status !== 'paused')
+        throw new WorkflowNotResumableError(run.id, run.status);
+      const blocker = resourceResumeBlocker(await occupancy(request.resource), {
+        ...run,
+        status: run.status,
+      });
+      if (!blocker) released.delete(run.id);
+      return blocker;
+    },
+    release: async id => {
+      if (requests.get(id)?.status !== 'admitted' || released.has(id)) return false;
+      released.add(id);
+      return true;
     },
     admitResourceStart: admit,
     drainResourceStarts: async ({
       resource,
       hostId,
     }): ReturnType<IResourceStartStore['drainResourceStarts']> => {
-      let free = (capacities.get(resource) ?? 1) - (await holders(resource)).length;
+      let free = freeResourceSlots(await occupancy(resource));
       const admitted: ResourceStartDisposition[] = [];
       for (const request of requests.values()) {
         if (request.resource !== resource || request.status !== 'queued') continue;

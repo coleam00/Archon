@@ -80,7 +80,9 @@ is limited by the platform's `fsync` guarantees; macOS does not force drive cach
 Triggers work with file storage: `archon trigger whoami` records a local run-as identity,
 and timer fire, admission, queueing, inspection and drain use the file store. Admission
 commits the run, request and resource holder together. A terminal or missing run releases
-its slot; failed-run resume respects live holders and queued requests.
+its slot, and so does a run paused where a continuation host continues it. Its resume takes
+a slot again ahead of queued requests, or records `capacity_wait` on the run and waits.
+Failed-run resume respects live holders, those waiting runs and queued requests.
 
 The server refuses file storage because its routes read SQL. Provider concurrency caps
 (`concurrency.providers`) require `store: database` and fail at startup.

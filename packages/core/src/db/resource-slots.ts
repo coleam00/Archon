@@ -1,21 +1,29 @@
-import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
+import {
+  ResourceSlotCapacityConflictError,
+  capacityWaiters,
+  type ResourceSlotOccupancy,
+} from '@archon/workflows/resource-start-store';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
  * A slot admits up to `capacity` live holders. Callers run these helpers inside one
  * database transaction, lock the slot first, then decide. A holder is released when
- * the thing it names reaches a terminal state; release is read from that authoritative
- * state inside the slot lock, never from elapsed time, so a live holder is never
- * declared dead. Waiters and their FIFO order belong to the caller, because a waiter
- * carries the caller's own payload (a start request carries its prepared launch).
+ * the thing it names reaches a terminal state, or explicitly by its owner; release is
+ * read from authoritative state inside the slot lock, never from elapsed time, so a
+ * live holder is never declared dead. Waiters and their FIFO order belong to the
+ * caller, because a waiter carries the caller's own payload (a start request carries
+ * its prepared launch, a capacity waiter is a paused run).
  *
  * Holder kinds and their liveness:
- * - `run`: a workflow run, live until the run is terminal or gone.
+ * - `run`: a workflow run, live until the run is terminal or gone, or until the run,
+ *   paused where the engine continues it by itself, gives its slot back
+ *   (`releasePausedRunSlot`).
  * - `attempt`: one provider attempt, released by its owner when the provider stream
  *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';
+import { parseJsonObject } from './workflow-run-normalization';
 import {
   isOwnerProvablyGone,
   parseProcessOwner,
@@ -184,4 +192,43 @@ export async function removeResourceSlotHolder(
     [resource, holder.kind, holder.id]
   );
   return result.rowCount > 0;
+}
+
+/**
+ * What a run-start slot holds, read under its lock (`lockResourceSlot`): live holders,
+ * capacity waiters, and the oldest queued start request.
+ */
+export async function resourceStartOccupancy(
+  query: TransactionQuery,
+  resource: string,
+  capacity: number
+): Promise<ResourceSlotOccupancy> {
+  const holders = await liveResourceSlotHolders(query, resource);
+  const holding = new Set(holders.map(holder => holder.id));
+  const paused = await query<{ id: string; metadata: unknown }>(
+    `SELECT w.id, w.metadata FROM remote_agent_workflow_runs w
+       JOIN remote_agent_resource_start_requests q ON q.id = w.id
+      WHERE q.resource_key = $1 AND q.status = 'admitted' AND w.status = 'paused'`,
+    [resource]
+  );
+  const queued = await query<{ id: string }>(
+    `SELECT id FROM remote_agent_resource_start_requests
+      WHERE resource_key = $1 AND status = 'queued'
+      ORDER BY queue_position LIMIT 1`,
+    [resource]
+  );
+  return {
+    capacity,
+    holders,
+    waiters: capacityWaiters(
+      paused.rows
+        .map(row => ({
+          id: String(row.id),
+          status: 'paused' as const,
+          metadata: parseJsonObject(row.metadata) ?? {},
+        }))
+        .filter(run => !holding.has(run.id))
+    ),
+    queued: queued.rows[0]?.id,
+  };
 }

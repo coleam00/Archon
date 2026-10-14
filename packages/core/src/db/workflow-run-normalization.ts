@@ -33,6 +33,21 @@ export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
   checkout_baseline: unknown;
 };
 
+/** A JSON object column as either dialect returns it (text or parsed); null otherwise. */
+export function parseJsonObject(raw: unknown): Record<string, unknown> | null {
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   cachedLog ??= createLogger('db.workflow-run-normalization');

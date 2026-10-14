@@ -688,6 +688,25 @@ export function readRunStopReason(
 }
 
 /**
+ * Key under which a paused run that gave back its resource slot records that its
+ * continuation was refused for capacity (#4045): `{ since }`, the first refusal. The run
+ * is then a capacity waiter: it keeps its place ahead of queued new starts, ordered by
+ * `since`, so a later refusal keeps the first value. Cleared by `resumeWorkflowRun` and by
+ * `releasePausedRunSlot`, so a later pause never inherits it.
+ */
+export const CAPACITY_WAIT_METADATA_KEY = 'capacity_wait';
+
+const capacityWaitSchema = z.object({ since: z.string() });
+
+/** Typed view of the capacity wait; undefined when the run carries none this build can read. */
+export function readCapacityWait(
+  metadata: Record<string, unknown> | undefined
+): z.infer<typeof capacityWaitSchema> | undefined {
+  const parsed = capacityWaitSchema.safeParse(metadata?.[CAPACITY_WAIT_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
  * Key under which a run records what its DISPATCHING surface resolved for it (#2454).
  *
  * A resume re-enters the executor with whatever the resuming surface happens to hold,

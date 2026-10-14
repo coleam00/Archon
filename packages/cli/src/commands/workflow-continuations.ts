@@ -132,6 +132,8 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     return { runId, kind: outcome.kind, reason: outcome.reason, ...deferral };
   if (outcome.kind === 'failed')
     return { runId, kind: outcome.kind, error: errorMessage(outcome.error), ...deferral };
+  if (outcome.kind === 'waiting_for_capacity')
+    return { runId, kind: outcome.kind, blocker: outcome.blocker, ...deferral };
   return { runId, kind: outcome.kind, ...deferral };
 }
 
@@ -139,6 +141,7 @@ function successful(outcome: SettledOutcome): boolean {
   return (
     outcome.deferError === undefined &&
     (outcome.kind === 'not-accepted' ||
+      outcome.kind === 'waiting_for_capacity' ||
       (outcome.kind === 'accepted' && outcome.status !== 'failed'))
   );
 }
@@ -170,7 +173,7 @@ async function report(
     );
     for (const outcome of outcomes) {
       console.log(
-        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
+        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
       );
     }
     if (signaled && !ok)

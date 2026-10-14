@@ -9,7 +9,7 @@ import type {
   startBindingPreparationStatusSchema,
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
-import type { WorkflowRunStatus } from './schemas/workflow-run';
+import { readCapacityWait, type WorkflowRun, type WorkflowRunStatus } from './schemas/workflow-run';
 
 export class SourceReceiptDigestConflictError extends Error {}
 
@@ -96,6 +96,96 @@ export function compareStartReceipts(
  */
 export function compareCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+export type ResourceBlocker = Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'];
+
+/**
+ * A paused admitted run that gave back its slot and whose continuation was then refused
+ * for capacity (`readCapacityWait`). It has not lost its admission, so it counts against
+ * capacity like a holder and goes ahead of queued new starts; waiters keep the order of
+ * their first refusal.
+ */
+export interface CapacityWaiter {
+  id: string;
+  since: string;
+}
+
+/**
+ * The waiters among `candidates`, in the order they keep. A store passes its paused runs
+ * that have an admitted request on the resource and no run holder there.
+ */
+export function capacityWaiters(
+  candidates: Iterable<Pick<WorkflowRun, 'id' | 'status' | 'metadata'>>
+): CapacityWaiter[] {
+  const waiters: CapacityWaiter[] = [];
+  for (const run of candidates) {
+    const wait = run.status === 'paused' ? readCapacityWait(run.metadata) : undefined;
+    if (wait) waiters.push({ id: run.id, since: wait.since });
+  }
+  return waiters.sort(compareCapacityWaiters);
+}
+
+function compareCapacityWaiters(a: CapacityWaiter, b: CapacityWaiter): number {
+  return compareCodeUnits(a.since, b.since) || compareCodeUnits(a.id, b.id);
+}
+
+/**
+ * What one resource slot holds, read inside the store's slot lock. Every store decides
+ * admission, drain and resume from this through the functions below, so the rules agree.
+ */
+export interface ResourceSlotOccupancy {
+  capacity: number;
+  /** Live holders, oldest first. */
+  holders: readonly { id: string }[];
+  waiters: readonly CapacityWaiter[];
+  /** The oldest queued start request. */
+  queued: string | undefined;
+}
+
+/** What keeps a new start request from being admitted now. */
+export function resourceStartBlocker(slot: ResourceSlotOccupancy): ResourceBlocker | null {
+  // An older queued request keeps FIFO even when a slot is free.
+  if (slot.queued !== undefined) return { kind: 'request', id: slot.queued };
+  const first = slot.holders[0] ?? slot.waiters[0];
+  return first && slot.holders.length + slot.waiters.length >= slot.capacity
+    ? { kind: 'run', id: first.id }
+    : null;
+}
+
+/** How many queued requests a drain may admit now. */
+export function freeResourceSlots(slot: Omit<ResourceSlotOccupancy, 'queued'>): number {
+  return slot.capacity - slot.holders.length - slot.waiters.length;
+}
+
+/**
+ * What keeps an admitted failed or paused run from resuming now.
+ *
+ * A paused run that still holds its slot keeps it. A paused run that gave its slot back
+ * never lost its admission, so it waits only for holders and for waiters refused before
+ * it, never for queued new starts. A failed run's claim ended, so its resume is a new
+ * decision and must not pass any promised work: a waiter or a queued request.
+ */
+export function resourceResumeBlocker(
+  slot: ResourceSlotOccupancy,
+  run: Pick<WorkflowRun, 'id' | 'metadata'> & { status: 'failed' | 'paused' }
+): ResourceBlocker | null {
+  const others = slot.holders.filter(holder => holder.id !== run.id);
+  if (others[0] && others.length >= slot.capacity) return { kind: 'run', id: others[0].id };
+  if (others.length < slot.holders.length) return null;
+  if (run.status === 'paused') {
+    const own = readCapacityWait(run.metadata);
+    const ahead = slot.waiters.filter(
+      waiter =>
+        waiter.id !== run.id &&
+        (own === undefined || compareCapacityWaiters(waiter, { id: run.id, ...own }) < 0)
+    );
+    return ahead[0] && others.length + ahead.length >= slot.capacity
+      ? { kind: 'run', id: ahead[0].id }
+      : null;
+  }
+  if (slot.waiters[0]) return { kind: 'run', id: slot.waiters[0].id };
+  return slot.queued === undefined ? null : { kind: 'request', id: slot.queued };
 }
 
 export interface IResourceStartStore {

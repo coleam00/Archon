@@ -254,3 +254,28 @@ test('reports deferral failure while admitting other rows', async () => {
   });
   expect(outcomes[1]?.kind).toBe('accepted');
 });
+
+test('a row waiting for capacity is deferred and keeps its outcome', async () => {
+  const wait = {
+    owner: 'node',
+    kind: 'time',
+    nodeId: 'delay',
+    waitingSince: '2026-08-24T10:00:00.000Z',
+    resumeAt: '2026-08-24T11:00:00.000Z',
+  };
+  mockListDueWorkflowContinuations.mockResolvedValue([run('full', 'paused', { wait })]);
+  mockDeferWorkflowContinuation.mockReset();
+  mockDeferWorkflowContinuation.mockResolvedValue(undefined);
+  const blocker = { kind: 'run' as const, id: 'holder' };
+  const outcomes = await wakeDueWorkflowContinuations(
+    store,
+    new Date('2026-08-24T11:00:00.000Z'),
+    async () => ({ kind: 'waiting_for_capacity', blocker })
+  );
+  expect(outcomes).toEqual([{ runId: 'full', kind: 'waiting_for_capacity', blocker }]);
+  expect(mockDeferWorkflowContinuation).toHaveBeenCalledWith('full', '2026-08-24T11:01:00.000Z', {
+    kind: 'wait',
+    nodeId: 'delay',
+    resumeAt: '2026-08-24T11:00:00.000Z',
+  });
+});

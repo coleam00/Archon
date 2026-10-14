@@ -275,6 +275,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+      Promise.resolve({ released: false })
+    ),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
@@ -3666,6 +3669,61 @@ describe('executeWorkflow', () => {
         throw new Error('Expected completed workflow result');
       }
       expect(result.summary).toBeUndefined();
+    });
+  });
+
+  describe('paused exit', () => {
+    const pausedAt = (approval: Record<string, unknown>) =>
+      makeRun({ status: 'paused', metadata: { approval } });
+    const run = (store: IWorkflowStore) =>
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      });
+
+    it('gives back the resource slot of a pause the host continues', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const result = await run(
+        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(releasePausedRunSlot.mock.calls).toEqual([
+        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
+      ]);
+    });
+
+    it('keeps the slot of a parent blocked on its child', async () => {
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const paused = pausedAt({
+        type: 'child_workflow',
+        nodeId: 'child',
+        message: '',
+        pauseId: 'p1',
+        childRunId: 'child-run',
+      });
+      await run(makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot }));
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+    });
+
+    it('still reports the pause when the release fails', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const result = await run(
+        makeStore({
+          getWorkflowRun: mock(async () => paused),
+          releasePausedRunSlot: mock(async () => {
+            throw new Error('database unavailable');
+          }),
+        })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowRunId: paused.id }),
+        'workflow.paused_slot_release_failed'
+      );
     });
   });
 

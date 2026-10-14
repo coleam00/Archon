@@ -69,7 +69,7 @@ This binding maps the issue number from the event and the repository from a lite
 }
 ```
 
-A run waiting at the approval gate is `paused`, and a paused run keeps holding its resource. With the default `capacity` of 1, one unreviewed draft would queue every later issue behind it. With `capacity: 3`, new issues keep starting while up to two drafts wait; once three wait, later issues queue until one is reviewed. Runs that the classifier skips finish in seconds and release their slot.
+A run waiting at the approval gate is `paused`, and it gives its resource slot back while it waits, so unreviewed drafts do not block later issues. `capacity: 3` bounds how many investigations execute at once. When a draft is approved, its run continues ahead of queued issues once a slot frees. This needs a continuation host: `archon serve`, or `archon workflow wake --watch` beside the trigger host. See [resource, capacity, and overlap](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
 
 The run uses the provider configuration and credentials of `runAsUserId`. The `gh` CLI must be authenticated for that user on the execution host, because both agents and the `post` node call it.
 

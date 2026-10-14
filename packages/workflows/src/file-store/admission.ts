@@ -21,6 +21,13 @@ import {
 import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
+  capacityWaiters,
+  freeResourceSlots,
+  resourceResumeBlocker,
+  resourceStartBlocker,
+  type CapacityWaiter,
+  type ResourceBlocker,
+  type ResourceSlotOccupancy,
   validateStartReceiptLimit,
   compareStartReceipts,
   compareCodeUnits,
@@ -28,8 +35,15 @@ import {
   type StartBindingInspection,
   type ResourceStartRequestInspection,
 } from '../resource-start-store';
-import { WorkflowNotResumableError, WorkflowResourceBusyError } from '../store';
-import { commit, isRunArchived, readJson, readSnapshot, recoverBeforeRead } from './commit';
+import { WorkflowNotResumableError } from '../store';
+import {
+  commit,
+  isRunArchived,
+  listRunSnapshots,
+  readJson,
+  readSnapshot,
+  recoverBeforeRead,
+} from './commit';
 import { createTransactionView } from './transaction-view';
 
 /** `source` names the slot document in a malformed attempt owner's error. */
@@ -102,7 +116,7 @@ interface AdmissionTransaction {
   request(id: string): Promise<Request | null>;
   receipt(id: string): Promise<Receipt | null>;
   slot(resource: string, capacity?: number): Promise<Slot>;
-  live(resource: string, capacity?: number): Promise<Slot>;
+  occupancy(resource: string): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
     runs: Map<string, WorkflowRun>
@@ -111,7 +125,10 @@ interface AdmissionTransaction {
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
-  resume(run: WorkflowRun): Promise<void>;
+  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
+  /** Remove the run holder of an admitted run; whether one was removed. */
+  release(id: string): Promise<boolean>;
 }
 
 // Used only inside commit: all holder reads and document changes share the run's lock.
@@ -143,8 +160,8 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     slots.set(resource, row);
     return row;
   }
-  async function live(resource: string, capacity?: number): Promise<Slot> {
-    const row = await slot(resource, capacity);
+  async function live(resource: string): Promise<Slot> {
+    const row = await slot(resource);
     const holders: typeof row.holders = [];
     for (const holder of row.holders) {
       if (holder.kind === 'attempt') {
@@ -156,6 +173,26 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     }
     row.holders = holders;
     return row;
+  }
+  // Waiters live only on run rows, so finding them scans every run, as the due scan does.
+  async function waiters(resource: string, holders: Slot['holders']): Promise<CapacityWaiter[]> {
+    const candidates: WorkflowRun[] = [];
+    for (const run of await listRunSnapshots(root)) {
+      if (run.status !== 'paused' || holders.some(h => h.kind === 'run' && h.id === run.id))
+        continue;
+      const row = await request(run.id);
+      if (row?.status === 'admitted' && row.resource === resource) candidates.push(run);
+    }
+    return capacityWaiters(candidates);
+  }
+  async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
+    const row = await live(resource);
+    return {
+      capacity: row.capacity,
+      holders: row.holders,
+      waiters: await waiters(resource, row.holders),
+      queued: row.queue[0],
+    };
   }
   async function admitExisting(
     row: Request,
@@ -184,14 +221,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     const resource = await slot(intent.resource, intent.capacity);
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
-    await live(intent.resource);
-    const older = resource.queue[0];
-    const first = resource.holders[0];
-    const blocker: Request['blocker'] = older
-      ? { kind: 'request', id: older }
-      : resource.holders.length >= resource.capacity && first
-        ? { kind: 'run', id: first.id }
-        : null;
+    const blocker = resourceStartBlocker(await occupancy(intent.resource));
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -231,19 +261,29 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
       (await slot(row.resource)).holders.some(h => h.kind === 'run' && h.id === id)
     );
   }
-  async function resume(run: WorkflowRun): Promise<void> {
+  async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
     const row = await request(run.id);
-    if (row?.status !== 'admitted') return;
+    if (row?.status !== 'admitted') return null;
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
-    const resource = await live(row.resource);
-    const others = resource.holders.filter(holder => holder.id !== run.id);
-    if (others.length >= resource.capacity && others[0])
-      throw new WorkflowResourceBusyError(run.id, { kind: 'run', id: others[0].id });
-    if (run.status === 'failed' && resource.queue[0])
-      throw new WorkflowResourceBusyError(run.id, { kind: 'request', id: resource.queue[0] });
+    const blocker = resourceResumeBlocker(await occupancy(row.resource), {
+      ...run,
+      status: run.status,
+    });
+    if (blocker) return blocker;
+    const resource = await slot(row.resource);
     if (!resource.holders.some(h => h.kind === 'run' && h.id === run.id))
       resource.holders.push({ kind: 'run', id: run.id });
+    return null;
+  }
+  async function release(id: string): Promise<boolean> {
+    const row = await request(id);
+    if (row?.status !== 'admitted') return false;
+    const resource = await slot(row.resource);
+    const holders = resource.holders.filter(h => h.kind !== 'run' || h.id !== id);
+    if (holders.length === resource.holders.length) return false;
+    resource.holders = holders;
+    return true;
   }
   async function changedDocuments(): Promise<Record<string, unknown>> {
     const changed: Record<string, unknown> = {};
@@ -260,13 +300,14 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     request,
     receipt,
     slot,
-    live,
+    occupancy,
     admit,
     admitExisting,
     binding,
     owned,
     canClaim,
     resume,
+    release,
   };
 }
 
@@ -336,13 +377,15 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
-        const resource = await tx.live(options.resource);
+        let free = freeResourceSlots(await tx.occupancy(options.resource));
+        const resource = await tx.slot(options.resource);
         const admitted: ResourceStartDisposition[] = [];
-        while (resource.holders.length < resource.capacity && resource.queue[0]) {
+        while (free > 0 && resource.queue[0]) {
           const row = await tx.request(resource.queue[0]);
           if (!row) throw new Error('Queued resource request missing');
           if (row.hostId !== options.hostId) break;
           admitted.push(await tx.admitExisting(row, runs));
+          free -= 1;
         }
         return admitted;
       }),

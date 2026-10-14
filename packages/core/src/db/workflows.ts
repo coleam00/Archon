@@ -12,8 +12,10 @@ import { lockConversationOwnership } from './conversation-ownership';
 import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
+  pauseCursorMatches,
   resumeCursorMatches,
   type GateResolutionEvent,
+  type PauseCursor,
 } from '@archon/workflows/store';
 export {
   WorkflowNotResumableError,
@@ -26,8 +28,9 @@ import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-obs
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
   addResourceSlotHolder,
-  liveResourceSlotHolders,
   lockResourceSlot,
+  removeResourceSlotHolder,
+  resourceStartOccupancy,
   type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
@@ -35,6 +38,7 @@ import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import {
   normalizeWorkflowRun,
+  parseJsonObject,
   readWorkflowRunOrigin,
   type WorkflowRunRow,
 } from './workflow-run-normalization';
@@ -65,7 +69,10 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
+  CAPACITY_WAIT_METADATA_KEY,
+  readCapacityWait,
 } from '@archon/workflows/schemas/workflow-run';
+import { resourceResumeBlocker } from '@archon/workflows/resource-start-store';
 import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
@@ -133,20 +140,6 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
  */
 function rowLockClause(): string {
   return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
-}
-
-function parseJsonObject(raw: unknown): Record<string, unknown> | null {
-  let value = raw;
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function normalizeMetadata(raw: unknown): Record<string, unknown> {
@@ -1010,7 +1003,7 @@ export async function resumeWorkflowRun(
   // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
   // (SQLite does not support RETURNING on UPDATE statements)
   // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: { rowCount: number };
+  let updateResult: { rowCount: number } | { busy: WorkflowResourceBusyError };
   try {
     // Refresh started_at to NOW so the resumed row competes fairly with
     // currently-active rows in getActiveWorkflowRunByPath's older-wins
@@ -1080,25 +1073,28 @@ export async function resumeWorkflowRun(
       )
         return { rowCount: 0 };
       const resourceKey = prior?.resource_key ?? undefined;
-      if (resourceKey !== undefined && (prior?.status === 'failed' || prior?.status === 'paused')) {
+      const status = prior?.status;
+      if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
         const { capacity } = await lockResourceSlot(query, resourceKey);
-        const others = (await liveResourceSlotHolders(query, resourceKey)).filter(
-          holder => holder.id !== id
+        const metadata = normalizeMetadata(prior?.metadata);
+        const blocker = resourceResumeBlocker(
+          await resourceStartOccupancy(query, resourceKey, capacity),
+          { id, status, metadata }
         );
-        if (others.length >= capacity && others[0]) {
-          throw new WorkflowResourceBusyError(id, { kind: 'run', id: others[0].id });
-        }
-        // A failed run released its slot and must not bypass promised queued work.
-        // A paused run still holds it: refusing that continuation would deadlock the queue.
-        if (prior.status === 'failed') {
-          const queued = await query<{ id: string }>(
-            `SELECT id FROM remote_agent_resource_start_requests
-              WHERE resource_key = $1 AND status = 'queued'
-              ORDER BY queue_position LIMIT 1`,
-            [resourceKey]
-          );
-          const next = queued.rows[0];
-          if (next) throw new WorkflowResourceBusyError(id, { kind: 'request', id: next.id });
+        if (blocker) {
+          // Committed with the refusal, so the paused run keeps its place as a waiter.
+          if (status === 'paused' && readCapacityWait(metadata) === undefined)
+            await query(
+              `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)}
+                WHERE id = $1`,
+              [
+                id,
+                JSON.stringify({
+                  [CAPACITY_WAIT_METADATA_KEY]: { since: new Date().toISOString() },
+                }),
+              ]
+            );
+          return { busy: new WorkflowResourceBusyError(id, blocker, status === 'paused') };
         }
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
@@ -1110,6 +1106,7 @@ export async function resumeWorkflowRun(
         error: null,
         [RUN_STOP_REASON_METADATA_KEY]: null,
         continuation_retry_at: null,
+        [CAPACITY_WAIT_METADATA_KEY]: null,
         ...(scheduled !== null && triggeredAt !== null
           ? { scheduled_resume: { ...scheduled, triggeredAt } }
           : {}),
@@ -1155,10 +1152,10 @@ export async function resumeWorkflowRun(
     });
   } catch (error) {
     const err = error as Error;
-    if (error instanceof WorkflowResourceBusyError) throw error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_failed');
     throw new Error(`Failed to resume workflow run: ${err.message}`);
   }
+  if ('busy' in updateResult) throw updateResult.busy;
 
   if (updateResult.rowCount === 0) {
     // CAS miss: the row is no longer resumable — deleted, terminal, or already
@@ -1642,6 +1639,51 @@ export async function cancelFanOutRun(
     await reportRunTerminal(id);
   }
   return { cancelled };
+}
+
+/**
+ * Give back the resource slot of an admitted run still paused at exactly `cursor`
+ * (`IWorkflowStore.releasePausedRunSlot`). The run row is pinned and the slot locked in
+ * the same transaction, so the release never races the resume that reacquires it.
+ */
+export async function releasePausedRunSlot(
+  id: string,
+  cursor: PauseCursor
+): Promise<{ released: boolean }> {
+  return getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'sqlite') {
+      await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+    }
+    const rows = await query<{ status: string; metadata: unknown; resource_key: string | null }>(
+      `SELECT w.status, w.metadata, q.resource_key
+         FROM remote_agent_workflow_runs w
+         LEFT JOIN remote_agent_resource_start_requests q
+           ON q.id = w.id AND q.status = 'admitted'
+        WHERE w.id = $1${getDatabaseType() === 'postgresql' ? ' FOR UPDATE OF w' : ''}`,
+      [id]
+    );
+    const row = rows.rows[0];
+    if (
+      !row?.resource_key ||
+      !pauseCursorMatches(
+        {
+          status: workflowRunStatusSchema.parse(row.status),
+          metadata: normalizeMetadata(row.metadata),
+        },
+        cursor
+      )
+    )
+      return { released: false };
+    await lockResourceSlot(query, row.resource_key);
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+        WHERE id = $1`,
+      [id, JSON.stringify({ [CAPACITY_WAIT_METADATA_KEY]: null })]
+    );
+    return {
+      released: await removeResourceSlotHolder(query, row.resource_key, { kind: 'run', id }),
+    };
+  });
 }
 
 /**

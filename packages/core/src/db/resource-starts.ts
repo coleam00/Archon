@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
+  freeResourceSlots,
+  resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
@@ -30,8 +32,8 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
-  liveResourceSlotHolders,
   lockResourceSlot,
+  resourceStartOccupancy,
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
@@ -105,14 +107,9 @@ async function admitResourceStartWithQuery(
   );
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
-  // An older waiter keeps FIFO even when a slot is free, so a new arrival cannot pass it.
-  const older = await oldestQueuedRequest(query, intent.resource);
-  const holders = await liveResourceSlotHolders(query, intent.resource);
-  const blocker: ResourceStartRequestInspection['blocker'] = older
-    ? { kind: 'request', id: older.id }
-    : holders.length >= capacity && holders[0]
-      ? { kind: 'run', id: holders[0].id }
-      : null;
+  const blocker = resourceStartBlocker(
+    await resourceStartOccupancy(query, intent.resource, capacity)
+  );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -160,7 +157,7 @@ export async function drainResourceStarts(options: {
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
     const { capacity } = await lockResourceSlot(query, options.resource);
-    let free = capacity - (await liveResourceSlotHolders(query, options.resource)).length;
+    let free = freeResourceSlots(await resourceStartOccupancy(query, options.resource, capacity));
     const admitted: ResourceStartDisposition[] = [];
     while (free > 0) {
       const head = await oldestQueuedRequest(query, options.resource);

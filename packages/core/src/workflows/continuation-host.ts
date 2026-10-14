@@ -1,5 +1,9 @@
 import type { WorkflowHost } from './host-store';
-import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
+import {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  type IWorkflowStore,
+} from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { resolveRunWorkflow } from './resolve-run-workflow';
@@ -20,6 +24,8 @@ type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
+  /** The run's resource is full; it stays paused or failed and is retried after a deferral. */
+  | { kind: 'waiting_for_capacity'; blocker: WorkflowResourceBusyError['blocker'] }
   | { kind: 'unavailable'; reason: string };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -104,6 +110,8 @@ export async function resumeWorkflowContinuation(
       error instanceof RunLiveOwnerAlreadyOwnedError
     )
       return { kind: 'not-accepted' };
+    if (error instanceof WorkflowResourceBusyError)
+      return { kind: 'waiting_for_capacity', blocker: error.blocker };
     throw error;
   }
 }
@@ -152,6 +160,11 @@ export async function wakeDueWorkflowContinuations(
         log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
       }
+      if (outcome.kind === 'waiting_for_capacity')
+        log.info(
+          { runId: run.id, blocker: outcome.blocker },
+          'workflow_continuation_capacity_wait'
+        );
       if (outcome.kind !== 'accepted') {
         try {
           await store.deferWorkflowContinuation(

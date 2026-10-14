@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  continuablePauseCursor,
+  type PauseCursor,
   WorkflowEventCursorError,
   type WorkflowEventCursor,
   WorkflowRunPauseConflictError,
@@ -22,6 +25,8 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   approvalContextSchema,
   continuablePause,
+  pendingWorkflowWaitDeadline,
+  readCapacityWait,
   workflowWaitContextSchema,
   isTerminalRunStatus,
   type ApprovalContext,
@@ -344,6 +349,112 @@ export function describeWorkflowStoreConformance(
         blocker: { kind: 'request', id: queued.launch.run.id },
       });
       expect((await store.getWorkflowRun(id))?.status).toBe('failed');
+    });
+    const gateCursor: PauseCursor = { kind: 'pause', nodeId: 'review', pauseId: 'first' };
+    const admitPaused = async (intent: ResourceStartIntent): Promise<string> => {
+      expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+      const id = intent.launch.run.id;
+      await store.claimPendingWorkflowRun(id);
+      await store.pauseWorkflowRun(id, approval);
+      return id;
+    };
+    const end = async (id: string): Promise<void> => {
+      await store.claimPendingWorkflowRun(id);
+      await store.completeWorkflowRun(id, { duration_ms: 1 });
+    };
+    const drain = (): ReturnType<IWorkflowStore['drainResourceStarts']> =>
+      store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+    test('a released paused run waits for capacity ahead of queued new starts', async () => {
+      const a = await admitPaused(start());
+      const b = start(),
+        c = start();
+      expect(await store.admitResourceStart(b)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: a },
+      });
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: true });
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: b.launch.run.id, runId: b.launch.run.id },
+      ]);
+      const refusal = await rejection(store.resumeWorkflowRun(a));
+      expect(refusal).toBeInstanceOf(WorkflowResourceBusyError);
+      expect(refusal).toMatchObject({
+        blocker: { kind: 'run', id: b.launch.run.id },
+        waitsForCapacity: true,
+      });
+      const waiting = await store.getWorkflowRun(a);
+      expect(waiting?.status).toBe('paused');
+      const since = readCapacityWait(waiting?.metadata);
+      expect(since).toBeDefined();
+      await rejection(store.resumeWorkflowRun(a));
+      expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
+      // The waiter counts against capacity, so the new start queues behind the holder.
+      expect(await store.admitResourceStart(c)).toMatchObject({ status: 'queued' });
+      await end(b.launch.run.id);
+      expect(await drain()).toEqual([]);
+      expect((await store.resumeWorkflowRun(a)).status).toBe('running');
+      expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toBeUndefined();
+      expect(await drain()).toEqual([]);
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: c.launch.run.id },
+      ]);
+    });
+    test('capacity waiters keep their refusal order and block a failed run resume', async () => {
+      const first = await admitPaused(start());
+      await store.releasePausedRunSlot(first, gateCursor);
+      const second = await admitPaused(start());
+      await store.releasePausedRunSlot(second, gateCursor);
+      const holder = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      const holderId = holder.launch.run.id;
+      for (const id of [first, second]) {
+        expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+          blocker: { kind: 'run', id: holderId },
+        });
+        await Bun.sleep(2);
+      }
+      await store.claimPendingWorkflowRun(holderId);
+      await store.failWorkflowRun(holderId, 'failed');
+      expect(await rejection(store.resumeWorkflowRun(second))).toMatchObject({
+        blocker: { kind: 'run', id: first },
+      });
+      expect(await rejection(store.resumeWorkflowRun(holderId))).toMatchObject({
+        blocker: { kind: 'run', id: first },
+        waitsForCapacity: false,
+      });
+      expect((await store.resumeWorkflowRun(first)).status).toBe('running');
+      expect(await rejection(store.resumeWorkflowRun(second))).toMatchObject({
+        blocker: { kind: 'run', id: first },
+      });
+    });
+    test('release refuses another pause and a run that holds no slot', async () => {
+      const id = await admitPaused(start());
+      for (const cursor of [
+        { ...gateCursor, pauseId: 'other' },
+        { ...gateCursor, nodeId: 'other' },
+        { kind: 'wait' as const, nodeId: 'review', resumeAt: wait.resumeAt },
+      ])
+        expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: false });
+      expect(await store.admitResourceStart(start())).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id },
+      });
+      const plain = await running(store);
+      await store.pauseWorkflowRun(plain.id, approval);
+      expect(await store.releasePausedRunSlot(plain.id, gateCursor)).toEqual({ released: false });
+      expect((await store.getWorkflowRun(plain.id))?.status).toBe('paused');
+    });
+    test('a paused run that kept its slot resumes ahead of queued new starts', async () => {
+      const id = await admitPaused(start());
+      const queued = start();
+      expect(await store.admitResourceStart(queued)).toMatchObject({ status: 'queued' });
+      expect((await store.resumeWorkflowRun(id)).status).toBe('running');
+      expect(await drain()).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: queued.launch.run.id },
+      ]);
     });
     for (const { name, timestamps } of [
       {
@@ -1148,7 +1259,7 @@ export function describeWorkflowStoreConformance(
         answered: false,
       });
     });
-    test('a pause is due once answered exactly when continuablePause says the host continues it', async () => {
+    test('a pause is due and gives back its slot exactly when the host continues it', async () => {
       const gate = (
         extra: Partial<Pick<ApprovalContext, 'type' | 'childRunId' | 'nodeId' | 'resolved'>>
       ): ApprovalContext => ({ ...approval, ...extra });
@@ -1157,6 +1268,11 @@ export function describeWorkflowStoreConformance(
         metadata?: Record<string, unknown>;
         pause: (id: string) => Promise<unknown>;
       }[] = [
+        {
+          name: 'time wait',
+          pause: id =>
+            store.pauseWorkflowRunForWait(id, wait, { kind: 'started', stepName: 'wait' }),
+        },
         {
           name: 'gate with a pauseId',
           pause: id => store.pauseWorkflowRun(id, gate({ resolved: 'approved' })),
@@ -1217,9 +1333,18 @@ export function describeWorkflowStoreConformance(
         const listed = (await store.listDueWorkflowContinuations(new Date(), 50)).some(
           due => due.id === run.id
         );
-        expect({ shape: shape.name, listed }).toEqual({
+        // A pause gives back its slot exactly when the host continues it by itself; a
+        // released pause the host never continues would strand its run.
+        expect({
           shape: shape.name,
-          listed: continuablePause(stored) !== undefined,
+          listed,
+          releases: continuablePauseCursor(stored) !== undefined,
+        }).toEqual({
+          shape: shape.name,
+          listed:
+            continuablePause(stored) !== undefined ||
+            pendingWorkflowWaitDeadline(stored) !== undefined,
+          releases: listed,
         });
       }
     });
