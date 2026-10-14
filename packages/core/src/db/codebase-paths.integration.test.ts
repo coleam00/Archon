@@ -8,6 +8,7 @@ import {
   getProjectStoragePaths,
   resolveProjectStorageKey,
 } from '@archon/paths';
+import { getWorktreeBase, toRepoPath } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { createMockPlatform } from '../test/mocks/platform';
 import { quoteCommandArg } from '../utils/command-args';
@@ -16,9 +17,10 @@ import { verifyCodebasePathContract } from '../test/codebase-path-contract';
 
 // Conversations need a configured default provider; isolate the home that supplies it.
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-codebase-paths-')));
-process.env.ARCHON_HOME = join(root, 'home');
-await mkdir(process.env.ARCHON_HOME);
-await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
+const archonHome = join(root, 'home');
+process.env.ARCHON_HOME = archonHome;
+await mkdir(archonHome);
+await writeFile(join(archonHome, 'config.yaml'), 'defaultAssistant: claude\n');
 
 const db = new SqliteAdapter(':memory:');
 mock.module('./connection', () => ({
@@ -98,6 +100,56 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
       );
       expect(nextRun.stateDir).toBe(storage.stateRoot);
       expect(await readFile(join(nextRun.stateDir, 'saved.txt'), 'utf8')).toBe(kind);
+    }
+    for (const { replacementPath, movesWorktreesOnly } of [
+      { replacementPath: join(root, 'different-basename'), movesWorktreesOnly: false },
+      {
+        replacementPath: join(archonHome, 'workspaces', 'acme', 'widget', 'db'),
+        movesWorktreesOnly: true,
+      },
+    ]) {
+      await mkdir(replacementPath, { recursive: true });
+      const init = Bun.spawn(['git', '-C', replacementPath, 'init'], {
+        stdout: 'ignore',
+        stderr: 'pipe',
+      });
+      expect(await init.exited).toBe(0);
+      await db.query(
+        'UPDATE remote_agent_codebases SET kind = $1, default_cwd = $2 WHERE id = $3',
+        ['repo', 'projects/db', project.id]
+      );
+      const legacy = { ...project, kind: 'repo' as const, default_cwd: 'projects/db' };
+      const replacement = { ...legacy, default_cwd: replacementPath };
+      const currentRoot = getProjectStoragePaths(
+        resolveProjectStorageKey(legacy, legacy.default_cwd)
+      ).root;
+      const replacementRoot = getProjectStoragePaths(
+        resolveProjectStorageKey(replacement, replacement.default_cwd)
+      ).root;
+      if (movesWorktreesOnly) {
+        expect(replacementRoot).toBe(currentRoot);
+        expect(getWorktreeBase(toRepoPath(replacementPath), project.name).base).not.toBe(
+          getWorktreeBase(toRepoPath(legacy.default_cwd), project.name).base
+        );
+      } else {
+        expect(replacementRoot).not.toBe(currentRoot);
+      }
+      platform.sendMessage.mockClear();
+      await handleMessage(
+        platform,
+        'legacy-repair',
+        `/register-project ${quoteCommandArg(project.name)} ${quoteCommandArg(replacementPath)}`,
+        { actor: { kind: 'operator' } }
+      );
+      expect(platform.sendMessage.mock.calls[0]?.[1]).toContain('would move its Archon storage');
+      expect(await codebases.listCodebaseRegistrations()).toEqual([
+        {
+          id: project.id,
+          name: project.name,
+          kind: 'repo',
+          stored_default_cwd: legacy.default_cwd,
+        },
+      ]);
     }
     await db.query('UPDATE remote_agent_codebases SET kind = $1, default_cwd = $2 WHERE id = $3', [
       'folder',

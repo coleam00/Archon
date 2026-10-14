@@ -2017,6 +2017,39 @@ describe('orchestrator-agent handleMessage', () => {
       });
     }
 
+    for (const target of ['normalTarget', 'eventTarget', 'perfTarget']) {
+      for (const destination of [1, 2]) {
+        test(`/register-project registers a non-git folder with global trace2.${target}=${destination}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), 'archon-global-trace-'));
+          const configPath = join(projectPath, 'gitconfig');
+          const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+          await writeFile(configPath, `[trace2]\n${target} = ${destination}\n`);
+          process.env.GIT_CONFIG_GLOBAL = configPath;
+          try {
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue([]);
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(mockCreateCodebase).toHaveBeenCalledWith({
+              name: 'my-app',
+              default_cwd: await mockCanonicalizeProjectPath(projectPath),
+              default_branch: null,
+              kind: 'folder',
+            });
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('registered successfully')
+            );
+          } finally {
+            if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+            else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
+
     test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives

@@ -36,12 +36,16 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
         timeout: 10000,
         env: {
           ...process.env,
-          // Trace output shares stderr with the discovery diagnostic.
+          // Trace output shares stderr with the discovery diagnostic; Trace2
+          // targets can also come from global config without environment keys.
           ...Object.fromEntries(
             Object.keys(process.env)
               .filter(key => key.startsWith('GIT_TRACE'))
               .map(key => [key, '0'])
           ),
+          GIT_TRACE2: '0',
+          GIT_TRACE2_EVENT: '0',
+          GIT_TRACE2_PERF: '0',
           LC_ALL: 'C',
         },
       }

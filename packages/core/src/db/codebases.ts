@@ -6,14 +6,8 @@ import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
 import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
-import {
-  createLogger,
-  captureCodebaseRegistered,
-  getProjectStoragePaths,
-  isPathInside,
-  resolveProjectStorageKey,
-} from '@archon/paths';
-import { getWorktreeBase, toRepoPath } from '@archon/git';
+import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
   assertAbsoluteDefaultCwd(row.default_cwd, row.name);
@@ -249,20 +243,6 @@ export class CodebaseStorageIdentityChangeError extends Error {
 }
 
 /**
- * Every Archon-managed location derived from a codebase's name. Storage and
- * worktrees are resolved by separate functions that do not always agree (the
- * worktree base also reads owner/repo from a path inside the workspaces tree),
- * so a rename must leave both unchanged.
- */
-function nameDerivedLocations(codebase: Codebase): string[] {
-  const storageRoot = getProjectStoragePaths(
-    resolveProjectStorageKey(codebase, codebase.default_cwd)
-  ).root;
-  if (codebase.kind === 'folder') return [storageRoot];
-  return [storageRoot, getWorktreeBase(toRepoPath(codebase.default_cwd), codebase.name).base];
-}
-
-/**
  * Names the transaction-scoped advisory lock that serializes codebase renames
  * on PostgreSQL. Hashed like the state-document locks, so no numeric key has to
  * be kept apart from the others by hand.
@@ -291,8 +271,8 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
   if (!current) throw new CodebaseNotFoundError(id);
   if (current.name === name) return current;
 
-  const currentPaths = nameDerivedLocations(current);
-  const requestedPaths = nameDerivedLocations({ ...current, name });
+  const currentPaths = getProjectLocations(current);
+  const requestedPaths = getProjectLocations({ ...current, name });
   const moved = currentPaths.findIndex((path, i) => path !== requestedPaths[i]);
   if (moved !== -1) {
     throw new CodebaseStorageIdentityChangeError(
