@@ -12,21 +12,6 @@ import type {
   ProviderKeyConnection,
 } from '../skills';
 
-/**
- * A credential counts as "usable" when the calling user connected it as a kind
- * this agent consumes (a Claude subscription does not serve Pi), the install
- * env already carries it, or the ambient chain is detected. Matches
- * the per-credential check in the server's `buildAgentCredentialMatrix`
- * (expressed there with falsy coercion rather than `=== true`). Used for the
- * per-row display and backend counts; the boolean ready/not-ready verdict
- * itself comes from the server's `ready` field (see `agentReadiness`).
- */
-export function isCredentialUsable(c: AgentCredentialStatus): boolean {
-  const consumed =
-    c.connected !== null && c.kinds.includes(c.connected === 'oauth' ? 'subscription' : 'api_key');
-  return consumed || c.installEnv || c.ambientConfigured === true;
-}
-
 export type AgentReadinessState = 'ready' | 'needs-credential' | 'dynamic';
 
 export interface AgentReadiness {
@@ -37,8 +22,8 @@ export interface AgentReadiness {
 
 /** Detail string for one usable credential ("Anthropic key", "subscription", …). */
 function usableCredentialDetail(c: AgentCredentialStatus): string {
-  if (c.connected === 'oauth') return 'subscription connected';
-  if (c.connected === 'api_key') return `${c.displayName} key connected`;
+  if (c.connectionConsumed && c.connected === 'oauth') return 'subscription connected';
+  if (c.connectionConsumed && c.connected === 'api_key') return `${c.displayName} key connected`;
   if (c.installEnv) return 'using install env';
   return 'ambient credentials detected';
 }
@@ -59,7 +44,7 @@ export function agentReadiness(agent: AgentCredentials): AgentReadiness {
   if (!agent.ready) {
     return { state: 'needs-credential', detail: 'needs credential' };
   }
-  const usable = agent.credentials.filter(isCredentialUsable);
+  const usable = agent.credentials.filter(c => c.usable);
   if (agent.credentials.length > 1) {
     return {
       state: 'ready',
@@ -67,9 +52,8 @@ export function agentReadiness(agent: AgentCredentials): AgentReadiness {
     };
   }
   const first = usable[0];
-  // Drift guard (live, not dead code): the server said ready but the client's
-  // per-credential detection found nothing nameable — fall back to a generic
-  // label rather than contradicting the server's verdict.
+  // The server sets `ready` exactly when a credential is `usable`; the fallback only
+  // covers the index type.
   return { state: 'ready', detail: first ? usableCredentialDetail(first) : 'ready' };
 }
 

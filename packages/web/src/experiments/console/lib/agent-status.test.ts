@@ -3,20 +3,23 @@ import {
   agentReadiness,
   connectionLabel,
   filterCredentials,
-  isCredentialUsable,
   modelCountByBackend,
   providerOptionHint,
   splitPiCredentials,
 } from './agent-status';
 import type { AgentCredentialStatus, AgentCredentials, PiModelInfo } from '../skills';
 
+/** Server-shaped row: a connection is consumed and the row usable unless the override says otherwise. */
 function cred(over: Partial<AgentCredentialStatus> & { vendor: string }): AgentCredentialStatus {
+  const connectionConsumed = over.connectionConsumed ?? (over.connected ?? null) !== null;
   return {
     displayName: over.vendor,
     kinds: ['api_key'],
     connected: null,
+    connectionConsumed,
     subscriptionAvailable: false,
     installEnv: false,
+    usable: connectionConsumed || over.installEnv === true || over.ambientConfigured === true,
     ...over,
   };
 }
@@ -30,26 +33,6 @@ function agent(over: Partial<AgentCredentials> & { id: string }): AgentCredentia
     ...over,
   };
 }
-
-describe('isCredentialUsable', () => {
-  test('connected, install env, or ambient-detected each count', () => {
-    expect(isCredentialUsable(cred({ vendor: 'a', connected: 'api_key' }))).toBe(true);
-    expect(
-      isCredentialUsable(cred({ vendor: 'a', kinds: ['subscription'], connected: 'oauth' }))
-    ).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', installEnv: true }))).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', ambientConfigured: true }))).toBe(true);
-  });
-
-  test('a connected kind the agent does not consume is not usable (Claude subscription on Pi)', () => {
-    expect(isCredentialUsable(cred({ vendor: 'anthropic', connected: 'oauth' }))).toBe(false);
-  });
-
-  test('nothing detected → not usable (ambientConfigured false stays false)', () => {
-    expect(isCredentialUsable(cred({ vendor: 'a' }))).toBe(false);
-    expect(isCredentialUsable(cred({ vendor: 'a', ambientConfigured: false }))).toBe(false);
-  });
-});
 
 describe('agentReadiness', () => {
   test('dynamic catalog → dynamic state regardless of credentials', () => {
@@ -109,6 +92,18 @@ describe('agentReadiness', () => {
     ).toBe('using install env');
   });
 
+  test('a stored connection the agent does not consume is never named as its reason', () => {
+    const claudeSubscriptionOnPi = cred({
+      vendor: 'anthropic',
+      connected: 'oauth',
+      connectionConsumed: false,
+      installEnv: true,
+    });
+    expect(
+      agentReadiness(agent({ id: 'pi', ready: true, credentials: [claudeSubscriptionOnPi] })).detail
+    ).toBe('using install env');
+  });
+
   test('single-credential agent ready via ambient detection names the chain', () => {
     expect(
       agentReadiness(
@@ -144,15 +139,6 @@ describe('agentReadiness', () => {
       credentials: [cred({ vendor: 'anthropic', connected: 'api_key' }), cred({ vendor: 'groq' })],
     });
     expect(agentReadiness(pi).detail).toBe('1 backend connected');
-  });
-
-  test('drift guard: server ready:true with no client-detectable credential → generic label', () => {
-    // The server verdict wins; the client falls back to a generic 'ready'
-    // rather than contradicting it when it can't name the credential.
-    const r = agentReadiness(
-      agent({ id: 'claude', ready: true, credentials: [cred({ vendor: 'anthropic' })] })
-    );
-    expect(r).toEqual({ state: 'ready', detail: 'ready' });
   });
 });
 

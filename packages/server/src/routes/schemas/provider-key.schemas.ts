@@ -38,9 +38,11 @@ export const agentCredentialStatusSchema = z
     displayName: z.string(),
     kinds: z.array(z.enum(CREDENTIAL_KINDS)),
     connected: z.enum(['api_key', 'oauth']).nullable(),
+    connectionConsumed: z.boolean(),
     subscriptionAvailable: z.boolean(),
     installEnv: z.boolean(),
     ambientConfigured: z.boolean().optional(),
+    usable: z.boolean(),
   })
   .openapi('AgentCredentialStatus');
 

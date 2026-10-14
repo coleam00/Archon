@@ -7,6 +7,7 @@ import {
   listConnectableVendors,
   isConnectableVendor,
   buildAgentCredentialMatrix,
+  type AgentCredentialStatus,
 } from './catalog';
 
 import {
@@ -153,9 +154,9 @@ describe('credentials/catalog', () => {
       expect(pi.ready).toBe(true);
     });
 
-    test('a Claude subscription makes Claude Code ready, not Pi', () => {
-      const pi = getRegisteredProviders().find(reg => reg.id === 'pi')!;
-      const piEnv = [
+    /** Runs `fn` with every credential env var the matrix reads unset, then `env` applied. */
+    function withCredentialEnv(env: Record<string, string>, fn: () => void): void {
+      const keys = [
         ...Object.values(PI_PROVIDER_ENV_VARS),
         'CLAUDE_API_KEY',
         'CLAUDE_CODE_OAUTH_TOKEN',
@@ -169,22 +170,56 @@ describe('credentials/catalog', () => {
         'GOOGLE_CLOUD_PROJECT',
         'GCLOUD_PROJECT',
       ];
-      const saved = piEnv.map(key => [key, process.env[key]] as const);
-      for (const key of piEnv) delete process.env[key];
+      const saved = keys.map(key => [key, process.env[key]] as const);
+      for (const key of keys) delete process.env[key];
+      Object.assign(process.env, env);
       try {
-        const matrix = buildAgentCredentialMatrix([{ provider: 'anthropic', kind: 'oauth' }]);
-        expect(matrix.find(a => a.id === 'claude')!.ready).toBe(true);
-        const piEntry = matrix.find(a => a.id === pi.id)!;
-        const anthropic = piEntry.credentials.find(s => s.vendor === 'anthropic')!;
-        expect(anthropic.connected).toBe('oauth');
-        expect(anthropic.subscriptionAvailable).toBe(false);
-        expect(piEntry.ready).toBe(false);
+        fn();
       } finally {
         for (const [key, value] of saved) {
           if (value === undefined) delete process.env[key];
           else process.env[key] = value;
         }
       }
+    }
+
+    function anthropicRow(
+      matrix: ReturnType<typeof buildAgentCredentialMatrix>,
+      agentId: string
+    ): { ready: boolean; row: AgentCredentialStatus } {
+      const agent = matrix.find(a => a.id === agentId)!;
+      return { ready: agent.ready, row: agent.credentials.find(s => s.vendor === 'anthropic')! };
+    }
+
+    test('a Claude subscription makes Claude Code ready, not Pi', () => {
+      withCredentialEnv({}, () => {
+        const matrix = buildAgentCredentialMatrix([{ provider: 'anthropic', kind: 'oauth' }]);
+        const claude = anthropicRow(matrix, 'claude');
+        expect(claude.ready).toBe(true);
+        expect(claude.row).toMatchObject({ connectionConsumed: true, usable: true });
+        const pi = anthropicRow(matrix, 'pi');
+        expect(pi.row).toMatchObject({
+          connected: 'oauth',
+          connectionConsumed: false,
+          subscriptionAvailable: false,
+          usable: false,
+        });
+        expect(pi.ready).toBe(false);
+      });
+    });
+
+    test('install env counts only the variables the agent itself reads', () => {
+      withCredentialEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'test-token' }, () => {
+        const matrix = buildAgentCredentialMatrix([]);
+        expect(anthropicRow(matrix, 'claude').ready).toBe(true);
+        expect(anthropicRow(matrix, 'pi').row.installEnv).toBe(false);
+        expect(anthropicRow(matrix, 'pi').ready).toBe(false);
+      });
+      withCredentialEnv({ ANTHROPIC_OAUTH_TOKEN: 'test-token' }, () => {
+        const pi = anthropicRow(buildAgentCredentialMatrix([]), 'pi');
+        expect(pi.row.installEnv).toBe(true);
+        expect(pi.ready).toBe(true);
+      });
     });
 
     test('subscriptionAvailable: all three subscription vendors connectable (#1924 gate lifted)', () => {

@@ -243,7 +243,9 @@ function CredentialRow({
   // for Codex until #1924). Don't "fix" login to follow the `kinds` pattern.
   const canConnectKey = connectEnabled && cred.kinds.includes('api_key') && cred.connected === null;
   const canLogin = connectEnabled && cred.subscriptionAvailable && cred.connected !== 'oauth';
-  const canDisconnect = connectEnabled && cred.connected !== null;
+  // An unconsumed connection (a Claude subscription on Pi's Anthropic row) belongs to the
+  // agent that uses it; disconnecting it here would remove that agent's credential.
+  const canDisconnect = connectEnabled && cred.connectionConsumed;
 
   return (
     <div className="flex flex-col gap-2">
@@ -257,7 +259,11 @@ function CredentialRow({
             </span>
           ) : null}
           {cred.connected === 'oauth' ? (
-            <span className="font-mono text-[10.5px] text-success">subscription connected</span>
+            <span
+              className={`font-mono text-[10.5px] ${cred.connectionConsumed ? 'text-success' : 'text-text-tertiary'}`}
+            >
+              {cred.connectionConsumed ? 'subscription connected' : 'subscription not used here'}
+            </span>
           ) : null}
           {cred.installEnv ? (
             <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">
