@@ -159,9 +159,10 @@ export async function checkProviderDiagnostics(
       const registration = getRegistration(id);
       // A deprecated provider stays bundled whether or not anyone uses it, so its
       // runtime is only worth checking for a user who selected or configured it.
+      // A config that fails to load selects nothing; the Config files check reports it.
       if (registration.deprecationNotice) {
-        config = await load();
-        if (!selectsProvider(config, id)) return [];
+        config = await load().catch(() => undefined);
+        if (!config || !selectsProvider(config, id)) return [];
       }
       // The factory, not getAgentProvider: a diagnostic is not a run, so it must not
       // report the deprecation notice the Provider support check already shows.

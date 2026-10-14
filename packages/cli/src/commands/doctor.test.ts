@@ -1192,6 +1192,17 @@ describe('bundled deprecated providers', () => {
     expect(reportDeprecation).not.toHaveBeenCalled();
   });
 
+  it.each(['old', 'copilot'])(
+    'a config that fails to load selects no deprecated provider (%s)',
+    async id => {
+      const checks = await checkProviderDiagnostics(id, undefined, async () => {
+        throw new Error('config.yaml: bad indentation');
+      });
+      expect(checks).toEqual([]);
+      expect(diagnose).not.toHaveBeenCalled();
+    }
+  );
+
   const selections: {
     selection: string;
     config: Pick<MergedConfig, 'assistant' | 'assistants'>;
