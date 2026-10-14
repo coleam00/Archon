@@ -40,6 +40,23 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
 
+it('plugin rejection guidance lists only public commands', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-plugin-cli-reject-'));
+  try {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'plugin', 'bogus'], {
+      cwd: root,
+      env: { ...process.env, ARCHON_HOME: root, ARCHON_TELEMETRY_DISABLED: '1' },
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe(
+      'Usage: archon plugin add <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list'
+    );
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
 describe('forge user trust boundary', () => {
   it('refuses to start when the repo .archon/.env sets ARCHON_HOME', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-repo-home-refused-'));

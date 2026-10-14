@@ -419,11 +419,12 @@ it('every supported attachment verb has scoped help, with aliases scoped only', 
   const global = renderHelp();
   for (const [command, verbs] of Object.entries(attachmentCommands)) {
     for (const [verb, entry] of Object.entries(verbs)) {
-      expect(renderHelp(command, verb)).toContain(entry.spec);
+      const spec = `${command} ${verb} ${entry.args}`.trimEnd();
+      expect(renderHelp(command, verb)).toContain(spec);
       if ('scopedOnly' in entry) {
-        expect(global).not.toContain(entry.spec);
+        expect(global).not.toContain(spec);
       } else {
-        expect(global).toContain(entry.spec);
+        expect(global).toContain(spec);
       }
     }
   }

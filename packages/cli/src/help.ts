@@ -58,7 +58,12 @@ interface HelpEntry {
 function attachmentHelp(command: keyof typeof attachmentCommands, scopedOnly = false): HelpEntry[] {
   return Object.entries(attachmentCommands[command])
     .filter(([, entry]) => Object.hasOwn(entry, 'scopedOnly') === scopedOnly)
-    .map(([subcommand, entry]) => ({ command, subcommand, ...entry }));
+    .map(([subcommand, entry]) => ({
+      command,
+      subcommand,
+      spec: `${command} ${subcommand} ${entry.args}`.trimEnd(),
+      description: entry.description,
+    }));
 }
 
 const forgeOperationDescriptions = {

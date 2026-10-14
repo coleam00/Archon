@@ -204,7 +204,7 @@ describe('skill CLI verbs', () => {
       ]);
       expect(code).toBe(1);
       expect(err).toContain('Unknown skill subcommand: bogus');
-      expect(err).toContain('Available: add');
+      expect(err.split('\n')).toContain('Available: add');
       expect(out).not.toContain('Adding Archon skill');
       for (const destination of ['.claude', '.agents']) {
         expect(readFileSync(join(root, destination, 'skills/archon-cli/SKILL.md'), 'utf8')).toBe(
