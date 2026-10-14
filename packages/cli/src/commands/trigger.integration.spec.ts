@@ -1595,6 +1595,11 @@ test('poll-style CLI fires deduplicate keyed event inputs and reject bad ones', 
   } finally {
     users.close();
   }
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-124' }));
+  const unknownUser = await cli([...fire, '--delivery-id', 'order-124@1'], false);
+  expect(unknownUser.exitCode).not.toBe(0);
+  expect(unknownUser.stderr).toContain('Trigger binding names an unknown run-as user.');
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
   writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
   await cli(keyed);
   writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));

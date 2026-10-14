@@ -157,8 +157,10 @@ export async function triggerCommand(
     }
     const config = await loadTimerConfig(options.config);
     // A redelivery keeps the binding snapshot of its first acceptance, so today's users
-    // must not turn a recorded delivery into a failure. The store still answers replay
-    // or conflict for it; a race past this lookup only repeats the check below.
+    // must not turn a recorded delivery into a failure; the store answers replay or
+    // conflict for it. This lookup is the only run-as gate before persistence. It holds
+    // because receipts are never deleted: retention would let a vanished receipt pass
+    // here as an unvalidated first acceptance.
     const recorded =
       options.deliveryId !== undefined &&
       (await host.deps.store.hasStartReceiptForDelivery(
