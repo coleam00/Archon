@@ -25,12 +25,14 @@ review__synthesize:
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 simplify__simplify: { findings: true }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 reshape__implement:
@@ -52,12 +54,14 @@ rereview__synthesize:
   findings_summary: "stub: the reshape delta is clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 rereview__publish:
   ready: true
   action: none
   findings_summary: "stub: the reshape delta is clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:

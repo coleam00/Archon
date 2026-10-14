@@ -271,7 +271,13 @@ nodes:
               relation: { type: string, enum: [unrelated, scope_conflict, note] }
               source_nodes: { type: array, items: { type: string }, minItems: 1 }
             required: [title, claim, evidence, relation, source_nodes]
-      required: [ready, action, findings_summary, report, discoveries]
+        # The required outcome and acceptance items the contract coverage does not
+        # mark met, one line each. Empty exactly when it marks all of them met: only
+        # then may the pull request close its issue.
+        contract_left:
+          type: array
+          items: { type: string, pattern: '\S' }
+      required: [ready, action, findings_summary, report, discoveries, contract_left]
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
@@ -293,6 +299,7 @@ nodes:
       summary: "$synthesize.output.findings_summary"
       report_pointer: "$synthesize.output.report"
       discoveries: { from: "$synthesize.output.discoveries" }
+      contract_left: { from: "$synthesize.output.contract_left" }
       route: { from: "$route.output", if_skipped: null }
       mode: { from: "$mode.output" }
     output_type: review-report

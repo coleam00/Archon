@@ -24,7 +24,8 @@
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
- *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
+ *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
+ *   node forwards.
  * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
  *   continuation skipped it) and review-round's output, whose lens fields hold a
  *   continuation's set. The lenses this round ran are recorded beside the report
@@ -62,6 +63,7 @@ try {
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
+    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));

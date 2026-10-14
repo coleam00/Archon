@@ -117,7 +117,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          # Named by the same function `archon plugin install` uses to request it,
+          # Named by the same function `archon plugin add` uses to request it,
           # from the manifest's executable and this Bun target.
           ASSET=$(bun -e '
             const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
@@ -267,9 +267,9 @@ jobs:
             export ARCHON_HOME=$(mktemp -d)
             if [ -n "$CONFIG" ]; then
               echo "$CONFIG" > "$ARCHON_HOME/config.yaml"
-              EXPECTED='archon provider install claude'
+              EXPECTED='archon provider add claude'
             else
-              EXPECTED='archon provider install <claude|codex|pi>'
+              EXPECTED='archon provider add <claude|codex|pi>'
             fi
             if OUTPUT=$(env -u DEFAULT_AI_ASSISTANT "$BIN" workflow run archon-investigate "hello" 2>&1); then
               echo "$OUTPUT"
@@ -451,9 +451,9 @@ jobs:
           | `archon-server-<os>-<arch>[.exe]` | Version-matched server executable fetched by `archon serve` |
           | `archon-forge-github-<os>-<arch>[.exe]` | GitHub forge plugin |
           | `archon-chat-slack-<os>-<arch>[.exe]` | Slack chat plugin |
-          | `archon-provider-claude-<os>-<arch>[.exe]` | Claude provider plugin, installed by `archon provider install claude` |
-          | `archon-provider-codex-<os>-<arch>[.exe]` | Codex provider plugin, installed by `archon provider install codex` |
-          | `archon-provider-pi-<os>-<arch>[.exe]` | Pi provider plugin, installed by `archon provider install pi` |
+          | `archon-provider-claude-<os>-<arch>[.exe]` | Claude provider plugin, installed by `archon provider add claude` |
+          | `archon-provider-codex-<os>-<arch>[.exe]` | Codex provider plugin, installed by `archon provider add codex` |
+          | `archon-provider-pi-<os>-<arch>[.exe]` | Pi provider plugin, installed by `archon provider add pi` |
           | `archon-web.tar.gz` | Web UI |
           | `checksums.txt` | SHA-256 checksums for every asset |
 

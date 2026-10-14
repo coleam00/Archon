@@ -6,7 +6,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
 #
 # Options:
-#   --providers <ids> - Comma-separated providers to install (claude, codex, pi).
+#   --providers <ids> - Comma-separated providers to add (claude, codex, pi).
 #                       An empty value installs none. Without it, the installer asks.
 #                       Releases up to 0.11.1 bundle their providers and have no
 #                       `archon provider`; pin one with `--providers=`.
@@ -239,7 +239,7 @@ prompt_providers() {
 
   ( : <"$tty" ) 2>/dev/null || return 1
   while true; do
-    printf 'Which providers should Archon install? (%s, comma-separated; empty for none): ' \
+    printf 'Which providers should Archon add? (%s, comma-separated; empty for none): ' \
       "${PROVIDER_IDS// /, }" >&2
     answer=""
     IFS= read -r answer <&3 || true
@@ -253,20 +253,21 @@ prompt_providers() {
 install_providers() {
   local archon="$1"
   local providers="$2"
-  local install_command="archon provider install <${PROVIDER_IDS// /|}>"
+  info "Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI."
+  local install_command="archon provider add <${PROVIDER_IDS// /|}>"
 
   if [ -z "$providers" ]; then
-    warn "No providers installed. AI workflows and chat need one; install it with:"
+    warn "No providers installed. AI workflows and chat need one; add it with:"
     echo "  $install_command"
     echo "  (or run: archon setup)"
     return 0
   fi
 
-  info "Installing providers: $providers"
+  info "Adding providers: $providers"
   # shellcheck disable=SC2086 # one argument per provider id
-  if ! "$archon" provider install $providers; then
-    error "Archon is installed, but installing providers failed."
-    error "Retry with: archon provider install $providers"
+  if ! "$archon" provider add $providers; then
+    error "Archon is installed, but adding providers failed."
+    error "Retry with: archon provider add $providers"
     exit 1
   fi
   success "Providers installed: $providers"
@@ -428,7 +429,7 @@ main() {
 
   if [ "$providers_given" = false ]; then
     providers=$(prompt_providers) \
-      || info "No terminal to ask which providers to install; installing none."
+      || info "No terminal to ask which providers to add; adding none."
   fi
   install_providers "$INSTALL_DIR/$BINARY_NAME" "$providers"
 

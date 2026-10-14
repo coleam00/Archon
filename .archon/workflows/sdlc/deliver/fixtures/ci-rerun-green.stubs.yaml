@@ -24,12 +24,14 @@ review__synthesize:
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 ci: { state: green, rerun: green, summary: "stub: a runner timeout outside the change; one re-run of the failed job passed; ready" }

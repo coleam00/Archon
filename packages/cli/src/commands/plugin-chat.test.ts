@@ -223,7 +223,7 @@ integration(
   async () => {
     const env = await environment();
     await configure();
-    const installed = await command(env, 'install', 'owner/repo');
+    const installed = await command(env, 'add', 'owner/repo');
     expect(installed.code).toBe(0);
     expect(installed.output).not.toContain(sentinel);
     const receipts = await readReceipts(env.pluginsDir);
@@ -275,14 +275,14 @@ integration(
   async () => {
     const env = await environment();
     await configure();
-    expect((await command(env, 'install', 'owner/repo')).code).toBe(0);
+    expect((await command(env, 'add', 'owner/repo')).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
-    const collision = await command(env, 'install', 'owner/repo/alternate');
+    const collision = await command(env, 'add', 'owner/repo/alternate');
     expect(collision.code).toBe(1);
     expect(collision.output).toContain('owner/repo/alternate collides with owner/repo');
     expect(await snapshot(env.pluginsDir)).toEqual(before);
     await configure('second-chat');
-    expect((await command(env, 'install', 'owner/repo/alternate')).code).toBe(0);
+    expect((await command(env, 'add', 'owner/repo/alternate')).code).toBe(0);
     await configure('slack');
     const beforeUpdate = await snapshot(env.pluginsDir);
     const refused = await command(env, 'update', 'owner/repo/alternate@v2');
@@ -299,7 +299,7 @@ integration(
     for (const [id, owner] of RESERVED_CHAT_PLATFORMS) {
       const env = await environment();
       await configure(id);
-      const result = await command(env, 'install', 'owner/repo@v1');
+      const result = await command(env, 'add', 'owner/repo@v1');
       expect(result.code).toBe(1);
       expect(result.output).toContain(`Chat platform ${id}: owner/repo collides with ${owner}`);
       expect(await snapshot(env.pluginsDir)).toEqual({});
@@ -315,7 +315,7 @@ integration(
       for (const update of [false, true]) {
         const env = await environment();
         await configure();
-        if (update) expect((await command(env, 'install', 'owner/repo@v1')).code).toBe(0);
+        if (update) expect((await command(env, 'add', 'owner/repo@v1')).code).toBe(0);
         await mkdir(env.pluginsDir, { recursive: true });
         const before = await snapshot(env.pluginsDir);
         const previousMarker = await Bun.file(marker)
@@ -333,7 +333,7 @@ integration(
         else await configure('slack', failure);
         const result = await command(
           env,
-          update ? 'update' : 'install',
+          update ? 'update' : 'add',
           `owner/repo@${update ? 'v2' : 'v1'}`
         );
         expect(result.code).toBe(1);
@@ -354,7 +354,7 @@ integration(
 integration('chat receipts do not interfere with provider and pack discovery', async () => {
   const env = await environment();
   await configure();
-  expect((await command(env, 'install', 'owner/repo@v1')).code).toBe(0);
+  expect((await command(env, 'add', 'owner/repo@v1')).code).toBe(0);
   const provider = {
     schemaVersion: 1,
     id: 'owner/provider',

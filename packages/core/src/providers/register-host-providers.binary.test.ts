@@ -70,7 +70,7 @@ test('release hosts register maintained providers only from install receipts', a
   expect(runtime).toBeInstanceOf(ProcessAgentProvider);
   expect(runtime).toMatchObject({ argv: [join(pluginsDir, 'archon-provider-claude')] });
   expect(() => requireProvider(providerRegistry, 'codex')).toThrow(
-    "Provider 'codex' is not installed. Install it with: archon provider install codex"
+    "Provider 'codex' is not installed. Add it with: archon provider add codex"
   );
   // OpenCode and Copilot stay bundled but deprecated, so the one installed provider is the default.
   clearConfigCache();

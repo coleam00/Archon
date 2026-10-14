@@ -15,12 +15,14 @@ synthesize:
   findings_summary: "stub: clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 publish:
   ready: true
   action: none
   findings_summary: "stub: clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed

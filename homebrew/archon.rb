@@ -49,12 +49,14 @@ class Archon < Formula
 
   def caveats
     <<~EOS
-      Archon ships without AI providers. Install the ones you use:
+      Archon ships without AI providers. Add the ones you use:
         archon setup
       or directly:
-        archon provider install <claude|codex|pi>
+        archon provider add <claude|codex|pi>
 
-      After `brew upgrade archon`, run `archon provider install` again for each
+      Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
+
+      After `brew upgrade archon`, run `archon provider add` again for each
       provider you use; installed providers must match the CLI version.
     EOS
   end

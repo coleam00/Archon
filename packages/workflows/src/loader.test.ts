@@ -9736,7 +9736,7 @@ nodes:
     providers
   );
   expect(result.error?.error).toBe(
-    "Provider 'claude' is not installed. Install it with: archon provider install claude"
+    "Provider 'claude' is not installed. Add it with: archon provider add claude"
   );
 });
 
