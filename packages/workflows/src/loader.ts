@@ -31,6 +31,7 @@ import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
 
 import {
+  attentionOptionSchema,
   dagNodeSchema,
   ignoredFieldsForNode,
   isOutputFormatEnforced,
@@ -826,15 +827,14 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
-/**
- * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
- * added only when a parenthesis sits outside a quoted literal, so a typo like
- * `$a.output = 'x'` is not blamed on grouping.
- */
+/** `attentionOptionSchema` as JSON Schema: the shape a producer's options field must declare. */
+const ATTENTION_OPTION_JSON_SCHEMA = z.toJSONSchema(attentionOptionSchema);
+
 /**
  * Why a producer's `output_format` cannot yield attention options at `options`'s field,
  * or undefined when it can or declares no schema (the pause-time check then owns it).
- * Mirrors `attentionOptionsSchema`: an array of `{ id, label? }` objects.
+ * The field must be an array whose items declare only `attentionOptionSchema`'s
+ * properties, with the same types, and require what it requires.
  */
 function referencedOptionsShapeError(
   options: string,
@@ -852,27 +852,41 @@ function referencedOptionsShapeError(
   }
   const items: unknown = isRecord(schema) && schema.type === 'array' ? schema.items : undefined;
   const itemProperties: unknown = isRecord(items) ? items.properties : undefined;
-  const required: unknown = isRecord(items) ? items.required : undefined;
+  const itemRequired: unknown = isRecord(items) ? items.required : undefined;
+  const { properties: optionProperties = {}, required: optionRequired = [] } =
+    ATTENTION_OPTION_JSON_SCHEMA;
   const fits =
     isRecord(items) &&
     items.type === 'object' &&
     isRecord(itemProperties) &&
-    Object.keys(itemProperties).every(key => key === 'id' || key === 'label') &&
-    isRecord(itemProperties.id) &&
-    itemProperties.id.type === 'string' &&
-    (itemProperties.label === undefined ||
-      (isRecord(itemProperties.label) && itemProperties.label.type === 'string')) &&
-    Array.isArray(required) &&
-    required.includes('id');
-  return fits
-    ? undefined
-    : `'${options}' must be an array of { id, label? } objects in '${ref.nodeId}'s output_format (id: string and required; label: optional string; no other properties)`;
+    Object.entries(itemProperties).every(([key, property]) => {
+      const optionProperty = optionProperties[key];
+      return (
+        isRecord(property) && isRecord(optionProperty) && property.type === optionProperty.type
+      );
+    }) &&
+    optionRequired.every(
+      key => key in itemProperties && Array.isArray(itemRequired) && itemRequired.includes(key)
+    );
+  if (fits) return undefined;
+  const expected = Object.entries(optionProperties)
+    .map(([key, property]) => {
+      const type = isRecord(property) ? String(property.type) : 'unknown';
+      return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
+    })
+    .join('; ');
+  return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
+ * added only when a parenthesis sits outside a quoted literal, so a typo like
+ * `$a.output = 'x'` is not blamed on grouping.
+ */
 function unsupportedConditionSyntax(nodeId: string, field: string, text: string): string {
   const hasGrouping = ['(', ')'].some(paren => splitOutsideQuotes(text, paren).length > 1);
   const hint = hasGrouping ? 'Grouping parentheses are not supported; use' : 'Use';
