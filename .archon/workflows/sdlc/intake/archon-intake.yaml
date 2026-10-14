@@ -174,37 +174,8 @@ nodes:
                 remove: { type: array, items: { type: string } }
               required: [add, remove]
             reasons: { type: array, items: { type: object } }
-            triage:
-              type: [object, 'null']
-              properties:
-                contract: { type: string }
-                route: { type: string }
-                pull_request: { type: [integer, 'null'] }
-                type: { type: object }
-                size: { type: object }
-                complexity: { type: object }
-                importance: { type: object }
-                urgency: { type: object }
-                proposed_edits: { type: object }
-                blocked_reason: { type: string }
-                blocked_by: { type: array, items: { type: string } }
-                labels: { type: array, items: { type: string } }
-                summary: { type: string }
-                report: { type: object }
-              required:
-                - contract
-                - route
-                - pull_request
-                - type
-                - size
-                - complexity
-                - importance
-                - urgency
-                - proposed_edits
-                - blocked_reason
-                - blocked_by
-                - labels
-                - summary
-                - report
+            # Triage's verdict as outcome.ts assembles it from fields triage's own
+            # output schema already validated; null when triage did not run.
+            triage: { type: [object, 'null'] }
           required: [trust_input, seen, labels, reasons, triage]
       required: [path, item, stage, trust, promoted, labels, summary, evaluation]
