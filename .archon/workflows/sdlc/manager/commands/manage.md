@@ -47,6 +47,7 @@ Every pass, append one line to the body of a single open issue titled `Loop metr
 ## Never
 
 - Edit product code, the harness and its scenarios, the CI workflows, the mission, or the product document.
+- Edit or delete a `Loop claim` comment: it marks an item a loop run is working right now, and it expires by itself if that run died.
 - Kill processes by name. Stop only processes you started, by the process ID you recorded, and stop all of them before you finish.
 - Move the mouse, type into, focus or show windows on the owner's desktop.
 
