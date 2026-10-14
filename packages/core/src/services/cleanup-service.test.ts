@@ -167,7 +167,11 @@ const mockLocalBranchExists = mock<typeof Git.localBranchExists>(() => Promise.r
 const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>(() => Promise.resolve(null));
 // Default: the local branch tip is the PR's head commit (or behind it).
 const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>(() => Promise.resolve(true));
+const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>(() =>
+  Promise.resolve(0)
+);
 mock.module('@archon/git', () => ({
+  countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
   execFileAsync: mockExecFileAsync,
   hasUncommittedChanges: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
@@ -243,6 +247,7 @@ mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mockUpdateStatus,
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
+  isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
   listByCodebase: mockListByCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
@@ -3245,7 +3250,11 @@ describe('cleanup after a chat plugin is removed', () => {
     const stale = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
     const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
-    expect(stale).toEqual({ removed: [], skipped: [{ branchName: env.branch_name, reason }] });
+    expect(stale).toEqual({
+      removed: [],
+      skipped: [{ branchName: env.branch_name, reason }],
+      releasedFailedRuns: [],
+    });
     expect(merged.skipped).toEqual(stale.skipped);
     expect(merged.removed).toEqual([]);
     expect(breakdown.stale).toBe(0);
@@ -3289,4 +3298,154 @@ describe('cleanup after a chat plugin is removed', () => {
       expect(mockUpdateStatus).toHaveBeenCalledWith(env.id, 'destroyed');
     }
   );
+});
+
+// A failed run locks its environment until a sweep settles its outcome (#4090). The
+// lock query is mocked in call order: first without a release (who claims the env),
+// then with one (who still claims it once the sweep's settlement is applied).
+describe('failed-run lock release', () => {
+  const FAILED_RUN = { id: 'run-failed-1234', status: 'failed' };
+
+  beforeEach(() => {
+    mockGetLiveRunOwningEnv.mockReset();
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockCountCommitsMissingFromRemotes.mockReset();
+    mockCountCommitsMissingFromRemotes.mockResolvedValue(0);
+    mockWorktreeExists.mockReset();
+    mockWorktreeExists.mockResolvedValue(true);
+    mockHasUncommittedChanges.mockReset();
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockIsBranchMerged.mockReset();
+    mockIsBranchMerged.mockResolvedValue(false);
+    mockIsPatchEquivalent.mockReset();
+    mockIsPatchEquivalent.mockResolvedValue(false);
+    mockLocalBranchExists.mockReset();
+    mockLocalBranchExists.mockResolvedValue(true);
+    mockIsRevCoveredBy.mockReset();
+    mockIsRevCoveredBy.mockResolvedValue(true);
+    mockGetPrState.mockReset();
+    mockGetPrState.mockResolvedValue(NO_PR);
+    mockGetLastCommitDate.mockReset();
+    mockGetLastCommitDate.mockResolvedValue(null);
+    mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
+    mockLoadRepoConfig.mockResolvedValue({});
+    mockGetById.mockReset();
+    mockGetById.mockImplementation(id => Promise.resolve(makeEnvironment({ id })));
+    mockDestroy.mockClear();
+    mockUpdateStatus.mockClear();
+  });
+
+  function releasedByTheSweep(): void {
+    mockGetLiveRunOwningEnv.mockResolvedValueOnce(FAILED_RUN).mockResolvedValueOnce(null);
+  }
+
+  const staleEnv = (): EnvironmentWithCodebase =>
+    makeEnvironmentWithCodebase({
+      id: 'env-stale-failed',
+      branch_name: 'stale-failed',
+      created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+
+  test.each([
+    ['MERGED', {}, 'merged'],
+    ['CLOSED', { includeClosed: true }, 'PR closed'],
+  ] as const)(
+    '--merged removes a failed run whose PR is %s and reports the release',
+    async (prState, options, reason) => {
+      mockListByCodebase.mockResolvedValueOnce([makeEnvironment({ branch_name: 'settled' })]);
+      mockGetPrState.mockResolvedValue(prAt(prState));
+      releasedByTheSweep();
+
+      const result = await cleanupMergedWorktrees('codebase-123', '/workspace/repo', options);
+
+      expect(result.removed).toEqual(['settled']);
+      expect(result.releasedFailedRuns).toEqual([
+        { branchName: 'settled', runId: FAILED_RUN.id, reason },
+      ]);
+      expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-1', { kind: 'settled' });
+      expect(mockCountCommitsMissingFromRemotes).not.toHaveBeenCalled();
+    }
+  );
+
+  test('the stale sweep removes a failed run inactive past the window with nothing unpushed', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    releasedByTheSweep();
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual(['env-stale-failed (stale)']);
+    expect(report.releasedFailedRuns).toEqual([
+      { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+    ]);
+    expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-stale-failed', {
+      kind: 'stale',
+      staleDays: 14,
+    });
+    expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/worktrees/task-1', [
+      'HEAD',
+      'refs/heads/stale-failed',
+    ]);
+  });
+
+  test('the stale sweep keeps a released failed run whose commits are on no remote', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    releasedByTheSweep();
+    mockCountCommitsMissingFromRemotes.mockResolvedValueOnce(2);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual([]);
+    expect(report.releasedFailedRuns).toEqual([]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but failed run run-fail has 2 unpushed commit(s)',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('the stale sweep keeps a failed run still inside the window', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-fail is failed',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('a paused run keeps its environment on every sweep, whatever its age', async () => {
+    const paused = { id: 'run-paused-1234', status: 'paused' };
+    mockGetLiveRunOwningEnv.mockResolvedValue(paused);
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockListByCodebase.mockResolvedValueOnce([makeEnvironment({ branch_name: 'paused' })]);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+
+    const merged = await cleanupMergedWorktrees('codebase-123', '/workspace/repo');
+    mockGetPrState.mockResolvedValue(NO_PR);
+    const report = await runScheduledCleanup();
+
+    expect(merged.skipped).toEqual([{ branchName: 'paused', reason: 'run run-paus is paused' }]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-paus is paused',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('the chat stale sweep removes a released failed run and reports it', async () => {
+    mockListByCodebaseWithAge.mockResolvedValueOnce([
+      makeEnvironmentWithAge({ branch_name: 'stale-failed', days_since_activity: 30 }),
+    ]);
+    releasedByTheSweep();
+
+    const result = await cleanupStaleWorktrees('codebase-123', '/workspace/repo');
+
+    expect(result.removed).toEqual(['stale-failed']);
+    expect(result.releasedFailedRuns).toEqual([
+      { branchName: 'stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+    ]);
+  });
 });

@@ -37,9 +37,6 @@ const mockFindActiveByBranchName = mock<typeof IsolationDb.findActiveByBranchNam
 const mockFindStaleEnvironments = mock<typeof IsolationDb.findStaleEnvironments>(() =>
   Promise.resolve([])
 );
-const mockGetLiveRunOwningEnv = mock<typeof IsolationDb.getLiveRunOwningEnv>(() =>
-  Promise.resolve(null)
-);
 const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
 
 mock.module('@archon/core/db/isolation-environments', () => ({
@@ -48,7 +45,6 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   listAllActiveWithCodebase: mock(() => Promise.resolve([])),
   listByCodebaseWithAge: mock(() => Promise.resolve([])),
   findStaleEnvironments: mockFindStaleEnvironments,
-  getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
   updateStatus: mockUpdateStatus,
 }));
@@ -71,14 +67,24 @@ const mockRemoveEnvironment = mock<typeof CleanupService.removeEnvironment>(() =
   Promise.resolve({ worktreeRemoved: true, branchDeleted: true, warnings: [] })
 );
 const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [], baseRef: toBranchName('origin/dev') })
+  Promise.resolve({
+    removed: [],
+    skipped: [],
+    releasedFailedRuns: [],
+    baseRef: toBranchName('origin/dev'),
+  })
 );
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
 
+const mockGetCleanupRunLock = mock<typeof CleanupService.getCleanupRunLock>(() =>
+  Promise.resolve({ kind: 'free' })
+);
+
 mock.module('@archon/core/services/cleanup-service', () => ({
   removeEnvironment: mockRemoveEnvironment,
+  getCleanupRunLock: mockGetCleanupRunLock,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupContainerEnvironments: mockCleanupContainerEnvironments,
 }));
@@ -98,7 +104,13 @@ const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>((
   })
 );
 const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMergedEnvironments>(
-  () => Promise.resolve({ removed: [], skipped: [], baseRef: toBranchName('origin/dev') })
+  () =>
+    Promise.resolve({
+      removed: [],
+      skipped: [],
+      releasedFailedRuns: [],
+      baseRef: toBranchName('origin/dev'),
+    })
 );
 
 mock.module('@archon/core/operations/isolation-operations', () => ({
@@ -749,6 +761,7 @@ describe('isolationCleanupMergedCommand', () => {
     mockCleanupMergedEnvironments.mockResolvedValue({
       removed: [],
       skipped: [],
+      releasedFailedRuns: [],
       baseRef: toBranchName('origin/dev'),
     });
   });
@@ -772,6 +785,21 @@ describe('isolationCleanupMergedCommand', () => {
 
   // The command used to claim "merged into main" while comparing against the repo's
   // configured base branch (#3471).
+  it('names each failed run whose lock the sweep released', async () => {
+    mockCleanupMergedEnvironments.mockResolvedValueOnce({
+      removed: ['settled'],
+      skipped: [],
+      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'PR closed' }],
+      baseRef: toBranchName('origin/dev'),
+    });
+
+    await isolationCleanupMergedCommand({ includeClosed: true });
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '  Released failed run run-fail (PR closed): settled'
+    );
+  });
+
   it('names the base ref the sweep compared against, never a hardcoded main', async () => {
     await isolationCleanupMergedCommand();
 
@@ -790,8 +818,8 @@ describe('isolationCleanupCommand', () => {
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     mockFindStaleEnvironments.mockReset();
     mockFindStaleEnvironments.mockResolvedValue([]);
-    mockGetLiveRunOwningEnv.mockReset();
-    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockGetCleanupRunLock.mockReset();
+    mockGetCleanupRunLock.mockResolvedValue({ kind: 'free' });
     mockDestroyWorktree.mockReset().mockResolvedValue({
       worktreeRemoved: true,
       directoryClean: true,
@@ -880,7 +908,11 @@ describe('isolationCleanupCommand', () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([
       { ...mockEnv, id: 'env-stale-2', branch_name: 'stale-branch' },
     ]);
-    mockGetLiveRunOwningEnv.mockResolvedValueOnce({ id: 'run-live-1', status: 'paused' });
+    mockGetCleanupRunLock.mockResolvedValueOnce({
+      kind: 'locked',
+      runId: 'run-live-1',
+      status: 'paused',
+    });
 
     await isolationCleanupCommand(7);
 
@@ -890,5 +922,59 @@ describe('isolationCleanupCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '\nCleanup complete: 0 cleaned, 1 skipped, 0 failed'
     );
+  });
+
+  it('judges the run lock against the same stale window it swept with', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+
+    await isolationCleanupCommand(3);
+
+    expect(mockGetCleanupRunLock).toHaveBeenCalledWith(mockEnv, '/test/repo', {
+      kind: 'stale',
+      staleDays: 3,
+    });
+  });
+
+  it('destroys a stale environment whose failed run was released and names the run', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    mockGetCleanupRunLock.mockResolvedValueOnce({
+      kind: 'released',
+      runId: 'run-failed-1',
+      reason: 'stale',
+    });
+
+    await isolationCleanupCommand(7);
+
+    expect(mockDestroyWorktree).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '  Status: Cleaned (failed run run-fail released: stale)'
+    );
+  });
+
+  it('keeps a released failed run whose commits are on no remote', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    mockGetCleanupRunLock.mockResolvedValueOnce({
+      kind: 'unpushed',
+      runId: 'run-failed-1',
+      commits: 2,
+    });
+
+    await isolationCleanupCommand(7);
+
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '  Status: Skipped — failed run run-fail has 2 unpushed commit(s)'
+    );
+  });
+
+  it('keeps the environment and reports a failure when the lock check throws', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    mockGetCleanupRunLock.mockRejectedValueOnce(new Error('rev-list failed'));
+
+    await isolationCleanupCommand(7);
+
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('rev-list failed');
   });
 });

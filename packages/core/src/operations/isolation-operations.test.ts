@@ -32,11 +32,11 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [] })
+  Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [] })
 );
 const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [], baseRef: MERGED_BASE_REF })
+  Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [], baseRef: MERGED_BASE_REF })
 );
 mock.module('../services/cleanup-service', () => ({
   cleanupStaleWorktrees: mockCleanupStale,
@@ -241,7 +241,11 @@ describe('cleanupStaleEnvironments', () => {
       },
     ]);
     mockLstat.mockResolvedValueOnce(undefined); // not a ghost
-    mockCleanupStale.mockResolvedValueOnce({ removed: ['feat'], skipped: [] });
+    mockCleanupStale.mockResolvedValueOnce({
+      removed: ['feat'],
+      skipped: [],
+      releasedFailedRuns: [],
+    });
 
     const result = await cleanupStaleEnvironments('cb-1', '/main');
 
@@ -259,6 +263,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat-a', 'feat-b'],
       skipped: [],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -272,6 +277,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -284,6 +290,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat'],
       skipped: [],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 

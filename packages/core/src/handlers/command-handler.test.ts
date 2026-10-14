@@ -18,6 +18,7 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
+import type { CleanupOperationResult } from '../services/cleanup-service';
 import {
   MissingProjectDirectoryError,
   worktreeRegistrationMetadata,
@@ -430,18 +431,13 @@ mock.module('@archon/isolation', () => ({
 }));
 
 // Mock cleanup service
-const mockCleanupMergedWorktrees = mock(() =>
-  Promise.resolve({
-    removed: [] as string[],
-    skipped: [] as { branchName: string; reason: string }[],
-  })
-);
-const mockCleanupStaleWorktrees = mock(() =>
-  Promise.resolve({
-    removed: [] as string[],
-    skipped: [] as { branchName: string; reason: string }[],
-  })
-);
+const emptyCleanup = (): CleanupOperationResult => ({
+  removed: [],
+  skipped: [],
+  releasedFailedRuns: [],
+});
+const mockCleanupMergedWorktrees = mock(() => Promise.resolve(emptyCleanup()));
+const mockCleanupStaleWorktrees = mock(() => Promise.resolve(emptyCleanup()));
 // Capture the real class before mock.module replaces the module, so the mock
 // re-exports it rather than a hand-declared copy that could drift.
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
@@ -1847,6 +1843,9 @@ describe('CommandHandler', () => {
           mockCleanupMergedWorktrees.mockResolvedValueOnce({
             removed: ['feat-old', 'feat-done'],
             skipped: [{ branchName: 'feat-protected', reason: 'has uncommitted changes' }],
+            releasedFailedRuns: [
+              { branchName: 'feat-done', runId: 'run-failed-1', reason: 'merged' },
+            ],
           });
           mockCountActiveByCodebase.mockResolvedValueOnce(3);
 
@@ -1860,16 +1859,14 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Cleaned up 2 merged worktree(s)');
           expect(result.message).toContain('feat-old');
           expect(result.message).toContain('feat-done');
+          expect(result.message).toContain('Released failed run run-fail (merged): feat-done');
           expect(result.message).toContain('Skipped 1 (protected)');
           expect(result.message).toContain('feat-protected');
           expect(result.message).toContain('Active worktrees: 3');
         });
 
         test('should report when no stale worktrees to clean up', async () => {
-          mockCleanupStaleWorktrees.mockResolvedValueOnce({
-            removed: [],
-            skipped: [],
-          });
+          mockCleanupStaleWorktrees.mockResolvedValueOnce(emptyCleanup());
           mockCountActiveByCodebase.mockResolvedValueOnce(1);
 
           const result = await handleCommand(

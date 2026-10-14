@@ -22,6 +22,7 @@ import {
 } from '@archon/isolation';
 import {
   removeEnvironment,
+  getCleanupRunLock,
   listContainerEnvironments,
   cleanupContainerEnvironments,
   type RemoveEnvironmentResult,
@@ -137,21 +138,32 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
     console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
     console.log(`  Path: ${env.working_path}`);
 
-    // Same lock the cleanup-service sweeps use: a run that can still claim the
-    // environment blocks removal, even when the conversation recency filter
-    // marks the env stale.
-    const liveRun = await isolationDb.getLiveRunOwningEnv(env.id);
-    if (liveRun) {
-      getLog().info(
-        { envId: env.id, runId: liveRun.id, runStatus: liveRun.status },
-        'skip_stale_live_run'
-      );
-      console.log(`  Status: Skipped — run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`);
-      skipped++;
-      continue;
-    }
-
     try {
+      // Same lock the cleanup-service sweeps use: a run that can still claim the
+      // environment blocks removal, even when the conversation recency filter
+      // marks the env stale. A failed run past the window no longer does.
+      const lock = await getCleanupRunLock(env, toRepoPath(env.codebase_default_cwd), {
+        kind: 'stale',
+        staleDays: daysStale,
+      });
+      if (lock.kind === 'locked') {
+        getLog().info(
+          { envId: env.id, runId: lock.runId, runStatus: lock.status },
+          'skip_stale_live_run'
+        );
+        console.log(`  Status: Skipped — run ${lock.runId.slice(0, 8)} is ${lock.status}`);
+        skipped++;
+        continue;
+      }
+      if (lock.kind === 'unpushed') {
+        getLog().warn({ envId: env.id, runId: lock.runId }, 'skip_stale_unpushed_commits');
+        console.log(
+          `  Status: Skipped — failed run ${lock.runId.slice(0, 8)} has ${String(lock.commits)} unpushed commit(s)`
+        );
+        skipped++;
+        continue;
+      }
+
       const result = await provider.destroy(env.working_path, {
         // A stale environment's branch is deleted only when the environment created it;
         // an existing branch it checked out may hold commits that exist nowhere else.
@@ -169,7 +181,11 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         );
       }
       await isolationDb.updateStatus(env.id, 'destroyed');
-      console.log('  Status: Cleaned');
+      console.log(
+        lock.kind === 'released'
+          ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
+          : '  Status: Cleaned'
+      );
       cleaned++;
     } catch (error) {
       const err = error as Error;
@@ -242,6 +258,9 @@ export async function isolationCleanupMergedCommand(
 
       for (const branch of result.removed) {
         console.log(`  Cleaned: ${branch}`);
+      }
+      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+        console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
       }
       for (const skip of result.skipped) {
         console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
