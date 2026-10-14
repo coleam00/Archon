@@ -24682,6 +24682,121 @@ describe('executeDagWorkflow -- loop_group node', () => {
     }
   });
 
+  it('substitutes $LOOP_USER_INPUT into a resumed body command file (#3954)', async () => {
+    const feedback = 'tighten the error message';
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'revise.md'),
+      'Revise per reviewer: [$LOOP_USER_INPUT]'
+    );
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DONE' };
+      yield { type: 'result', sessionId: 'lg-cmd-input-sess' };
+    });
+    const workflowRun = makeWorkflowRun('lg-userinput-command', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'grp',
+          iteration: 0,
+          message: 'Review and provide feedback.',
+        },
+        loop_user_input: feedback,
+        loop_feedback_given: true,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-userinput-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-userinput-command',
+          nodes: [
+            {
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: true,
+                interactive: true,
+                gate_message: 'Review and provide feedback.',
+                nodes: [
+                  {
+                    id: 'revise',
+                    kind: 'agent',
+                    source: { kind: 'command', name: 'revise' },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][0] as string).toContain(
+      `Revise per reviewer: [${feedback}]`
+    );
+  });
+
+  it('resolves $LOOP_PREV in a body command file to the previous iteration (#3954)', async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'draft.md'),
+      'Prior draft: [$LOOP_PREV.draft.output]'
+    );
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      yield { type: 'agent_message_chunk', text: callCount === 1 ? 'first draft' : 'DONE' };
+      yield { type: 'result', sessionId: `lg-cmd-prev-sess-${callCount}` };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-prev-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-prev-command',
+          nodes: [
+            {
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: true,
+                nodes: [
+                  {
+                    id: 'draft',
+                    kind: 'agent',
+                    source: { kind: 'command', name: 'draft' },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-prev-command'),
+      })
+    );
+
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.length).toBe(2);
+    expect(prompts[0]).toContain('Prior draft: []');
+    expect(prompts[1]).toContain('Prior draft: [first draft]');
+  });
+
   it('exhausts loop_group iterations after a negated final until signal', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {

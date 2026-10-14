@@ -10,8 +10,11 @@ import {
   applyLoopPrevToBody,
   checkComposedBlockBoundaries,
   checkTriggerRule,
+  loopBodyScope,
   resolveNodeBindings,
+  substituteLoopBodyText,
   substituteNodeOutputRefs,
+  type LoopBodyScope,
   type ShellInputContext,
 } from './dag-executor';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
@@ -548,6 +551,11 @@ interface DryRunContext {
    */
   loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
   /**
+   * One scope per enclosing loop_group iteration, outermost first; a loaded body command
+   * file runs through each, as in a real run (`RunLayersContext.loopBodyScopes`).
+   */
+  loopBodyScopes: readonly LoopBodyScope[];
+  /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
    * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
@@ -1056,22 +1064,24 @@ async function simulateLoopGroup(
   // nests correctly when a body contains another loop_group.
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
+  const outerLoopBodyScopes = ctx.loopBodyScopes;
   let loopPrevOutputs: Map<string, NodeOutput> | undefined;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
     // in a real run outside an interactive resume.
-    const bodyPlan = planGraph(
-      applyLoopPrevToBody(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir)
-    );
+    const iterScope = loopBodyScope(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir);
+    const bodyPlan = planGraph(applyLoopPrevToBody(bodyNodes, iterScope));
     const bodyOutputs = new Map(outputs);
     ctx.scope = bodyScope;
     ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
+    ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
+      ctx.loopBodyScopes = outerLoopBodyScopes;
     }
     loopPrevOutputs = bodyOutputs;
     lastOutput =
@@ -1274,7 +1284,10 @@ async function simulateNode(
 
     const sourceText = isAgentNode(node)
       ? node.source.kind === 'command'
-        ? await loadDryRunCommand(ctx, node.source.name)
+        ? ctx.loopBodyScopes.reduce(
+            (text, scope) => substituteLoopBodyText(text, scope),
+            await loadDryRunCommand(ctx, node.source.name)
+          )
         : node.source.prompt
       : isExecNode(node)
         ? node.script
@@ -1527,6 +1540,7 @@ export async function dryRunWorkflow(options: {
     stubs: options.stubs ?? {},
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
+    loopBodyScopes: [],
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),

@@ -2045,6 +2045,46 @@ describe('dryRunWorkflow', () => {
     ]);
   });
 
+  test('substitutes loop variables into a body command file as a real run does (#3954)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'report.md'),
+      'previous: [$LOOP_PREV.round.output.pr_url] feedback: [$LOOP_USER_INPUT]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'loop-command',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'round',
+                prompt: 'round',
+                output_format: { type: 'object', properties: { pr_url: { type: 'string' } } },
+              },
+              { id: 'report', command: 'report', depends_on: ['round'] },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { round: { pr_url: 'https://example.test/pr/1' }, report: 'more' },
+    });
+
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'report').map(entry => entry.resolvedText)
+    ).toEqual(['previous: [] feedback: []', 'previous: [https://example.test/pr/1] feedback: []']);
+  });
+
   test('represents cancellation and unsupported subworkflows visibly', async () => {
     const cancelled = makeTestWorkflow({
       name: 'cancel',

@@ -750,6 +750,9 @@ string. Field access uses the same strict semantics as `$nodeId.output.field`
 (a field not in the producer's declared schema fails the consuming node rather
 than silently degrading).
 
+A `command:` body node's command file gets the same `$LOOP_PREV.*` and
+`$LOOP_USER_INPUT` substitution as the same text written as an inline `prompt:`.
+
 A body node can also gate on the previous iteration's typed output with `when:`:
 
 ```yaml
