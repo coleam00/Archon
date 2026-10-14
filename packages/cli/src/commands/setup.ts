@@ -1578,7 +1578,7 @@ async function collectBotDisplayName(): Promise<string> {
  * Generate .env file content from collected configuration
  */
 export function generateEnvContent(config: SetupConfig): string {
-  const lines: string[] = [];
+  const lines: EnvLine[] = [];
 
   // Header
   lines.push('# Archon Configuration');
@@ -1596,16 +1596,16 @@ export function generateEnvContent(config: SetupConfig): string {
 
   if (config.ai.claude) {
     if (config.ai.claudeAuthType === 'global') {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=true');
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
     } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_API_KEY=${config.ai.claudeApiKey}`);
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
     } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
     }
     if (config.ai.claudeBinaryPath) {
-      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
+      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
     }
   } else {
     lines.push('# Claude not configured');
@@ -1615,16 +1615,16 @@ export function generateEnvContent(config: SetupConfig): string {
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
     const tokens = config.ai.codexTokens;
-    lines.push(`${CODEX_SETUP_ENV.idToken.name}=${tokens.idToken}`);
-    lines.push(`${CODEX_SETUP_ENV.accessToken.name}=${tokens.accessToken}`);
-    lines.push(`${CODEX_SETUP_ENV.refreshToken.name}=${tokens.refreshToken}`);
-    lines.push(`${CODEX_SETUP_ENV.accountId.name}=${tokens.accountId}`);
+    lines.push([CODEX_SETUP_ENV.idToken.name, tokens.idToken]);
+    lines.push([CODEX_SETUP_ENV.accessToken.name, tokens.accessToken]);
+    lines.push([CODEX_SETUP_ENV.refreshToken.name, tokens.refreshToken]);
+    lines.push([CODEX_SETUP_ENV.accountId.name, tokens.accountId]);
     lines.push('');
   }
 
   if (config.ai.pi && config.ai.piApiKey && config.ai.piApiKeyEnvVar) {
     lines.push('# Pi Authentication');
-    lines.push(`${config.ai.piApiKeyEnvVar}=${config.ai.piApiKey}`);
+    lines.push([config.ai.piApiKeyEnvVar, config.ai.piApiKey]);
     lines.push('');
   } else if (config.ai.pi) {
     lines.push('# Pi configured — set the backend API key manually');
@@ -1638,33 +1638,34 @@ export function generateEnvContent(config: SetupConfig): string {
   // Default AI Assistant
   lines.push('# Default AI Assistant');
   if (config.ai.defaultAssistant !== undefined)
-    lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
+    lines.push(['DEFAULT_AI_ASSISTANT', config.ai.defaultAssistant]);
   lines.push('');
 
   // GitHub
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
     if (config.github.mode === 'pat') {
-      lines.push(`GH_TOKEN=${config.github.token}`);
-      lines.push(`GITHUB_TOKEN=${config.github.token}`);
+      lines.push(['GH_TOKEN', config.github.token]);
+      lines.push(['GITHUB_TOKEN', config.github.token]);
     } else {
       const app = config.github;
       lines.push(
-        serializeEnv({
-          GITHUB_APP_ID: app.appId,
-          [app.privateKey.source === 'path'
+        ['GITHUB_APP_ID', app.appId],
+        [
+          app.privateKey.source === 'path'
             ? 'GITHUB_APP_PRIVATE_KEY_PATH'
-            : 'GITHUB_APP_PRIVATE_KEY']: app.privateKey.value,
-          ...(app.slug ? { GITHUB_APP_SLUG: app.slug } : {}),
-        }).trimEnd()
+            : 'GITHUB_APP_PRIVATE_KEY',
+          app.privateKey.value,
+        ]
       );
+      if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
     }
-    lines.push(serializeEnv({ WEBHOOK_SECRET: config.github.webhookSecret }).trimEnd());
+    lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
     if (config.github.allowedUsers) {
-      lines.push(`GITHUB_ALLOWED_USERS=${config.github.allowedUsers}`);
+      lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
     }
     if (config.github.botMention) {
-      lines.push(`GITHUB_BOT_MENTION=${config.github.botMention}`);
+      lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
     }
     lines.push('');
   }
@@ -1672,30 +1673,30 @@ export function generateEnvContent(config: SetupConfig): string {
   // Telegram
   if (config.platforms.telegram && config.telegram) {
     lines.push('# Telegram');
-    lines.push(`TELEGRAM_BOT_TOKEN=${config.telegram.botToken}`);
+    lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
     if (config.telegram.allowedUserIds) {
-      lines.push(`TELEGRAM_ALLOWED_USER_IDS=${config.telegram.allowedUserIds}`);
+      lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
     }
-    lines.push('TELEGRAM_STREAMING_MODE=stream');
+    lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
     lines.push('');
   }
 
   // Slack
   if (config.platforms.slack && config.slack) {
     lines.push('# Slack');
-    lines.push(`SLACK_BOT_TOKEN=${config.slack.botToken}`);
-    lines.push(`SLACK_APP_TOKEN=${config.slack.appToken}`);
+    lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
+    lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
     if (config.slack.allowedUserIds) {
-      lines.push(`SLACK_ALLOWED_USER_IDS=${config.slack.allowedUserIds}`);
+      lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
     }
-    lines.push('SLACK_STREAMING_MODE=batch');
+    lines.push(['SLACK_STREAMING_MODE', 'batch']);
     lines.push('');
   }
 
   // Bot Display Name
   if (config.botDisplayName !== 'Archon') {
     lines.push('# Bot Display Name');
-    lines.push(`BOT_DISPLAY_NAME=${config.botDisplayName}`);
+    lines.push(['BOT_DISPLAY_NAME', config.botDisplayName]);
     lines.push('');
   }
 
@@ -1710,9 +1711,9 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Concurrency
   lines.push('# Concurrency');
-  lines.push('MAX_CONCURRENT_CONVERSATIONS=10');
+  lines.push(['MAX_CONCURRENT_CONVERSATIONS', '10']);
 
-  return lines.join('\n');
+  return serializeEnvDocument(lines);
 }
 
 /**
@@ -1829,8 +1830,22 @@ export function writeHomePiModelConfig(model: string): void {
  * parser can round-trip rather than applying JavaScript string escaping.
  */
 export function serializeEnv(entries: Record<string, string>): string {
+  return serializeEnvDocument(Object.entries(entries));
+}
+
+type EnvLine = string | [key: string, value: string];
+
+function serializeEnvDocument(document: EnvLine[]): string {
+  const entries: Record<string, string> = {};
   const lines: string[] = [];
-  for (const [key, value] of Object.entries(entries)) {
+  const trailing: string[] = [];
+  for (const entry of document) {
+    if (typeof entry === 'string') {
+      lines.push(entry);
+      continue;
+    }
+    const [key, value] = entry;
+    entries[key] = value;
     const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
     const candidates: string[] = [];
     // Prefer quoted forms for leading quotes, which can consume later entries.
@@ -1848,9 +1863,13 @@ export function serializeEnv(entries: Record<string, string>): string {
     const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
     if (line === undefined)
       throw new Error(`Cannot serialize env key ${key} without changing its value`);
-    lines.push(line);
+    // An unmatched opening quote can close in a later entry, even in a comment.
+    // Put values requiring this bare representation after the rest of the document.
+    if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
+    else lines.push(line);
   }
-  const content = lines.join('\n') + (lines.length > 0 ? '\n' : '');
+  const content =
+    [...lines, ...trailing].join('\n') + (lines.length + trailing.length > 0 ? '\n' : '');
   const parsed = parseDotenv(content);
   if (
     Object.keys(parsed).length !== Object.keys(entries).length ||
@@ -2345,9 +2364,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   // trace after the user has filled out the entire wizard.
   s.start('Writing configuration...');
 
-  const envContent = generateEnvContent(config);
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
+    const envContent = generateEnvContent(config);
     writeResult = writeScopedEnv(envContent, {
       scope,
       repoPath: options.repoPath,

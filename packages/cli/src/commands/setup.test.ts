@@ -1196,6 +1196,7 @@ describe('GitHub setup wizard', () => {
     .toString();
   const pat = 'ghp_fixture_token';
   let webhookSecret: string;
+  let botDisplayName: string;
   let keyPem: string;
   let keyValidation: (string | Error | undefined)[];
   let root: string;
@@ -1221,6 +1222,7 @@ describe('GitHub setup wizard', () => {
     mkdirSync(join(root, '.archon'));
     target = join(root, '.archon', '.env');
     webhookSecret = 'fixture-webhook-secret';
+    botDisplayName = 'Archon';
     keyPem = privateKey;
     keyValidation = [];
     keyPath = join(root, 'app.pem');
@@ -1256,6 +1258,7 @@ describe('GitHub setup wizard', () => {
         'Enter allowed Slack user IDs (comma-separated, or leave empty for all):'
       )
         return 'U222';
+      if (options.message === 'Enter the bot display name:') return botDisplayName;
       if (options.message === 'GitHub App ID:') return '123';
       if (options.message === 'GitHub App private key path:') {
         const error = await options.validate?.(keyPath);
@@ -1280,7 +1283,10 @@ describe('GitHub setup wizard', () => {
       throw new Error(`Unexpected password: ${options.message}`);
     });
     const confirmation = spyOn(prompts, 'confirm').mockImplementation(async options =>
-      options.message.startsWith('Replace existing GitHub authentication') ? switchAnswer : false
+      options.message.startsWith('Replace existing GitHub authentication')
+        ? switchAnswer
+        : options.message === 'Do you want to set a custom bot display name? (Default: Archon)' &&
+          botDisplayName !== 'Archon'
     );
     const platforms = spyOn(prompts, 'multiselect').mockResolvedValue(['github']);
     const notes = spyOn(prompts, 'note').mockImplementation(message => {
@@ -1442,6 +1448,46 @@ describe('GitHub setup wizard', () => {
       expect(existsSync(join(root, 'home', '.env'))).toBe(false);
     }
   );
+
+  it.each([
+    ['"', 'fresh'],
+    ["'", 'fresh'],
+    ['`', 'fresh'],
+    ['"', 'force'],
+    ["'", 'force'],
+    ['`', 'force'],
+    ['"', 'merge'],
+    ["'", 'merge'],
+    ['`', 'merge'],
+  ] as const)(
+    'preserves a %s mixed-quote App secret and display name on %s writes',
+    async (quote, path) => {
+      webhookSecret = quote + ['"', "'", '`'].filter(q => q !== quote).join('middle') + 'tail';
+      botDisplayName = 'Bot' + quote;
+      if (path !== 'fresh') writeFileSync(target, 'CUSTOM_KEY=keep\n');
+      expect(await run(path === 'force')).toBe(0);
+      const env = read();
+      expect(env.WEBHOOK_SECRET).toBe(webhookSecret);
+      expect(env.BOT_DISPLAY_NAME).toBe(botDisplayName);
+      expect(selectGitHubAuthMode(env)).toEqual({ kind: 'app' });
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_TOKEN).toBeUndefined();
+      if (path === 'merge') expect(env.CUSTOM_KEY).toBe('keep');
+      else expect(env.CUSTOM_KEY).toBeUndefined();
+      expect(output.join('\n')).not.toContain(webhookSecret);
+    }
+  );
+
+  it('rejects an unrepresentable complete env document before writing or reporting success', async () => {
+    webhookSecret = '\"single\'back`tick';
+    botDisplayName = '\'name`end"';
+    expect(await run()).toBe(1);
+    expect(existsSync(target)).toBe(false);
+    const messages = output.join('\n');
+    expect(messages).toContain('Cannot serialize env without changing its values');
+    expect(messages).not.toContain('Configuration written');
+    expect(messages).not.toContain(webhookSecret);
+  });
 
   it('writes an App webhook secret containing every quote delimiter', async () => {
     webhookSecret = '\"single\'back`tick';
