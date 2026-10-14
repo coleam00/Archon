@@ -15,7 +15,7 @@ import type {
   SystemEvent,
   ErrorEvent,
 } from '../primitives/event';
-import type { ProviderEvent, RunProviderEvents } from '../lib/provider-events';
+import type { ProviderEvent, ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import { StreamCard } from './StreamCard';
 
 interface RunStreamProps {
@@ -75,6 +75,7 @@ type TimelineEntry =
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
 
 interface PairedToolCall {
+  record: ProviderEventRecord;
   id: string;
   timestamp: string;
   /** The node that made the call: the record's `stepName`. */
@@ -97,6 +98,7 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
       const key = JSON.stringify([record.attemptId, 'toolCallId' in event ? event.toolCallId : '']);
       if (event.type === 'tool_call') {
         const entry: PairedToolCall = {
+          record,
           id: `${stepName}:${key}`,
           timestamp: record.observedAt,
           nodeId: stepName,
@@ -247,31 +249,32 @@ export function RunStream({
     }
 
     const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
-    for (const t of toolCalls.fromProviderEvents) {
-      const status = nodeStatus.get(t.nodeId);
-      const unrecorded =
-        t.call.status === undefined && status !== undefined && status !== 'running';
-      entries.push({
-        kind: 'tool',
-        key: `pt:${t.id}`,
-        at: new Date(t.timestamp).getTime(),
-        call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
-        timestamp: t.timestamp,
-        nodeId: t.nodeId,
-      });
-    }
-
+    const pairedTools = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
     for (const [stepName, records] of providerEvents) {
       for (const record of records) {
-        if (record.event.type !== 'hook') continue;
-        entries.push({
-          kind: 'hook',
-          key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
-          at: Date.parse(record.observedAt),
-          event: record.event,
-          timestamp: record.observedAt,
-          nodeId: stepName,
-        });
+        const t = pairedTools.get(record);
+        if (t !== undefined) {
+          const status = nodeStatus.get(t.nodeId);
+          const unrecorded =
+            t.call.status === undefined && status !== undefined && status !== 'running';
+          entries.push({
+            kind: 'tool',
+            key: `pt:${t.id}`,
+            at: Date.parse(t.timestamp),
+            call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
+            timestamp: t.timestamp,
+            nodeId: t.nodeId,
+          });
+        } else if (record.event.type === 'hook') {
+          entries.push({
+            kind: 'hook',
+            key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
+            at: Date.parse(record.observedAt),
+            event: record.event,
+            timestamp: record.observedAt,
+            nodeId: stepName,
+          });
+        }
       }
     }
 

@@ -261,6 +261,49 @@ describe('RunStream tool rendering', () => {
     expect(render(events, 'implement', false)).not.toContain('Bash');
   });
 
+  test.each([
+    ['native', ['a1']],
+    ['legacy', [null]],
+    ['native retries', ['a1', 'a2']],
+    ['legacy then native', [null, 'a2']],
+  ] as const)('preserves equal-time hook/tool order for %s', (_name, attempts) => {
+    const timestamp = '2026-10-02T10:00:00.100Z';
+    const records: ProviderEventRecord[] = [];
+    const expectedOrder: string[] = [];
+    for (const [attemptIndex, attemptId] of attempts.entries()) {
+      for (const [index, status] of (
+        ['started', 'succeeded', 'failed', 'cancelled'] as const
+      ).entries()) {
+        const hookName = `hook-${attemptIndex}-${status}`;
+        const toolName = `tool-${attemptIndex}-${status}`;
+        records.push(
+          record('implement', attemptId, index * 3, timestamp, {
+            type: 'hook',
+            hookId: hookName,
+            hookName,
+            hookEvent: 'PreToolUse',
+            status,
+          }),
+          record('implement', attemptId, index * 3 + 1, timestamp, {
+            type: 'tool_call',
+            toolCallId: `t${index}`,
+            name: toolName,
+          }),
+          record('implement', attemptId, index * 3 + 2, timestamp, {
+            type: 'tool_call_update',
+            toolCallId: `t${index}`,
+            status: 'completed',
+          })
+        );
+        expectedOrder.push(hookName, toolName);
+      }
+    }
+    const html = render(new Map([['implement', mergeProviderEventRecords([], records, 'load')]]));
+    const positions = expectedOrder.map(name => html.indexOf(name));
+    for (const position of positions) expect(position).toBeGreaterThan(-1);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
   test('hook records do not suppress message-inline tool calls', () => {
     const html = render(
       new Map([
