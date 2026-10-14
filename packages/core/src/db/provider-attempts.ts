@@ -20,6 +20,7 @@ import {
   currentProcessOwner,
   isOwnerProvablyGone,
   parseProcessOwner,
+  ProcessOwnerRecordError,
   type ProcessOwner,
 } from '@archon/paths/process-owner';
 
@@ -60,14 +61,25 @@ export async function releaseProviderAttempt(provider: string, attemptId: string
   );
 }
 
-export interface ProviderAttemptHolder {
+interface ProviderAttemptHolderRow {
   provider: string;
   attemptId: string;
-  owner: ProcessOwner;
   acquiredAt: string;
-  /** False when this host cannot prove liveness either way (the owner is on another host). */
-  ownerOnThisHost: boolean;
 }
+
+/**
+ * A holder whose owner record fails to parse is listed with `owner: null` and the
+ * parse error, so one corrupt row cannot hide the healthy holders from the operator.
+ */
+export type ProviderAttemptHolder = ProviderAttemptHolderRow &
+  (
+    | {
+        owner: ProcessOwner;
+        /** False when this host cannot prove liveness either way (the owner is on another host). */
+        ownerOnThisHost: boolean;
+      }
+    | { owner: null; invalidOwner: string }
+  );
 
 /** Every provider-attempt holder, for operator inspection and explicit release. */
 export async function listProviderAttemptHolders(): Promise<ProviderAttemptHolder[]> {
@@ -84,31 +96,38 @@ export async function listProviderAttemptHolders(): Promise<ProviderAttemptHolde
       WHERE holder_kind = 'attempt'
       ORDER BY resource_key, acquired_at, holder_id`
   );
-  return result.rows.map(row => {
-    const owner = parseProcessOwner(
-      { host: row.owner_host, pid: row.owner_pid, instance: row.owner_instance },
-      resourceSlotHolderSource(row.resource_key, row.holder_id)
-    );
-    return {
+  return result.rows.map((row): ProviderAttemptHolder => {
+    const holder = {
       provider: row.resource_key.slice(PROVIDER_RESOURCE_PREFIX.length),
       attemptId: row.holder_id,
-      owner,
       acquiredAt: row.acquired_at instanceof Date ? row.acquired_at.toISOString() : row.acquired_at,
-      ownerOnThisHost: owner.host === currentProcessOwner.host,
     };
+    try {
+      const owner = parseProcessOwner(
+        { host: row.owner_host, pid: row.owner_pid, instance: row.owner_instance },
+        resourceSlotHolderSource(row.resource_key, row.holder_id)
+      );
+      return { ...holder, owner, ownerOnThisHost: owner.host === currentProcessOwner.host };
+    } catch (error) {
+      if (!(error instanceof ProcessOwnerRecordError)) throw error;
+      return { ...holder, owner: null, invalidOwner: error.message };
+    }
   });
 }
 
 /**
  * Explicit operator release of one attempt holder, for an owner this host cannot
- * prove dead. Refuses a same-host owner that is still running.
+ * prove dead. Refuses a same-host owner that is still running. A holder with an
+ * invalid owner record has no owner to probe, so the operator's release stands.
  */
 export async function releaseProviderAttemptHolder(
   attemptId: string
 ): Promise<'released' | 'not_found' | 'owner_running'> {
   const holder = (await listProviderAttemptHolders()).find(h => h.attemptId === attemptId);
   if (!holder) return 'not_found';
-  if (holder.ownerOnThisHost && !isOwnerProvablyGone(holder.owner)) return 'owner_running';
+  if (holder.owner && holder.ownerOnThisHost && !isOwnerProvablyGone(holder.owner)) {
+    return 'owner_running';
+  }
   await releaseProviderAttempt(holder.provider, attemptId);
   return 'released';
 }

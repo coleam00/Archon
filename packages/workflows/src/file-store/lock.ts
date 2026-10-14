@@ -290,7 +290,15 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
  * creator may not have written it yet), stays.
  */
 async function sweepScratch(root: string): Promise<void> {
-  for (const name of await readdir(root)) {
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch (error) {
+    // The sweep is cleanup; failing to list the store must not fail the operation.
+    log.warn({ path: root, err: error }, 'file_store.scratch_sweep_skipped');
+    return;
+  }
+  for (const name of names) {
     if (!name.startsWith('.lock-') && !name.startsWith('.probe-')) continue;
     const path = join(root, name);
     try {

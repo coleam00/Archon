@@ -542,6 +542,12 @@ describe('file store filesystem primitives', () => {
     expect(await readFile(join(root, 'lock.break'), 'utf8')).toBe(dead);
   });
 
+  test('a scratch sweep that cannot list the store still runs the operation', async () => {
+    const root = await fixture();
+    spies.push(spyOn(fsPromises, 'readdir').mockRejectedValue(injected()));
+    expect(await withFileStoreLock(root, async () => 'ran')).toBe('ran');
+  });
+
   test('the probe refuses only link failures that mean no hard-link support', async () => {
     const root = await fixture();
     const real = fsPromises.link;

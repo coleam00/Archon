@@ -769,10 +769,10 @@ export async function aiCapacityListCommand(json?: boolean): Promise<number> {
   }
   console.log('Provider attempts holding capacity:');
   for (const h of holders) {
-    const where = h.ownerOnThisHost ? 'this host' : 'another host';
-    console.log(
-      `  ${h.provider.padEnd(10)} ${h.attemptId}  ${h.owner.host} pid ${String(h.owner.pid)} (${where}) since ${h.acquiredAt}`
-    );
+    const owner = h.owner
+      ? `${h.owner.host} pid ${String(h.owner.pid)} (${h.ownerOnThisHost ? 'this host' : 'another host'})`
+      : h.invalidOwner;
+    console.log(`  ${h.provider.padEnd(10)} ${h.attemptId}  ${owner} since ${h.acquiredAt}`);
   }
   return 0;
 }
