@@ -1580,10 +1580,10 @@ export function nodeTemplateReferences(
 export function substituteNodeOutputRefs(
   prompt: string,
   nodeOutputs: Map<string, NodeOutput>,
+  loopBodyScopes: readonly LoopBodyScope[],
   escapedForBash = false,
   artifactsDir?: string,
-  requiredContext?: RequiredOutputRefContext,
-  loopBodyScopes: readonly LoopBodyScope[] = []
+  requiredContext?: RequiredOutputRefContext
 ): string {
   const { before, after } = nodeTemplateReferences(
     prompt,
@@ -6992,14 +6992,7 @@ async function executeWaitNode(
       }
       rendered = canonicalValueText(runInputs[inputsName]);
     } else {
-      rendered = substituteNodeOutputRefs(
-        condition.timestamp,
-        nodeOutputs,
-        false,
-        undefined,
-        undefined,
-        ctx.loopBodyScopes
-      );
+      rendered = substituteNodeOutputRefs(condition.timestamp, nodeOutputs, ctx.loopBodyScopes);
     }
     if (!waitUntilTimestampSchema.safeParse(rendered).success) {
       throw new Error(
@@ -7302,14 +7295,7 @@ async function executeApprovalNode(
 
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
-  const renderedMessage = substituteNodeOutputRefs(
-    node.message,
-    nodeOutputs,
-    false,
-    undefined,
-    undefined,
-    ctx.loopBodyScopes
-  );
+  const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs, ctx.loopBodyScopes);
   const choices = node.decisions.map(decision => {
     const label =
       decision.label ??
@@ -10085,9 +10071,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 const reason = substituteNodeOutputRefs(
                   node.reason,
                   ctx.nodeOutputs,
-                  false,
-                  undefined,
-                  undefined,
                   ctx.loopBodyScopes
                 );
                 const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;

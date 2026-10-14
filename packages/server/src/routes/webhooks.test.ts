@@ -5,8 +5,8 @@
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import createGitHubWebhookSource from '../../../adapters/src/forge/github/source-plugin';
-import { verifyGitHubWebhookSignature } from '../../../adapters/src/forge/github/webhook-signature';
+import createGitHubWebhookSource from '@archon/adapters/forge/github-source-plugin';
+import { verifyGitHubWebhookSignature } from '@archon/adapters/forge/github/webhook-signature';
 import { OpenAPIHono } from '@hono/zod-openapi';
 
 // Mock logger to suppress noisy output during tests
@@ -529,38 +529,42 @@ for (const route of ['github', 'sources/configured'] as const) {
       }
     });
 
-    test.each([true, false])(
-      'rejects declared oversize before pulling (eligible=%s)',
-      async eligible => {
-        const { app, receive, drain } = setup(eligible);
-        const stream = streamedBody([new Uint8Array([1])]);
-        const headers: Record<string, string> = { 'content-length': String(bodyLimit + 1) };
-        if (eligible) headers['x-hub-signature-256'] = 'signed';
-        const response = await app.request(`/webhooks/${route}`, {
-          method: 'POST',
-          headers,
-          body: stream.body,
-        });
-        expect(response.status).toBe(413);
-        expect(stream.pulls).toBe(0);
-        expect(receive).not.toHaveBeenCalled();
-        expect(drain).not.toHaveBeenCalled();
-      }
-    );
+    test('refuses an ineligible request before reading the body', async () => {
+      const { app, receive, drain } = setup(false);
+      const stream = streamedBody([new Uint8Array(bodyLimit + 1)]);
+      const response = await app.request(`/webhooks/${route}`, {
+        method: 'POST',
+        headers: { 'content-length': String(bodyLimit + 1) },
+        body: stream.body,
+      });
+      expect(response.status).toBe(route === 'github' ? 400 : 404);
+      expect(stream.pulls).toBe(0);
+      expect(receive).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
+    });
 
-    test.each([
-      [undefined, true],
-      ['1', true],
-      [undefined, false],
-    ] as const)(
-      'stops and cancels on the crossing chunk (Content-Length=%s, eligible=%s)',
-      async (length, eligible) => {
-        const { app, receive, drain } = setup(eligible);
+    test('rejects declared oversize before pulling', async () => {
+      const { app, receive, drain } = setup();
+      const stream = streamedBody([new Uint8Array([1])]);
+      const response = await app.request(`/webhooks/${route}`, {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': 'signed', 'content-length': String(bodyLimit + 1) },
+        body: stream.body,
+      });
+      expect(response.status).toBe(413);
+      expect(stream.pulls).toBe(0);
+      expect(receive).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
+    });
+
+    test.each([undefined, '1'] as const)(
+      'stops and cancels on the crossing chunk (Content-Length=%s)',
+      async length => {
+        const { app, receive, drain } = setup();
         const prefix = new Uint8Array(bodyLimit);
         prefix[0] = 0xff;
         const stream = streamedBody([prefix, new Uint8Array([1]), new Uint8Array([1])]);
-        const headers: Record<string, string> = {};
-        if (eligible) headers['x-hub-signature-256'] = 'signed';
+        const headers: Record<string, string> = { 'x-hub-signature-256': 'signed' };
         if (length) headers['content-length'] = length;
         const response = await app.request(`/webhooks/${route}`, {
           method: 'POST',

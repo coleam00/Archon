@@ -97,7 +97,7 @@ registerOpencodeProvider();
 // --- Imports (after mocks) ---
 import {
   checkTriggerRule,
-  substituteNodeOutputRefs,
+  substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
   substituteLoopBodyText,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
@@ -717,6 +717,24 @@ function node(id: string, depends_on?: string[], opts?: Partial<AgentNode>): Age
     ...(depends_on?.length ? { depends_on } : {}),
     ...opts,
   };
+}
+
+/** Substitution outside any loop_group: no enclosing loop scope. */
+function substituteNodeOutputRefs(
+  prompt: string,
+  nodeOutputs: Map<string, NodeOutput>,
+  escapedForBash?: boolean,
+  artifactsDir?: string,
+  requiredContext?: Parameters<typeof substituteNodeOutputRefsInScopes>[5]
+): string {
+  return substituteNodeOutputRefsInScopes(
+    prompt,
+    nodeOutputs,
+    [],
+    escapedForBash,
+    artifactsDir,
+    requiredContext
+  );
 }
 
 /**
@@ -1915,13 +1933,11 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
       { loopPrevOutputs: new Map([['draft', makeOutput('completed', "it's $a.output")]]) },
     ];
     expect(
-      substituteNodeOutputRefs(
+      substituteNodeOutputRefsInScopes(
         'echo $LOOP_PREV.draft.output $a.output',
         outputs,
-        true,
-        undefined,
-        undefined,
-        scopes
+        scopes,
+        true
       )
     ).toBe("echo 'it'\\''s $a.output' 'A'");
   });

@@ -39,7 +39,7 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
    - **Webhook URL** — `https://archon.example.com/webhooks/github`.
    - **Webhook secret** — same value as your `WEBHOOK_SECRET` env var.
 
-   Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes. Accepted deliveries retain exact-byte signature verification and existing acknowledgement behavior.
+   Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before the signature is checked; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes.
 3. Uncheck **Active** on the user authorisation callback URL — Archon doesn't use OAuth in PR-B.
 
 ## Step 2: Permissions (fine-grained)

@@ -342,12 +342,14 @@ describe('file store filesystem primitives', () => {
     const path = join(root, 'lock');
     await writeFile(path, JSON.stringify({ ...currentProcessOwner, instance: randomUUID() }));
     expect(await withFileStoreLock(root, async () => 'recovered')).toBe('recovered');
-    const malformed = JSON.stringify({ ...currentProcessOwner, pid: -1 });
-    await writeFile(path, malformed);
-    await expect(withFileStoreLock(root, async () => {}, 25)).rejects.toThrow(
-      'Invalid owner record'
-    );
-    expect(await readFile(path, 'utf8')).toBe(malformed);
+    for (const pid of [-1, 1.5]) {
+      const malformed = JSON.stringify({ ...currentProcessOwner, pid });
+      await writeFile(path, malformed);
+      await expect(withFileStoreLock(root, async () => {}, 25)).rejects.toThrow(
+        'Invalid owner record'
+      );
+      expect(await readFile(path, 'utf8')).toBe(malformed);
+    }
     await writeFile(path, '{');
     let entered = false;
     const error = await rejection(

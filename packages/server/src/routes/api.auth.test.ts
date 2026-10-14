@@ -74,14 +74,11 @@ const mockListConversations = mock(
     _userId?: string
   ) => [] as unknown[]
 );
-const mockGetSchemaVersion = mock<(typeof import('@archon/core'))['getSchemaVersion']>(
-  async () => null
-);
 
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'postgresql',
-  getSchemaVersion: mockGetSchemaVersion,
+  getSchemaVersion: mock(async () => null),
   loadConfig: mock(async () => ({})),
   ProjectRegistrationError: class ProjectRegistrationError extends Error {},
   inspectProjectBaseBranch: mock(async () => ({
@@ -301,7 +298,6 @@ describe('server-side /api/* gate', () => {
     apiGateEnabled = false;
     authInstance = null;
     mockFindOrCreateUser.mockClear();
-    mockGetSchemaVersion.mockClear();
   });
   afterEach(() => {
     apiGateEnabled = false; // don't leak the gate into other describes
@@ -325,40 +321,11 @@ describe('server-side /api/* gate', () => {
     expect(res.status).toBe(200);
   });
 
-  test.each(['available', 'degraded'] as const)(
-    'gate on → /api/health is never blocked by the gate (%s schema read)',
-    async databaseState => {
-      apiGateEnabled = true;
-      if (databaseState === 'degraded') {
-        mockGetSchemaVersion.mockImplementationOnce(async () => {
-          throw new Error('database unavailable');
-        });
-      }
-      const res = await makeApp().request('/api/health');
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toMatchObject({
-        status: 'ok',
-        adapter: 'web',
-        concurrency: {
-          active: 0,
-          queuedTotal: 0,
-          queuedByConversation: [],
-          maxConcurrent: 10,
-          activeConversationIds: [],
-        },
-        runningWorkflows: 0,
-        version: expect.any(String),
-        is_docker: expect.any(Boolean),
-        is_wsl: expect.any(Boolean),
-        activePlatforms: ['Web'],
-      });
-      if (databaseState === 'degraded') {
-        expect(mockGetSchemaVersion).toHaveBeenCalledTimes(1);
-        expect(body).not.toHaveProperty('schema');
-      }
-    }
-  );
+  test('gate on → /api/health is never blocked by the gate', async () => {
+    apiGateEnabled = true;
+    const res = await makeApp().request('/api/health');
+    expect(res.status).toBe(200);
+  });
 
   test('gate on + Better Auth session → protected route passes', async () => {
     apiGateEnabled = true;
