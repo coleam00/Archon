@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   approvalContextSchema,
+  isApprovalContext,
   bodySessionCursorsSchema,
   bodySessionCursorAncestrySchema,
 } from './schemas/workflow-run';
@@ -83,6 +84,33 @@ describe('nodeOutputSchema', () => {
       expect(nodeOutputSchema.safeParse({ state: 'skipped', output: '', cause }).success).toBe(
         true
       );
+    }
+  });
+});
+
+describe('authored approval context', () => {
+  const base = { nodeId: 'review', message: 'Choose' };
+  test.each([
+    { decisions: undefined },
+    { decisions: [] },
+    { decisions: [{ label: 'Missing id' }] },
+  ])('refuses authored contexts without usable decisions (%j)', ({ decisions }) => {
+    const approval = { ...base, decisionsAuthored: true, decisions };
+    expect(approvalContextSchema.safeParse(approval).success).toBe(false);
+    expect(isApprovalContext(approval)).toBe(false);
+  });
+  test('round trips authored decisions and legacy contexts', () => {
+    for (const approval of [
+      base,
+      { ...base, decisionsAuthored: false as const },
+      {
+        ...base,
+        decisionsAuthored: true as const,
+        decisions: [{ id: 'accept', label: 'Accept plan' }, { id: 'revise' }],
+      },
+    ]) {
+      expect(approvalContextSchema.parse(approval)).toEqual(approval);
+      expect(isApprovalContext(approval)).toBe(true);
     }
   });
 });

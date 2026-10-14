@@ -273,7 +273,6 @@ function gateCompletionEvent(
 /**
  * The message for a gate `runAttention` could not read. Shared by approve and
  * reject so a corrupt row explains itself the same way at both entry points.
- * `malformed_gate` never reaches here from reject — that case stays rejectable.
  */
 function unreadableGateMessage(
   run: WorkflowRun,
@@ -404,7 +403,7 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
  * decision as `assertApprovable` but acts on one variant differently, and that
  * difference is real: reject has no `nodeId` requirement — it falls back to
  * `approval?.nodeId ?? 'unknown'` when writing its audit event, so a run whose gate
- * metadata is unreadable (`malformed_gate`) is still legitimately rejectable. A
+ * legacy metadata is unreadable (`malformed_gate`) is still legitimately rejectable. A
  * well-formed context with an unrecognized `type` is NOT one of those cases — it
  * throws, same as approve. Merging the two gates would either break reject or
  * over-permit approve.
@@ -434,9 +433,21 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
     case 'unreadable':
       // The one deliberate divergence from approve: unreadable gate METADATA is
-      // still rejectable (see this function's doc comment). An unrecognized gate
-      // TYPE is not, and neither is a block pointer with nothing to follow.
-      if (attention.reason === 'malformed_gate') break;
+      // still rejectable for legacy gates. An unrecognized TYPE is not, and
+      // neither is a block pointer with nothing to follow.
+      if (attention.reason === 'malformed_gate') {
+        if (
+          typeof rawApproval === 'object' &&
+          rawApproval !== null &&
+          'decisionsAuthored' in rawApproval &&
+          rawApproval.decisionsAuthored === true
+        ) {
+          throw new Error(
+            `Run ${run.id} has malformed authored decisions. Inspect its gate context before responding.`
+          );
+        }
+        break;
+      }
       throw new Error(unreadableGateMessage(run, attention, approval));
     case undefined:
       if (approval && isGateResolved(approval)) {
@@ -655,7 +666,7 @@ function assertDeclaredDecision(
     approval.decisionsAuthored !== true
   )
     return;
-  const declaredIds = (approval.decisions ?? []).map(d => d.id);
+  const declaredIds = approval.decisions.map(d => d.id);
   if (!declaredIds.includes(decision)) {
     throw new Error(
       `Run ${run.id}'s gate does not declare decision '${decision}'. Declared decisions: ` +

@@ -62,8 +62,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
   const signalBearing = run.approval?.completionSignaled === true;
 
   const authored = run.approval?.decisionsAuthored === true;
-  const decisions =
-    run.approval?.decisions ?? (authored ? [] : [{ id: 'approve' }, { id: 'reject' }]);
+  const decisions = run.approval?.decisions ?? [];
   const approveDecision = decisions.find(d => d.id === 'approve');
   const canApprove = !authored || approveDecision !== undefined;
   const approveLabel = authored

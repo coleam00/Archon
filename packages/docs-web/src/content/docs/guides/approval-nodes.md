@@ -107,8 +107,8 @@ pair. The legacy `capture_response` and `on_reject` behavior described below rem
 available. Explicit decisions produce structured output, `{decision, text}`;
 `capture_response` does not change that output. Every declared decision completes
 the gate and lets the authored graph determine what happens next. An ID such as `cancel` does not cancel by itself; wire it to a
-`cancel:` node when that is the intended outcome. There is no per-decision
-required-text rule.
+`cancel:` node when that is the intended outcome. The engine has no per-decision required-text rule. In the console, `approve`
+accepts an optional comment; every other decision requires text before confirmation.
 
 Approval nodes do not support AI-specific fields (`model`, `provider`, `context`,
 `output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`,
@@ -147,7 +147,9 @@ its transport limits; otherwise it posts respond commands. The CLI equivalent is
 archon workflow respond <run-id> revise "Please add tests"
 ```
 
-Text is optional and passes through to `$gate-name.output.text`. The selected ID
+Text is optional in the engine, CLI and HTTP API and passes through to
+`$gate-name.output.text`. The console requires text for every decision other than
+`approve`, including custom decisions such as `accept` or `revise`. The selected ID
 is available as `$gate-name.output.decision`. Use these fields to wire the next
 step. CLI run detail lists the available IDs and commands; the console displays
 the labels and sends the IDs. Older gates without `decisions` retain the legacy

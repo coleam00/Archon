@@ -1378,6 +1378,67 @@ describe('respondToWorkflow', () => {
     }
   );
 
+  test.each([{ decisions: undefined }, { decisions: [] }])(
+    'malformed authored vocabularies cannot fall through to legacy cancellation (%j)',
+    async ({ decisions }) => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              nodeId: 'review',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions,
+            },
+          },
+        })
+      );
+      mockResolveAndCancelApprovalGate.mockClear();
+      await expect(rejectWorkflow('run-1', 'Stop', operator)).rejects.toThrow(
+        'malformed authored decisions'
+      );
+      await expect(respondToWorkflow('run-1', 'reject', 'Stop', operator)).rejects.toThrow(
+        'malformed authored decisions'
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    }
+  );
+
+  test('resolves a declared custom decision without approve in the vocabulary', async () => {
+    mockResolveAndCancelApprovalGate.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Choose',
+            type: 'approval',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      })
+    );
+    await respondToWorkflow('run-1', 'accept', 'Use this plan', operator);
+    expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
+    const call = mockResolveApprovalGate.mock.calls[0];
+    if (!call) throw new Error('Expected gate resolution');
+    expect(call[2]).toContainEqual(
+      expect.objectContaining({
+        event_type: 'node_completed',
+        step_name: 'review',
+        data: expect.objectContaining({
+          structured_output: { decision: 'accept', text: 'Use this plan' },
+          node_output: JSON.stringify({ decision: 'accept', text: 'Use this plan' }),
+        }),
+      })
+    );
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+  });
+
   test('resolves a custom decision on an escalated body-terminal-gate pause — node_completed lands under the namespaced <nodeId>.<bodyGateId> step_name (#2707 step 3)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
       makePausedRun({

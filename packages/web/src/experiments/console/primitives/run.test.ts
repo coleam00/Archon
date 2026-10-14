@@ -246,6 +246,25 @@ describe('toRun — cost', () => {
 });
 
 describe('toRun — approval parsing', () => {
+  test('keeps an authored vocabulary and its labels without synthesizing default choices', () => {
+    const decisions = [
+      { id: 'accept', label: 'Accept plan' },
+      { id: 'revise', label: 'Revise plan' },
+    ];
+    const run = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        metadata: {
+          approval: { nodeId: 'gate', message: 'Choose', decisionsAuthored: true, decisions },
+        },
+      })
+    );
+    expect(run.approval?.decisions).toEqual(decisions);
+    expect(run.approval?.decisionsAuthored).toBe(true);
+  });
+
   test('parses a well-formed approval from metadata', () => {
     const r = toRun(
       raw({

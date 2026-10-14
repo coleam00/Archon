@@ -82,6 +82,7 @@ import type { OverlayChangeSummary } from './container-context';
 import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
+import { approvalContextSchema } from './schemas/workflow-run';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
@@ -7295,7 +7296,7 @@ async function executeApprovalNode(
     }
   );
   const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
-  const approvalContext: ApprovalContext = {
+  const approvalContext = approvalContextSchema.parse({
     execution: executionMetadata(suspended),
     message: renderedMessage,
     nodeId: bodyGateOwner?.nodeId ?? node.id,
@@ -7320,7 +7321,7 @@ async function executeApprovalNode(
       ...(d.label !== undefined ? { label: d.label } : {}),
     })),
     decisionsAuthored: node.decisionsAuthored,
-  };
+  });
   const paused = await pauseGateRespectingExternalTransition(
     deps,
     workflowRun.id,
