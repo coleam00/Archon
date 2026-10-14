@@ -88,7 +88,12 @@ export function assertProviderRegistrationAllowed(
  */
 export function registerProvider(entry: ProviderRegistration): void {
   assertProviderRegistrationAllowed(entry, registry.values());
-  registry.set(entry.id, entry);
+  const registration: ProviderRegistration = {
+    ...entry,
+    factory: () =>
+      Object.assign(entry.factory(), { getCapabilities: () => registration.capabilities }),
+  };
+  registry.set(entry.id, registration);
   unavailableProviders.delete(entry.id);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }

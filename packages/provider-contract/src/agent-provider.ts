@@ -327,7 +327,7 @@ export interface IAgentProvider {
 
   /**
    * Get the provider's capability flags.
-   * Derived from the same declaration as the registry descriptor.
+   * Registered factories bind this view to the registry descriptor's declaration.
    */
   getCapabilities(): ProviderCapabilities;
 }

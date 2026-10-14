@@ -92,7 +92,10 @@ describe('registry', () => {
     expect(providerRegistry.get('absent')).toBeUndefined();
     const entry = makeMockRegistration('custom', { factory });
     registerProvider(entry);
-    expect(providerRegistry.get('custom')).toEqual(entry);
+    expect(providerRegistry.get('custom')).toMatchObject({
+      ...entry,
+      factory: expect.any(Function),
+    });
     expect(providerRegistry.list().map(provider => provider.id)).toEqual([
       'claude',
       'codex',
@@ -246,6 +249,43 @@ describe('registry', () => {
   });
 
   describe('registerProvider', () => {
+    test('registered factories derive instance capabilities from the descriptor', async () => {
+      const native = makeMockProvider('custom');
+      const nativeCapabilities = mock(() => ({
+        ...makeMockProvider('custom').getCapabilities(),
+        backgroundWork: 'reported' as const,
+      }));
+      native.getCapabilities = nativeCapabilities;
+      const factory = mock(() => native);
+      const entry = makeMockRegistration('custom', {
+        factory,
+        capabilities: { ...native.getCapabilities(), backgroundWork: 'none' },
+      });
+      nativeCapabilities.mockClear();
+      registerProvider(entry);
+
+      expect(getProviderCapabilities('custom')).toBe(entry.capabilities);
+      expect(providerRegistry.get('custom')?.capabilities).toBe(entry.capabilities);
+      expect(factory).not.toHaveBeenCalled();
+
+      for (const provider of [
+        getAgentProvider('custom'),
+        getRegistration('custom').factory(),
+        ...getRegisteredProviders()
+          .filter(provider => provider.id === 'custom')
+          .map(provider => provider.factory()),
+      ]) {
+        expect(provider).toBe(native);
+        expect(provider.getCapabilities()).toBe(entry.capabilities);
+        expect(provider.getType()).toBe('custom');
+        expect(await Array.fromAsync(provider.sendQuery('prompt', '/tmp'))).toEqual([
+          { type: 'result' },
+        ]);
+      }
+      expect(factory).toHaveBeenCalledTimes(3);
+      expect(nativeCapabilities).not.toHaveBeenCalled();
+    });
+
     test('registers a new provider', () => {
       const entry = makeMockRegistration('my-llm');
       registerProvider(entry);
