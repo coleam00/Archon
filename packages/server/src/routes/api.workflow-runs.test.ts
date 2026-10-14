@@ -3592,19 +3592,53 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
           },
         },
       });
-      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
       const { app } = makeApp();
       const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
         method: 'POST',
         body: JSON.stringify({ decision, text: 'feedback', expectedGate }),
         headers: { 'Content-Type': 'application/json' },
       });
-      expect(response.status).toBe(500);
-      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+      // Refused before any write, as a conflict naming the occurrence the run is at now.
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toContain(
+        "It is now awaiting occurrence 'pause-after'."
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
       expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
       expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  test('a stale occurrence is a 409, not an undeclared-decision 400, when the new gate lacks the decision', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'next-gate',
+          pauseId: 'pause-after',
+          message: 'Something else',
+          decisions: [{ id: 'approve' }, { id: 'accept' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+      method: 'POST',
+      body: JSON.stringify({
+        decision: 'revise',
+        text: 'feedback',
+        expectedGate: { nodeId: 'review-gate', pauseId: 'pause-before' },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      "It is now awaiting occurrence 'pause-after'."
+    );
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 
   test("'approve' produces the exact same resolution as POST .../approve", async () => {
     mockGetWorkflowRun.mockResolvedValue({

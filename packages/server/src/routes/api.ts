@@ -326,7 +326,10 @@ import {
   describeAbandonOwner,
   describeReleasedWorktrees,
   AbandonRefusedError,
+  assertAnswerAdmissible,
   assertRespondable,
+  StaleGateAnswerError,
+  type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
@@ -1215,6 +1218,7 @@ const respondWorkflowRunRoute = createRoute({
     400: jsonGateRefusal('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('The answer names an occurrence the run is no longer paused at'),
     500: jsonError('Server error'),
   },
 });
@@ -4365,6 +4369,19 @@ export function registerApiRoutes(
       }
       const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
+      const origin: GateAnswerOrigin = {
+        via: 'api',
+        ...(body.expectedGate !== undefined ? { expectedGate: body.expectedGate } : {}),
+      };
+
+      // A stale occurrence is reported before the current gate judges the decision: the
+      // caller answered an earlier pause and must hear that, not "undeclared decision".
+      try {
+        assertAnswerAdmissible(run, origin);
+      } catch (staleError) {
+        if (staleError instanceof StaleGateAnswerError) return apiError(c, 409, staleError.message);
+        throw staleError;
+      }
 
       try {
         assertRespondable(run, decision);
@@ -4377,10 +4394,7 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text, actor, {
-        via: 'api',
-        ...(body.expectedGate !== undefined ? { expectedGate: body.expectedGate } : {}),
-      });
+      const result = await respondToWorkflow(runId, decision, text, actor, origin);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -4405,6 +4419,8 @@ export function registerApiRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      // A race lost after the pre-check above: the run moved to another pause meanwhile.
+      if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
     }

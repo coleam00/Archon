@@ -2315,6 +2315,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {

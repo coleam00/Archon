@@ -1587,8 +1587,10 @@ describe('respondToWorkflow', () => {
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
-  test('a stale occurrence is refused and names the occurrence the run is at now', async () => {
+  test('a race lost after the occurrence check still names the occurrence the run is at now', async () => {
     const stale = declaredGate('pause-one');
+    // The operation reads the run at pause-one; by the time the CAS runs it has moved on.
+    mockGetWorkflowRun.mockResolvedValueOnce(stale);
     mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-two'));
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
     const expectedGate = expectedGateForOccurrence(stale, 'pause-one');
@@ -1597,6 +1599,41 @@ describe('respondToWorkflow', () => {
       respondToWorkflow('run-1', 'revise', undefined, operator, { via: 'cli', expectedGate })
     ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
     expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+  });
+
+  test('a stale occurrence is reported before the current gate validates the decision', async () => {
+    // The run moved on from a gate declaring 'revise' to one that does not. The answer
+    // was meant for the old pause, so the caller must hear that, not "undeclared decision".
+    const current = makePausedRun({
+      user_id: 'user-who-answered',
+      metadata: {
+        approval: {
+          nodeId: 'later',
+          pauseId: 'pause-two',
+          message: 'Choose',
+          type: 'approval',
+          decisionsAuthored: true,
+          decisions: [{ id: 'approve' }, { id: 'accept' }],
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValue(current);
+    const expectedGate = { nodeId: 'review', pauseId: 'pause-one' };
+    for (const decision of ['revise', 'approve', 'reject']) {
+      await expect(
+        respondToWorkflow('run-1', decision, undefined, operator, { via: 'cli', expectedGate })
+      ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
+    }
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('a malformed surface is refused before a terminal reject cancels the run', async () => {
+    mockGetWorkflowRun.mockResolvedValue(makePausedRun());
+    await expect(
+      rejectWorkflow('run-1', 'no', operator, { via: 'Not A Surface' })
+    ).rejects.toThrow();
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 
   test('a legacy occurrence names the gate by node, as run-attention reports it', () => {
@@ -1610,7 +1647,8 @@ describe('respondToWorkflow', () => {
         makePausedRun({
           metadata: {
             approval: {
-              nodeId: 'later',
+              // Matches the expected gate when read, so the CAS is what loses the race.
+              nodeId: 'earlier',
               message: 'Choose',
               type: 'approval',
               decisionsAuthored: true,

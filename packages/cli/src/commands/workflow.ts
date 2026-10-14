@@ -197,6 +197,7 @@ import {
   assertApprovable,
   assertRejectable,
   assertRespondable,
+  assertAnswerAdmissible,
   expectedGateForOccurrence,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
@@ -6044,7 +6045,13 @@ async function cliAnswerOrigin(
   if (occurrence === undefined) return { via: 'cli' };
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) throw new Error(`Workflow run not found: ${runId}`);
-  return { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
+  return cliOriginForRun(run, occurrence);
+}
+
+function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): GateAnswerOrigin {
+  return occurrence === undefined
+    ? { via: 'cli' }
+    : { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
 }
 
 /**
@@ -6081,8 +6088,9 @@ export async function workflowApproveCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
-      // The SAME gate approveWorkflow enforces — not a copy of one branch of it.
-      // A partial copy acks { ok: true } and lets the child die unseen.
+      // The SAME gates approveWorkflow enforces, in the same order — not a copy of
+      // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertApprovable(run);
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
@@ -6234,8 +6242,9 @@ export async function workflowRejectCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
-      // The SAME gate rejectWorkflow enforces — not a copy of one branch of it.
-      // A partial copy acks { ok: true } and lets the child die unseen.
+      // The SAME gates rejectWorkflow enforces, in the same order — not a copy of
+      // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertRejectable(run);
       return run;
     });
@@ -6404,6 +6413,7 @@ export async function workflowRespondCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
+      assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
       assertRespondable(run, decision);
       if (!run.working_path) {
         throw new Error(

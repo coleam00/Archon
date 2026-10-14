@@ -12236,6 +12236,57 @@ describe('workflowRespondCommand', () => {
     }
   });
 
+  it.each([
+    ['approve', false],
+    ['reject', false],
+    ['revise', false],
+    ['approve', true],
+    ['reject', true],
+    ['revise', true],
+  ] as const)(
+    'refuses a stale --occurrence for %s before acknowledging anything (detach=%s)',
+    async (decision, detach) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const run = {
+        id: 'run-stale-occurrence',
+        workflow_name: 'guided',
+        status: 'paused',
+        user_message: 'go',
+        working_path: '/repo',
+        codebase_id: null,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'gate',
+            pauseId: 'pause-two',
+            message: 'Choose',
+            decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          },
+        },
+      };
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(run);
+      const resolve = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+      const cancel = workflowDb.resolveAndCancelApprovalGate as ReturnType<typeof mock>;
+      resolve.mockClear();
+      cancel.mockClear();
+      await expect(
+        workflowRespondCommand(
+          createTestWorkflowHost(),
+          run.id,
+          decision,
+          'feedback',
+          false,
+          undefined,
+          detach,
+          'pause-one'
+        )
+      ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
+      expect(resolve).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+    }
+  );
+
   it("delegates 'approve' to the exact same resolution as workflowApproveCommand", async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

@@ -348,11 +348,56 @@ function answeredGate(
   return {
     ...approval,
     resolved,
-    // Validated before the write, so a surface passing a malformed id fails loudly here
-    // instead of persisting an audit fact no reader can trust.
-    answeredVia: recordSurfaceSchema.parse(origin.via),
+    answeredVia: origin.via,
     answeredAt: new Date().toISOString(),
   };
+}
+
+const LOST_GATE_MESSAGE = (runId: string): string =>
+  `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`;
+
+/**
+ * An answer named an occurrence that is not the run's open one. Typed so a surface can
+ * report it as a conflict rather than a server failure; the message names the occurrence
+ * the run is at now.
+ */
+export class StaleGateAnswerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleGateAnswerError';
+  }
+}
+
+/** The refusal for an answer whose occurrence is not the run's open one, naming the one it is at now. */
+function staleGateError(runId: string, current: WorkflowRun | null): StaleGateAnswerError {
+  const attention = current ? runAttention(current) : null;
+  return new StaleGateAnswerError(
+    attention?.kind === 'awaiting_response'
+      ? `${LOST_GATE_MESSAGE(runId)} It is now awaiting occurrence '${attention.occurrence}'.`
+      : `${LOST_GATE_MESSAGE(runId)} It is not awaiting an answer now.`
+  );
+}
+
+/**
+ * The checks every answer passes before anything else judges it: the surface id is
+ * well formed, and a named occurrence is the run's open one. The occurrence goes first
+ * so an answer prepared for an earlier pause is reported as stale, not as an invalid
+ * decision for a gate its sender never saw. Mirrors the store's own CAS predicate,
+ * which still decides a race after this read. Read-only, so the CLI's detached
+ * pre-flight runs it too.
+ */
+export function assertAnswerAdmissible(run: WorkflowRun, origin: GateAnswerOrigin): void {
+  recordSurfaceSchema.parse(origin.via);
+  const expected = origin.expectedGate;
+  if (expected === undefined) return;
+  const gate = run.metadata.approval;
+  const open =
+    run.status === 'paused' && isApprovalContext(gate) && !isGateResolved(gate) ? gate : undefined;
+  const matches =
+    open !== undefined &&
+    open.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
+    (open.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId);
+  if (!matches) throw staleGateError(run.id, run);
 }
 
 /** The occurrence an answer resolved, recorded on its audit event; absent when the gate is unreadable. */
@@ -1432,21 +1477,15 @@ export function createWorkflowOperations({
     runId: string,
     expected: ExpectedApprovalGate | undefined
   ): Promise<Error> {
-    const message = `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`;
-    if (expected === undefined) return new Error(message);
+    if (expected === undefined) return new Error(LOST_GATE_MESSAGE(runId));
     let current: WorkflowRun | null;
     try {
       current = await store.getWorkflowRun(runId);
     } catch (err) {
       getLog().warn({ err, runId }, 'operations.workflow_gate_occurrence_lookup_failed');
-      return new Error(message);
+      return new Error(LOST_GATE_MESSAGE(runId));
     }
-    const attention = current ? runAttention(current) : null;
-    return new Error(
-      attention?.kind === 'awaiting_response'
-        ? `${message} It is now awaiting occurrence '${attention.occurrence}'.`
-        : `${message} It is not awaiting an answer now.`
-    );
+    return staleGateError(runId, current);
   }
 
   /**
@@ -1466,6 +1505,7 @@ export function createWorkflowOperations({
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     await assertMayAct(run, actor, 'approve');
+    assertAnswerAdmissible(run, origin);
     const approval = assertApprovable(run);
 
     // Whitespace-only comments count as absent (mirrors feedbackProvided below):
@@ -1656,6 +1696,7 @@ export function createWorkflowOperations({
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     await assertMayAct(run, actor, 'reject');
+    assertAnswerAdmissible(run, origin);
     const approval = assertRejectable(run);
 
     // Exhaustively switched on the suspend reason (#2489) so a future reason value
@@ -1869,6 +1910,7 @@ export function createWorkflowOperations({
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     await assertMayAct(run, actor, 'respond');
+    assertAnswerAdmissible(run, origin);
     const approval = assertRespondable(run, decision);
     if (!approval) throw new Error('Workflow run is paused but missing approval context.');
 

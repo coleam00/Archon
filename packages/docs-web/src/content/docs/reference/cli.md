@@ -620,6 +620,8 @@ Once answered, `metadata.approval` also records the surface the answer came thro
 `answeredVia` (`cli`, `api`, `manage_run`, or a chat platform id such as `slack`) and the
 time as `answeredAt`. The `approval_received` event carries the same surface as `via`, and
 the `occurrence` it answered.
+A reject that cancels the run leaves no resumable gate context, so on that path the
+`approval_received` event (with its `via`, `occurrence` and timestamp) is the record.
 These are audit facts. They never name who answered, and nothing routes on them.
 
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:
