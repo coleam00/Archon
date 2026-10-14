@@ -925,10 +925,7 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    run.workflow_name,
-    workflows.map(w => w.workflow)
-  );
+  const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
     const readErrors = errors.filter(error => error.errorType === 'read_error');
     // Incomplete discovery cannot prove that the verified capture lacks the workflow.

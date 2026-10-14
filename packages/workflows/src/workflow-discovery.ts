@@ -762,7 +762,6 @@ export async function discoverWorkflows(
     if (targetsByFile.size === 0) return;
 
     const discoveryRoot = projectRoot ?? cwd ?? archonPaths.getArchonHome();
-    const scripts = await discoverScriptsForCwd(discoveryRoot, roots);
     const contents = new Map<string, string>();
     const readErrors = new Map<string, Error>();
     const readScript = async (path: string): Promise<string> => {
@@ -782,6 +781,22 @@ export async function discoverWorkflows(
     };
 
     for (const [filename, { workflow, targets }] of targetsByFile) {
+      let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
+      try {
+        scripts = await discoverScriptsForCwd(
+          discoveryRoot,
+          roots,
+          new Set(targets.map(target => target.slot.value))
+        );
+      } catch (error) {
+        allErrors.push({
+          filename,
+          error: `Script discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+          errorType: 'read_error',
+        });
+        files.delete(filename);
+        continue;
+      }
       const sources = new Map<ExecInputValidationTarget, ExecInputSource>();
       let unreadable = false;
       for (const target of targets) {

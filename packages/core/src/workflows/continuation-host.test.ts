@@ -886,10 +886,18 @@ for (const scope of ['packaged', 'project', 'configured', 'global', 'legacy'] as
   }
 }
 
-for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
-  test(`temporary ${scope} packaged script inspection keeps retrying and recovers`, async () => {
+for (const scope of [
+  'project',
+  'global',
+  'bundled',
+  'installed',
+  'project-shared',
+  'global-shared',
+] as const) {
+  test(`${scope} script inspection failure isolates healthy workflows and retries its owner`, async () => {
+    const shared = scope.endsWith('-shared');
     const base =
-      scope === 'project'
+      scope === 'project' || shared
         ? 'project/.archon/workflows/pack'
         : scope === 'installed'
           ? 'installed/acme.pack'
@@ -900,6 +908,21 @@ for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
         [`${base}/deliver/workflow.yaml`]:
           'name: deliver\ndescription: Test\nnodes:\n  - id: act\n    script: task\n    runtime: bun\n',
         [`${base}/deliver/scripts/task.ts`]: 'console.log("done");',
+        [`${base}/healthy/healthy.yaml`]:
+          'name: healthy\ndescription: Test\nnodes:\n  - id: act\n    script: task\n    runtime: bun\n',
+        [`${base}/healthy/scripts/task.ts`]: 'console.log("healthy");',
+        ...(shared
+          ? {
+              'project/.archon/workflows/shared.yaml':
+                'name: shared\ndescription: Test\nnodes:\n  - id: act\n    script: unrelated\n    runtime: bun\n',
+              'project/.archon/workflows/healthy-shared.yaml':
+                'name: healthy-shared\ndescription: Test\nnodes:\n  - id: act\n    script: good\n    runtime: bun\n',
+              [`${scope === 'project-shared' ? 'project/.archon' : 'global'}/scripts/good.ts`]:
+                'console.log("healthy");',
+              [`${scope === 'project-shared' ? 'project/.archon' : 'global'}/scripts/unrelated.ts`]:
+                'console.log("unrelated");',
+            }
+          : {}),
         ...(scope === 'installed'
           ? {
               [`${base}/archon-plugin.json`]: JSON.stringify({
@@ -907,25 +930,56 @@ for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
                 kind: 'workflow-pack',
                 name: 'pack',
                 description: 'Test',
-                entrypoints: { deliver: 'deliver/workflow.yaml' },
+                entrypoints: { deliver: 'deliver/workflow.yaml', healthy: 'healthy/healthy.yaml' },
               }),
             }
           : {}),
       },
       DEFAULT_WORKFLOW_SOURCE_CONFIG,
-      scope === 'installed' ? 'acme/pack:deliver' : 'deliver'
+      scope === 'installed' ? 'acme/pack:deliver' : shared ? 'shared' : 'deliver'
     );
     const cause = Object.assign(new Error('temporary I/O failure'), { code: 'EIO' });
     const stat = fs.stat;
     const inspect = spyOn(fs, 'stat').mockImplementation(
       new Proxy(stat, {
         apply(target, receiver, args) {
-          if (args[0] === join(fixture.root, base, 'deliver/scripts/task.ts'))
+          if (
+            args[0] ===
+            join(
+              fixture.root,
+              shared
+                ? `${scope === 'project-shared' ? 'project/.archon' : 'global'}/scripts/unrelated.ts`
+                : `${base}/deliver/scripts/task.ts`
+            )
+          )
             return Promise.reject(cause);
           return Reflect.apply(target, receiver, args);
         },
       })
     );
-    await expectDiscoveryRecovery(fixture, () => inspect.mockRestore());
+    try {
+      const { resolveRunWorkflow } = await import('./resolve-run-workflow');
+      const { createWorkflowDeps } = await import('./store-adapter');
+      const healthy = {
+        ...fixture.candidate,
+        workflow_name: scope === 'installed' ? 'acme/pack:healthy' : 'healthy',
+      };
+      expect(
+        await resolveRunWorkflow(createWorkflowDeps(), healthy, fixture.root, {})
+      ).toMatchObject({ ok: true });
+      if (shared) {
+        expect(
+          await resolveRunWorkflow(
+            createWorkflowDeps(),
+            { ...fixture.candidate, workflow_name: 'healthy-shared' },
+            fixture.root,
+            {}
+          )
+        ).toMatchObject({ ok: true });
+      }
+      await expectDiscoveryRecovery(fixture, () => inspect.mockRestore());
+    } finally {
+      inspect.mockRestore();
+    }
   });
 }
