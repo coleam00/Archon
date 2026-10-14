@@ -554,24 +554,27 @@ describe('ClaudeProvider', () => {
         }
       );
 
-      test.each(['legacy', 'backwards', 'missing-model'])(
+      test.each(['legacy', 'backwards', 'missing-model', 'empty'])(
         'incomplete or inconsistent token baseline omits tokens (%s)',
         async scenario => {
           const sessionId = '10000000-0000-4000-8000-000000000096';
           persist({
             session_id: sessionId,
             total_cost_usd: 0.1,
-            modelUsage: {
-              main:
-                scenario === 'legacy'
-                  ? { outputTokens: 10 }
-                  : {
-                      inputTokens: 100,
-                      outputTokens: 10,
-                      cacheReadInputTokens: 30,
-                      cacheCreationInputTokens: 40,
-                    },
-            },
+            modelUsage:
+              scenario === 'empty'
+                ? {}
+                : {
+                    main:
+                      scenario === 'legacy'
+                        ? { outputTokens: 10 }
+                        : {
+                            inputTokens: 100,
+                            outputTokens: 10,
+                            cacheReadInputTokens: 30,
+                            cacheCreationInputTokens: 40,
+                          },
+                  },
           });
           mockQuery.mockImplementationOnce(async function* () {
             yield {
@@ -605,6 +608,52 @@ describe('ClaudeProvider', () => {
           );
           if (scenario !== 'missing-model')
             expect(result).toMatchObject({ resolvedModel: { id: 'main' } });
+        }
+      );
+
+      test.each(['missing', 'legacy', 'empty'])(
+        'keeps tokens unknown across later results (%s baseline)',
+        async scenario => {
+          const sessionId = '10000000-0000-4000-8000-000000000095';
+          if (scenario !== 'missing')
+            persist({
+              session_id: sessionId,
+              total_cost_usd: 0.1,
+              modelUsage: scenario === 'empty' ? {} : { main: { outputTokens: 10 } },
+            });
+          mockQuery.mockImplementationOnce(async function* () {
+            for (const { cost, increment } of [
+              { cost: 0.3, increment: 0 },
+              { cost: 0.5, increment: 10 },
+            ]) {
+              yield {
+                type: 'result',
+                session_id: sessionId,
+                total_cost_usd: cost,
+                modelUsage: {
+                  main: {
+                    inputTokens: 100 + increment,
+                    outputTokens: 20 + increment,
+                    cacheReadInputTokens: 30 + increment,
+                    cacheCreationInputTokens: 40 + increment,
+                  },
+                },
+              };
+            }
+          });
+          const results: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            if (chunk.type === 'result') results.push(chunk);
+          expect(results).toHaveLength(2);
+          for (const result of results) expect(result).not.toHaveProperty('tokens');
+          if (scenario === 'missing') expect(results[0]).not.toHaveProperty('cost');
+          else expect(results[0]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(results[1]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(
+            mockLogger.warn.mock.calls.filter(call => call[1] === 'claude.query_tokens_unknown')
+          ).toHaveLength(2);
         }
       );
 
@@ -4227,6 +4276,14 @@ describe('typed failures (#1797, #3524)', () => {
             subtype: 'success',
             session_id: 's',
             result: 'first',
+            modelUsage: {
+              main: {
+                inputTokens: 100,
+                outputTokens: 20,
+                cacheReadInputTokens: 30,
+                cacheCreationInputTokens: 40,
+              },
+            },
             total_cost_usd: 0.1,
           };
           yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
@@ -4248,6 +4305,14 @@ describe('typed failures (#1797, #3524)', () => {
             subtype: 'success',
             session_id: 's',
             result: 'final',
+            modelUsage: {
+              main: {
+                inputTokens: 110,
+                outputTokens: 25,
+                cacheReadInputTokens: 37,
+                cacheCreationInputTokens: 49,
+              },
+            },
             total_cost_usd: 0.3,
           };
           yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
@@ -4450,10 +4515,10 @@ describe('typed failures (#1797, #3524)', () => {
     expect(
       backgroundStream.chunks
         .filter(chunk => chunk.type === 'result')
-        .map(chunk => [chunk.text, chunk.cost])
+        .map(chunk => [chunk.text, chunk.cost, chunk.tokens])
     ).toEqual([
-      ['first', 0.1],
-      ['final', 0.19999999999999998],
+      ['first', 0.1, { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 }],
+      ['final', 0.19999999999999998, { input: 26, output: 5, cacheRead: 7, cacheWrite: 9 }],
     ]);
     expect(violations).toEqual([]);
   });

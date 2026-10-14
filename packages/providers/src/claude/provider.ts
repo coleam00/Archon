@@ -1094,6 +1094,7 @@ async function* streamClaudeMessages(
   let lastRateLimit: SDKRateLimitInfo | undefined;
   // A wake turn must report its own result before idle can settle it.
   let resultSeen = false;
+  let queryTokensUnknown = false;
   let resultReported = false;
   let backgroundObserved = false;
   let idleReached = false;
@@ -1413,9 +1414,12 @@ async function* streamClaudeMessages(
       pendingSdkError = undefined;
       // Results without per-model totals retain the SDK's query-scoped main-agent usage.
       // With cumulative totals but no usable baseline, omit tokens rather than count earlier turns.
-      const tokens =
+      const resultTokens =
         resultMsg.modelUsage === undefined ? normalizeClaudeUsage(resultMsg.usage) : spend.tokens;
-      if (resultMsg.modelUsage !== undefined && tokens === undefined) {
+      // Later deltas cannot recover an earlier unknown interval in this query.
+      queryTokensUnknown ||= resultTokens === undefined;
+      const tokens = queryTokensUnknown ? undefined : resultTokens;
+      if (queryTokensUnknown) {
         getLog().warn(
           { sessionIdPreview: sessionPreview(resultMsg.session_id), baseline: baselineKind },
           'claude.query_tokens_unknown'

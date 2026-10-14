@@ -90,6 +90,8 @@ function tokensSince(
 ): TokenUsage | undefined {
   if (baseline.kind === 'unknown') return undefined;
   const base = baseline.kind === 'known' ? baseline.spend.modelUsage : {};
+  if (baseline.kind === 'known' && baseline.spend.costUsd > 0 && Object.keys(base).length === 0)
+    return undefined;
   if (Object.keys(base).some(model => cumulative[model] === undefined)) return undefined;
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   for (const [model, usage] of Object.entries(cumulative)) {
