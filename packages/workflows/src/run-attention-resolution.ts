@@ -2,8 +2,8 @@
  * Resolve what a run's sub-run tree needs now, without waiting: the attention a waiter
  * would report, or whether the tree still needs a live owner. A parent blocked on
  * children is never an item of its own; the walk reports the child that is. Shared by
- * `workflow wait` (`waitForRunAttention`, @archon/core) and the attention queue's single
- * read, so the two cannot disagree about which run an answer belongs to.
+ * `workflow wait` (`waitForRunAttention`, @archon/core) and the attention queue's list and
+ * single read, so they cannot disagree about which run an answer belongs to.
  */
 import { hostname } from 'node:os';
 import {

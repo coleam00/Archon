@@ -1379,7 +1379,7 @@ export type QueuedRunAttention = Extract<
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
  * pause someone must answer, or a paused run nothing can read, which needs someone to
- * look. Every store's queue list and the single read use this one rule.
+ * look. The queue's list and single read both build items by this one rule.
  */
 export function queuedRunAttention(
   run: RunAttentionInput,
@@ -1394,6 +1394,20 @@ export function queuedRunAttention(
     default:
       return undefined;
   }
+}
+
+/**
+ * True when the attention queue reads `run`: a queue item on its own
+ * (`queuedRunAttention`), or a paused parent blocked on sub-runs, which resolves to a
+ * child's item or, when its sub-run tree cannot be read, to an unreadable item of its own.
+ */
+export function isAttentionQueueRow(run: RunAttentionInput): boolean {
+  const attention = runAttention(run);
+  return (
+    queuedRunAttention(run, attention) !== undefined ||
+    (run.status === 'paused' &&
+      (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children'))
+  );
 }
 
 /**

@@ -932,7 +932,8 @@ archon workflow attention <run-id> --json                          # one item
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
 `item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
-item of the child that holds the pause. An unknown run id prints `error: "not_found"` and
+item of the child that holds the pause, or to its own `unreadable` item when its sub-run
+tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and

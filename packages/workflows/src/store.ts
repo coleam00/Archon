@@ -332,6 +332,26 @@ export function waitAnsweredEvent(
   };
 }
 
+/** One answer to an open attention wait, checked against the occurrence it names. */
+export type AttentionAnswerWrite = Required<
+  Pick<WorkflowAttentionWaitContext, 'pauseId' | 'answer' | 'answeredVia' | 'answeredAt'>
+>;
+
+/**
+ * The wait `run` sits at once `write` lands: the stored wait, labels and revision
+ * included, with the answer added. `undefined` when the run is no longer paused at
+ * that unanswered occurrence.
+ */
+export function answeredAttentionWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  write: AttentionAnswerWrite
+): WorkflowAttentionWaitContext | undefined {
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
+    return undefined;
+  return { ...wait, ...write };
+}
+
 /** One label write on an open attention wait, checked against the occurrence it names. */
 export interface AttentionLabelWrite {
   /** The `pauseId` of the wait the writer read; a write for any other pause is refused. */
@@ -638,16 +658,12 @@ export interface IWorkflowStore
     cursor: WorkflowResumeCursor
   ): Promise<void>;
   /**
-   * Atomically record the answer to one open attention wait and its `wait_answered` audit
-   * row (`waitAnsweredEvent`), without changing lifecycle. `answered` is the stored wait
-   * plus `answer`, `answeredVia` and `answeredAt`. It lands only while the run is still
-   * paused at that wait's `pauseId` and the wait is unanswered; otherwise nothing is
-   * written and `answered` is false.
+   * Atomically add one answer to the stored attention wait (`answeredAttentionWait`) and
+   * commit its `wait_answered` audit row (`waitAnsweredEvent`), without changing
+   * lifecycle. Writes nothing, and returns `answered: false`, when the run is no longer
+   * paused at that unanswered wait.
    */
-  answerAttentionWait(
-    id: string,
-    answered: WorkflowAttentionWaitContext
-  ): Promise<{ answered: boolean }>;
+  answerAttentionWait(id: string, write: AttentionAnswerWrite): Promise<{ answered: boolean }>;
   /**
    * Atomically apply one label write to an open attention wait (`labeledAttentionWait`)
    * and commit its `attention_labeled` audit row (`attentionLabeledEvent`). Writes
@@ -659,10 +675,10 @@ export interface IWorkflowStore
     write: AttentionLabelWrite
   ): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }>;
   /**
-   * Every run in the attention queue (`queuedRunAttention`), most recently started first.
-   * The rows only: `@archon/workflows/attention-queue` builds the items.
+   * Every row the attention queue reads (`isAttentionQueueRow`), most recently started
+   * first. The rows only: `@archon/workflows/attention-queue` builds the items.
    */
-  listRunsNeedingAttention(): Promise<WorkflowRun[]>;
+  listAttentionQueueRows(): Promise<WorkflowRun[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

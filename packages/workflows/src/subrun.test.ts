@@ -303,8 +303,8 @@ class InMemoryStore implements IWorkflowStore {
   labelAttentionWait: IWorkflowStore['labelAttentionWait'] = () => {
     throw new Error('Unexpected labelAttentionWait');
   };
-  listRunsNeedingAttention: IWorkflowStore['listRunsNeedingAttention'] = () => {
-    throw new Error('Unexpected listRunsNeedingAttention');
+  listAttentionQueueRows: IWorkflowStore['listAttentionQueueRows'] = () => {
+    throw new Error('Unexpected listAttentionQueueRows');
   };
   signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
     throw new Error('Unexpected signalWorkflowWait');

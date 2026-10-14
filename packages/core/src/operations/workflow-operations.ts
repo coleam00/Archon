@@ -493,7 +493,9 @@ export function expectedGateForOccurrence(
  * The open attention wait `run` is paused at, refusing every state where an answer to one
  * cannot land. Read-only, so the CLI's detached pre-flight runs it too.
  */
-export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext {
+export function assertAnswerable(
+  run: WorkflowRun
+): WorkflowAttentionWaitContext & { pauseId: string } {
   const wait = pausedAttentionWait(run);
   if (wait === undefined) {
     const attention = runAttention(run);
@@ -516,7 +518,7 @@ export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext
       `Run ${run.id} paused at an attention wait before answers existed. Continue it with resume, ` +
         'or abandon it if it should not continue.'
     );
-  return wait;
+  return { ...wait, pauseId: wait.pauseId };
 }
 
 /**
@@ -1333,7 +1335,7 @@ export function createWorkflowOperations({
     const wait = assertAnswerable(run);
     const answer = attentionAnswerFor(run, wait, request);
     const { answered } = await store.answerAttentionWait(run.id, {
-      ...wait,
+      pauseId: wait.pauseId,
       answer,
       answeredVia: origin.via,
       answeredAt: new Date().toISOString(),

@@ -4011,7 +4011,7 @@ export function registerApiRoutes(
         return apiError(c, 400, (refusal as Error).message);
       }
       // One read backs both the items and the console's dashboard rows for the same runs.
-      const rows = await workflowDb.listRunsNeedingAttention();
+      const rows = await workflowDb.listAttentionQueueRows();
       const items = await attentionQueueItems(attentionQueue, rows);
       if (countBy !== undefined)
         return c.json({ counts: countAttentionQueue(items, { scope, labels, countBy }) });

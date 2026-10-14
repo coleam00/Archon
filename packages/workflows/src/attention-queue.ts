@@ -218,7 +218,7 @@ export function toAttentionQueueItem(
 
 /** What the queue reads: the store, and the host's record of each checkout's branch. */
 export interface AttentionQueueSource {
-  store: Pick<IWorkflowStore, 'listRunsNeedingAttention' | 'getWorkflowRun' | 'getCodebase'>;
+  store: Pick<IWorkflowStore, 'listAttentionQueueRows' | 'getWorkflowRun' | 'getCodebase'>;
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
 }
@@ -243,6 +243,23 @@ async function itemFor(
   });
 }
 
+/**
+ * The attention that makes `run` an item of its own. A parent blocked on sub-runs is one
+ * only when the walk the single read uses stops at the parent, because its sub-run tree
+ * cannot be read; otherwise the walk reaches a child, which is listed by its own row.
+ */
+async function ownQueuedAttention(
+  source: AttentionQueueSource,
+  run: WorkflowRun
+): Promise<QueuedRunAttention | undefined> {
+  const own = queuedRunAttention(run);
+  if (own !== undefined) return own;
+  const resolution = await resolveRunAttention(source.store, run);
+  return resolution.kind === 'attention' && resolution.attention.runId === run.id
+    ? queuedRunAttention(run, resolution.attention)
+    : undefined;
+}
+
 /** The items for rows the store's queue list returned, in their order. */
 export async function attentionQueueItems(
   source: AttentionQueueSource,
@@ -251,7 +268,7 @@ export async function attentionQueueItems(
   const codebases: CodebaseCache = new Map();
   const items: AttentionQueueItem[] = [];
   for (const run of runs) {
-    const attention = queuedRunAttention(run);
+    const attention = await ownQueuedAttention(source, run);
     if (attention !== undefined) items.push(await itemFor(source, run, attention, codebases));
   }
   return items;
@@ -261,7 +278,7 @@ export async function attentionQueueItems(
 export async function listAttentionQueue(
   source: AttentionQueueSource
 ): Promise<AttentionQueueItem[]> {
-  return attentionQueueItems(source, await source.store.listRunsNeedingAttention());
+  return attentionQueueItems(source, await source.store.listAttentionQueueRows());
 }
 
 /**

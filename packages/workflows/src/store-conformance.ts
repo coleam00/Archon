@@ -15,6 +15,7 @@ import {
   WorkflowEventCursorError,
   type WorkflowEventCursor,
   WorkflowRunPauseConflictError,
+  type AttentionAnswerWrite,
   type GateResolutionEvent,
   type IWorkflowStore,
 } from './store';
@@ -85,6 +86,12 @@ const answeredAttention = (
 ): Extract<WorkflowWaitContext, { kind: 'attention' }> => ({
   ...pause,
   answer: { decision: answer, text: '' },
+  answeredVia: 'cli',
+  answeredAt: '2026-01-01T00:05:00.000Z',
+});
+const attentionAnswer = (decision: string, pauseId = 'ask-1'): AttentionAnswerWrite => ({
+  pauseId,
+  answer: { decision, text: '' },
   answeredVia: 'cli',
   answeredAt: '2026-01-01T00:05:00.000Z',
 });
@@ -1125,15 +1132,12 @@ export function describeWorkflowStoreConformance(
         stepName: 'ask',
       });
       expect(await due()).not.toContain(run.id);
-      expect(
-        await store.answerAttentionWait(
-          run.id,
-          answeredAttention('use-main', { ...attentionWait, pauseId: 'stale' })
-        )
-      ).toEqual({ answered: false });
+      expect(await store.answerAttentionWait(run.id, attentionAnswer('use-main', 'stale'))).toEqual(
+        { answered: false }
+      );
 
       const results = await eight(index =>
-        store.answerAttentionWait(run.id, answeredAttention(index === 0 ? 'use-main' : 'use-dev'))
+        store.answerAttentionWait(run.id, attentionAnswer(index === 0 ? 'use-main' : 'use-dev'))
       );
       expect(results.filter(result => result.answered)).toHaveLength(1);
       const stored = (await store.getWorkflowRun(run.id))?.metadata.wait;
@@ -1156,7 +1160,7 @@ export function describeWorkflowStoreConformance(
         await rejection(store.resumeWorkflowRun(run.id, { ...cursor, pauseId: 'other' }))
       ).toBeInstanceOf(WorkflowNotResumableError);
       expect((await store.resumeWorkflowRun(run.id, cursor)).status).toBe('running');
-      expect(await store.answerAttentionWait(run.id, answeredAttention('use-dev'))).toEqual({
+      expect(await store.answerAttentionWait(run.id, attentionAnswer('use-dev'))).toEqual({
         answered: false,
       });
     });
@@ -1212,7 +1216,13 @@ export function describeWorkflowStoreConformance(
         .map(event => event.data.revision);
       expect(new Set(revisions).size).toBe(9);
 
-      await store.answerAttentionWait(run.id, answeredAttention('use-main'));
+      // An answer adds to the stored wait, so labels written after the answerer read it stay.
+      expect(await store.answerAttentionWait(run.id, attentionAnswer('use-main'))).toEqual({
+        answered: true,
+      });
+      const answered = (await store.getWorkflowRun(run.id))?.metadata.wait;
+      expect(answered).toMatchObject({ answer: { decision: 'use-main' }, revision: 10 });
+      expect(Object.keys((answered as { labels: object }).labels)).toHaveLength(10);
       expect(await store.labelAttentionWait(run.id, { ...write, set: { late: 'yes' } })).toEqual({
         labeled: false,
       });
@@ -1281,10 +1291,10 @@ export function describeWorkflowStoreConformance(
       const timed = await running(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
       const answered = await pauseAttention(5, {});
-      await store.answerAttentionWait(answered.id, {
-        ...answeredAttention('use-main'),
-        pauseId: `ask-${answered.id}`,
-      });
+      await store.answerAttentionWait(
+        answered.id,
+        attentionAnswer('use-main', `ask-${answered.id}`)
+      );
 
       const source: AttentionQueueSource = {
         store,
@@ -1403,6 +1413,23 @@ export function describeWorkflowStoreConformance(
         revision: 2,
         labels: { ci: 'other', team: 'web', class: 'ci-other' },
       });
+    });
+    test('a parent blocked on a sub-run with no row is the same unreadable item listed and read', async () => {
+      const parent = await running(store);
+      const missing = crypto.randomUUID();
+      await store.pauseWorkflowRun(parent.id, {
+        nodeId: 'each',
+        message: 'Waiting on sub-runs',
+        type: 'fan_out',
+        childRunIds: [missing],
+        unspawnedItems: 0,
+      });
+      const source: AttentionQueueSource = { store, branchOf: async () => null };
+      const listed = (await listAttentionQueue(source)).filter(item => item.runId === parent.id);
+      expect(listed).toEqual([
+        expect.objectContaining({ kind: 'unreadable', reason: 'child_run_missing' }),
+      ]);
+      expect(await readAttentionQueueItem(source, parent.id)).toEqual(listed[0]);
     });
     test('a pause is due once answered exactly when continuablePause says the host continues it', async () => {
       const gate = (

@@ -281,8 +281,8 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
       throw new Error('Unexpected labelAttentionWait');
     }),
-    listRunsNeedingAttention: mock<IWorkflowStore['listRunsNeedingAttention']>(() => {
-      throw new Error('Unexpected listRunsNeedingAttention');
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
     }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');

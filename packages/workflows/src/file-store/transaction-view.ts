@@ -13,6 +13,7 @@ import {
   resumeCursorMatches,
   waitAnsweredEvent,
   labeledAttentionWait,
+  answeredAttentionWait,
   attentionLabeledEvent,
 } from '../store';
 import {
@@ -23,7 +24,7 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
-  queuedRunAttention,
+  isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
@@ -220,22 +221,13 @@ export function createTransactionView(
       const run = runs.get(id);
       if (run && resumeCursorMatches(run, cursor)) run.metadata.continuation_retry_at = retryAt;
     },
-    answerAttentionWait: async (id, answered) => {
+    answerAttentionWait: async (id, write) => {
       const run = runs.get(id);
-      const wait = run?.metadata.wait;
-      if (
-        run?.status !== 'paused' ||
-        !isWorkflowWaitContext(wait) ||
-        wait.kind !== 'attention' ||
-        wait.pauseId === undefined ||
-        wait.pauseId !== answered.pauseId ||
-        wait.answer !== undefined
-      )
-        return { answered: false };
+      const answered = run && answeredAttentionWait(run, write);
+      if (!run || !answered) return { answered: false };
       const stored = workflowWaitContextSchema.parse(answered);
-      if (stored.kind !== 'attention') return { answered: false };
       run.metadata.wait = stored;
-      record(waitAnsweredEvent(id, stored));
+      record(waitAnsweredEvent(id, answered));
       return { answered: true };
     },
     labelAttentionWait: async (id, write) => {
@@ -533,10 +525,8 @@ export function createTransactionView(
       ),
     findAdoptingRuns: async id =>
       structuredClone(newest([...runs.values()].filter(run => run.adopted_from_run_id === id))),
-    listRunsNeedingAttention: async () =>
-      structuredClone(
-        newest([...runs.values()].filter(run => queuedRunAttention(run) !== undefined))
-      ),
+    listAttentionQueueRows: async () =>
+      structuredClone(newest([...runs.values()].filter(isAttentionQueueRow))),
     findOpenWorkRuns: async options =>
       structuredClone(
         newest(

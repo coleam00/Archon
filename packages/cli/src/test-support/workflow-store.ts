@@ -308,7 +308,7 @@ export function createInMemoryWorkflowStore(
       write(view => view.deferWorkflowContinuation(id, retry, cursor)),
     answerAttentionWait: (id, answered) => write(view => view.answerAttentionWait(id, answered)),
     labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
-    listRunsNeedingAttention: () => write(view => view.listRunsNeedingAttention()),
+    listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),

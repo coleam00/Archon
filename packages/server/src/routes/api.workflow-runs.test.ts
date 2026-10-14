@@ -105,7 +105,7 @@ type ListWorkflowRunsOptions = Parameters<
 const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
-const mockListRunsNeedingAttention = mock(async (): Promise<DashboardWorkflowRun[]> => []);
+const mockListAttentionQueueRows = mock(async (): Promise<DashboardWorkflowRun[]> => []);
 const mockListDashboardRuns = makeListDashboardRunsMock();
 const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
@@ -453,7 +453,7 @@ const mockLabelAttentionWait = mock<
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
-  listRunsNeedingAttention: mockListRunsNeedingAttention,
+  listAttentionQueueRows: mockListAttentionQueueRows,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
@@ -4921,7 +4921,7 @@ test('the attention endpoint and detail expose the shared projection with wire d
       },
     },
   };
-  mockListRunsNeedingAttention.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
+  mockListAttentionQueueRows.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
   mockGetWorkflowRun.mockImplementationOnce(async () => run);
   const { app } = makeApp();
   const list = await app.request('/api/runs/attention');
@@ -4965,7 +4965,7 @@ describe('the attention queue over HTTP', () => {
   const pr = attentionRun('run-pr', { ci: 'pr' });
 
   test('lists typed items with the console rows, filtered by label, and counts by label', async () => {
-    mockListRunsNeedingAttention.mockImplementation(async () => [
+    mockListAttentionQueueRows.mockImplementation(async () => [
       makeDashboardWorkflowRun(other),
       makeDashboardWorkflowRun(pr),
     ]);
@@ -5001,7 +5001,7 @@ describe('the attention queue over HTTP', () => {
       expect((await app.request('/api/runs/attention?sort=newest')).status).toBe(400);
       expect((await app.request('/api/runs/attention?project=nowhere')).status).toBe(400);
     } finally {
-      mockListRunsNeedingAttention.mockReset();
+      mockListAttentionQueueRows.mockReset();
       mockFindLatestEnvironment.mockReset();
     }
   });
