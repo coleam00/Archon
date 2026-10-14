@@ -428,6 +428,17 @@ export function pendingWorkflowWaitDeadline(
   return wait;
 }
 
+/**
+ * Whether a deadline-bearing wait is ready to continue: its deadline passed, or its event
+ * was signaled (a signal leaves `resumeAt` in the future). The SQL continuation listing
+ * restates this; the store conformance suite pins the two together.
+ */
+export function workflowWaitDue(wait: WorkflowDeadlineWaitContext, now: number): boolean {
+  return (
+    Date.parse(wait.resumeAt) <= now || (wait.kind === 'event' && wait.signaledAt !== undefined)
+  );
+}
+
 /** The identity a continuation host claims an answered pause by. */
 export interface PauseContinuation {
   nodeId: string;

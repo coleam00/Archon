@@ -12,6 +12,7 @@ import type {
 import {
   answeredPauseContinuation,
   pendingWorkflowWaitDeadline,
+  workflowWaitDue,
   readCapacityWait,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -197,9 +198,9 @@ export function resourceResumeBlocker(
 
 /**
  * What a refused resume leaves behind. A paused run that is ready to continue (its pause
- * answered, its wait due, or a continuation host's claim) becomes a capacity waiter, from
- * whichever surface resumed it: answering a gate resumes without a cursor. An early resume
- * of a pause that is not ready must not hold capacity for it.
+ * answered, its wait due or signaled, or a continuation host's claim) becomes a capacity
+ * waiter, from whichever surface resumed it: answering a gate resumes without a cursor. An
+ * early resume of a pause that is not ready must not hold capacity for it.
  */
 export function resumeRefusal(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
@@ -211,7 +212,7 @@ export function resumeRefusal(
     cursor !== undefined ||
     readCapacityWait(run.metadata) !== undefined ||
     answeredPauseContinuation(run) !== undefined ||
-    (wait !== undefined && Date.parse(wait.resumeAt) <= Date.now());
+    (wait !== undefined && workflowWaitDue(wait, Date.now()));
   return ready ? 'waiting' : 'paused';
 }
 

@@ -430,7 +430,14 @@ export function describeWorkflowStoreConformance(
     });
     test('a refused resume of a ready pause keeps its place without a cursor', async () => {
       const notDue = { ...wait, resumeAt: '2999-01-01T00:00:00.000Z' };
-      const pauseAt = async (pause: 'answered' | 'due' | 'not-due'): Promise<string> => {
+      const event: Extract<WorkflowWaitContext, { kind: 'event' }> = {
+        ...notDue,
+        kind: 'event',
+        event: 'ready',
+      };
+      const pauseAt = async (
+        pause: 'answered' | 'due' | 'signaled' | 'not-due'
+      ): Promise<string> => {
         const intent = start();
         expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
         const id = intent.launch.run.id;
@@ -445,16 +452,19 @@ export function describeWorkflowStoreConformance(
           );
           return id;
         }
-        const pending = pause === 'due' ? wait : notDue;
+        const pending = pause === 'due' ? wait : pause === 'signaled' ? event : notDue;
         await store.pauseWorkflowRunForWait(id, pending, { kind: 'started', stepName: 'wait' });
         await store.releasePausedRunSlot(id, {
           kind: 'wait',
           nodeId: pending.nodeId,
           resumeAt: pending.resumeAt,
         });
+        // A signal leaves the deadline in the future; the run is ready all the same.
+        if (pause === 'signaled')
+          expect(await store.signalWorkflowWait(id, event, {})).toEqual({ signaled: true });
         return id;
       };
-      for (const pause of ['answered', 'due', 'not-due'] as const) {
+      for (const pause of ['answered', 'due', 'signaled', 'not-due'] as const) {
         const a = await pauseAt(pause);
         const holder = start();
         expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });

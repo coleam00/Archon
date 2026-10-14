@@ -24,6 +24,7 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  workflowWaitDue,
   workflowWaitStepName,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
@@ -212,11 +213,7 @@ export function createTransactionView(
             const retry = run.metadata.continuation_retry_at;
             if (typeof retry === 'string' && Date.parse(retry) > now.getTime()) return false;
             const wait = pendingWorkflowWaitDeadline(run);
-            if (wait)
-              return (
-                Date.parse(wait.resumeAt) <= now.getTime() ||
-                (wait.kind === 'event' && wait.signaledAt !== undefined)
-              );
+            if (wait) return workflowWaitDue(wait, now.getTime());
             if (answeredPauseContinuation(run)) return true;
             const scheduled = run.metadata.scheduled_resume;
             return (
