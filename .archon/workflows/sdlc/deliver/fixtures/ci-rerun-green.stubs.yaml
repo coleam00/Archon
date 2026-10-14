@@ -1,5 +1,6 @@
 # Outcome: delivered. CI is red on a flake outside the change; the CI agent re-runs
 # the failed jobs once, they pass, and the pull request stays ready in the same round.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

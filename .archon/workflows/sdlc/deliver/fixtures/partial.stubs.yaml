@@ -2,6 +2,7 @@
 # operator deferred one acceptance item to a later delivery, so its contract coverage
 # leaves that item open: the description references the issue without closing it and
 # lists what is left, and so does the outcome.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

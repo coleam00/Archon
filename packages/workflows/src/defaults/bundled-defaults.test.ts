@@ -431,8 +431,13 @@ describe('bundled-defaults', () => {
             : []
       );
       expect(waits).toEqual([]);
-      expect(nodes.map(candidate => candidate.id)).toEqual(['rounds', 'update-pr-body', 'outcome']);
-      const rounds = nodes[0];
+      expect(nodes.map(candidate => candidate.id)).toEqual([
+        'forge',
+        'rounds',
+        'update-pr-body',
+        'outcome',
+      ]);
+      const rounds = nodes[1];
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
         'implement',
@@ -447,6 +452,35 @@ describe('bundled-defaults', () => {
       expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
       expect(parsed.workflow.returns).toBe('outcome');
       expect(parsed.workflow.outcome_field).toBe('ready');
+    });
+
+    // The forge source is checked before any agent spends, and the agents that act on
+    // the forge read the source that check certified rather than the environment.
+    it('checks the forge source first and admits a run without a GitHub identity', () => {
+      interface RawNode {
+        id: string;
+        script?: string;
+        depends_on?: string[];
+        with?: Record<string, unknown>;
+        loop_group?: { nodes: RawNode[] };
+      }
+      const raw = (name: string) =>
+        Bun.YAML.parse(BUNDLED_WORKFLOWS[name]) as { requires?: unknown; nodes: RawNode[] };
+      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
+        expect(raw(name).requires).toBeUndefined();
+      }
+      for (const name of ['archon-deliver', 'archon-ship', 'archon-upkeep']) {
+        const [first, ...rest] = raw(name).nodes;
+        expect(first).toMatchObject({ id: 'forge', script: 'forge-check' });
+        const roots = rest.filter(
+          node => !node.depends_on?.some(dependency => dependency !== 'forge')
+        );
+        expect(roots.length).toBeGreaterThan(0);
+        for (const node of roots) expect(node.depends_on).toEqual(['forge']);
+      }
+      const rounds = raw('archon-deliver').nodes.find(node => node.id === 'rounds');
+      const ci = rounds?.loop_group?.nodes.find(node => node.id === 'ci');
+      expect(ci?.with).toEqual({ pr: '$pr.output', source: '$forge.output.source' });
     });
 
     // A delivery ending travels from round to deliver's outcome to ship's outcome; the
@@ -887,7 +921,7 @@ describe('bundled-defaults', () => {
       // A command node carries its bindings on `source`, not the node root.
       expect(updateNode.source).toMatchObject({
         kind: 'command',
-        with: { pr: '$rounds.output.pr_url' },
+        with: { pr: '$rounds.output.pr_url', source: '$forge.output.source' },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver

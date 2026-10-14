@@ -21,8 +21,8 @@ const inputs = {
   INPUTS_AREA_LABELS: '["area","nonexistent"]',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
-test('default gh triage applies wanted labels', () => {
-  const triage = runPackScript('triage/scripts/verdict', { inputs });
+test('gh triage applies wanted labels', () => {
+  const triage = runPackScript('triage/scripts/verdict', { source: 'gh', inputs });
   expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
   expect(JSON.parse(triage.stdout)).toMatchObject({
     published: true,
@@ -149,10 +149,11 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
   expect(run.stdout).toBe('');
 });
 
-test('default triage preserves inherited-property labels and accepts them as area labels', () => {
+test('gh triage preserves inherited-property labels and accepts them as area labels', () => {
   const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
   for (const area of [[], ['constructor']]) {
     const run = runPackScript('triage/scripts/verdict', {
+      source: 'gh',
       inputs: { ...inputs, INPUTS_AREA_LABELS: JSON.stringify(area) },
       gh: {
         issueLabels: ['archon-blocked', ...operatorLabels],
@@ -169,6 +170,7 @@ test('default triage preserves inherited-property labels and accepts them as are
 
 test('a gh label write is one delta that leaves labels it does not name on the item', () => {
   const run = runPackScript('triage/scripts/verdict', {
+    source: 'gh',
     inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
     gh: {
       issueLabels: ['operator', 'archon-blocked', 'archon-size-s', 'archon-type-feature'],
@@ -197,6 +199,7 @@ test('a gh label write is one delta that leaves labels it does not name on the i
 
 test('re-triage replaces a changed type and removes a retired size label', () => {
   const run = runPackScript('triage/scripts/verdict', {
+    source: 'gh',
     inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
     gh: {
       issueLabels: ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'],

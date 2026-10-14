@@ -6,13 +6,11 @@ description: |
   no work remains. Actionable paths converge on the reviewed delivery tail.
   One governed run, one artifact store, no inherited issue assumptions.
 
-  Use when: a GitHub issue or request should be taken from current-truth check
+  Use when: an issue or request should be taken from current-truth check
   through to a reviewed PR — "fix this issue", "implement issue #123", "take
   this work item to a PR".
   NOT for: bypassing triage with already-prepared work (deliver directly),
   reviewing an existing PR, or merging.
-
-requires: [github]
 
 inputs:
   target:
@@ -37,10 +35,22 @@ returns: outcome
 outcome_field: delivered
 
 nodes:
+  # Refuses the run before any agent spends when the selected forge source cannot
+  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  - id: forge
+    script: forge-check
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        source: { type: string, enum: [gh, forge] }
+      required: [source]
+
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
     include: archon-triage
+    depends_on: [forge]
     with:
       target: "$INPUTS.target"
       publish: "$INPUTS.publish"

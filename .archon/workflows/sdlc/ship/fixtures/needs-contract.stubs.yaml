@@ -1,5 +1,6 @@
 # Dry-run fixture: the item is not a contract yet. Triage proposes one, every
 # delivery node stays skipped, and the real outcome reports needs_contract.
+forge: { source: forge }
 triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" } }
   type: { value: feature, reason: "stub: asks for new behavior" }

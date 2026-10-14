@@ -1,6 +1,8 @@
 # Dry-run fixture: delivery dies when the implementer declares a blocker and changed
 # nothing. The real assert-changed guard refuses, the loop group fails, and the
 # failure cascade blocks ship's outcome join even though triage succeeded.
+forge: { source: forge }
+deliver__forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }

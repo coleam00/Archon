@@ -12,8 +12,6 @@ description: |
   NOT for: implementing (implement), reviewing (review), or merging (always human).
 
 model: medium
-requires: [github]
-
 inputs:
   draft:
     default: "true"

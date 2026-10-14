@@ -1,6 +1,7 @@
 # Outcome: delivered. One round: the review passes, simplify finds a smaller shape,
 # the implementer adopts it and pushes, a light review of that delta (the code lens
 # alone) passes, and the CI agent sees green and marks the pull request ready. round and outcome run for real.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true
@@ -65,4 +66,7 @@ update-pr-body: { changed: false, summary: "stub: the description is still accur
 fixture:
   expect: completed
   reached: [reshape__implement, rereview__code, rereview__synthesize, ci, round, update-pr-body, outcome]
+  resolved-text-contains:
+    ci: '"repo":{"host":"github.com","path":"example/repo"},"number":1'
+    update-pr-body: "the source this run selected, `forge`:"
 exec-code: true

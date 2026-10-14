@@ -1,6 +1,7 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. The assessment is
 # explicit, every delivery node stays skipped, and the real outcome node returns
 # the no_action reason with the report path.
+forge: { source: forge }
 assess:
   action: no_action
   summary: "stub: the locked version already satisfies the advisory's fixed range"

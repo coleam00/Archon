@@ -1,6 +1,7 @@
 # Outcome: not ready, ci_other. CI is red on a failure outside the change; its one
 # re-run fails again, so the CI agent puts the pull request back to draft and the
 # rounds end with its cause.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

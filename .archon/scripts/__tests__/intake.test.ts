@@ -416,6 +416,7 @@ function run(
   inputs: Record<string, string> = {}
 ): ScriptRun {
   return runPackScript(`intake/scripts/${script}`, {
+    source: 'gh',
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {

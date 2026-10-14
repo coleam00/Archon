@@ -1,6 +1,7 @@
 # Outcome: not ready, needs_human. The only open blocker is a manual check no agent
 # in the run can perform: simplify and CI do not run, and the run stops for a
 # person instead of another correction round.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

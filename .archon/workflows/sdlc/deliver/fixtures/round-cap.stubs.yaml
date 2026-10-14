@@ -2,6 +2,7 @@
 # stubs repeat each round), so the CI agent declares pr_caused with the conflicting
 # paths in ci.md, the next round's implementer is told to merge the base, never
 # rebase, and the real round script ends the rounds typed at its cap.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

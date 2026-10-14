@@ -8,6 +8,8 @@
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
+forge: { source: forge }
+deliver__forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }

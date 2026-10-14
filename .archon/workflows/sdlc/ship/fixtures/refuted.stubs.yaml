@@ -2,6 +2,7 @@
 # repository (run with --default-stubs --exec-code). The delivery
 # tail stays skipped, and the real outcome node reports no work owed in the
 # investigator's words, completing with delivered: false rather than failing.
+forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: investigate }
   type: { value: feature, reason: "stub: asks for new behavior" }

@@ -47,6 +47,7 @@ function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
+    source: 'gh',
     ...rest,
     cwd,
     gh: { ...rest.gh, pr: { headRefOid: head, ...rest.gh?.pr } },
@@ -134,7 +135,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('does not match what was requested');
   });
 
-  it('publishes through the plugin, never gh, when the operator opted in', () => {
+  it('publishes through the plugin, never gh, on the forge source', () => {
     const result = publishPr({
       source: 'forge',
       forge: {
@@ -286,6 +287,7 @@ describe('publish-pr opens the pull request at most once', () => {
 
 function publishReview(options: ScriptOptions = {}): ScriptRun {
   return runPackScript('review/scripts/publish-review', {
+    source: 'gh',
     ...options,
     inputs: {
       INPUTS_PR: JSON.stringify(PR),
@@ -402,7 +404,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     );
   });
 
-  it('upserts through the plugin on the opt-in path, with the report in the request file', () => {
+  it('upserts through the plugin on the forge source, with the report in the request file', () => {
     const result = publishReview({
       source: 'forge',
       inputs: report,
@@ -549,23 +551,23 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
 describe('markPrDraft uses the selected source', () => {
   const script = '../../scripts/__tests__/mark-pr-draft';
   it('converts through gh and reads back draft state', () => {
-    const result = runPackScript(script, { gh: { pr: { isDraft: false } } });
+    const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false } } });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true, state: 'open' });
     expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo --undo');
   });
   it.each(['CLOSED', 'MERGED'] as const)('refuses %s without a write', state => {
-    const result = runPackScript(script, { gh: { pr: { state } } });
+    const result = runPackScript(script, { source: 'gh', gh: { pr: { state } } });
     expect(result.code).not.toBe(0);
     expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
   });
   it('does not write for an already-draft PR', () => {
-    const result = runPackScript(script);
+    const result = runPackScript(script, { source: 'gh' });
     expect(result.code).toBe(0);
     expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
   });
   it('fails when gh conversion does not read back', () => {
-    const result = runPackScript(script, { gh: { pr: { isDraft: false }, writeLost: true } });
+    const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false }, writeLost: true } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('does not report an open draft');
   });

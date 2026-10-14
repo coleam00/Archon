@@ -1,16 +1,15 @@
 /**
- * Standalone client for `archon forge`, the pack's opt-in forge source.
+ * Standalone client for `archon forge`, the pack's default forge source.
  *
  * One switch selects the source for every forge read and write this pack makes:
  *
- *   gh     the default. The GitHub CLI, as the pack has always used it.
- *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
- *          reached through the host command (`ARCHON_CLI_COMMAND`) the CLI and
- *          server publish.
+ *   forge  the default. An installed forge plugin, reached through the host
+ *          command (`ARCHON_CLI_COMMAND`) the CLI and server publish.
+ *   gh     opt-in with `ARCHON_SDLC_FORGE=gh`. The GitHub CLI.
  *
  * The source is never inferred from what happens to be installed, and a selected
  * source that cannot answer fails the operation rather than falling back to the
- * other. A container execution receives neither variable, so it uses `gh`.
+ * other.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,10 +24,29 @@ export type ForgeSource = 'gh' | 'forge';
 // shared module like this one never trips a false "unbound variable" warning.
 export function forgeSource(): ForgeSource {
   const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
-  if (selected === '' || selected === 'gh') return 'gh';
-  if (selected === 'forge') return 'forge';
-  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
+  if (selected === '' || selected === 'forge') return 'forge';
+  if (selected === 'gh') return 'gh';
+  throw new Error(`ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"`);
 }
+
+/** What an operator does when the forge source has no plugin or no credential. */
+export const FORGE_SETUP =
+  'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
+  '`archon plugin add coleam00/Archon/plugins/forge-github`, and set `GH_TOKEN` in ' +
+  "Archon's env file `~/.archon/.env` or configure GitHub App mode. To use the GitHub CLI " +
+  'instead, set `ARCHON_SDLC_FORGE=gh`.';
+
+/** What an operator does when the installed plugin lacks an operation this pack uses. */
+export const FORGE_UPDATE =
+  'For github.com, update the plugin with `archon plugin update coleam00/Archon/plugins/forge-github`, ' +
+  'or set `ARCHON_SDLC_FORGE=gh` to use the GitHub CLI instead.';
+
+// The operator's next step for each refusal the contract types as their setup's.
+const REMEDY: Readonly<Record<string, string>> = {
+  no_plugin_for_host: FORGE_SETUP,
+  no_credential: FORGE_SETUP,
+  unsupported_op: FORGE_UPDATE,
+};
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
@@ -175,8 +193,10 @@ export function invokeForge(
       const error = record(response.error);
       const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
       const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+      const kind = typeof error?.kind === 'string' ? error.kind : undefined;
+      const remedy = kind !== undefined && Object.hasOwn(REMEDY, kind) ? ` ${REMEDY[kind]}` : '';
       throw new ForgeOperationError(
-        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
+        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
         mutation
       );
     }

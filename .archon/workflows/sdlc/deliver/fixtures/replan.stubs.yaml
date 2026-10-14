@@ -1,6 +1,7 @@
 # Outcome: not ready, replan. The review finds the requested outcome needs work
 # outside the accepted scope: simplify and CI do not run, the pull request stays
 # draft, and the outcome relays its discoveries.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true

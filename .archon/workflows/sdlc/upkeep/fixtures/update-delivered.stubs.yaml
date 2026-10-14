@@ -7,6 +7,8 @@
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
+forge: { source: forge }
+deliver__forge: { source: forge }
 assess:
   action: update
   summary: "stub: locked 1.2.3, target 1.2.9 admitted by the constraint, two usage sites, no breaking changes apply"
