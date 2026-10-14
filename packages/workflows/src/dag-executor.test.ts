@@ -3829,6 +3829,87 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     }
   });
 
+  for (const kind of ['agent', 'loop'] as const) {
+    for (const mode of ['stream', 'reask', 'unknown-first-reask', 'iterations'] as const) {
+      if (kind === 'agent' && mode === 'iterations') continue;
+      it(`keeps ${kind} node tokens unknown after an unavailable interval (${mode})`, async () => {
+        const reask = mode === 'reask' || mode === 'unknown-first-reask';
+        const usage = { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 };
+        let calls = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          calls++;
+          const unknown = mode === 'unknown-first-reask' ? calls === 1 : calls === 2;
+          if (mode === 'stream') {
+            yield { type: 'result', sessionId: 's', tokens: usage, cost: 0.1 };
+            yield { type: 'result', sessionId: 's', tokensUnknown: true, cost: 0.2 };
+            yield {
+              type: 'result',
+              sessionId: 's',
+              tokens: usage,
+              cost: 0.1,
+              text: '<promise>COMPLETE</promise>',
+            };
+          } else {
+            yield {
+              type: 'result',
+              sessionId: 's',
+              cost: 0.1,
+              ...(unknown ? { tokensUnknown: true } : { tokens: usage }),
+              ...(reask
+                ? { structuredOutput: calls === 1 ? {} : { done: true } }
+                : { text: calls === 3 ? '<promise>COMPLETE</promise>' : 'Keep working.' }),
+            };
+          }
+        });
+        const store = createMockStore();
+        const outputFormat = {
+          type: 'object',
+          properties: { done: { type: 'boolean' } },
+          required: ['done'],
+        };
+        const node: DagNode =
+          kind === 'agent'
+            ? {
+                id: 'work',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Work.' },
+                ...(reask ? { output_format: outputFormat } : {}),
+              }
+            : {
+                id: 'work',
+                kind: 'loop',
+                ...(reask ? { output_format: outputFormat } : {}),
+                loop: {
+                  prompt: 'Work.',
+                  fresh_context: false,
+                  max_iterations: 3,
+                  ...(reask ? { until_field: 'done' } : { until: 'COMPLETE' }),
+                },
+              };
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: { name: 'unknown-node-tokens', nodes: [node] },
+            workflowRun: makeWorkflowRun('unknown-node-tokens-run'),
+            workflowProvider: reask ? 'pi' : 'claude',
+            config: { ...minimalConfig, assistant: reask ? 'pi' : 'claude' },
+          })
+        );
+        expect(calls).toBe(mode === 'stream' ? 1 : reask ? 2 : 3);
+        const completed = persistedEvents(store).find(
+          event => event.event_type === 'node_completed' && event.step_name === 'work'
+        );
+        expect(completed).toBeDefined();
+        expect(completed?.data?.tokens).toBeUndefined();
+        const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+        expect(record?.metadata?.spend.tokens).toMatchObject({ source: 'unavailable' });
+        expect(completed?.data?.cost_usd).toBeCloseTo(mode === 'stream' ? 0.4 : reask ? 0.2 : 0.3);
+        expect(store.completeWorkflowRun).toHaveBeenCalled();
+      });
+    }
+  }
+
   it('uses structuredOutput from result when output_format is set', async () => {
     const structuredJson = { run_code_review: 'true', run_tests: 'false' };
 

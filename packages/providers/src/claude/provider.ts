@@ -1523,6 +1523,7 @@ async function* streamClaudeMessages(
       const result: ResultChunk = { type: 'result', sessionId: resultMsg.session_id };
       if (failure === undefined && resultText !== undefined) result.text = resultText;
       if (tokens) result.tokens = tokens;
+      if (queryTokensUnknown) result.tokensUnknown = true;
       if ('structured_output' in resultMsg && resultMsg.structured_output !== undefined) {
         result.structuredOutput = resultMsg.structured_output;
       }

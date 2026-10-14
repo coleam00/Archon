@@ -373,6 +373,48 @@ describe('ClaudeProvider', () => {
       }
     );
 
+    test('marks a later unknown token interval after a known result', async () => {
+      mockQuery.mockImplementationOnce(async function* () {
+        for (const [cost, input] of [
+          [0.1, 100],
+          [0.3, 50],
+          [0.4, 60],
+        ]) {
+          yield {
+            type: 'result',
+            session_id: 'reset-totals',
+            total_cost_usd: cost,
+            modelUsage: {
+              main: {
+                inputTokens: input,
+                outputTokens: 20,
+                cacheReadInputTokens: 30,
+                cacheCreationInputTokens: 40,
+              },
+            },
+          };
+        }
+      });
+      const results: MessageChunk[] = [];
+      for await (const chunk of client.sendQuery('test', '/workspace'))
+        if (chunk.type === 'result') results.push(chunk);
+      expect(results).toHaveLength(3);
+      expect(results[0]).toMatchObject({
+        tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+        cost: 0.1,
+      });
+      expect(results[0]).not.toHaveProperty('tokensUnknown');
+      for (const result of results.slice(1)) {
+        expect(result).not.toHaveProperty('tokens');
+        expect(result).toMatchObject({ tokensUnknown: true });
+      }
+      expect(results[1]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+      expect(results[2]).toMatchObject({ cost: expect.closeTo(0.1, 10) });
+      expect(
+        mockLogger.warn.mock.calls.filter(call => call[1] === 'claude.query_tokens_unknown')
+      ).toHaveLength(2);
+    });
+
     test('yields result with structuredOutput when SDK result has structured_output', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
@@ -391,6 +433,7 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toEqual({
         type: 'result',
         sessionId: 'sid-structured',
+        tokensUnknown: true,
         structuredOutput: { type: 'BUG', severity: 'high' },
       });
     });

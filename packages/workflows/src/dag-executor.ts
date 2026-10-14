@@ -2237,6 +2237,7 @@ async function executeNodeInternal(
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
 
   let nodeTokens: TokenUsage | undefined;
+  let nodeTokensUnknown = false;
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
@@ -2554,7 +2555,10 @@ async function executeNodeInternal(
             newSessionId = msg.sessionId;
             if (msg.resumed !== undefined) nodeResumed = msg.resumed;
           }
-          if (msg.tokens !== undefined) {
+          nodeTokensUnknown ||= msg.tokensUnknown === true;
+          if (nodeTokensUnknown) {
+            nodeTokens = undefined;
+          } else if (msg.tokens !== undefined) {
             nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
               nodeId: node.id,
             });
@@ -2702,7 +2706,9 @@ async function executeNodeInternal(
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
-        if (nodeTokens !== undefined) {
+        if (nodeTokensUnknown) {
+          accumulatedTokens = undefined;
+        } else if (nodeTokens !== undefined) {
           accumulatedTokens = sumTokenUsage(
             [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), nodeTokens],
             { nodeId: node.id }
@@ -5606,6 +5612,7 @@ async function executeLoopNode(
   let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined = persistedLoopCostUsd;
   let loopTotalTokens: TokenUsage | undefined = persistedLoopTokens;
+  let loopTokensUnknown = false;
   // Concrete model the provider resolved to (#2314). Last-seen wins, like
   // loopFinalStopReason: every iteration runs on the same resolved provider and
   // model, so the final iteration's report is the node's report.
@@ -5847,7 +5854,7 @@ async function executeLoopNode(
         if (iterationCost !== undefined) {
           loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterationCost;
         }
-        if (iterationTokens !== undefined) {
+        if (!loopTokensUnknown && iterationTokens !== undefined) {
           loopTotalTokens = sumTokenUsage(
             [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterationTokens],
             { nodeId: node.id }
@@ -6038,7 +6045,11 @@ async function executeLoopNode(
                     );
                   }
                 }
-                if (msg.tokens !== undefined) {
+                loopTokensUnknown ||= msg.tokensUnknown === true;
+                if (loopTokensUnknown) {
+                  iterationTokens = undefined;
+                  loopTotalTokens = undefined;
+                } else if (msg.tokens !== undefined) {
                   iterationTokens = sumTokenUsage(
                     [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
                     {

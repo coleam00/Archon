@@ -92,6 +92,10 @@
         "tokens": {
           "$ref": "#/$defs/TokenUsage"
         },
+        "tokensUnknown": {
+          "type": "boolean",
+          "const": true
+        },
         "structuredOutput": {},
         "failure": {
           "$ref": "#/$defs/ProviderFailure"
@@ -611,6 +615,10 @@
             },
             "tokens": {
               "$ref": "#/$defs/TokenUsage"
+            },
+            "tokensUnknown": {
+              "type": "boolean",
+              "const": true
             },
             "structuredOutput": {},
             "failure": {

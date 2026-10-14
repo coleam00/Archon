@@ -61,6 +61,12 @@ export const providerResultSchema = z.object({
   text: z.string().optional(),
   /** Usage of this result; consumers sum usage across results before settlement. */
   tokens: tokenUsageSchema.optional(),
+  /**
+   * This result's token measurement is unavailable. Consumers must discard earlier
+   * token totals and keep the same aggregate unknown across subsequent queries.
+   * Omission alone means no measurement was reported and does not invalidate a total.
+   */
+  tokensUnknown: z.literal(true).optional(),
   structuredOutput: z.unknown().optional(),
   /**
    * The provider's classification of a failed turn. Present means the turn failed, and the

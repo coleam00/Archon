@@ -2110,14 +2110,18 @@ it reported zero. On a restatement row an absent `cost_usd` means the scope's sp
 rows that row names. Claude reports a session's running total, so Archon subtracts the source
 session's total from its native session transcript when a node resumes or forks, including
 across Archon processes. If that persisted state is missing or invalid, the earlier total is
-unknown and the node's `cost_usd` is absent rather than over-counted. Claude tokens cover the
-main agent, forked skills, and subagents included in that cost: input (including cache reads
-and writes), output, cache read, and cache write. Fresh sessions report the full totals;
+unknown and the first result's cost is absent rather than over-counted. Later results can
+report incremental cost from the newly known baseline, so the node's `cost_usd` can be a
+partial cost that excludes the first interval. Claude tokens cover the main agent, forked
+skills, and subagents included in that cost: input (including cache reads and writes),
+output, cache read, and cache write. Fresh sessions report the full totals;
 resumes and forks subtract the persisted baseline on all four axes. If the token baseline
 is missing or incomplete (including older transcripts that stored only output tokens or
 positive cost with no model totals), or totals are inconsistent, token usage is absent and
 Archon logs `claude.query_tokens_unknown`. Tokens remain unknown for the rest of that query,
-even if later results supply usable totals; cost subtraction continues independently.
+even if later results supply usable totals. The node's tokens also remain absent across
+structured-output reasks and later loop iterations after an unknown interval; cost
+subtraction continues independently.
 A run that spent nothing on AI, such as a bash-only workflow, carries no `cost_usd` rather
 than `0`. Governance nodes do not yet have complete terminal
 transcript-row coverage, so read usage from the rows that exist rather than treating
