@@ -19,14 +19,10 @@ import {
   type Contract,
   isOwnedLabel,
   OWNED_LABEL_NAMES,
-  type PackLabel,
   type Route,
-  ROUTE_LABEL,
-  SIZE_LABEL,
   type Size,
-  STATE_LABEL,
-  TYPE_LABEL,
   type WorkType,
+  wantedLabels,
   writeLabels,
 } from '../../.shared/labels.ts';
 
@@ -127,12 +123,7 @@ function main(): void {
     return;
   }
 
-  const wanted: PackLabel[] = [
-    decision.contract === 'READY' ? ROUTE_LABEL[decision.route] : STATE_LABEL[decision.contract],
-    TYPE_LABEL[type.value],
-  ];
-  // Size only matters on an item that can still be worked; a close verdict carries none.
-  if (contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size.value]);
+  const wanted = wantedLabels(decision, type.value, size.value);
 
   const published = publish && item !== undefined;
   const labels = published
