@@ -7,7 +7,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './file-store';
 import type { WorkflowRunDelivery } from './engine-port';
 import { subscribeToRunTree, type RunSubscriptionStore } from './run-subscription';
-import type { IWorkflowStore } from './store';
+import type { IWorkflowStore, WorkflowEventCursor } from './store';
 
 const roots = trackTempRoots();
 const PARKED = { pollIntervalMs: 60_000 };
@@ -234,6 +234,41 @@ describe('subscribeToRunTree', () => {
     await subscription.close();
 
     expect(seen.tags()).toEqual(['child']);
+  });
+
+  it('drains a backlog longer than one page exactly once, in order', async () => {
+    const store = await makeStore();
+    const root = await createRun(store);
+    const beforeTemplate = await store.getWorkflowEventHead();
+    await write(store, root, 'template');
+    const template = (await store.readWorkflowEventsAfter(beforeTemplate, { limit: 1 })).events[0]
+      ?.event;
+    if (template === undefined) throw new Error('expected a template row');
+    // 1001 rows span three 500-row pages; the file store takes seconds to write that many.
+    const rows = Array.from({ length: 1001 }, (_, i) => ({
+      ...template,
+      id: `event-${String(i)}`,
+      step_name: String(i),
+    }));
+    const cursorAt = (position: number): WorkflowEventCursor =>
+      `fake:${String(position)}` as WorkflowEventCursor;
+    const paged: RunSubscriptionStore = {
+      getWorkflowEventHead: async () => cursorAt(0),
+      getRunAncestry: async () => [],
+      readWorkflowEventsAfter: async (after, { limit }) => {
+        const start = Number(after.slice('fake:'.length));
+        const page = rows.slice(start, start + limit);
+        return {
+          events: page.map((event, i) => ({ cursor: cursorAt(start + i + 1), event })),
+          next: cursorAt(start + page.length),
+        };
+      },
+    };
+    const seen = recorder();
+    const subscription = await subscribeToRunTree(paged, root, seen.listener, PARKED);
+    await subscription.close();
+
+    expect(seen.tags()).toEqual(rows.map(row => row.step_name));
   });
 
   it('looks up membership once per run id', async () => {
