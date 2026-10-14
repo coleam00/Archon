@@ -1838,30 +1838,22 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     const remoteRef = `${remote}/${branchName}`;
+    const localRefName = `refs/heads/${branchName}`;
+    const remoteRefName = `refs/remotes/${remoteRef}`;
     let source: 'local' | 'remote' | 'fast_forwarded' = 'local';
     if (remoteExists) {
       await fetchWithRefLockRetry(
         toRepoPath(repoPath),
         remote,
-        `+refs/heads/${branchName}:refs/remotes/${remoteRef}`,
-        { timeoutMs: GIT_OPERATION_TIMEOUT_MS }
+        `+${localRefName}:${remoteRefName}`,
+        {
+          timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+        }
       );
       if (!localExists) {
         source = 'remote';
-      } else if (
-        !(await this.isAncestorRef(
-          repoPath,
-          `refs/remotes/${remoteRef}`,
-          `refs/heads/${branchName}`
-        ))
-      ) {
-        if (
-          !(await this.isAncestorRef(
-            repoPath,
-            `refs/heads/${branchName}`,
-            `refs/remotes/${remoteRef}`
-          ))
-        ) {
+      } else if (!(await this.isAncestorRef(repoPath, remoteRefName, localRefName))) {
+        if (!(await this.isAncestorRef(repoPath, localRefName, remoteRefName))) {
           const { stdout: counts } = await execFileAsync(
             'git',
             [
@@ -1870,7 +1862,7 @@ export class WorktreeProvider implements IIsolationProvider {
               'rev-list',
               '--left-right',
               '--count',
-              `refs/heads/${branchName}...refs/remotes/${remoteRef}`,
+              `${localRefName}...${remoteRefName}`,
             ],
             { timeout: GIT_OPERATION_TIMEOUT_MS }
           );
@@ -1882,8 +1874,10 @@ export class WorktreeProvider implements IIsolationProvider {
         // that changed after the ancestry check.
         await execFileAsync(
           'git',
-          ['-C', repoPath, 'fetch', '.', `refs/remotes/${remoteRef}:refs/heads/${branchName}`],
-          { timeout: GIT_OPERATION_TIMEOUT_MS }
+          ['-C', repoPath, 'fetch', '.', `${remoteRefName}:${localRefName}`],
+          {
+            timeout: GIT_OPERATION_TIMEOUT_MS,
+          }
         );
         source = 'fast_forwarded';
       }
