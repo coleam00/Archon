@@ -15,10 +15,10 @@ import { MockPlatformAdapter } from '../test/mocks/platform';
 import type { Conversation, Codebase, IPlatformAdapter } from '../types';
 import type {
   IsolationEnvironmentRow,
-  IsolationResolution,
   IsolationResolver,
+  ResolvedIsolation,
 } from '@archon/isolation';
-import { toBranchName } from '@archon/git';
+import { toBranchName, toRepoPath } from '@archon/git';
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
 // (or the workflow engine) before the mock.module() calls below take effect.
 import type { WorkflowRoutingContext } from './orchestrator';
@@ -98,9 +98,10 @@ mock.module('../db/codebases', () => ({
   createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
 }));
 
+const mockUpdateIsolationStatus = mock(() => Promise.resolve());
 mock.module('../db/isolation-environments', () => ({
   createIsolationStore: mock(() => ({
-    updateStatus: mock(() => Promise.resolve()),
+    updateStatus: mockUpdateIsolationStatus,
   })),
 }));
 
@@ -207,8 +208,11 @@ const mockResolve = mock<IsolationResolver['resolve']>(() =>
   Promise.resolve({ status: 'none', cwd: '/workspace' })
 );
 
+const mockReleaseUnlinked = mock<IsolationResolver['releaseUnlinked']>(() => Promise.resolve());
+
 class MockIsolationResolver {
   resolve = mockResolve;
+  releaseUnlinked = mockReleaseUnlinked;
   constructor(_deps: unknown) {}
 }
 
@@ -391,8 +395,6 @@ function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvi
   };
 }
 
-type ResolvedIsolation = Extract<IsolationResolution, { status: 'resolved' }>;
-
 // The resolver always reports the environment's own working path as `cwd`.
 // Deriving it here stops a call site from setting the two to different values.
 function resolvedIsolation(
@@ -400,6 +402,17 @@ function resolvedIsolation(
   env: IsolationEnvironmentRow = makeEnvRow()
 ): ResolvedIsolation {
   return { status: 'resolved', env, cwd: env.working_path, method };
+}
+
+type CreatedMethod = Extract<ResolvedIsolation['method'], { type: 'created' }>;
+
+function createdMethod(overrides?: Partial<CreatedMethod>): CreatedMethod {
+  return {
+    type: 'created',
+    creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    canonicalRepoPath: toRepoPath('/workspace/test-repo'),
+    ...overrides,
+  };
 }
 
 function makeConversation(overrides?: Partial<Conversation>): Conversation {
@@ -447,7 +460,31 @@ describe('validateAndResolveIsolation', () => {
     platform = new MockPlatformAdapter();
     mockUpdateConversation.mockClear();
     mockResolve.mockClear();
+    mockReleaseUnlinked.mockClear();
+    mockUpdateIsolationStatus.mockClear();
   });
+
+  const linkFailureMethods: ResolvedIsolation['method'][] = [
+    { type: 'existing' },
+    { type: 'workflow_reuse' },
+    { type: 'linked_issue_reuse', issueNumber: 99 },
+    createdMethod(),
+  ];
+  for (const method of linkFailureMethods) {
+    test(`link failure on ${method.type} leaves the row to the resolver and rethrows`, async () => {
+      const resolution = resolvedIsolation(method);
+      mockResolve.mockResolvedValueOnce(resolution);
+      const linkError = new Error('conversation update failed');
+      mockUpdateConversation.mockRejectedValueOnce(linkError);
+
+      await expect(
+        validateAndResolveIsolation(makeConversation(), makeCodebase(), platform, 'conv-1')
+      ).rejects.toBe(linkError);
+
+      expect(mockUpdateIsolationStatus).not.toHaveBeenCalled();
+      expect(mockReleaseUnlinked).toHaveBeenCalledWith(resolution);
+    });
+  }
 
   test('linked_issue_reuse triggers reuse message', async () => {
     const conversation = makeConversation();
@@ -467,13 +504,7 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase();
 
-    mockResolve.mockResolvedValueOnce(
-      resolvedIsolation({
-        type: 'created',
-        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
-        autoCleanedCount: 3,
-      })
-    );
+    mockResolve.mockResolvedValueOnce(resolvedIsolation(createdMethod({ autoCleanedCount: 3 })));
 
     const result = await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -488,9 +519,7 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: 'develop' });
 
-    mockResolve.mockResolvedValueOnce(
-      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
-    );
+    mockResolve.mockResolvedValueOnce(resolvedIsolation(createdMethod()));
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -502,9 +531,7 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: null });
 
-    mockResolve.mockResolvedValueOnce(
-      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
-    );
+    mockResolve.mockResolvedValueOnce(resolvedIsolation(createdMethod()));
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -946,7 +973,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+        createdMethod(),
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );
@@ -970,11 +997,7 @@ describe('dispatchBackgroundWorkflow', () => {
   test('hands the executor the cut-from commit of a branch this dispatch created', async () => {
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        {
-          type: 'created',
-          cutFromCommit: 'c'.repeat(40),
-          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
-        },
+        createdMethod({ cutFromCommit: 'c'.repeat(40) }),
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );

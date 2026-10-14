@@ -24,6 +24,7 @@ import type { RepoPath, BranchName, WorktreePath } from '@archon/git';
 import type {
   IIsolationProvider,
   IsolationResolution,
+  ResolvedIsolation,
   IsolationHints,
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -573,35 +574,11 @@ export class IsolationResolver {
       );
 
       if (!isolatedEnv.metadata.adopted) {
-        // Clean up the orphaned worktree — best-effort, don't mask the original error
-        try {
-          const result = await this.provider.destroy(isolatedEnv.workingPath, {
-            canonicalRepoPath: canonicalPath,
-            creationId: isolatedEnv.metadata.creationId,
-            branchName: isolatedEnv.branchName,
-            force: true,
-          });
-          if (!result.worktreeRemoved || !result.directoryClean) {
-            throw new Error(
-              `Worktree cleanup incomplete at ${isolatedEnv.workingPath}: ${result.warnings.join('; ')}`
-            );
-          }
-          getLog().info(
-            { worktreePath: isolatedEnv.workingPath },
-            'isolation_orphan_cleanup_completed'
-          );
-        } catch (cleanupError) {
-          const cleanupErr =
-            cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
-          getLog().error(
-            {
-              err: cleanupErr,
-              errorType: cleanupErr.constructor.name,
-              worktreePath: isolatedEnv.workingPath,
-            },
-            'isolation_orphan_cleanup_failed'
-          );
-        }
+        await this.removeCreatedWorktree(isolatedEnv.workingPath, {
+          canonicalRepoPath: canonicalPath,
+          creationId: isolatedEnv.metadata.creationId,
+          branchName: isolatedEnv.branchName,
+        });
       }
 
       throw err; // Re-throw original store error — this is an unexpected failure
@@ -616,6 +593,7 @@ export class IsolationResolver {
           ? {
               type: 'created',
               creationId: isolatedEnv.metadata.creationId,
+              canonicalRepoPath: canonicalPath,
               ...(isolatedEnv.metadata.cutFromCommit !== undefined
                 ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
                 : {}),
@@ -623,5 +601,59 @@ export class IsolationResolver {
           : { type: 'provider_adoption' },
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
+  }
+
+  /**
+   * Undo a resolution the caller could not link to its conversation. Only a
+   * worktree this resolution created is removed; reused and adopted environments
+   * may be in use elsewhere and are left exactly as they were. The row is marked
+   * destroyed only after removal is verified, so a failed removal stays active
+   * for cleanup to retry. Never throws, so the caller can rethrow its link error.
+   */
+  async releaseUnlinked(resolution: ResolvedIsolation): Promise<void> {
+    const { env, method } = resolution;
+    if (method.type !== 'created') return;
+
+    const removed = await this.removeCreatedWorktree(env.working_path, {
+      canonicalRepoPath: method.canonicalRepoPath,
+      creationId: method.creationId,
+      branchName: toBranchName(env.branch_name),
+    });
+    if (!removed) return;
+    try {
+      await this.store.updateStatus(env.id, 'destroyed');
+    } catch (error) {
+      getLog().error(
+        { err: error instanceof Error ? error : new Error(String(error)), isolationEnvId: env.id },
+        'isolation_rollback_failed'
+      );
+    }
+  }
+
+  /**
+   * Remove a worktree this resolver created and verify it is gone.
+   * Logs and returns false on any failure instead of throwing.
+   */
+  private async removeCreatedWorktree(
+    worktreePath: string,
+    proof: { canonicalRepoPath: RepoPath; creationId: string; branchName: BranchName }
+  ): Promise<boolean> {
+    try {
+      const result = await this.provider.destroy(worktreePath, { ...proof, force: true });
+      if (!result.worktreeRemoved || !result.directoryClean) {
+        throw new Error(
+          `Worktree cleanup incomplete at ${worktreePath}: ${result.warnings.join('; ')}`
+        );
+      }
+      getLog().info({ worktreePath }, 'isolation_orphan_cleanup_completed');
+      return true;
+    } catch (cleanupError) {
+      const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+      getLog().error(
+        { err, errorType: err.constructor.name, worktreePath },
+        'isolation_orphan_cleanup_failed'
+      );
+      return false;
+    }
   }
 }

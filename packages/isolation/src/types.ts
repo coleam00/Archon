@@ -455,6 +455,8 @@ export type ResolutionMethod =
   | {
       type: 'created';
       creationId: string;
+      /** The repository the worktree was created from; part of its removal proof. */
+      canonicalRepoPath: RepoPath;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;
@@ -471,6 +473,8 @@ export type IsolationResolution =
   | { status: 'stale_cleaned'; previousEnvId: string }
   | { status: 'none'; cwd: string }
   | { status: 'blocked'; reason: IsolationBlockReason; userMessage: string };
+
+export type ResolvedIsolation = Extract<IsolationResolution, { status: 'resolved' }>;
 
 // --- Isolation Backend Seam (folder projects only) ---
 //

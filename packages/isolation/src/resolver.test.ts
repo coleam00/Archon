@@ -22,9 +22,11 @@ import { MissingProjectDirectoryError } from './errors';
 import type { IsolationResolverDeps } from './resolver';
 import type { IIsolationStore } from './store';
 import type {
+  DestroyResult,
   IsolationEnvironmentRow,
   WorktreeCreationEnvironment,
   IsolationRequest,
+  ResolutionMethod,
 } from './types';
 
 function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvironmentRow {
@@ -804,6 +806,105 @@ describe('IsolationResolver', () => {
         platformType: 'web',
       })
     ).rejects.toThrow('DB constraint violation');
+  });
+
+  describe('releaseUnlinked', () => {
+    const canonicalRepoPath = git.toRepoPath('/repos/myrepo');
+    const creationId = '58e2e55c-b565-4cca-8786-4bc9b86d6fa8';
+    const created = {
+      status: 'resolved' as const,
+      env: makeEnvRow(),
+      cwd: '/worktrees/issue-42',
+      method: { type: 'created' as const, creationId, canonicalRepoPath },
+    };
+
+    function releaseHarness(destroy: () => Promise<DestroyResult>): {
+      resolver: IsolationResolver;
+      destroyCalls: unknown[][];
+      statusUpdates: unknown[][];
+    } {
+      const destroyCalls: unknown[][] = [];
+      const statusUpdates: unknown[][] = [];
+      const resolver = createResolver({
+        provider: {
+          ...makeMockProvider(),
+          destroy: async (...args) => {
+            destroyCalls.push(args);
+            return destroy();
+          },
+        },
+        store: makeMockStore({
+          updateStatus: async (...args) => {
+            statusUpdates.push(args);
+          },
+        }),
+      });
+      return { resolver, destroyCalls, statusUpdates };
+    }
+
+    const removed: DestroyResult = {
+      worktreeRemoved: true,
+      branchDeleted: true,
+      remoteBranchDeleted: null,
+      directoryClean: true,
+      warnings: [],
+    };
+
+    const notCreated: ResolutionMethod[] = [
+      { type: 'existing' },
+      { type: 'workflow_reuse' },
+      { type: 'linked_issue_reuse', issueNumber: 42 },
+      { type: 'branch_adoption', branch: 'issue-42' },
+      { type: 'provider_adoption' },
+    ];
+    for (const method of notCreated) {
+      test(`leaves a ${method.type} environment untouched`, async () => {
+        const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed);
+        await resolver.releaseUnlinked({ ...created, method });
+        expect(destroyCalls).toEqual([]);
+        expect(statusUpdates).toEqual([]);
+      });
+    }
+
+    test('removes a created worktree and marks it destroyed once removal is verified', async () => {
+      const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed);
+      await resolver.releaseUnlinked(created);
+      expect(destroyCalls).toEqual([
+        [
+          '/worktrees/issue-42',
+          {
+            canonicalRepoPath,
+            creationId,
+            branchName: git.toBranchName('issue-42'),
+            force: true,
+          },
+        ],
+      ]);
+      expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
+    });
+
+    const unverified: [string, () => Promise<DestroyResult>][] = [
+      ['the worktree is still registered', async () => ({ ...removed, worktreeRemoved: false })],
+      ['the directory is still on disk', async () => ({ ...removed, directoryClean: false })],
+      [
+        'the provider refuses',
+        async () => {
+          throw new Error('Cannot verify worktree ownership');
+        },
+      ],
+    ];
+    for (const [condition, destroy] of unverified) {
+      test(`keeps a created row active when ${condition}`, async () => {
+        mockCleanupError.mockClear();
+        const { resolver, destroyCalls, statusUpdates } = releaseHarness(destroy);
+        await resolver.releaseUnlinked(created);
+        expect(destroyCalls).toHaveLength(1);
+        expect(statusUpdates).toEqual([]);
+        expect(mockCleanupError.mock.calls.map(args => args[1])).toContain(
+          'isolation_orphan_cleanup_failed'
+        );
+      });
+    }
   });
 
   // --- Warnings propagation tests ---
