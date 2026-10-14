@@ -852,6 +852,10 @@ describe('bundled-defaults', () => {
       // token with no PR number in it (#2909 R1).
       expect(sync).toContain('$INPUTS.pr');
       expect(sync).not.toContain('INPUTS_PR');
+      expect(sync).toContain('$INPUTS.review_ready');
+      expect(sync).toContain(
+        'Only when the review verdict is `true` and coverage is an empty list (`[]`)'
+      );
 
       // The public write belongs to a deterministic node, not to a prompt: the
       // identity it writes to is the recorded record, and the same node performs
@@ -887,7 +891,11 @@ describe('bundled-defaults', () => {
       // A command node carries its bindings on `source`, not the node root.
       expect(updateNode.source).toMatchObject({
         kind: 'command',
-        with: { pr: '$rounds.output.pr_url' },
+        with: {
+          pr: '$rounds.output.pr_url',
+          review_ready: '$rounds.output.review_ready',
+          contract_left: '$rounds.output.contract_left',
+        },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver

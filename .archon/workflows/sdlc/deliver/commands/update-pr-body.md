@@ -22,14 +22,18 @@ the number every command below uses.
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
    still true.
-4. Link the issue the description references by the latest review's contract
-   coverage. What it left open, as a JSON list (empty text when no review judged
-   coverage): `$INPUTS.contract_left`. On an empty list (`[]`), and only then,
-   the reference becomes `Closes #N`, replacing a `Refs #N`. Anything else gets a non-closing reference (`Refs #N`)
+4. Link the issue the description references by the deciding review's verdict
+   (`$INPUTS.review_ready`) and contract coverage. What it left open, as a JSON
+   list (empty text when no review judged coverage): `$INPUTS.contract_left`.
+   Only when the review verdict is `true` and coverage is an empty list (`[]`)
+   does the reference become `Closes #N`, replacing a `Refs #N`.
+   Anything else gets a non-closing reference (`Refs #N`)
    in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
-   variants), and a short "Left open" section listing each item, or saying no
-   review judged coverage. Keep at most one "Left open" section, current, and
-   remove it on an empty list. Change no other reference, and add none when the
+   variants), and a short "Left open" section listing each item. If coverage is
+   empty but the review did not pass, say the review remains blocked or uncertified;
+   if coverage is absent, say no review judged coverage. Keep at most one "Left
+   open" section, current, and remove it only on a passing review with empty
+   coverage. Change no other reference, and add none when the
    description links no issue.
 5. When something changed, write the complete description to
    `$ARTIFACTS_DIR/pr-body-final.md` and apply it with
