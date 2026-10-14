@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
-import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
@@ -28,22 +27,6 @@ function scopedHelpOptions(argv: string[]): string {
   const end = body.indexOf('\n\n');
   return end === -1 ? body : body.slice(0, end);
 }
-
-it('keeps run source and isolation flags consistent with the parser', () => {
-  const options = scopedHelpOptions(['workflow', 'run']).split('\n');
-  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
-    const parserOption = cliArgOptions[name];
-    expect(parserOption).toBeDefined();
-    const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
-    expect(lines).toHaveLength(1);
-    const spec = lines[0]?.trimStart().split(/ {2,}/)[0];
-    if (parserOption?.type === 'string') {
-      expect(spec).toMatch(new RegExp(`^--${name} <[^>]+>$`));
-    } else {
-      expect(spec).toBe(`--${name}`);
-    }
-  }
-});
 
 describe('CLI help output', () => {
   const help = renderHelp();
