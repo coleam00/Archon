@@ -65,6 +65,43 @@ test('a ready item is labelled with the route the run takes on it', () => {
   }
 });
 
+test('the verdict passes all five triage fields through unchanged', () => {
+  const run = runPackScript('triage/scripts/verdict', {
+    inputs: {
+      ...inputs,
+      INPUTS_PUBLISH: 'false',
+      INPUTS_COMPLEXITY: '{"value":"high","reason":"unknown design"}',
+      INPUTS_IMPORTANCE: '{"value":"low","reason":"off direction"}',
+      INPUTS_URGENCY: '{"value":"soon","reason":"release next week"}',
+    },
+  });
+  expect(run.code).toBe(0);
+  expect(JSON.parse(run.stdout)).toMatchObject({
+    type: { value: 'feature', reason: 'new behavior' },
+    size: { value: 's', reason: 'one script' },
+    complexity: { value: 'high', reason: 'unknown design' },
+    importance: { value: 'low', reason: 'off direction' },
+    urgency: { value: 'soon', reason: 'release next week' },
+  });
+});
+
+test('a close verdict keeps the type label and drops the size label', () => {
+  const run = runPackScript('triage/scripts/verdict', {
+    inputs: {
+      ...inputs,
+      INPUTS_PUBLISH: 'false',
+      INPUTS_DECISION: JSON.stringify({ contract: 'NO_ACTION' }),
+    },
+  });
+  expect(run.code).toBe(0);
+  expect(JSON.parse(run.stdout).labels).toEqual([
+    'archon-close',
+    'archon-type-feature',
+    'area',
+    'nonexistent',
+  ]);
+});
+
 test('malformed qualified triage identity refuses before invoking a transport', () => {
   for (const item of [
     { repo: { host: '', path: 'repo' }, number: 1 },
