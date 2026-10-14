@@ -3,17 +3,18 @@
  * workflows can refresh installation tokens without rewriting the remote URL.
  *
  * Flow:
- *   1. Write the bundled credential helper to `~/.archon/bin/` (idempotent;
- *      write only on first call).
+ *   1. Atomically replace the managed credential helper in `~/.archon/bin/`.
  *   2. Register the helper on the worktree's git config:
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
+ *      `credential.https://github.com.useHttpPath = true`
  *
  * The caller (the GitHub adapter clone path in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
  */
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
@@ -42,17 +43,25 @@ export async function installCredentialHelper(
 ): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
+  const tempPath = resolve(binDir, `git-credential-archon.${randomUUID()}.tmp`);
   try {
-    if (!existsSync(helperPath)) {
-      mkdirSync(binDir, { recursive: true });
-      writeFileSync(helperPath, credentialHelperScript);
-      chmodSync(helperPath, 0o755);
-      getLog().info({ helperPath }, 'github_auth.credential_helper_copied');
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeFileSync(tempPath, credentialHelperScript, { flag: 'wx' });
+      chmodSync(tempPath, 0o755);
+      renameSync(tempPath, helperPath);
+    } finally {
+      rmSync(tempPath, { force: true });
     }
-    // Per-worktree git config write — idempotent on git's side.
+    getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
     await execFileAsync(
       'git',
       ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperPath],
+      { timeout: 5000 }
+    );
+    await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
       { timeout: 5000 }
     );
     getLog().info({ worktreePath, helperPath }, 'github_auth.credential_helper_registered');

@@ -374,6 +374,8 @@ mock.module('@archon/git', () => ({
 
 const envKeys = [
   'ARCHON_WEBHOOK_SOURCES',
+  'ARCHON_PORT',
+  'PORT',
   'CLAUDE_USE_GLOBAL_AUTH',
   'CODEX_ACCESS_TOKEN',
   'CODEX_ID_TOKEN',
@@ -425,6 +427,23 @@ afterAll(async () => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test('server publishes the bound port to credential-helper children', async () => {
+    process.env.ARCHON_PORT = '3090';
+    process.env.PORT = '3000';
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 43210,
+    })) as unknown as typeof Bun.serve);
+    try {
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(process.env.ARCHON_PORT).toBe('43210');
+    } finally {
+      serveSpy.mockRestore();
+      delete process.env.ARCHON_PORT;
+      delete process.env.PORT;
+    }
+  });
+
   test('server registers offline policies with all platform transports skipped', async () => {
     clearPlatformPolicies();
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({

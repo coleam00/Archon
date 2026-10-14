@@ -1,21 +1,8 @@
 // @archon-test-isolated
 /**
- * Direct coverage for installCredentialHelper.
- *
- * This behaviour used to be asserted only indirectly, from the GitHub adapter's
- * App-mode test, through the `git config` call the helper makes. That forced a
- * unit test in @archon/adapters to run the real copy into the developer's
- * `~/.archon/bin/` (#2305). The write is legitimate — it is what the function is
- * for — so it is tested here instead, at the layer that owns it, against an
- * ARCHON_HOME this file creates and removes itself.
- *
- * `execFileAsync` is stubbed with spyOn (reversible; no mock.module pollution)
- * so no real `git` process runs and the registered helper path can be asserted
- * exactly.
- *
- * The compiled-asset test builds and executes a standalone binary from the
- * module that owns the helper text. The credential protocol test then proves a
- * registered helper can provide a fresh token to a later Git operation.
+ * Installer writes stay inside a temporary ARCHON_HOME. Unit tests spy on git
+ * configuration; protocol tests run real Git and the installed shell helper.
+ * The packaging test checks that source and compiled installs share the asset.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { cp, mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
@@ -24,8 +11,30 @@ import { join } from 'node:path';
 import * as git from '@archon/git';
 import { skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { installCredentialHelper } from './credential-helper-install';
+import { credentialHelperScript } from './credential-helper-script';
 
 const trackTempRoot = trackTempRoots();
+
+async function runHelper(
+  command: string[],
+  input: string,
+  env: NodeJS.ProcessEnv
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn(command, {
+    env,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  child.stdin.write(input);
+  child.stdin.end();
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
 
 describe('installCredentialHelper', () => {
   let archonHome: string;
@@ -94,7 +103,7 @@ describe('installCredentialHelper', () => {
     }
   );
 
-  test('is idempotent — an existing helper is not overwritten but is re-registered', async () => {
+  test('replaces an outdated helper and re-registers it on every install', async () => {
     const binDir = join(archonHome, 'bin');
     await mkdir(binDir, { recursive: true });
     const helperPath = join(binDir, 'git-credential-archon');
@@ -103,8 +112,9 @@ describe('installCredentialHelper', () => {
     const result = await installCredentialHelper('/tmp/another-worktree');
 
     expect(result.kind).toBe('installed');
-    // Copy skipped: the sentinel survives.
-    expect(await readFile(helperPath, 'utf8')).toContain('pre-existing');
+    expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
+    expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
+    expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     // Registration still runs — every cloned worktree needs its own config entry.
     expect(execSpy).toHaveBeenCalledWith(
       'git',
@@ -121,6 +131,19 @@ describe('installCredentialHelper', () => {
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') throw new Error('unreachable');
     expect(result.error.message).toContain('not a git repository');
+  });
+
+  test('returns failed when the path configuration write fails', async () => {
+    execSpy.mockImplementation(async (_file, args) => {
+      if (args.includes('credential.https://github.com.useHttpPath')) {
+        throw new Error('path config rejected');
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await installCredentialHelper('/tmp/some-worktree');
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error.message).toBe('path config rejected');
   });
 
   test.skipIf(process.platform === 'win32' || skipCompiledBinaryTests())(
@@ -157,40 +180,181 @@ describe('installCredentialHelper', () => {
       await mkdir(fakeBin, { recursive: true });
       await writeFile(
         join(fakeBin, 'curl'),
-        '#!/bin/sh\nprintf \'%s\\n\' \'{"token":"fresh-installation-token"}\'\n',
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CURL_ARGS"\nprintf \'%s\\n\' \'{"token":"fresh-installation-token"}\'\n',
         { mode: 0o755 }
       );
       await git.execFileAsync('git', ['init', repoPath], { timeout: 5_000 });
 
-      const result = await installCredentialHelper(repoPath);
-      expect(result.kind).toBe('installed');
-
-      const child = Bun.spawn(
-        ['git', '-C', repoPath, '-c', 'credential.useHttpPath=true', 'credential', 'fill'],
-        {
-          env: {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect((await installCredentialHelper(repoPath)).kind).toBe('installed');
+        const { exitCode, stdout, stderr } = await runHelper(
+          ['git', '-C', repoPath, 'credential', 'fill'],
+          'protocol=https\nhost=github.com\npath=owner/repo.git\n\n',
+          {
             ...process.env,
+            ARCHON_PORT: '43210',
+            PORT: '3000',
+            CURL_ARGS: join(archonHome, 'curl-args'),
             PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
             GIT_CONFIG_GLOBAL: '/dev/null',
             GIT_CONFIG_SYSTEM: '/dev/null',
             GIT_TERMINAL_PROMPT: '0',
-          },
-          stdin: 'pipe',
-          stdout: 'pipe',
-          stderr: 'pipe',
-        }
-      );
-      child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
-      child.stdin.end();
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
+          }
+        );
+        expect(exitCode, stderr).toBe(0);
+        expect(stdout).toContain('username=x-access-token');
+        expect(stdout).toContain('password=fresh-installation-token');
+        expect(stderr).toBe('');
+        const curlArgs = await readFile(join(archonHome, 'curl-args'), 'utf8');
+        expect(curlArgs).toContain('http://127.0.0.1:43210/internal/git-credential');
+        expect(curlArgs).toContain('{"host":"github.com","path":"owner/repo.git"}');
+      }
+      const { stdout: config } = await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'config',
+        '--local',
+        '--list',
       ]);
+      expect(config).toContain('credential.https://github.com.usehttppath=true');
+      expect(config).not.toContain('fresh-installation-token');
+    }
+  );
+  test.skipIf(process.platform === 'win32')(
+    'installed helper reaches a real loopback server',
+    async () => {
+      execSpy.mockRestore();
+      const repoPath = join(archonHome, 'repo');
+      await git.execFileAsync('git', ['init', repoPath], { timeout: 5_000 });
+      expect((await installCredentialHelper(repoPath)).kind).toBe('installed');
+      const requests: { host: string; path: string; body: unknown }[] = [];
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        async fetch(request) {
+          const url = new URL(request.url);
+          requests.push({ host: url.hostname, path: url.pathname, body: await request.json() });
+          return Response.json({ token: 'loopback-test-token' });
+        },
+      });
+      try {
+        expect(server.port).not.toBe(3090);
+        const { exitCode, stdout, stderr } = await runHelper(
+          ['git', '-C', repoPath, 'credential', 'fill'],
+          'protocol=https\nhost=github.com\npath=owner/repo\n\n',
+          {
+            ...process.env,
+            ARCHON_PORT: String(server.port),
+            PORT: '3000',
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_SYSTEM: '/dev/null',
+            GIT_TERMINAL_PROMPT: '0',
+          }
+        );
+        expect(exitCode, stderr).toBe(0);
+        expect(stdout).toContain('password=loopback-test-token');
+        expect(stderr).toBe('');
+        expect(requests).toEqual([
+          {
+            host: '127.0.0.1',
+            path: '/internal/git-credential',
+            body: { host: 'github.com', path: 'owner/repo' },
+          },
+        ]);
+      } finally {
+        server.stop(true);
+      }
+    }
+  );
 
-      expect(exitCode, stderr).toBe(0);
-      expect(stdout).toContain('username=x-access-token');
-      expect(stdout).toContain('password=fresh-installation-token');
+  test.skipIf(process.platform === 'win32')(
+    'rejects invalid input before invoking curl',
+    async () => {
+      const result = await installCredentialHelper('/tmp/some-worktree');
+      if (result.kind !== 'installed') throw result.error;
+      const fakeBin = join(archonHome, 'fake-bin');
+      const argsPath = join(archonHome, 'curl-args');
+      await mkdir(fakeBin);
+      await writeFile(
+        join(fakeBin, 'curl'),
+        '#!/bin/sh\nprintf called > "$CURL_ARGS"\nprintf \'%s\\n\' \'{"token":"test-token"}\'\n',
+        { mode: 0o755 }
+      );
+      const env = {
+        ...process.env,
+        ARCHON_PORT: '43210',
+        PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+        CURL_ARGS: argsPath,
+      };
+      const invalidInputs = [
+        { host: 'example.com', path: 'owner/repo', port: '43210' },
+        ...[
+          '',
+          'repo',
+          'owner/repo/subpath',
+          '/repo',
+          'owner/',
+          '.owner/repo',
+          'owner/.repo',
+          'owner/foo..bar',
+          'foo..bar/repo',
+        ].map(path => ({ host: 'github.com', path, port: '43210' })),
+        ...['', '0', '65536', '123456', '-1', '3.5', '3000/secret', 'secret-token'].map(port => ({
+          host: 'github.com',
+          path: 'owner/repo',
+          port,
+        })),
+      ];
+      for (const { host, path, port } of invalidInputs) {
+        const { exitCode, stdout, stderr } = await runHelper(
+          [result.helperPath, 'get'],
+          `host=${host}\npath=${path}\n\n`,
+          { ...env, ARCHON_PORT: port }
+        );
+        expect(exitCode).toBe(0);
+        expect(stdout).toBe('');
+        expect(stderr).toContain('git-credential-archon:');
+        expect(stderr).not.toContain('secret');
+        expect(await Bun.file(argsPath).exists()).toBe(false);
+      }
+      for (const action of ['store', 'erase']) {
+        const { stdout, stderr } = await runHelper([result.helperPath, action], '', env);
+        expect(stdout).toBe('');
+        expect(stderr).toBe('');
+        expect(await Bun.file(argsPath).exists()).toBe(false);
+      }
+      for (const path of ['owner/repo', 'owner/repo.git', 'own-er/re.po.git']) {
+        const { stdout, stderr } = await runHelper(
+          [result.helperPath, 'get'],
+          `host=github.com\npath=${path}\n\n`,
+          env
+        );
+        expect(stdout).toContain('password=test-token');
+        expect(stderr).toBe('');
+      }
+      expect(await readFile(argsPath, 'utf8')).toBe('called');
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'transport failure does not expose curl stderr',
+    async () => {
+      const result = await installCredentialHelper('/tmp/some-worktree');
+      if (result.kind !== 'installed') throw result.error;
+      const fakeBin = join(archonHome, 'fake-bin');
+      await mkdir(fakeBin);
+      await writeFile(join(fakeBin, 'curl'), '#!/bin/sh\nprintf secret-token >&2\nexit 22\n', {
+        mode: 0o755,
+      });
+      const { exitCode, stdout, stderr } = await runHelper(
+        [result.helperPath, 'get'],
+        'host=github.com\npath=owner/repo\n\n',
+        { ...process.env, ARCHON_PORT: '43210', PATH: `${fakeBin}:${process.env.PATH ?? ''}` }
+      );
+      expect(exitCode).toBe(0);
+      expect(stdout).toBe('');
+      expect(stderr).toContain('exit 22');
+      expect(stderr).not.toContain('secret-token');
     }
   );
 });
