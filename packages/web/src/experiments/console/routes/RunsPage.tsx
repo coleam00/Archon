@@ -284,7 +284,7 @@ function RunsFeed({
 
 function attentionKey(run: Run): string {
   const attention = run.attention;
-  return `${run.id}:${attention?.kind === 'awaiting_response' || attention?.kind === 'action_required' ? attention.occurrence : ''}`;
+  return `${run.id}:${attention?.kind === 'awaiting_response' || attention?.kind === 'attention' ? attention.occurrence : ''}`;
 }
 
 export function RunsPage(): ReactElement {
@@ -339,8 +339,7 @@ export function RunsPage(): ReactElement {
     () =>
       [
         ...demoRuns.filter(
-          run =>
-            run.attention?.kind === 'awaiting_response' || run.attention?.kind === 'action_required'
+          run => run.attention?.kind === 'awaiting_response' || run.attention?.kind === 'attention'
         ),
         ...(attentionRuns ?? []),
       ].filter(run => scope === 'all' || run.projectId === scope),

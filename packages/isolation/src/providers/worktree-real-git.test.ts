@@ -27,7 +27,11 @@ import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 import { WorktreeProvider } from './worktree';
 import type { IsolationRequest } from '../types';
-import { classifyIsolationError, MissingProjectDirectoryError } from '../errors';
+import {
+  classifyIsolationError,
+  ExistingBranchDivergedError,
+  MissingProjectDirectoryError,
+} from '../errors';
 
 // The provider logs a full setup failure and its rollback. Both are expected here,
 // and a child logger takes the level set before it is created.
@@ -897,5 +901,102 @@ describe('WorktreeProvider against real git', () => {
     await expect(provider.create(freshRequest)).rejects.toThrow();
     expect(existsSync(path)).toBe(false);
     expect(await registeredWorktrees()).not.toContain(resolve(path));
+  });
+
+  describe('a new-branch request naming a branch that already exists', () => {
+    const PR_BRANCH = 'feature/pr';
+    let attempt: IsolationRequest;
+
+    beforeEach(async () => {
+      const remotePath = join(root, 'remote.git');
+      await git(root, 'init', '--bare', '-q', remotePath);
+      await git(repoPath, 'remote', 'add', 'origin', remotePath);
+      await git(repoPath, 'push', '-q', 'origin', 'main');
+      attempt = {
+        ...request,
+        workflowType: 'task',
+        baseBranch: toBranchName('main'),
+        taskBranch: { kind: 'new', branch: toBranchName(PR_BRANCH) },
+      };
+    });
+
+    /** Commit a new file on `branch`, creating it from main if needed, and return the commit. */
+    const commitOn = async (branch: string, file: string): Promise<string> => {
+      const exists = (await git(repoPath, 'branch', '--list', branch)).trim() !== '';
+      await git(repoPath, 'checkout', '-q', ...(exists ? [branch] : ['-b', branch]));
+      await writeFile(join(repoPath, file), file);
+      await git(repoPath, 'add', file);
+      await git(repoPath, 'commit', '-qm', file);
+      await git(repoPath, 'checkout', '-q', 'main');
+      return (await git(repoPath, 'rev-parse', branch)).trim();
+    };
+    const localHead = async (): Promise<string> =>
+      (await git(repoPath, 'rev-parse', `refs/heads/${PR_BRANCH}`)).trim();
+    const remoteHead = async (): Promise<string> =>
+      (await git(repoPath, 'ls-remote', 'origin', `refs/heads/${PR_BRANCH}`)).split('\t')[0];
+
+    test.each(['no remote counterpart', 'remote counterpart behind'])(
+      'an existing local branch ahead of base keeps its commits (%s)',
+      async counterpart => {
+        let tip = await commitOn(PR_BRANCH, 'one');
+        if (counterpart === 'remote counterpart behind') {
+          await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+          tip = await commitOn(PR_BRANCH, 'two');
+        }
+
+        const env = await provider.create(attempt);
+
+        expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
+        expect(await localHead()).toBe(tip);
+        expect(env.metadata).toHaveProperty('branchCreated', false);
+        expect(env.metadata).not.toHaveProperty('cutFromCommit');
+      }
+    );
+
+    test('an existing remote-only PR branch is checked out at its head', async () => {
+      const tip = await commitOn(PR_BRANCH, 'one');
+      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+      await git(repoPath, 'branch', '-q', '-D', PR_BRANCH);
+      await git(repoPath, 'update-ref', '-d', `refs/remotes/origin/${PR_BRANCH}`);
+
+      const env = await provider.create(attempt);
+
+      expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
+      expect((await git(env.workingPath, 'rev-parse', '--abbrev-ref', '@{u}')).trim()).toBe(
+        `origin/${PR_BRANCH}`
+      );
+      expect(env.metadata).toHaveProperty('branchCreated', true);
+    });
+
+    test('a local branch behind its remote counterpart is fast-forwarded to it', async () => {
+      await commitOn(PR_BRANCH, 'one');
+      const tip = await commitOn(PR_BRANCH, 'two');
+      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+      await git(repoPath, 'branch', '-f', PR_BRANCH, `${PR_BRANCH}~1`);
+
+      const env = await provider.create(attempt);
+
+      expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
+      expect(await localHead()).toBe(tip);
+    });
+
+    test('diverged local and remote fail before any checkout', async () => {
+      const shared = await commitOn(PR_BRANCH, 'shared');
+      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+      await git(repoPath, 'branch', 'elsewhere', shared);
+      const remoteTip = await commitOn('elsewhere', 'remote-only');
+      await git(repoPath, 'push', '-q', 'origin', `elsewhere:refs/heads/${PR_BRANCH}`);
+      await git(repoPath, 'branch', '-q', '-D', 'elsewhere');
+      const localTip = await commitOn(PR_BRANCH, 'local-only');
+
+      const error = await provider.create(attempt).catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(ExistingBranchDivergedError);
+      expect((error as Error).message).toContain(`Branch '${PR_BRANCH}' has diverged`);
+      expect((error as Error).message).toContain(`'origin/${PR_BRANCH}'`);
+      expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+      expect(await localHead()).toBe(localTip);
+      expect(await remoteHead()).toBe(remoteTip);
+    });
   });
 });

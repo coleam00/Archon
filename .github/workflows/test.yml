@@ -507,6 +507,11 @@ jobs:
         shell: bash
         run: |
           bun scripts/smoke-serve.ts dist/${{ matrix.binary }} dist/${{ matrix.server }} archon-web.tar.gz
+      - name: Smoke-test provider plugins initialize
+        shell: bash
+        run: |
+          VERSION=$(bun -e 'console.log((await Bun.file("package.json").json()).version)')
+          bun packages/core/src/test/provider-plugin-smoke.ts initialize "$VERSION" dist/archon-provider-*
 
   test-suite:
     name: Test Suite

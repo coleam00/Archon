@@ -644,6 +644,18 @@ describe('CodexProvider', () => {
       expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
     });
 
+    test("a run's identity in the request env reaches the app-server the agent's shell runs in", async () => {
+      const { provider, server } = providerWith();
+      const identity = {
+        WORKFLOW_ID: 'run-1',
+        ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
+        ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
+      };
+      await run(provider, { env: identity });
+      expect(server.processes[0].env).toMatchObject(identity);
+      expect(server.processes[0].env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+    });
+
     // #3562 renamed Archon's setup variables instead of stripping Codex's own names
     // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
     test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {

@@ -2162,6 +2162,25 @@ describe('ClaudeProvider', () => {
       expect(env.PATH ?? env.Path).toBeDefined();
     });
 
+    test("a run's identity in the request env reaches the Claude Code process the agent's shell runs in", async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const identity = {
+        WORKFLOW_ID: 'run-1',
+        ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
+        ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
+      };
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, { env: identity })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.env).toMatchObject(identity);
+      expect(callArgs.options.settingSources).toEqual(['project', 'user']);
+    });
+
     test('requestOptions.env overrides buildSubprocessEnv values', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };

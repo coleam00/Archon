@@ -1096,6 +1096,23 @@ describe('provider diagnostics', () => {
     expect(await doctorCommand([async () => check])).toBe(1);
   });
 
+  it('only deprecated bundled providers warns and names the install command', async () => {
+    const { registerOpencodeProvider } = await import('@archon/providers/community/opencode');
+    const { providerRegistry } = await import('@archon/providers');
+    registerOpencodeProvider();
+    const opencode = providerRegistry.get('opencode');
+    if (!opencode) throw new Error('OpenCode did not register');
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [opencode] },
+      async () => new Map()
+    );
+    expect(check.status).toBe('warn');
+    expect(check.message).toContain('opencode (');
+    expect(check.message).toContain(
+      'No providers installed. Run: archon provider install <claude|codex|pi>'
+    );
+  });
+
   it('maps provider statuses, preserves remedies, and forwards its configured defaults', async () => {
     const diagnose = mock(async (_request: unknown) => ({
       checks: [

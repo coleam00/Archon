@@ -327,7 +327,7 @@ describe('manage_run — reads', () => {
     expect(out).toContain('authored outcome: succeeded');
   });
 
-  test('get surfaces an outside action with resume and abandon guidance', async () => {
+  test('get sends a wait paused before answers to resume and abandon', async () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({
         status: 'paused',
@@ -345,9 +345,37 @@ describe('manage_run — reads', () => {
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
 
-    expect(out).toContain('action required: Re-run CI, then resume.');
+    expect(out).toContain('needs attention: Re-run CI, then resume.');
     expect(out).toContain('archon workflow resume r1abcdef-1234');
     expect(out).toContain('abandon it');
+  });
+
+  test('get describes an attention wait by its form, options and occurrence', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'ask',
+            kind: 'attention',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            message: 'Which base?',
+            pauseId: 'pause-1',
+            form: 'select',
+            options: [{ id: 'use-main' }, { id: 'use-dev' }],
+          },
+        },
+      }),
+    ]);
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+
+    expect(out).toContain('occurrence: pause-1');
+    expect(out).toContain('form: select');
+    expect(out).toContain('options: use-main, use-dev');
+    expect(out).toContain('action=respond, decision=<one of the options>');
+    expect(out).not.toContain('workflow resume');
   });
 
   test('get preserves the prior detail shape when outcome is undeclared', async () => {
@@ -455,21 +483,21 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockAbandon).not.toHaveBeenCalled();
   });
 
-  test('approve without confirm previews the human gate and does NOT mutate', async () => {
+  test('approve without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'approve', runId: 'r1abcdef' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockApprove).not.toHaveBeenCalled();
   });
 
-  test('reject without confirm previews the human gate and does NOT mutate', async () => {
+  test('reject without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'reject', runId: 'r1abcdef' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockReject).not.toHaveBeenCalled();
   });
 
@@ -652,12 +680,12 @@ describe('manage_run — destructive confirmation gate', () => {
   // #2707 step 2 — the general drive verb, extended to manage_run so an agent's only
   // "not this" affordance on a gate declaring decisions beyond approve/reject isn't a
   // full cancel it never asked for.
-  test('respond without confirm previews the human gate and does NOT mutate', async () => {
+  test('respond without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'respond', runId: 'r1abcdef', decision: 'revise' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockRespond).not.toHaveBeenCalled();
   });
 
@@ -1144,6 +1172,7 @@ describe('manage_run authorization refusal', () => {
           cancelWorkflowRun: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
+          answerAttentionWait: unexpected,
           cancelResumableRunsForConversation: unexpected,
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,

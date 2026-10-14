@@ -1102,7 +1102,7 @@ describe('wait immediately after detached resume', () => {
         expect(payload).toMatchObject({
           result: 'attention',
           attention: nextPause
-            ? { kind: 'action_required', nodeId: 'new-pause', message: 'Second action' }
+            ? { kind: 'attention', nodeId: 'new-pause', message: 'Second action', form: 'message' }
             : { kind: 'terminal', runId, status: 'completed' },
         });
       },

@@ -889,6 +889,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         resolveApprovalGate: (...args) => operationWorkflowDb.resolveApprovalGate(...args),
         resolveAndCancelApprovalGate: (...args) =>
           operationWorkflowDb.resolveAndCancelApprovalGate(...args),
+        answerAttentionWait: (...args) => operationWorkflowDb.answerAttentionWait(...args),
         cancelResumableRunsForConversation: (...args) =>
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
         deleteWorkflowNodeSessions: (...args) =>
@@ -6672,7 +6673,7 @@ describe('workflowGetCommand', () => {
     );
   });
 
-  it('prints an action-required wait with its explicit resume command', async (): Promise<void> => {
+  it('prints an attention wait with its explicit resume command', async (): Promise<void> => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-action-human',
@@ -6701,7 +6702,10 @@ describe('workflowGetCommand', () => {
     await workflowGetCommand(createTestWorkflowHost(), 'run-action-human');
 
     expect(consoleSpy).toHaveBeenCalledWith(
-      '  Wait:   action required — Re-run CI, then resume. (resume with: archon workflow resume run-action-human)'
+      '  Wait:   needs attention — Re-run CI, then resume. (occurrence legacy:rerun-ci)'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    When it is done, resume: `archon workflow resume run-action-human`'
     );
     expect(consoleSpy.mock.calls.flat().join(' ')).not.toContain('Gate:');
   });
@@ -8205,7 +8209,7 @@ describe('workflowRunsCommand', () => {
       expect(parsed.runs[1]?.nodes).toEqual([]);
     });
 
-    it("carries each run's attention: a gate awaits a response, an attention wait needs action", async () => {
+    it("carries each run's attention: a gate awaits a response, an attention wait its answer", async () => {
       const eventsSpy = await listOnce();
       eventsSpy.mockResolvedValueOnce(new Map());
 
@@ -8225,11 +8229,13 @@ describe('workflowRunsCommand', () => {
         message: 'Ship it?',
       });
       expect(parsed.runs[1]?.attention).toEqual({
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'run-wait',
         nodeId: 'plan',
-        occurrence: 'wait:2026-09-27T09:00:01.000Z',
+        occurrence: 'legacy:plan',
         message: 'Check the plan',
+        form: 'message',
+        options: [],
       });
     });
 
@@ -14676,15 +14682,17 @@ describe('workflowWaitCommand', () => {
     expect(printed).toContain("gate 'review'");
   });
 
-  it('names the outside action and explicit resume command', async () => {
+  it('sends an attention wait from before answers to resume', async () => {
     mockWaitForRunAttention.mockResolvedValueOnce({
       kind: 'attention',
       attention: {
-        kind: 'action_required',
+        kind: 'attention',
         runId: FULL_ID,
         nodeId: 'rerun-ci',
-        occurrence: 'wait:2026-08-28T10:00:00.000Z',
+        occurrence: 'legacy:rerun-ci',
         message: 'Re-run CI, then resume.',
+        form: 'message',
+        options: [],
       },
     });
 
@@ -14694,6 +14702,32 @@ describe('workflowWaitCommand', () => {
     const printed = consoleSpy.mock.calls.flat().join(' ');
     expect(printed).toContain('Re-run CI, then resume.');
     expect(printed).toContain(`archon workflow resume ${FULL_ID}`);
+  });
+
+  it('names how to answer a multi_select attention wait at its occurrence', async () => {
+    mockWaitForRunAttention.mockResolvedValueOnce({
+      kind: 'attention',
+      attention: {
+        kind: 'attention',
+        runId: FULL_ID,
+        nodeId: 'pick',
+        occurrence: 'pause-7',
+        message: 'Which checks?',
+        form: 'multi_select',
+        options: [{ id: 'lint' }, { id: 'test', label: 'Tests' }],
+      },
+    });
+
+    const code = await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, undefined, '/repo');
+
+    expect(code).toBe(0);
+    const printed = consoleSpy.mock.calls.flat().join(' ');
+    expect(printed).toContain(`Run ${FULL_ID} needs attention: Which checks?`);
+    expect(printed).toContain('Choose one or more of: lint, Tests (test)');
+    expect(printed).toContain(
+      `archon workflow answer ${FULL_ID} --occurrence pause-7 --choose <id>`
+    );
+    expect(printed).not.toContain('workflow resume');
   });
 
   it('exits 3 with the observed status when the deadline passes', async () => {

@@ -69,7 +69,11 @@ export interface CancelNodeData {
 }
 
 type UnionKeys<T> = T extends T ? keyof T : never;
-type UnionValue<T, K extends PropertyKey> = T extends Record<K, infer V> ? V : never;
+type UnionValue<T, K extends PropertyKey> = T extends unknown
+  ? K extends keyof T
+    ? Exclude<T[K], undefined>
+    : never
+  : never;
 
 /**
  * The wire wait is a validated one-of union. The builder deliberately holds an

@@ -523,7 +523,7 @@ describe('waitForRunAttention', () => {
     expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
   });
 
-  test('an action-required wait wakes with its authored message', async () => {
+  test('an attention wait wakes with its authored message', async () => {
     putRun('r1', {
       status: 'paused',
       metadata: {
@@ -540,11 +540,13 @@ describe('waitForRunAttention', () => {
     expect(await wait('r1')).toEqual({
       kind: 'attention',
       attention: {
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'r1',
         nodeId: 'rerun-ci',
-        occurrence: 'wait:2026-08-28T10:00:00.000Z',
+        occurrence: 'legacy:rerun-ci',
         message: 'Rerun the failed check.',
+        form: 'message',
+        options: [],
       },
     });
   });

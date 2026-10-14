@@ -571,6 +571,27 @@ describe('CopilotProvider.sendQuery', () => {
     expect(lastClientOpts?.connection).toBeUndefined();
   });
 
+  test("a run's identity in the request env reaches the Copilot runtime the agent's shell runs in", async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+    const identity = {
+      WORKFLOW_ID: 'run-1',
+      ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
+      ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
+    };
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, { model: 'gpt-5', env: identity });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(lastClientOpts?.env).toMatchObject(identity);
+    expect(lastClientOpts?.baseDirectory).toBeUndefined();
+  });
+
   test('configDir override → client baseDirectory (COPILOT_HOME), sdk-1.0 placement', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;

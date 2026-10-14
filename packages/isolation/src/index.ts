@@ -46,6 +46,7 @@ export {
   CONTAINER_LABELS,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
+  readWorktreeBranchCreated,
 } from './types';
 
 // --- Backend seam (folder projects) ---
@@ -64,6 +65,7 @@ export type { IIsolationStore } from './store';
 
 // --- Errors ---
 export {
+  ExistingBranchDivergedError,
   IsolationBlockedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
