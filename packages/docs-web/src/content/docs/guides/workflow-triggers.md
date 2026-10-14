@@ -172,6 +172,8 @@ If an admitted run has ambiguous ownership after a crash, inspect the request an
 
 ## Configure GitHub event starts
 
+Both `/webhooks/github` and `/webhooks/sources/:sourceInstanceId` accept bodies up to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication, including streamed deliveries without `Content-Length`. Archon stops reading at the first chunk crossing the limit and creates no receipt or workflow start. This webhook-only limit does not change other API routes; signature verification still covers exact received bytes on both routes, and accepted source deliveries still acknowledge after durable receipt intake.
+
 GitHub event starts use an installed source plugin. The maintained plugin is temporarily housed in this repository; it has its own module entrypoint and does not require the GitHub chat adapter or an outbound GitHub token.
 
 From a source checkout, build the module with `bun run --cwd packages/adapters build:github-source-plugin`, then copy `packages/adapters/dist/github-source-plugin.mjs` to an operator-owned plugin directory. The compiled module can load outside the Archon source tree. Installation and module paths are explicit in this release; marketplace installation is separate work.
@@ -250,6 +252,8 @@ GitHub does not automatically redeliver every failed webhook. Check delivery sta
 
 ## Start workflows from any signed webhook
 
+Both `/webhooks/github` and `/webhooks/sources/:sourceInstanceId` accept bodies up to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication, including streamed deliveries without `Content-Length`. Archon stops reading at the first chunk crossing the limit and creates no receipt or workflow start. This webhook-only limit does not change other API routes; signature verification still covers exact received bytes on both routes, and accepted source deliveries still acknowledge after durable receipt intake.
+
 The Standard Webhooks source plugin accepts the published [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC-SHA256 scheme. It requires `webhook-id`, `webhook-timestamp`, and `webhook-signature`; vendor-specific signatures, `svix-*` aliases, and asymmetric signatures are unsupported. Every authenticated delivery with valid JSON evaluates every configured binding. Configure the sender to send only the events you need.
 
 From a source checkout, bundle the plugin into a standalone module in an operator-owned plugin directory. The module loads outside the Archon source tree:
@@ -325,6 +329,7 @@ curl --fail-with-body 'https://your-archon-host/webhooks/sources/orders-producti
 | 401 | Missing headers, invalid signature or invalid/stale timestamp; nothing persisted |
 | 404 | Unknown source instance |
 | 409 | Delivery ID reused with different content; no new receipt or start |
+| 413 | Body exceeds 32 MiB (33,554,432 bytes); reading stops before authentication, with no receipt or start |
 | 500 | Processing or persistence failed; investigate and retry |
 
 ### Security boundary

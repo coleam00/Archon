@@ -22,18 +22,61 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * The received body as text that re-encodes to the exact received bytes. A signature
- * covers bytes, so the default decoding is wrong twice over: it drops a leading BOM, which
- * lets an unsigned prefix pass, and replaces invalid UTF-8, which lets different bytes
- * share one text. Returns null for a body that is not UTF-8.
- */
-async function readSignedBody(request: Request): Promise<string | null> {
-  const bytes = await request.arrayBuffer();
+// GitHub caps deliveries at 25 MB; leave headroom without changing API body limits.
+export const MAX_WEBHOOK_BODY_BYTES = 32 * 1024 * 1024;
+
+type SignedBody = { kind: 'ok'; body: string } | { kind: 'invalid_utf8' } | { kind: 'too_large' };
+
+async function cancelOversizedBody(
+  body: Pick<ReadableStreamDefaultReader<Uint8Array>, 'cancel'>
+): Promise<void> {
   try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    await body.cancel();
+  } catch (error) {
+    getLog().warn({ err: error }, 'webhook_body_cancel_failed');
+  }
+}
+
+async function readSignedBody(request: Request): Promise<SignedBody> {
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isSafeInteger(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
+    if (request.body) await cancelOversizedBody(request.body);
+    return { kind: 'too_large' };
+  }
+
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_WEBHOOK_BODY_BYTES) {
+          await cancelOversizedBody(reader);
+          return { kind: 'too_large' };
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    // Signatures cover bytes: preserve the BOM and reject lossy UTF-8 decoding.
+    return {
+      kind: 'ok',
+      body: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes),
+    };
   } catch {
-    return null;
+    return { kind: 'invalid_utf8' };
   }
 }
 
@@ -46,17 +89,19 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
     const deliveryId = c.req.header('x-github-delivery');
 
     try {
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
+
       const signature = c.req.header('x-hub-signature-256');
       if (!signature) {
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
-      const payload = await readSignedBody(c.req.raw);
-      if (payload === null) return c.json({ error: 'Body is not UTF-8' }, 400);
+      if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
       // Receipt acceptance is durable; it does not mean the workflow completed.
       // GitHub requires explicit redelivery/reconciliation after a failed delivery.
-      const result = await github.receiveWebhook(payload, signature, deliveryId, eventType);
+      const result = await github.receiveWebhook(payload.body, signature, deliveryId, eventType);
       if (result === 'invalid_signature') return c.json({ error: 'Invalid signature' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
 
@@ -85,14 +130,14 @@ export function registerWebhookSourceRoutes(
 ): void {
   app.post('/webhooks/sources/:sourceInstanceId', async c => {
     const sourceInstanceId = c.req.param('sourceInstanceId');
-    if (!sources.hasSource(sourceInstanceId))
-      return c.json({ error: 'Unknown webhook source' }, 404);
-
     try {
       const body = await readSignedBody(c.req.raw);
-      if (body === null) return c.json({ error: 'Body is not UTF-8' }, 400);
+      if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
+      if (!sources.hasSource(sourceInstanceId))
+        return c.json({ error: 'Unknown webhook source' }, 404);
+      if (body.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
       const result = await sources.receive(sourceInstanceId, {
-        body,
+        body: body.body,
         headers: Object.fromEntries(c.req.raw.headers.entries()),
         receivedAt: new Date().toISOString(),
       });

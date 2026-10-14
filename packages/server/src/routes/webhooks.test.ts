@@ -4,6 +4,9 @@
  * GitHubAdapter.receiveWebhook().
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { createHmac } from 'node:crypto';
+import createGitHubWebhookSource from '../../../adapters/src/forge/github/source-plugin';
+import { verifyGitHubWebhookSignature } from '../../../adapters/src/forge/github/webhook-signature';
 import { OpenAPIHono } from '@hono/zod-openapi';
 
 // Mock logger to suppress noisy output during tests
@@ -22,7 +25,8 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const { registerGithubWebhookRoute, registerWebhookSourceRoutes } = await import('./webhooks');
+const { registerGithubWebhookRoute, registerWebhookSourceRoutes, MAX_WEBHOOK_BODY_BYTES } =
+  await import('./webhooks');
 type GithubWebhookTarget = import('./webhooks').GithubWebhookTarget;
 
 const mockReceiveWebhook = mock(
@@ -300,4 +304,304 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
       'webhook_source_endpoint_error'
     );
   });
+});
+
+const bodyLimit = MAX_WEBHOOK_BODY_BYTES;
+
+function streamedBody(chunks: Uint8Array[], cancelError?: Error) {
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        if (cancelError) throw cancelError;
+      },
+    },
+    { highWaterMark: 0 }
+  );
+  return {
+    body,
+    get pulls() {
+      return pulls;
+    },
+    get cancelled() {
+      return cancelled;
+    },
+  };
+}
+
+const signingSecret = 'webhook-body-limit-test-secret';
+function signBytes(bytes: Uint8Array): string {
+  return `sha256=${createHmac('sha256', signingSecret).update(bytes).digest('hex')}`;
+}
+
+async function authenticatedApp(route: 'github' | 'sources/configured', bytes: Uint8Array) {
+  const app = new OpenAPIHono();
+  const assertBytes = (body: string) => {
+    expect(Buffer.from(body).equals(bytes)).toBe(true);
+  };
+  if (route === 'github') {
+    registerGithubWebhookRoute(app, {
+      async receiveWebhook(body, signature) {
+        assertBytes(body);
+        return verifyGitHubWebhookSignature(body, signature, signingSecret)
+          ? 'accepted'
+          : 'invalid_signature';
+      },
+    });
+  } else {
+    const envKey = 'ARCHON_BODY_LIMIT_TEST_SECRET';
+    const prior = process.env[envKey];
+    let plugin: Awaited<ReturnType<typeof createGitHubWebhookSource>>;
+    try {
+      process.env[envKey] = signingSecret;
+      plugin = await createGitHubWebhookSource({
+        sourceInstanceId: 'configured',
+        config: { version: 1, webhookSecretEnv: envKey, host: 'github.com', bindings: [] },
+      });
+    } finally {
+      if (prior === undefined) delete process.env[envKey];
+      else process.env[envKey] = prior;
+    }
+    registerWebhookSourceRoutes(app, {
+      hasSource: () => true,
+      async receive(_id, request) {
+        assertBytes(request.body);
+        const result = await plugin.receive(request);
+        if (result.status === 'rejected') return result.reason;
+        return result.acceptance.outcome === 'malformed' ? 'malformed' : 'accepted';
+      },
+    });
+  }
+  return app;
+}
+
+for (const route of ['github', 'sources/configured'] as const) {
+  describe(`body admission: /webhooks/${route}`, () => {
+    function setup(eligible = true) {
+      const app = new OpenAPIHono();
+      const receive = mock(async () => 'accepted' as const);
+      const drain = mock(() => undefined);
+      if (route === 'github') registerGithubWebhookRoute(app, { receiveWebhook: receive });
+      else registerWebhookSourceRoutes(app, { hasSource: () => eligible, receive }, drain);
+      return { app, receive, drain };
+    }
+
+    test.each([bodyLimit - 1, bodyLimit])(
+      'authenticates all %s bytes at the inclusive boundary',
+      async size => {
+        const bytes = new TextEncoder().encode('{}' + ' '.repeat(size - 2));
+        const signature = signBytes(bytes);
+        const app = await authenticatedApp(route, bytes);
+        const stream = streamedBody([bytes.subarray(0, size - 1), bytes.subarray(size - 1)]);
+        const response = await app.request(`/webhooks/${route}`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': signature },
+          body: stream.body,
+        });
+        expect(response.status).toBe(200);
+        expect(stream.pulls).toBe(3);
+        expect(stream.cancelled).toBe(false);
+        bytes[size - 1] = 0x09;
+        const rejected = await app.request(`/webhooks/${route}`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': signature },
+          body: bytes,
+        });
+        expect(rejected.status).toBe(401);
+      }
+    );
+
+    test('preserves a split BOM and multibyte character for authentication', async () => {
+      const bytes = new TextEncoder().encode('\uFEFF{"text":"😀"}');
+      const app = await authenticatedApp(route, bytes);
+      const stream = streamedBody(Array.from(bytes, byte => new Uint8Array([byte])));
+      const response = await app.request(`/webhooks/${route}`, {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': signBytes(bytes) },
+        body: stream.body,
+      });
+      // The source authenticates the BOM, then JSON.parse rejects it as before.
+      expect(response.status).toBe(route === 'github' ? 200 : 400);
+      expect(stream.pulls).toBe(bytes.length + 1);
+    });
+
+    test.each([true, false])(
+      'preserves in-limit rejection precedence (eligible=%s)',
+      async eligible => {
+        const { app, receive } = setup(eligible);
+        const response = await app.request(`/webhooks/${route}`, {
+          method: 'POST',
+          headers: eligible ? { 'x-hub-signature-256': 'signed' } : {},
+          body: new Uint8Array([0xff]),
+        });
+        expect(response.status).toBe(eligible || route === 'github' ? 400 : 404);
+        expect(receive).not.toHaveBeenCalled();
+      }
+    );
+
+    test('keeps 413 and logs a cancellation failure', async () => {
+      const { app, receive } = setup();
+      const cause = new Error('cancel failed');
+      const stream = streamedBody([new Uint8Array(bodyLimit), new Uint8Array([1])], cause);
+      mockLogger.warn.mockClear();
+      const response = await app.request(`/webhooks/${route}`, {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': 'signed' },
+        body: stream.body,
+      });
+      expect(response.status).toBe(413);
+      expect(receive).not.toHaveBeenCalled();
+      expect(stream.body.locked).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith({ err: cause }, 'webhook_body_cancel_failed');
+    });
+
+    test('keeps stream failures on the logged 500 path', async () => {
+      const { app, receive } = setup();
+      const cause = new Error('read failed');
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.error(cause);
+        },
+      });
+      mockLogger.error.mockClear();
+      const response = await app.request(`/webhooks/${route}`, {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': 'signed' },
+        body,
+      });
+      expect(response.status).toBe(500);
+      expect(receive).not.toHaveBeenCalled();
+      expect(body.locked).toBe(false);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: cause }),
+        expect.any(String)
+      );
+    });
+
+    test('returns 413 for a chunked HTTP request through Bun', async () => {
+      const { app, receive, drain } = setup();
+      const server = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch(request) {
+          expect(request.headers.get('content-length')).toBeNull();
+          expect(request.headers.get('transfer-encoding')).toBe('chunked');
+          return app.fetch(request);
+        },
+      });
+      try {
+        const chunk = new Uint8Array(1024 * 1024);
+        const stream = streamedBody(Array.from({ length: 34 }, () => chunk));
+        const response = await fetch(new URL(`/webhooks/${route}`, server.url), {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': 'signed' },
+          body: stream.body,
+        });
+        expect(response.status).toBe(413);
+        expect(receive).not.toHaveBeenCalled();
+        expect(drain).not.toHaveBeenCalled();
+        await response.text();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test.each([true, false])(
+      'rejects declared oversize before pulling (eligible=%s)',
+      async eligible => {
+        const { app, receive, drain } = setup(eligible);
+        const stream = streamedBody([new Uint8Array([1])]);
+        const headers: Record<string, string> = { 'content-length': String(bodyLimit + 1) };
+        if (eligible) headers['x-hub-signature-256'] = 'signed';
+        const response = await app.request(`/webhooks/${route}`, {
+          method: 'POST',
+          headers,
+          body: stream.body,
+        });
+        expect(response.status).toBe(413);
+        expect(stream.pulls).toBe(0);
+        expect(receive).not.toHaveBeenCalled();
+        expect(drain).not.toHaveBeenCalled();
+      }
+    );
+
+    test.each([
+      [undefined, true],
+      ['1', true],
+      [undefined, false],
+    ] as const)(
+      'stops and cancels on the crossing chunk (Content-Length=%s, eligible=%s)',
+      async (length, eligible) => {
+        const { app, receive, drain } = setup(eligible);
+        const prefix = new Uint8Array(bodyLimit);
+        prefix[0] = 0xff;
+        const stream = streamedBody([prefix, new Uint8Array([1]), new Uint8Array([1])]);
+        const headers: Record<string, string> = {};
+        if (eligible) headers['x-hub-signature-256'] = 'signed';
+        if (length) headers['content-length'] = length;
+        const response = await app.request(`/webhooks/${route}`, {
+          method: 'POST',
+          headers,
+          body: stream.body,
+        });
+        expect(response.status).toBe(413);
+        expect(stream.pulls).toBe(2);
+        expect(stream.cancelled).toBe(true);
+        expect(stream.body.locked).toBe(false);
+        expect(receive).not.toHaveBeenCalled();
+        expect(drain).not.toHaveBeenCalled();
+      }
+    );
+  });
+}
+
+test('source acknowledgement and drain wait for durable intake', async () => {
+  const app = new OpenAPIHono();
+  const entered = Promise.withResolvers<void>();
+  const completed = Promise.withResolvers<void>();
+  const drain = mock(() => undefined);
+  registerWebhookSourceRoutes(
+    app,
+    {
+      hasSource: () => true,
+      async receive() {
+        entered.resolve();
+        await completed.promise;
+        return 'accepted';
+      },
+    },
+    drain
+  );
+  let acknowledged = false;
+  const response = Promise.resolve(
+    app.request('/webhooks/sources/configured', { method: 'POST', body: '{}' })
+  );
+  void response.then(() => {
+    acknowledged = true;
+  });
+  await entered.promise;
+  expect(acknowledged).toBe(false);
+  expect(drain).not.toHaveBeenCalled();
+  completed.resolve();
+  expect((await response).status).toBe(200);
+  expect(drain).toHaveBeenCalledTimes(1);
+});
+
+test('the webhook limit does not apply to other routes', async () => {
+  const app = createWebhookApp();
+  registerWebhookSourceRoutes(app, { hasSource: () => true, receive: async () => 'accepted' });
+  app.post('/unrelated', async c => c.json({ size: (await c.req.raw.arrayBuffer()).byteLength }));
+  const response = await app.request('/unrelated', {
+    method: 'POST',
+    body: new Uint8Array(bodyLimit + 1),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ size: bodyLimit + 1 });
 });
