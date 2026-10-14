@@ -95,7 +95,7 @@ export function registerProvider(entry: ProviderRegistration): void {
       const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
       const diagnose = provider.diagnose?.bind(provider);
       const listModels = provider.listModels?.bind(provider);
-      return {
+      const adapter = {
         checkCredential: provider.checkCredential.bind(provider),
         sendQuery: provider.sendQuery.bind(provider),
         getType: provider.getType.bind(provider),
@@ -103,7 +103,8 @@ export function registerProvider(entry: ProviderRegistration): void {
         ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
         ...(diagnose ? { diagnose } : {}),
         ...(listModels ? { listModels } : {}),
-      };
+      } satisfies IAgentProvider;
+      return adapter satisfies Record<Exclude<keyof IAgentProvider, keyof typeof adapter>, never>;
     },
   };
   registry.set(entry.id, registration);
