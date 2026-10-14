@@ -12,6 +12,8 @@ import { createLogger } from '@archon/paths/logger';
 
 const log = createLogger('file-store');
 const queues = new Map<string, Promise<void>>();
+/** Tail of the callers still resolving their queue key; see `withFileStoreLock`. */
+let joining: Promise<unknown> = Promise.resolve();
 /** `lock` and `lock.break` paths this module linked but then failed to remove. */
 const stranded = new Set<string>();
 
@@ -315,11 +317,18 @@ export async function withFileStoreLock<T>(
   operation: () => Promise<T>,
   timeoutMs = 10_000
 ): Promise<T> {
-  const key = await realpath(root);
-  const previous = queues.get(key) ?? Promise.resolve();
   let finish!: () => void;
   const pending = new Promise<void>(resolve => (finish = resolve));
-  queues.set(key, pending);
+  // Concurrent realpath calls settle in any order, so callers resolve their key one at a
+  // time; otherwise a later caller can join the queue first and commit before an earlier one.
+  const joined = joining.then(async () => {
+    const key = await realpath(root);
+    const previous = queues.get(key) ?? Promise.resolve();
+    queues.set(key, pending);
+    return { key, previous };
+  });
+  joining = joined.catch(() => undefined);
+  const { key, previous } = await joined;
   await previous;
   try {
     const release = await acquire(key, timeoutMs);
