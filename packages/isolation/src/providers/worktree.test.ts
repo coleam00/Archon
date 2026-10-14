@@ -627,6 +627,29 @@ describe('WorktreeProvider', () => {
       expect(worktreeAdds).toHaveLength(0);
     });
 
+    test('names the remote and branch when the remote branch lookup fails', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote')) throw new Error('fatal: unable to access remote');
+        return { stdout: '', stderr: '' };
+      });
+
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'test-adapters',
+      };
+
+      const error = await provider.create(request).catch((e: unknown) => e);
+      expect(String(error)).toContain(
+        "Cannot check whether branch 'archon/task-test-adapters' exists on 'origin': fatal: unable to access remote"
+      );
+      expect((error as Error).cause).toBeInstanceOf(Error);
+      const worktreeAdds = execSpy.mock.calls.filter((call: unknown[]) =>
+        (call[1] as string[]).includes('worktree')
+      );
+      expect(worktreeAdds).toHaveLength(0);
+    });
+
     test('creates worktree for same-repo PR (uses actual branch)', async () => {
       const request: IsolationRequest = {
         ...baseRequest,

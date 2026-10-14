@@ -1901,10 +1901,19 @@ export class WorktreeProvider implements IIsolationProvider {
     branchName: string
   ): Promise<boolean> {
     const ref = `refs/heads/${branchName}`;
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'ls-remote', remote, ref], {
-      timeout: GIT_OPERATION_TIMEOUT_MS,
-    });
-    return stdout.trim() !== '';
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', repoPath, 'ls-remote', remote, ref], {
+        timeout: GIT_OPERATION_TIMEOUT_MS,
+      });
+      return stdout.trim() !== '';
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(
+        `Cannot check whether branch '${branchName}' exists on '${remote}': ${err.message}. ` +
+          'Check your network connection and remote configuration, then retry.',
+        { cause: err }
+      );
+    }
   }
 
   /** Exit 1 from `merge-base --is-ancestor` means "not an ancestor"; any other failure throws. */
