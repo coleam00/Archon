@@ -889,17 +889,23 @@ describe('IsolationResolver', () => {
       const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed);
       await resolver.releaseUnlinked(created);
       expect(destroyCalls).toEqual([
-        [
-          '/worktrees/issue-42',
-          {
-            canonicalRepoPath,
-            creationId,
-            branchName: git.toBranchName('issue-42'),
-            force: true,
-          },
-        ],
+        ['/worktrees/issue-42', { canonicalRepoPath, creationId, force: true }],
       ]);
       expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
+    });
+
+    test('deletes the branch only when the resolution cut it', async () => {
+      const { resolver, destroyCalls } = releaseHarness(async () => removed);
+      await resolver.releaseUnlinked({
+        ...created,
+        method: { ...created.method, cutFromCommit: 'abc123' },
+      });
+      expect(destroyCalls).toEqual([
+        [
+          '/worktrees/issue-42',
+          { canonicalRepoPath, creationId, branchName: git.toBranchName('issue-42'), force: true },
+        ],
+      ]);
     });
 
     const unverified: [string, () => Promise<DestroyResult>][] = [

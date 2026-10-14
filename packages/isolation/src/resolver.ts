@@ -577,7 +577,9 @@ export class IsolationResolver {
         await this.removeCreatedWorktree(isolatedEnv.workingPath, {
           canonicalRepoPath: canonicalPath,
           creationId: isolatedEnv.metadata.creationId,
-          branchName: isolatedEnv.branchName,
+          ...(isolatedEnv.metadata.cutFromCommit !== undefined
+            ? { branchName: isolatedEnv.branchName }
+            : {}),
         });
       }
 
@@ -617,7 +619,7 @@ export class IsolationResolver {
     const removed = await this.removeCreatedWorktree(env.working_path, {
       canonicalRepoPath: method.canonicalRepoPath,
       creationId: method.creationId,
-      branchName: toBranchName(env.branch_name),
+      ...(method.cutFromCommit !== undefined ? { branchName: toBranchName(env.branch_name) } : {}),
     });
     if (!removed) return;
     try {
@@ -633,10 +635,15 @@ export class IsolationResolver {
   /**
    * Remove a worktree this resolver created and verify it is gone.
    * Logs and returns false on any failure instead of throwing.
+   *
+   * The creation id proves only that this resolution created the checkout, not
+   * the branch: a same-repo PR checks out a local branch that may already exist
+   * and hold unpushed work. Callers pass `branchName` only when the resolution
+   * cut the branch itself, which `cutFromCommit` records.
    */
   private async removeCreatedWorktree(
     worktreePath: string,
-    proof: { canonicalRepoPath: RepoPath; creationId: string; branchName: BranchName }
+    proof: { canonicalRepoPath: RepoPath; creationId: string; branchName?: BranchName }
   ): Promise<boolean> {
     try {
       const result = await this.provider.destroy(worktreePath, { ...proof, force: true });
