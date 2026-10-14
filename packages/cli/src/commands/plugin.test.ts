@@ -3,10 +3,11 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
 import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
 import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
+import { receiptPath } from '@archon/plugin-manifest/store';
 import { parsePluginRef, pluginCommand, stagingName, type PluginEnvironment } from './plugin';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
@@ -29,8 +30,7 @@ let pluginBinary: Uint8Array;
 const commits = new Map<string, string>();
 const manifests = new Map<string, unknown>();
 const releases = new Map<string, Release>();
-// The suite needs the compiled fixture. Bun still runs file-level hooks when every
-// test is skipped, so the hooks check this too.
+// Most of the suite needs the compiled fixture, which only the v1.0.0 release carries.
 const skipCompiled = skipCompiledBinaryTests();
 const latestTag = 'v1.0.0';
 // For the test that installs the ~86 MB compiled fixture (only v1.0.0 carries it; every
@@ -56,11 +56,13 @@ const checksumsFor = (assets: Record<string, Uint8Array>): string =>
 // Compiles the same forge fixture as forge's discovery.test.ts, so it takes the same
 // compile-sized budget.
 beforeAll(async () => {
-  if (skipCompiled) return;
   fixtureRoot = await mkdtemp(join(tmpdir(), 'plugin-install-fixture-'));
-  // A real executable that answers forge discovery's metadata handshake as `github`.
-  const binaryPath = compileDiscoveryPlugin(fixtureRoot);
-  pluginBinary = new Uint8Array(await readFile(binaryPath));
+  if (!skipCompiled) {
+    // A real executable that answers forge discovery's metadata handshake as `github`.
+    const binaryPath = compileDiscoveryPlugin(fixtureRoot);
+    pluginBinary = new Uint8Array(await readFile(binaryPath));
+    releases.set('v1.0.0', { assets: { [hostAsset]: pluginBinary } });
+  }
 
   const repo = join(fixtureRoot, 'repo');
   const fixtureCommits = await createReleaseRepo(repo, [
@@ -115,7 +117,6 @@ beforeAll(async () => {
     description: 'fixture',
     entrypoints: { review: 'review/review.yaml' },
   });
-  releases.set('v1.0.0', { assets: { [hostAsset]: pluginBinary } });
   // On a Windows x64 host both keys are the same asset.
   releases.set('v2.0.0', {
     assets: {
@@ -132,7 +133,6 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  if (skipCompiled) return;
   await server.stop(true);
   await removeTempTree(fixtureRoot);
 });
@@ -189,9 +189,15 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 }
 
 const receiptOf = async (env: PluginEnvironment): Promise<Record<string, unknown>> =>
-  JSON.parse(
-    await readFile(join(env.pluginsDir, 'installed', ...ID.split('/'), 'receipt.json'), 'utf8')
-  ) as Record<string, unknown>;
+  JSON.parse(await readFile(receiptPath(env.pluginsDir, ID), 'utf8')) as Record<string, unknown>;
+
+/** Writes `{not json` as `id`'s receipt and returns its path. */
+async function breakReceipt(env: PluginEnvironment, id: string): Promise<string> {
+  const file = receiptPath(env.pluginsDir, id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, '{not json');
+  return file;
+}
 
 describe.skipIf(skipCompiled)('archon plugin', () => {
   test(
@@ -330,6 +336,126 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
     for (const target of ['owner', 'owner/../x', 'owner/repo/..', 'owner/repo@', '-x/repo']) {
       expect((await run(env, 'install', target)).err).toContain('Invalid plugin');
     }
+  });
+});
+
+describe('archon plugin with an unreadable receipt', () => {
+  const BROKEN = 'acme/broken';
+  const OTHER = 'acme/other';
+
+  /** A hand-written forge receipt for OTHER, with the executable it names. */
+  async function installOther(env: PluginEnvironment): Promise<void> {
+    const file = receiptPath(env.pluginsDir, OTHER);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: OTHER,
+        manifest: {
+          schemaVersion: 1,
+          kind: 'forge',
+          name: 'forge-other',
+          description: 'x',
+          executable: 'archon-forge-other',
+        },
+        tag: 'v1.0.0',
+        commit: 'a'.repeat(40),
+        installedAt: new Date().toISOString(),
+        files: [{ path: 'archon-forge-other', sha256: 'b'.repeat(64) }],
+      })
+    );
+    await writeFile(join(env.pluginsDir, 'archon-forge-other'), 'other');
+  }
+
+  test('list reports the broken receipt beside the valid plugins', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    const listed = await run(env, 'list');
+    expect(listed.code).toBe(0);
+    expect(listed.out.split('\n')).toEqual([
+      `${OTHER}  forge  v1.0.0  ${'a'.repeat(12)}  archon any`,
+      `${BROKEN}  unreadable  Invalid JSON in plugin receipt ${broken}. Repair it: archon plugin update ${BROKEN}, or archon plugin remove ${BROKEN}`,
+    ]);
+  });
+
+  test('remove deletes the broken receipt and leaves every file it might name', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    const before = await snapshot(env.pluginsDir);
+    const removed = await run(env, 'remove', BROKEN);
+    expect(removed.code).toBe(0);
+    expect(removed.out).toContain(`Removed the unreadable receipt of ${BROKEN}: ${broken}`);
+    expect(removed.out).toContain('could not be identified and were left in place');
+    delete before[join('installed', ...BROKEN.split('/'), 'receipt.json')];
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+  });
+
+  test('remove and copy of an unrelated plugin still work', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    // OTHER is a forge plugin: copy reaching its kind check proves the scan let it through.
+    expect((await run(env, 'copy', OTHER)).err).toContain('only workflow packs copy');
+    expect((await run(env, 'copy', BROKEN)).err).toContain(
+      `Invalid JSON in plugin receipt ${broken}`
+    );
+    expect((await run(env, 'remove', OTHER)).code).toBe(0);
+    expect(Object.keys(await snapshot(env.pluginsDir))).toEqual([
+      join('installed', ...BROKEN.split('/'), 'receipt.json'),
+    ]);
+  });
+
+  test('installing any other plugin refuses, naming the broken receipt and its repair', async () => {
+    const env = await environment();
+    const broken = await breakReceipt(env, BROKEN);
+    const before = await snapshot(env.pluginsDir);
+    const result = await run(env, 'install', `${ID}@v2.0.0`);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`Invalid JSON in plugin receipt ${broken}`);
+    expect(result.err).toContain(`archon plugin remove ${BROKEN}`);
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+    expect((await run(env, 'install', BROKEN)).err).toContain(`${BROKEN} is installed, but`);
+  });
+
+  test('update repairs the broken plugin, replacing an executable nothing else can claim', async () => {
+    const env = await environment();
+    await installOther(env);
+    await breakReceipt(env, ID);
+    const target = join(env.pluginsDir, `archon-forge-github${hostExe}`);
+    await writeFile(target, 'left by the broken install');
+    const updated = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(updated.err).toBe('');
+    expect(updated.code).toBe(0);
+    expect(updated.out).toContain('Replaced the unreadable receipt');
+    expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
+    expect(new Uint8Array(await readFile(target))).toEqual(new Uint8Array([2, 2]));
+    expect((await run(env, 'list')).code).toBe(0);
+  });
+
+  test('update of a valid plugin works while another receipt is broken', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v2.0.0`)).code).toBe(0);
+    await breakReceipt(env, BROKEN);
+    const updated = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(updated.err).toBe('');
+    expect(updated.code).toBe(0);
+  });
+
+  test('update of a broken plugin refuses an existing target another broken receipt could own', async () => {
+    const env = await environment();
+    await breakReceipt(env, ID);
+    const other = await breakReceipt(env, BROKEN);
+    const target = join(env.pluginsDir, `archon-forge-github${hostExe}`);
+    await writeFile(target, 'owner unknown');
+    const before = await snapshot(env.pluginsDir);
+    const result = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`${target} exists and may belong to a plugin`);
+    expect(result.err).toContain(`Invalid JSON in plugin receipt ${other}`);
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 });
 
