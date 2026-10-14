@@ -24,12 +24,14 @@ review__synthesize:
   findings_summary: "stub: a person must run the manual check"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 review__publish:
   ready: false
   action: needs_human
   findings_summary: "stub: a person must run the manual check"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
+  contract_left: []
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

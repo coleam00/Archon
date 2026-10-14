@@ -16,13 +16,22 @@ the number every command below uses.
 2. Check every concrete claim in the description against the diff: named
    functions and guards, described mechanics, file lists, "unchanged" claims.
    Change only what the diff falsifies. Keep the structure, the tone and every
-   claim that is still true. Do not rewrite from scratch, add sections, or narrate
-   the correction history.
+   claim that is still true. Do not rewrite from scratch, add sections other than
+   step 4's, or narrate the correction history.
 3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
    still true.
-4. When something changed, write the complete description to
+4. Link the issue the description references by the latest review's contract
+   coverage. What it left open, as a JSON list (empty text when no review judged
+   coverage): `$INPUTS.contract_left`. Only an empty list (`[]`) earns a closing
+   keyword (`Closes #N`). Anything else gets a non-closing reference (`Refs #N`)
+   in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
+   variants), and a short "Left open" section listing each item, or saying no
+   review judged coverage. Keep at most one "Left open" section, current, and
+   remove it on an empty list. Change no other reference, and add none when the
+   description links no issue.
+5. When something changed, write the complete description to
    `$ARTIFACTS_DIR/pr-body-final.md` and apply it with
    `gh pr edit <number> --repo <owner>/<repo> --body-file "$ARTIFACTS_DIR/pr-body-final.md"`.
    When nothing changed, edit nothing.
@@ -33,4 +42,5 @@ state, or touch the review comment.
 ## Output
 
 - `changed`: whether you edited the description.
-- `summary`: which claims you corrected, or that it was already accurate.
+- `summary`: which claims you corrected and how the issue is linked, or that it
+  was already accurate.

@@ -22,8 +22,13 @@ Look first for decisions that add coordination or prematurely close options:
 - **Coherent capability:** Does the change deepen one useful abstraction, or spread special-case coordination across callers, layers, and schemas?
 - **Concurrency:** If another actor changes shared state concurrently, is the answer safely "nothing"? If not, should the state be isolated instead of synchronized?
 - **Foundations:** Would one smaller primitive make the downstream logic obvious? Remove dead weight before adding scaffold; add scaffold early only when every later phase benefits from it.
-- **Existing primitives:** For each helper, type, gate, state, or wrapper the change adds, search the repository for an existing primitive or helper that already implements it — search by what it does, not only by its name. A reimplemented primitive is a finding even when the machinery itself is needed.
 - **Premature machinery:** Which real supported variation requires each new state, lifecycle, wrapper, configuration surface, fallback, or extension point?
+
+Then answer three questions explicitly, every time. Each finding they produce carries the same evidence as any other (Require proof, below), and the report names what you checked for each even when it found nothing:
+
+1. **Does something already do this?** For each helper, type, gate, state, reader, parser, or wrapper the change adds, look for an existing primitive in the repository and in the libraries the project already depends on (its manifests and lockfile name them) that implements it — search by what it does, not only by its name, and read the library's own exports where it is installed. A hand-written version of what an installed library or an in-repo helper already provides is a finding even when the machinery itself is needed; cite the primitive.
+2. **Does anything go beyond the brief?** Map each changed behavior, surface, and edit to the required outcome in the work order. A behavior change, removed option, relaxed rule, extra runtime check, or doc edit the outcome does not need is a finding: cite the hunk and the part of the work order it does not serve. Its smaller shape drops the extra, which keeps the required outcome and the behavior the project supported before the change.
+3. **Does anything cost more than what it protects?** For each test, guard, check, or helper the change adds, weigh what maintaining it costs — its size, a new cross-package or source-scraping dependency, a new way for unrelated edits to fail — against the failure it prevents. When the cost is larger, the finding names the smaller protection or none.
 
 Apply the laziness test:
 
