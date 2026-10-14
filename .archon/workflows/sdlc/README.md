@@ -197,8 +197,8 @@ them; anything that must be exact, such as label names, stays typed configuratio
 A node reaches the defaults through its workflow's `policy` script node. A run
 captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
-[`.shared/policy.ts`](.shared/policy.ts) finds `.shared/policy/` beside itself and
-the node binds that directory into the prompt with `with:`. The script hands over
+[`triage/scripts/policy.ts`](triage/scripts/policy.ts) finds `.shared/policy/`
+from its own location and the node binds that directory into the prompt with `with:`. The script hands over
 the directory only; the agent chooses between the project's file and the default,
 and no script opens either. The default is a file rather than text in the prompt
 because a prompt carrying the default would hold it even after a project replaced

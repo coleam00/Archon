@@ -10,7 +10,7 @@ import { captureWorkflowSource } from '../packages/workflows/src/workflow-source
 /**
  * A run's triage node finds the SDLC pack's default policy inside the run's own captured
  * source, whether the bundle came from a source checkout or from a binary's embedded
- * constants. Importing the captured module gives the same `import.meta.dir` the
+ * constants. Importing the captured script gives the same `import.meta.dir` the
  * `policy` script node runs with.
  */
 const track = trackTempRoots();
@@ -26,6 +26,7 @@ for (const binary of [true, false]) {
     const root = track(await mkdtemp(join(tmpdir(), 'archon-sdlc-policy-')));
     process.env.ARCHON_HOME = join(root, 'home');
     const mode = spyOn(defaults, 'isBinaryBuild').mockReturnValue(binary);
+    const output = spyOn(console, 'log').mockImplementation(() => {});
     try {
       const project = join(root, 'project');
       await mkdir(project);
@@ -33,10 +34,9 @@ for (const binary of [true, false]) {
         sourceRoot: project,
         captureRoot: join(root, 'capture'),
       });
-      const captured: { policyDefaultsDir(): string } = await import(
-        join(anchor.root, 'bundled/workflows/sdlc/.shared/policy.ts')
-      );
-      const directory = realpathSync(captured.policyDefaultsDir());
+      await import(join(anchor.root, 'bundled/workflows/sdlc/triage/scripts/policy.ts'));
+      const emitted: { defaults: string } = JSON.parse(String(output.mock.calls[0]?.[0]));
+      const directory = realpathSync(emitted.defaults);
       expect(directory.startsWith(realpathSync(anchor.root) + sep)).toBe(true);
       expect(await readFile(join(directory, 'triage.md'), 'utf8')).toBe(
         await readFile(
@@ -45,6 +45,7 @@ for (const binary of [true, false]) {
         )
       );
     } finally {
+      output.mockRestore();
       mode.mockRestore();
     }
   });
