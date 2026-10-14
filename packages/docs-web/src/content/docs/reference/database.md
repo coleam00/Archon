@@ -65,6 +65,11 @@ The lock records its host, PID and process instance. Archon breaks it only when 
 is provably gone. A live or unprovable owner produces `FileStoreLockHeldError` with the
 owner and path. Inspect the named process before manually removing a lock. A stranded
 `lock.break` needs operator inspection; time alone never proves ownership has ended.
+An owner record whose PID is not a positive integer, in the lock or in a resource-slot
+holder, fails the operation with `ProcessOwnerRecordError` naming its source; it is never
+read as a dead owner. `archon ai capacity` lists such a provider-attempt holder with the
+error, and `archon ai capacity release <attempt-id>` removes it. Each operation under the store lock removes `.lock-*` and
+`.probe-*` scratch files left by a crashed process once their owner is provably gone.
 
 The intent and file synchronization protect against process crashes. Power-loss durability
 is limited by the platform's `fsync` guarantees; macOS does not force drive caches with
