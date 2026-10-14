@@ -302,7 +302,10 @@ worktree:
   enabled: false
 nodes:
   - id: proof
-    bash: echo timer >> timer-count
+    bash: |
+      i=0
+      while [ ! -f go ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
+      echo timer >> timer-count
   - id: hold
     depends_on: [proof]
     wait:
@@ -369,10 +372,10 @@ nodes:
     }
     throw new Error(`Timer run ${id} did not pause`);
   }
+  // A paused timer run gives back its slot, so the first run holds it while `proof` waits.
   const first = await fire(queueConfig);
   expect(first.status).toBe('admitted');
   if (first.status !== 'admitted') throw new Error('First timer was not admitted');
-  await paused(first.runId);
   const queued = await fire(queueConfig);
   expect(queued).toMatchObject({ status: 'queued', blocker: { kind: 'run', id: first.runId } });
   const skipped = await fire(skipConfig);
@@ -382,6 +385,8 @@ nodes:
   });
   expect(existsSync(join(f.home, 'store/runs', queued.requestId))).toBe(false);
   expect(existsSync(join(f.home, 'store/runs', skipped.requestId))).toBe(false);
+  writeFileSync(join(f.project, 'go'), '');
+  await paused(first.runId);
   const cancelled = await cli(f, ['workflow', 'abandon', first.runId]);
   expect(cancelled, cancelled.output + cancelled.error).toMatchObject({ code: 0 });
   const drained = await cli(f, ['trigger', 'drain', '--host', 'timer-host']);
