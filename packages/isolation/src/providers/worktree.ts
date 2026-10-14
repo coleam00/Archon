@@ -13,7 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
-  addSafeDirectory,
+  withProvisionalSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
   isWorktreeRegistered,
@@ -678,45 +678,50 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
-    await addSafeDirectory(toRepoPath(path));
-    let repoPath: RepoPath;
-    let worktrees: WorktreeInfo[];
-    try {
-      repoPath = (await getGitCommandAnchors(path)).active;
-      worktrees = await listWorktrees(repoPath);
-    } catch (error) {
-      const err = error as Error;
-      // "not a git repository" is an expected case — return null
-      if (err.message.toLowerCase().includes('not a git repository')) {
-        getLog().debug({ path }, 'worktree_adopt_not_git_repo');
-        return null;
-      }
-      // Unexpected errors (permission denied, I/O) should propagate
-      throw error;
-    }
+    return withProvisionalSafeDirectory(
+      toRepoPath(path),
+      async () => {
+        let repoPath: RepoPath;
+        let worktrees: WorktreeInfo[];
+        try {
+          repoPath = (await getGitCommandAnchors(path)).active;
+          worktrees = await listWorktrees(repoPath);
+        } catch (error) {
+          const err = error as Error;
+          // "not a git repository" is an expected case — return null
+          if (err.message.toLowerCase().includes('not a git repository')) {
+            getLog().debug({ path }, 'worktree_adopt_not_git_repo');
+            return null;
+          }
+          // Unexpected errors (permission denied, I/O) should propagate
+          throw error;
+        }
 
-    const wt = worktrees.find(w => isSameWorktreePath(w.path, path));
+        const wt = worktrees.find(w => isSameWorktreePath(w.path, path));
 
-    if (!wt) {
-      // Worktree directory exists but isn't registered with git - possible corruption
-      getLog().warn(
-        { path, repoPath, registeredWorktreeCount: worktrees.length },
-        'worktree_adopt_not_registered'
-      );
-      return null;
-    }
+        if (!wt) {
+          // Worktree directory exists but isn't registered with git - possible corruption
+          getLog().warn(
+            { path, repoPath, registeredWorktreeCount: worktrees.length },
+            'worktree_adopt_not_registered'
+          );
+          return null;
+        }
 
-    await this.refuseUnfinishedWorktree(path);
-    getLog().info({ path, branchName: wt.branch }, 'worktree_adopted');
-    return {
-      id: path,
-      provider: 'worktree',
-      workingPath: path,
-      branchName: toBranchName(wt.branch),
-      status: 'active',
-      createdAt: new Date(),
-      metadata: { provenance: 'adopted', adopted: true },
-    };
+        await this.refuseUnfinishedWorktree(path);
+        getLog().info({ path, branchName: wt.branch }, 'worktree_adopted');
+        return {
+          id: path,
+          provider: 'worktree',
+          workingPath: path,
+          branchName: toBranchName(wt.branch),
+          status: 'active',
+          createdAt: new Date(),
+          metadata: { provenance: 'adopted', adopted: true },
+        };
+      },
+      result => result !== null
+    );
   }
 
   /**
@@ -811,40 +816,41 @@ export class WorktreeProvider implements IIsolationProvider {
       : exactTaskBranch;
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
-      await addSafeDirectory(toRepoPath(worktreePath));
-      // Verify the existing worktree belongs to the same repo root before
-      // adopting. Two clones of the same remote resolve to the same worktree
-      // base dir, so a worktree created from clone A is visible from clone B.
-      // Throws on cross-checkout or unverifiable state — surfacing the problem
-      // is safer than falling through to createNewBranch (which would report
-      // a confusing "branch already exists" cascade) or silently adopting.
-      try {
-        await verifyWorktreeOwnership(toWorktreePath(worktreePath), request.canonicalRepoPath);
-      } catch (err) {
-        getLog().warn(
-          {
-            worktreePath,
-            branchName,
-            codebaseId: request.codebaseId,
-            canonicalRepoPath: request.canonicalRepoPath,
-            err: (err as Error).message,
-          },
-          'worktree.adoption_refused_cross_checkout'
-        );
-        throw err;
-      }
-
-      if (exactBranch) {
-        const actualBranch = await getCurrentBranchStrict(toWorktreePath(worktreePath));
-        if (actualBranch !== exactBranch) {
-          throw new Error(
-            `Cannot adopt worktree at '${worktreePath}': expected branch ` +
-              `'${exactBranch}', found '${actualBranch ?? 'detached HEAD'}'.`
+      return withProvisionalSafeDirectory(toRepoPath(worktreePath), async () => {
+        // Verify the existing worktree belongs to the same repo root before
+        // adopting. Two clones of the same remote resolve to the same worktree
+        // base dir, so a worktree created from clone A is visible from clone B.
+        // Throws on cross-checkout or unverifiable state — surfacing the problem
+        // is safer than falling through to createNewBranch (which would report
+        // a confusing "branch already exists" cascade) or silently adopting.
+        try {
+          await verifyWorktreeOwnership(toWorktreePath(worktreePath), request.canonicalRepoPath);
+        } catch (err) {
+          getLog().warn(
+            {
+              worktreePath,
+              branchName,
+              codebaseId: request.codebaseId,
+              canonicalRepoPath: request.canonicalRepoPath,
+              err: (err as Error).message,
+            },
+            'worktree.adoption_refused_cross_checkout'
           );
+          throw err;
         }
-      }
 
-      return this.adoptWorktree(worktreePath, exactBranch ?? toBranchName(branchName), request);
+        if (exactBranch) {
+          const actualBranch = await getCurrentBranchStrict(toWorktreePath(worktreePath));
+          if (actualBranch !== exactBranch) {
+            throw new Error(
+              `Cannot adopt worktree at '${worktreePath}': expected branch ` +
+                `'${exactBranch}', found '${actualBranch ?? 'detached HEAD'}'.`
+            );
+          }
+        }
+
+        return this.adoptWorktree(worktreePath, exactBranch ?? toBranchName(branchName), request);
+      });
     }
 
     // Exact-branch requests also search Git's registered worktrees because an
@@ -872,24 +878,25 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
-    await addSafeDirectory(toRepoPath(worktreePath));
-    try {
-      await verifyWorktreeOwnership(worktreePath, request.canonicalRepoPath);
-    } catch (err) {
-      getLog().warn(
-        {
-          worktreePath,
-          branchName,
-          codebaseId: request.codebaseId,
-          canonicalRepoPath: request.canonicalRepoPath,
-          err: (err as Error).message,
-        },
-        'worktree.adoption_refused_cross_checkout'
-      );
-      throw err;
-    }
+    return withProvisionalSafeDirectory(toRepoPath(worktreePath), async () => {
+      try {
+        await verifyWorktreeOwnership(worktreePath, request.canonicalRepoPath);
+      } catch (err) {
+        getLog().warn(
+          {
+            worktreePath,
+            branchName,
+            codebaseId: request.codebaseId,
+            canonicalRepoPath: request.canonicalRepoPath,
+            err: (err as Error).message,
+          },
+          'worktree.adoption_refused_cross_checkout'
+        );
+        throw err;
+      }
 
-    return this.adoptWorktree(worktreePath, branchName, request, 'branch');
+      return this.adoptWorktree(worktreePath, branchName, request, 'branch');
+    });
   }
 
   /**
@@ -976,119 +983,127 @@ export class WorktreeProvider implements IIsolationProvider {
           'It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
       );
     }
-    const creationId = randomUUID();
-    const setupLockReason = `${SETUP_LOCK_PREFIX}: ${creationId}`;
-
-    const override: WorktreeBaseOverride = {
-      repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),
-    };
-    const { base: worktreeBase } = getWorktreeBase(repoPath, request.codebaseName, override);
-    // In both layouts the base already carries repo context — creating it
-    // recursively is enough.
-    await mkdirAsync(worktreeBase, { recursive: true });
-
-    // Only a branch this call cuts from its start point has a cut-from commit,
-    // so it says nothing about who owns the branch; `branchCreated` does.
-    let cutFromCommit: string | undefined;
-    let branchCreated = false;
-    if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
-      // Adoption continues the local branch exactly as the prior run left it.
-      // Do not fetch, sync, reset, or create a child branch here.
-      await this.createFromExistingBranch(
-        repoPath,
-        worktreePath,
-        request.taskBranch.branch,
-        setupLockReason
-      );
-    } else {
-      // Resolve git remote name: explicit config > auto-detect > actionable error
-      const remote = await this.resolveRemote(repoPath, worktreeConfig?.remote);
-
-      // Base precedence: a per-dispatch --base override (request.baseOverride) wins,
-      // then explicit repo config, then the registered codebase's default branch
-      // (request.baseBranch), then auto-detect via getDefaultBranch.
-      const preferredBaseBranch =
-        request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
-      const baseBranch = await this.syncWorkspaceBeforeCreate(
-        repoPath,
-        preferredBaseBranch,
-        remote
-      );
-
-      if (isPRIsolationRequest(request)) {
-        // For PRs: fetch and checkout the PR branch (actual or synthetic)
-        const pr = await this.createFromPR(request, worktreePath, setupLockReason, remote);
-        if ('adopted' in pr) {
-          return { kind: 'adopted', environment: pr.adopted };
-        }
-        branchCreated = pr.branchCreated;
-      } else {
-        // For issues, tasks, threads: create new branch
-        ({ cutFromCommit, branchCreated } = await this.createNewBranch(
-          request,
-          repoPath,
-          worktreePath,
-          branchName,
-          baseBranch,
-          setupLockReason,
-          remote
-        ));
-      }
-    }
-
-    // Reaching here means this call's own `git worktree add` produced the
-    // directory and left the setup lock on it. The lock marks the checkout
-    // unfinished until setup completes, so no other caller adopts it meanwhile,
-    // and the rollback below only ever removes a checkout this attempt created
-    // and still holds. Without both, a half-set-up worktree survives with no
-    // isolation-environment row tracking it, and the next run on the same branch
-    // adopts it as ready (#3448).
-    const existingBranch =
-      request.workflowType === 'task' && request.taskBranch?.kind === 'existing';
-    const setup = await this.rollBackOnFailure(
-      repoPath,
-      worktreePath,
-      setupLockReason,
+    return withProvisionalSafeDirectory(
+      toRepoPath(worktreePath),
       async () => {
-        const warnings = await this.finishWorktreeSetup(
-          request,
+        const creationId = randomUUID();
+        const setupLockReason = `${SETUP_LOCK_PREFIX}: ${creationId}`;
+
+        const override: WorktreeBaseOverride = {
+          repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),
+        };
+        const { base: worktreeBase } = getWorktreeBase(repoPath, request.codebaseName, override);
+        // In both layouts the base already carries repo context — creating it
+        // recursively is enough.
+        await mkdirAsync(worktreeBase, { recursive: true });
+
+        // Only a branch this call cuts from its start point has a cut-from commit,
+        // so it says nothing about who owns the branch; `branchCreated` does.
+        let cutFromCommit: string | undefined;
+        let branchCreated = false;
+        if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
+          // Adoption continues the local branch exactly as the prior run left it.
+          // Do not fetch, sync, reset, or create a child branch here.
+          await this.createFromExistingBranch(
+            repoPath,
+            worktreePath,
+            request.taskBranch.branch,
+            setupLockReason
+          );
+        } else {
+          // Resolve git remote name: explicit config > auto-detect > actionable error
+          const remote = await this.resolveRemote(repoPath, worktreeConfig?.remote);
+
+          // Base precedence: a per-dispatch --base override (request.baseOverride) wins,
+          // then explicit repo config, then the registered codebase's default branch
+          // (request.baseBranch), then auto-detect via getDefaultBranch.
+          const preferredBaseBranch =
+            request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
+          const baseBranch = await this.syncWorkspaceBeforeCreate(
+            repoPath,
+            preferredBaseBranch,
+            remote
+          );
+
+          if (isPRIsolationRequest(request)) {
+            // For PRs: fetch and checkout the PR branch (actual or synthetic)
+            const pr = await this.createFromPR(request, worktreePath, setupLockReason, remote);
+            if ('adopted' in pr) {
+              return { kind: 'adopted', environment: pr.adopted };
+            }
+            branchCreated = pr.branchCreated;
+          } else {
+            // For issues, tasks, threads: create new branch
+            ({ cutFromCommit, branchCreated } = await this.createNewBranch(
+              request,
+              repoPath,
+              worktreePath,
+              branchName,
+              baseBranch,
+              setupLockReason,
+              remote
+            ));
+          }
+        }
+
+        // Reaching here means this call's own `git worktree add` produced the
+        // directory and left the setup lock on it. The lock marks the checkout
+        // unfinished until setup completes, so no other caller adopts it meanwhile,
+        // and the rollback below only ever removes a checkout this attempt created
+        // and still holds. Without both, a half-set-up worktree survives with no
+        // isolation-environment row tracking it, and the next run on the same branch
+        // adopts it as ready (#3448).
+        const existingBranch =
+          request.workflowType === 'task' && request.taskBranch?.kind === 'existing';
+        const setup = await this.rollBackOnFailure(
           repoPath,
           worktreePath,
-          worktreeConfig,
-          setupExecutor
+          setupLockReason,
+          async () => {
+            const warnings = await this.finishWorktreeSetup(
+              request,
+              repoPath,
+              worktreePath,
+              worktreeConfig,
+              setupExecutor
+            );
+            if (existingBranch) return { kind: 'adopted' as const, warnings };
+            const identity = await getGitCheckoutIdentity(worktreePath);
+            await writeFile(join(identity.gitDir, CREATION_MARKER), creationId, { flag: 'wx' });
+            return { kind: 'created' as const, warnings };
+          }
         );
-        if (existingBranch) return { kind: 'adopted' as const, warnings };
-        const identity = await getGitCheckoutIdentity(worktreePath);
-        await writeFile(join(identity.gitDir, CREATION_MARKER), creationId, { flag: 'wx' });
-        return { kind: 'created' as const, warnings };
-      }
+
+        const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
+        const warnings = lockWarning ? [...setup.warnings, lockWarning] : setup.warnings;
+        if (setup.kind === 'adopted') {
+          return {
+            kind: 'adopted',
+            environment: {
+              id: worktreePath,
+              provider: 'worktree',
+              workingPath: worktreePath,
+              branchName: toBranchName(branchName),
+              status: 'active',
+              createdAt: new Date(),
+              metadata: { provenance: 'adopted', adopted: true, adoptedFrom: 'branch', request },
+              ...(warnings.length ? { warnings } : {}),
+            },
+          };
+        }
+
+        return {
+          kind: 'created',
+          creationId,
+          branchCreated,
+          warnings,
+          ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+        };
+      },
+      result =>
+        result.kind !== 'adopted' ||
+        isSameWorktreePath(result.environment.workingPath, worktreePath)
     );
-
-    const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
-    const warnings = lockWarning ? [...setup.warnings, lockWarning] : setup.warnings;
-    if (setup.kind === 'adopted') {
-      return {
-        kind: 'adopted',
-        environment: {
-          id: worktreePath,
-          provider: 'worktree',
-          workingPath: worktreePath,
-          branchName: toBranchName(branchName),
-          status: 'active',
-          createdAt: new Date(),
-          metadata: { provenance: 'adopted', adopted: true, adoptedFrom: 'branch', request },
-          ...(warnings.length ? { warnings } : {}),
-        },
-      };
-    }
-
-    return {
-      kind: 'created',
-      creationId,
-      branchCreated,
-      warnings,
-      ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
-    };
   }
 
   /**
@@ -1587,7 +1602,6 @@ export class WorktreeProvider implements IIsolationProvider {
         }
         throw new WorktreeAddError(cause, canAdoptConcurrentCheckout);
       }
-      await addSafeDirectory(toRepoPath(worktreePath));
     });
   }
 

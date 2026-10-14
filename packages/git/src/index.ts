@@ -77,6 +77,7 @@ export {
   validateCloneUrl,
   syncRepository,
   addSafeDirectory,
+  withProvisionalSafeDirectory,
 } from './repo';
 export type { CloneCredentials, CloneRepositoryOptions } from './repo';
 

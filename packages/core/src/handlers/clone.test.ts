@@ -555,12 +555,70 @@ describe('cloneRepository', () => {
       }
     });
 
+    test.each([false, true])(
+      'failed clone validation withdraws only new trust (existing: %s)',
+      async preexisting => {
+        const home = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-rejected-'));
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
+        const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
+          new Error('validation failed')
+        );
+        const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+        try {
+          spyExecFileAsync.mockImplementation(realExecFileAsync);
+          spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
+          const target = '/home/test/.archon/workspaces/owner/repo/source';
+          await realExecFileAsync('git', [
+            'config',
+            '--global',
+            '--add',
+            'safe.directory',
+            '/unrelated',
+          ]);
+          if (preexisting)
+            await realExecFileAsync('git', [
+              'config',
+              '--global',
+              '--add',
+              'safe.directory',
+              target,
+            ]);
+          await expect(
+            cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
+          ).rejects.toThrow('validation failed');
+          expect(getGitCloneCall()?.[1]).toBe(target);
+          expect(spyFsRm).toHaveBeenCalledWith(target, { recursive: true });
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          const { stdout } = await realExecFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim().split('\n')).toEqual(
+            preexisting ? ['/unrelated', target] : ['/unrelated']
+          );
+        } finally {
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+          remote.mockRestore();
+          syntax.mockRestore();
+          spyFsRm.mockRestore();
+          await removeTempTree(home);
+        }
+      }
+    );
+
     test('adds safe.directory before registration and propagates config failures', async () => {
       spyAddSafeDirectory.mockRejectedValueOnce(new Error('config locked'));
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'config locked'
       );
       expect(mockCreateCodebase).not.toHaveBeenCalled();
+      expect(spyFsRm).toHaveBeenCalledWith('/home/test/.archon/workspaces/owner/repo/source', {
+        recursive: true,
+      });
     });
   });
 

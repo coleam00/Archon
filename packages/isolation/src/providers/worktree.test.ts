@@ -635,7 +635,10 @@ describe('WorktreeProvider', () => {
     });
 
     test('throws when branch already exists and fromBranch is specified', async () => {
-      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
+      execSpy.mockImplementation(async (_cmd, args) => ({
+        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
+        stderr: '',
+      }));
 
       const request: IsolationRequest = {
         ...baseRequest,
@@ -1109,7 +1112,10 @@ describe('WorktreeProvider', () => {
     });
 
     test('checks out an existing issue branch as it is', async () => {
-      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
+      execSpy.mockImplementation(async (_cmd, args) => ({
+        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
+        stderr: '',
+      }));
 
       const env = await provider.create(baseRequest);
 
@@ -1329,7 +1335,10 @@ describe('WorktreeProvider', () => {
         isForkPR: false,
       };
 
-      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
+      execSpy.mockImplementation(async (_cmd, args) => ({
+        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
+        stderr: '',
+      }));
 
       const environment = await provider.create(request);
 
@@ -2985,6 +2994,16 @@ describe('WorktreeProvider', () => {
       expect(result?.provider).toBe('worktree');
       expect(result?.branchName).toBe(git.toBranchName('feature/auth'));
       expect(result?.metadata).toHaveProperty('adopted', true);
+    });
+
+    test('public adoption rejects a required trust-write failure', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      addSafeDirectorySpy.mockRejectedValueOnce(new Error('config locked'));
+      await expect(provider.adopt('/workspace/worktrees/repo/feature-auth')).rejects.toThrow(
+        'config locked'
+      );
+      expect(getCanonicalRepoPathSpy).not.toHaveBeenCalled();
+      expect(listWorktreesSpy).not.toHaveBeenCalled();
     });
 
     test('refuses a registered worktree whose setup never finished', async () => {

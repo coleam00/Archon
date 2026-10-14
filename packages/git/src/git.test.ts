@@ -3279,6 +3279,46 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('withProvisionalSafeDirectory', () => {
+    test('preserves setup and cleanup errors when withdrawing trust fails', async () => {
+      const setupError = new Error('setup failed');
+      const cleanupError = new Error('config locked');
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_cmd, args) => {
+        if (args.includes('--get-all')) throw Object.assign(new Error('missing'), { code: 1 });
+        if (args.includes('--unset-all')) throw cleanupError;
+        return { stdout: '', stderr: '' };
+      });
+      try {
+        const result = await git
+          .withProvisionalSafeDirectory(repo('/workspace/repo'), async () => {
+            throw setupError;
+          })
+          .catch((error: unknown) => error);
+        expect(result).toBeInstanceOf(AggregateError);
+        if (!(result instanceof AggregateError)) throw new Error('Expected both failures');
+        expect(result.errors).toEqual([setupError, cleanupError]);
+        expect(result.cause).toBe(setupError);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+
+    test('a failed trust read stops setup before any write', async () => {
+      const readError = Object.assign(new Error('config unreadable'), { code: 128 });
+      const execSpy = spyOn(git, 'execFileAsync').mockRejectedValue(readError);
+      const operation = mock(async () => 'accepted');
+      try {
+        await expect(
+          git.withProvisionalSafeDirectory(repo('/workspace/repo'), operation)
+        ).rejects.toBe(readError);
+        expect(operation).not.toHaveBeenCalled();
+        expect(execSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+  });
+
   describe('findRepoRoot', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 

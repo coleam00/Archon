@@ -15,7 +15,7 @@ import type { Codebase } from '../types';
 import {
   cloneRepository as cloneGitRepository,
   execFileAsync,
-  addSafeDirectory,
+  withProvisionalSafeDirectory,
   toRepoPath,
   validateCloneUrl,
   type CloneCredentials,
@@ -519,25 +519,25 @@ export async function cloneRepository(
   }
 
   try {
-    await addSafeDirectory(toRepoPath(targetPath));
-    getLog().debug({ path: targetPath }, 'safe_directory_added');
-    await validateRegistrationChoice(targetPath, options);
+    return await withProvisionalSafeDirectory(toRepoPath(targetPath), async () => {
+      getLog().debug({ path: targetPath }, 'safe_directory_added');
+      await validateRegistrationChoice(targetPath, options);
+      const result = await registerRepoAtPath(
+        codebases,
+        targetPath,
+        name,
+        workingUrl,
+        await codebases.findCodebaseByName(name),
+        options
+      );
+      getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
+      return result;
+    });
   } catch (error) {
     // Any failure here leaves a clone with no registration, which would block a retry.
     await rm(targetPath, { recursive: true });
     throw error;
   }
-
-  const result = await registerRepoAtPath(
-    codebases,
-    targetPath,
-    name,
-    workingUrl,
-    await codebases.findCodebaseByName(name),
-    options
-  );
-  getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
-  return result;
 }
 
 /**
