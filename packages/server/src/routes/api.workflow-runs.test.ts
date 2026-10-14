@@ -2995,7 +2995,7 @@ describe('dedicated gate answers with expectedGate', () => {
       const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
       mockGetWorkflowRun.mockResolvedValue({
         ...MOCK_PAUSED_RUN,
-        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+        metadata: { approval: { type: 'approval', message: 'Review', ...expectedGate } },
       });
       const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
         method: 'POST',
@@ -3015,7 +3015,7 @@ describe('dedicated gate answers with expectedGate', () => {
       const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
       mockGetWorkflowRun.mockResolvedValue({
         ...MOCK_PAUSED_RUN,
-        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+        metadata: { approval: { type: 'approval', message: 'Review', ...expectedGate } },
       });
       const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
         method: 'POST',
@@ -3046,7 +3046,7 @@ describe('dedicated gate answers with expectedGate', () => {
       const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
       mockGetWorkflowRun.mockResolvedValue({
         ...MOCK_PAUSED_RUN,
-        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+        metadata: { approval: { type: 'approval', message: 'Review', ...expectedGate } },
       });
       if (route === 'approve') mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
       else mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
