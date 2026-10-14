@@ -552,7 +552,7 @@ describe('workflow answer flag rejection and command discovery', () => {
     };
     visit(source);
     expect(routes.size).toBeGreaterThan(0);
-    expect(available?.toSorted()).toEqual([...routes].sort());
+    expect(available?.sort()).toEqual([...routes].sort());
   });
 });
 
