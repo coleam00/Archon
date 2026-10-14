@@ -519,15 +519,14 @@ export async function cloneRepository(
   }
 
   try {
+    await addSafeDirectory(toRepoPath(targetPath));
+    getLog().debug({ path: targetPath }, 'safe_directory_added');
     await validateRegistrationChoice(targetPath, options);
   } catch (error) {
     // Any failure here leaves a clone with no registration, which would block a retry.
     await rm(targetPath, { recursive: true });
     throw error;
   }
-
-  await addSafeDirectory(toRepoPath(targetPath));
-  getLog().debug({ path: targetPath }, 'safe_directory_added');
 
   const result = await registerRepoAtPath(
     codebases,

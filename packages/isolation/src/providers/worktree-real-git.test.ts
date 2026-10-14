@@ -53,6 +53,18 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout;
 }
 
+const trackConfigRoot = trackTempRoots();
+let previousGlobalConfig: string | undefined;
+beforeEach(async () => {
+  previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  const home = trackConfigRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-config-')));
+  process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
+});
+afterEach(() => {
+  if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+});
+
 describe('missing registered project directory', () => {
   const trackTempRoot = trackTempRoots();
 
@@ -217,6 +229,37 @@ describe('WorktreeProvider against real git', () => {
   afterEach(() => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  test('new and reused checkouts work when Git requires explicit ownership trust', async () => {
+    await execFileAsync('git', [
+      'config',
+      '--global',
+      '--fixed-value',
+      '--replace-all',
+      'safe.directory',
+      repoPath,
+      repoPath,
+    ]);
+    const previousOwnerCheck = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+    process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+    try {
+      const created = await provider.create(request);
+      expect(created.workingPath).toBe(worktreePath);
+      const adopted = await provider.create(request);
+      expect(adopted.metadata.adopted).toBe(true);
+      expect(await provider.adopt(worktreePath)).not.toBeNull();
+      const { stdout } = await execFileAsync('git', [
+        'config',
+        '--global',
+        '--get-all',
+        'safe.directory',
+      ]);
+      expect(stdout.trim().split('\n')).toEqual([repoPath, worktreePath]);
+    } finally {
+      if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
+    }
   });
 
   test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {

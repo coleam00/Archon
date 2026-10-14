@@ -422,6 +422,10 @@ describe('cloneRepository', () => {
         cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
       ).rejects.toThrow('git remote failed');
       const target = getGitCloneCall()?.[1];
+      expect(spyAddSafeDirectory).toHaveBeenCalledWith(target);
+      expect(spyAddSafeDirectory.mock.invocationCallOrder[0]).toBeLessThan(
+        remote.mock.invocationCallOrder[0]
+      );
       expect(target).toBeDefined();
       expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();

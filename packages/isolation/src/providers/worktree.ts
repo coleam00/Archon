@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  addSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
   isWorktreeRegistered,
@@ -677,6 +678,7 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
+    await addSafeDirectory(toRepoPath(path));
     let repoPath: RepoPath;
     let worktrees: WorktreeInfo[];
     try {
@@ -809,6 +811,7 @@ export class WorktreeProvider implements IIsolationProvider {
       : exactTaskBranch;
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
+      await addSafeDirectory(toRepoPath(worktreePath));
       // Verify the existing worktree belongs to the same repo root before
       // adopting. Two clones of the same remote resolve to the same worktree
       // base dir, so a worktree created from clone A is visible from clone B.
@@ -869,6 +872,7 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
+    await addSafeDirectory(toRepoPath(worktreePath));
     try {
       await verifyWorktreeOwnership(worktreePath, request.canonicalRepoPath);
     } catch (err) {
@@ -1583,6 +1587,7 @@ export class WorktreeProvider implements IIsolationProvider {
         }
         throw new WorktreeAddError(cause, canAdoptConcurrentCheckout);
       }
+      await addSafeDirectory(toRepoPath(worktreePath));
     });
   }
 
