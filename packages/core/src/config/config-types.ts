@@ -20,8 +20,8 @@ export type PlatformStreaming = z.infer<typeof platformStreamingSchema>;
  * Located at ~/.archon/config.yaml
  */
 
-// Provider config defaults — canonical definitions live in @archon/providers/types.
-// Imported and re-exported here so existing consumers don't break.
+// Provider config defaults — each type is derived from its provider's config
+// schema and re-exported through @archon/providers/types.
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,

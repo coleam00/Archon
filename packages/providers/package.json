@@ -168,6 +168,12 @@
       "src/community/copilot/config.test.ts"
     ],
     [
+      "src/community/opencode/config.test.ts"
+    ],
+    [
+      "src/shared/run-config.test.ts"
+    ],
+    [
       "src/community/copilot/event-bridge.test.ts"
     ],
     [

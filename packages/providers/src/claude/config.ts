@@ -1,59 +1,26 @@
 /**
- * Typed config parsing for Claude provider defaults.
- * Validates and narrows the opaque assistantConfig to typed fields.
+ * Claude provider config: the schema owns the shape, and the defaults type is
+ * derived from it.
  */
 import { snapshotConfigSchema, type ProviderConfigScope } from '@archon/provider-contract';
-import { createLogger } from '@archon/paths';
-import { parseClaudeSettingSources } from '@archon/paths/skills';
-import type { ClaudeProviderDefaults } from '../types';
 import { z } from 'zod';
-import { configStringSchema, parseConfigSchema } from '../shared/run-config';
-
-// Re-export so consumers can import the type from either location
-export type { ClaudeProviderDefaults } from '../types';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  cachedLog ??= createLogger('provider.claude.config');
-  return cachedLog;
-}
-
-/**
- * Parse raw assistantConfig into typed Claude defaults.
- * Defensive: invalid fields are dropped rather than thrown. `settingSources` is
- * a capability control, so dropped entries are logged instead of going silent.
- */
-export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderDefaults {
-  const result: ClaudeProviderDefaults = {};
-
-  if (typeof raw.model === 'string') {
-    result.model = raw.model;
-  }
-
-  const settingSources = parseClaudeSettingSources(raw.settingSources);
-  if (settingSources.value !== undefined) {
-    if (settingSources.invalid.length > 0) {
-      getLog().warn(
-        { invalid: settingSources.invalid, effective: settingSources.value },
-        'claude.setting_sources_invalid_entries'
-      );
-    }
-    result.settingSources = settingSources.value;
-  }
-
-  if (typeof raw.claudeBinaryPath === 'string') {
-    result.claudeBinaryPath = raw.claudeBinaryPath;
-  }
-
-  return result;
-}
+import { configStringSchema, parseConfigLenient, parseConfigSchema } from '../shared/run-config';
 
 const fields = {
   model: configStringSchema.optional(),
+  /** Claude Code settingSources — controls which sources the SDK loads:
+   *  CLAUDE.md, skills, commands, agents, and hooks. Both project-level
+   *  (`<cwd>/.claude/`) and user-level (`~/.claude/`) are loaded by default.
+   *  Set explicitly to `['project']` to scope a workflow to project-only
+   *  resources (e.g. CI, shared environments).
+   *  @default ['project', 'user']
+   */
   settingSources: z
     .array(z.enum(['project', 'user'], { error: "expected 'project' or 'user'" }))
     .optional(),
+  /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
+   *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
+   *  (SDK resolves from node_modules). */
   claudeBinaryPath: configStringSchema.optional(),
 };
 export const configSchemas = {
@@ -64,6 +31,17 @@ export const configSchemas = {
     { settingSources: fields.settingSources, claudeBinaryPath: fields.claudeBinaryPath }
   ),
 };
+
+export type ClaudeProviderDefaults = z.output<typeof configSchemas.install>;
+
+/**
+ * Parse raw assistantConfig into typed Claude defaults. Invalid values are
+ * dropped rather than thrown; an invalid `settingSources` entry drops only that
+ * entry, so a typo narrows the sources instead of widening them to the default.
+ */
+export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderDefaults {
+  return parseConfigLenient(configSchemas.install, raw, 'claude');
+}
 
 export function parseClaudeConfigStrict(
   raw: Record<string, unknown>,
