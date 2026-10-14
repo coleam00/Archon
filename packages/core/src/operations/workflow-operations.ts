@@ -581,7 +581,9 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
       // operator to the child run, where the actual gate lives.
       throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
     case 'attention':
-      throw new Error(`Run ${run.id} is paused at an attention wait. Answer it with answer.`);
+      throw new Error(
+        `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
+      );
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
     case 'stalled_tool_calls':
@@ -649,7 +651,9 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
   const attention = runAttention(run);
   switch (attention?.kind) {
     case 'attention':
-      throw new Error(`Run ${run.id} is paused at an attention wait. Answer it with answer.`);
+      throw new Error(
+        `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
+      );
     case 'blocked_on_child':
       // Same redirect as assertApprovable: the parent's pause is not a rejectable
       // gate — cancelling the parent here would silently orphan the still-paused
@@ -1207,7 +1211,7 @@ export function createWorkflowOperations({
     // A bare resume continues a message-form wait with empty text, which keeps waits from
     // before answers continuable. Any other form has no answer to continue with.
     const wait = pausedAttentionWait(run);
-    if (wait?.answer === undefined && wait !== undefined && attentionForm(wait) !== 'message') {
+    if (wait !== undefined && wait.answer === undefined && attentionForm(wait) !== 'message') {
       throw new Error(
         `Run ${run.id} is waiting for an answer to its '${attentionForm(wait)}' attention wait. ` +
           'Answer it with answer instead of resuming it.'
