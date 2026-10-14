@@ -240,9 +240,7 @@ function unknownNodeKeyHint(key: string): string {
     return (
       " Nothing on this node gates. For a human gate, use an 'approval:' node; to gate each" +
       " iteration of a loop, set BOTH 'loop.interactive: true' and 'loop.gate_message'" +
-      " ('gate_message' on its own does not gate). Workflow-level 'interactive:' is a" +
-      ' different setting, and only on the web UI — it keeps the run in the foreground' +
-      ' there; chat platforms already run in the foreground, so it does nothing for them.'
+      " ('gate_message' on its own does not gate)."
     );
   }
   if (WORKFLOW_ONLY_KEYS.has(key)) {
@@ -1424,90 +1422,6 @@ export function validateDagStructure(
 }
 
 /**
- * Workflow-class placement check (#2707 step 2): a workflow declared
- * unattended (workflow-level `interactive` not `true`) should not NATIVELY
- * author a pause node anywhere in its DAG — a gate (`approval:`) node, or a
- * `loop`/`loop_group` node with node-level `interactive: true`. The
- * declaration is the workflow's promise about the pause nodes IT authors.
- *
- * GRACE PERIOD (#2736): a violation here does NOT reject the file. Rejecting
- * outright broke every workflow written before the class declaration
- * existed, including ones that only ever ran in the foreground and were
- * never actually unsafe — the hard error had no transition. `parseWorkflow`
- * instead coerces `interactive` to `true` for the rest of this parse and
- * reports a parse warning, which closes #1991
- * for these workflows immediately: every dispatch surface reads the SAME
- * parsed `interactive` value this function's result feeds
- * (`assertInteractiveClassNotBackgrounded`, the web console's own
- * background-vs-foreground branch), so the coercion protects
- * them without waiting for the author to add the declaration. TODO(#2738):
- * once the grace period ends, delete the coercion in `parseWorkflow` and
- * restore the hard error — this function's return value already carries the
- * exact message that error used to return, unchanged. Restoring the hard
- * error also means a leaf gate-authoring block reachable only via `include:`
- * can fail its OWN class check again, so #2738 must also resurrect the
- * `WorkflowLoadError.name`/`failedNames` mechanism this grace-period commit
- * removed (see its git history) — without it, every composer of that block
- * regresses to a misleading "not found" instead of the real cause.
- *
- * Called ONLY from `parseWorkflow`, against ONE file's own unexpanded node
- * list — deliberately NOT re-run against the post-`include:`-expansion node
- * list (see `expandWorkflowIncludes`'s doc comment at its `validateDagStructure`
- * call site for why): a reusable block can legitimately author a gate without
- * declaring its own `interactive: true`, since the SAME block may be composed
- * into an interactive parent, or independently discovered and invoked on its
- * own — load time cannot tell which discovered workflow will actually own a
- * given run (mirrors `findComposedApprovalGate`'s "one reader, one file"
- * reasoning). Composed-gate drivability stays an INVOCATION-time question,
- * answered by `assertComposedGateDriveable` against the run actually being
- * dispatched.
- *
- * Runs on the same node list `validateDagStructure` walks, recursing into
- * `loop_group` bodies (a body pause is governed by the SAME enclosing
- * workflow's class, not a class of its own).
- *
- * A `workflow:` node is also deliberately NOT checked here: its target
- * resolves at spawn, not load (#2200), and a child that pauses is its own run
- * with its own gate — 1:1 or fan-out (#4044).
- */
-export function validateWorkflowClassPlacement(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  interactive: boolean | undefined
-): string | null {
-  if (interactive === true) return null;
-  for (const node of nodes) {
-    if (isIncludeDirective(node)) continue;
-    if (isGateNode(node)) {
-      return (
-        `Node '${node.id}' is a pause node ('approval:'), but this workflow does not declare ` +
-        "'interactive: true'. An unattended workflow may never contain a pause node — declare " +
-        "'interactive: true' at the workflow level, or remove this gate."
-      );
-    }
-    if (isLoopNode(node) && node.loop.interactive === true) {
-      return (
-        `Node '${node.id}' is a pause node ('loop.interactive: true'), but this workflow does not ` +
-        "declare 'interactive: true'. An unattended workflow may never contain a pause node — " +
-        "declare 'interactive: true' at the workflow level, or remove the node-level 'interactive:'."
-      );
-    }
-    if (isLoopGroupNode(node)) {
-      if (node.loop_group.interactive === true) {
-        return (
-          `Node '${node.id}' is a pause node ('loop_group.interactive: true'), but this workflow ` +
-          "does not declare 'interactive: true'. An unattended workflow may never contain a pause " +
-          "node — declare 'interactive: true' at the workflow level, or remove the node-level " +
-          "'interactive:'."
-        );
-      }
-      const bodyError = validateWorkflowClassPlacement(node.loop_group.nodes, interactive);
-      if (bodyError) return bodyError;
-    }
-  }
-  return null;
-}
-
-/**
  * A `workflow:` node may not declare `output_format` (#2453). The result contract
  * belongs to the node that produces the value — the child's `returns:` node — and
  * its declared field names travel back with the result, so the caller has nothing
@@ -1740,23 +1654,13 @@ export function parseWorkflow(
 
     collectConditionalJoinWarnings(dagNodes, parseWarnings);
 
-    // Workflow-class placement (#2707 step 2) + the typed `interactive` field share
-    // one raw-value coercion, computed here so the class check and the field the
-    // engine actually reads can never disagree.
-    const rawInteractive = typeof raw.interactive === 'boolean' ? raw.interactive : undefined;
-    if (raw.interactive !== undefined && typeof raw.interactive !== 'boolean') {
-      getLog().warn({ filename, value: raw.interactive }, 'invalid_interactive_value_ignored');
-    }
-    const classError = validateWorkflowClassPlacement(dagNodes, rawInteractive);
-    // Grace period (#2736/#2738) — see this check's doc comment above `validateWorkflowClassPlacement`.
-    const interactive = classError ? true : rawInteractive;
-    if (classError) {
-      const classWarning =
-        `Workflow '${raw.name}': ${classError} 'interactive: true' has been applied for this run only ` +
-        '(this grace period ends in a future release — see #2738); add the declaration to the file to ' +
-        'silence this warning.';
-      parseWarnings.push(classWarning);
-      getLog().debug({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
+    if (raw.interactive !== undefined) {
+      const message =
+        `Workflow '${raw.name}': workflow-level 'interactive:' is deprecated and has no effect. ` +
+        'Any workflow can start in the foreground, in the background or from a trigger; a ' +
+        'pause waits in the attention queue until it is answered. Remove the line.';
+      parseWarnings.push(message);
+      getLog().debug({ filename, warning: message }, 'workflow_interactive_deprecated');
     }
 
     // Parse workflow-level fields using WorkflowBaseSchema for validation
@@ -1940,7 +1844,7 @@ export function parseWorkflow(
     }
 
     // Parse workflow-level worktree policy. Same warn-and-ignore pattern used
-    // for `interactive` / `modelReasoningEffort` — invalid values are dropped
+    // for `modelReasoningEffort` — invalid values are dropped
     // rather than rejected, so a typo in one workflow doesn't nuke the whole
     // discovery pass. Only `worktree.enabled` is recognised today.
     let worktreePolicy: { enabled?: boolean } | undefined;
@@ -2041,7 +1945,7 @@ export function parseWorkflow(
     }
 
     // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
-    // Same parse/warn pattern as `interactive` (invalid non-boolean values are dropped).
+    // Invalid non-boolean values are dropped with a warning.
     // When false, the executor skips the path-lock guard and allows concurrent runs on the same checkout.
     let mutatesCheckout: boolean | undefined;
     if (raw.mutates_checkout !== undefined) {
@@ -2306,6 +2210,7 @@ export function parseWorkflow(
     const workflowName = raw.name;
     const workflowLabel = `Workflow '${workflowName}'`;
     for (const key of Object.keys(raw)) {
+      if (key === 'interactive') continue; // deprecated, warned above
       if (!KNOWN_WORKFLOW_KEYS.has(key)) {
         const hint = KNOWN_DAG_NODE_KEYS.has(key)
           ? ` ('${key}' is valid on individual nodes, not at workflow level.)`
@@ -2342,7 +2247,6 @@ export function parseWorkflow(
       // `modelReasoningEffort` is deliberately absent — it was translated into
       // `effort` above, so nothing downstream ever sees the deprecated field.
       webSearchMode,
-      interactive,
       ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
       ...(effort !== undefined ? { effort } : {}),
       ...(fallbackModel !== undefined ? { fallbackModel } : {}),

@@ -262,10 +262,7 @@ describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
   });
 
   test('rejects a pause-capable nested workflow target at load time', () => {
-    const child = {
-      ...wf('child', [{ id: 'pause', wait: { duration_ms: 3_600_000 } }]),
-      interactive: true,
-    };
+    const child = wf('child', [{ id: 'pause', wait: { duration_ms: 3_600_000 } }]);
     const block = wf('workflow-block', [{ id: 'child-run', workflow: 'child' }]);
     const parent = wf('parent', [
       { id: 'list', bash: 'echo []' },
@@ -281,7 +278,6 @@ describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
 
     expect(workflows.has('parent')).toBe(false);
     const error = errors.find(entry => entry.filename === 'parent')?.error;
-    expect(error).toContain("'child' (interactive workflow)");
     expect(error).toContain("'pause' (durable wait)");
   });
 
@@ -617,14 +613,9 @@ describe('expandWorkflowIncludes — with input mapping', () => {
         },
       },
     ]);
-    // `interactive: true` because the block carries an approval gate — a composed gate a
-    // background run cannot drive is a load error (#1764).
-    const parent = {
-      ...wf('parent', [
-        { id: 'review', include: 'parameterized', with: { detail: 'CLEAN-TEMP-FILES' } },
-      ]),
-      interactive: true,
-    };
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { detail: 'CLEAN-TEMP-FILES' } },
+    ]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
@@ -857,10 +848,9 @@ describe('expandWorkflowIncludes — with input mapping', () => {
         },
       },
     ]);
-    const parent = {
-      ...wf('parent', [{ id: 'review', include: 'parameterized', with: { value: 'done' } }]),
-      interactive: true, // the block carries an approval gate (#1764)
-    };
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { value: 'done' } },
+    ]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
@@ -1130,13 +1120,10 @@ describe('expandWorkflowIncludes — refs in Markdown code spans', () => {
         depends_on: ['plan'],
       },
     ]);
-    const parent = {
-      ...wf('parent', [
-        { id: 'plan', prompt: 'parent plan' },
-        { id: 'inc', include: 'approval-block', depends_on: ['plan'] },
-      ]),
-      interactive: true, // the block carries an approval gate (#1764)
-    };
+    const parent = wf('parent', [
+      { id: 'plan', prompt: 'parent plan' },
+      { id: 'inc', include: 'approval-block', depends_on: ['plan'] },
+    ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
     const gate = nodeById(workflows.get('parent')!, 'inc__gate');
@@ -2497,16 +2484,14 @@ describe('expandWorkflowIncludes — systemPrompt/agents are node-ref surfaces (
   });
 });
 
-describe('expandWorkflowIncludes — composed approval gates are stamped, not rejected (#1764)', () => {
+describe('expandWorkflowIncludes — composed approval gates carry their origin (#1764)', () => {
   const gateBlock = (): WorkflowDefinition =>
     wf('gate-blk', [
       { id: 'plan', prompt: 'plan' },
       { id: 'gate', approval: { message: 'Approve?' }, depends_on: ['plan'] },
     ]);
 
-  test('a composed gate carries its origin so invocation can decide', () => {
-    // Expansion records WHERE the gate came from; whether a run can drive it is a
-    // question only the invoked workflow can answer (see assertComposedGateDriveable).
+  test('a composed gate carries its origin', () => {
     const parent = wf('parent', [{ id: 'inc', include: 'gate-blk' }]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), parent));
 
@@ -2514,12 +2499,9 @@ describe('expandWorkflowIncludes — composed approval gates are stamped, not re
     expect(composedOrigin(nodeById(workflows.get('parent')!, 'inc__gate'))).toBe('gate-blk');
   });
 
-  test('a non-interactive INTERMEDIATE block still expands — it is never the run owner', () => {
-    // The regression this replaced: rejecting at every expansion level made a valid
-    // three-level composition unloadable even when the top-level workflow declared
-    // `interactive: true`, because the intermediate block has no reason to declare it.
+  test('a gate composed through an intermediate block names the file that authored it', () => {
     const mid = wf('mid', [{ id: 'i', include: 'gate-blk' }]);
-    const top = { ...wf('top', [{ id: 'm', include: 'mid' }]), interactive: true };
+    const top = wf('top', [{ id: 'm', include: 'mid' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), mid, top));
     expect(errors).toHaveLength(0);
@@ -2530,8 +2512,6 @@ describe('expandWorkflowIncludes — composed approval gates are stamped, not re
   });
 
   test("a parent's OWN approval node carries no composed origin", () => {
-    // One file, one reader: the gate and the missing `interactive:` are visible together,
-    // so invocation has nothing to refuse.
     const plain = wf('plain-blk', [{ id: 'work', prompt: 'work' }]);
     const parent = wf('parent', [
       { id: 'inc', include: 'plain-blk' },

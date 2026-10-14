@@ -202,7 +202,7 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     expect(await workflows.claimWriteback(id)).toEqual({ claimed: true });
   });
 
-  test('concurrent gate pauses keep one owner and an undelivered prompt cannot fail its successor', async () => {
+  test('concurrent gate pauses keep one owner', async () => {
     const id = await seed('running', { unrelated: 'keep' });
     const first = { nodeId: 'first', type: 'approval' as const, message: 'Review first' };
     const second = { ...first, nodeId: 'second', message: 'Review second' };
@@ -218,7 +218,7 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     ]);
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
-    const [active, next] = results[0].status === 'fulfilled' ? [first, second] : [second, first];
+    const active = results[0].status === 'fulfilled' ? first : second;
     expect((await workflows.getWorkflowRun(id))!.metadata.approval).toEqual(active);
     const suspended = await db.query<{ step_name: string }>(
       "SELECT step_name FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'node_suspended'",
@@ -229,27 +229,6 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     expect(
       await workflows.resolveApprovalGate(id, { approval: { ...active, resolved: 'approved' } }, [])
     ).toEqual({ resolved: true });
-    expect(await workflows.failPausedApproval(id, active, 'late failure')).toEqual({
-      failed: false,
-    });
-    await workflows.resumeWorkflowRun(id);
-    await workflows.pauseWorkflowRun(id, next);
-    expect(await workflows.failPausedApproval(id, active, 'wrong owner')).toEqual({
-      failed: false,
-    });
-    expect(await workflows.failPausedApproval(id, next, 'undelivered')).toEqual({ failed: true });
-    expect((await workflows.getWorkflowRun(id))?.status).toBe('failed');
-    expect(await storedMetadata(id)).toMatchObject({
-      error: 'undelivered',
-      unrelated: 'keep',
-      stop_reason: { reason: 'node_error' },
-    });
-    const audit = await db.query<{ data: Record<string, unknown> }>(
-      "SELECT data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_failed'",
-      [id]
-    );
-    expect(audit.rows).toHaveLength(1);
-    expect(audit.rows[0].data).toMatchObject({ error: 'undelivered', exit_reason: 'node_error' });
   });
 
   test('a run is found by the short id shown in listings', async () => {

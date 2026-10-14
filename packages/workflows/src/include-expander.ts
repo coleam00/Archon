@@ -117,7 +117,7 @@ export interface ComposedSuspensionPath {
   reason: string;
 }
 
-type SuspensionWorkflow = Pick<WorkflowDefinition, 'name' | 'interactive'> & {
+type SuspensionWorkflow = Pick<WorkflowDefinition, 'name'> & {
   readonly nodes: readonly (DagNode | IncludeDirective)[];
 };
 
@@ -138,9 +138,6 @@ export function collectComposedSuspensionPaths(
   const visitDefinition = (definition: SuspensionWorkflow): void => {
     if (visited.has(definition.name)) return;
     visited.add(definition.name);
-    if (definition.interactive === true) {
-      found.push({ id: definition.name, reason: 'interactive workflow' });
-    }
     visitNodes(definition.nodes);
   };
 
@@ -348,7 +345,7 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
  * workflow-level layer be REMOVED afterwards (see `collapseWorkflowScope`).
  *
  * Absent on purpose:
- *   - Run-owned fields (`interactive`, `worktree`, `container`, `evidence_policy`,
+ *   - Run-owned fields (`worktree`, `container`, `evidence_policy`,
  *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
  *     file that happens to hold a node. These stay workflow-level and are warned about
  *     when a composed workflow declares them.
@@ -903,7 +900,7 @@ const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
- * RUN-owned: isolation, interactivity, evidence policy, concurrency safety. Those are
+ * RUN-owned: isolation, evidence policy, concurrency safety. Those are
  * decisions belonging to whoever started the run, so a composed workflow cannot carry
  * them — emit a one-line load-time WARN so the author who wrote them gets a signal.
  *
@@ -1289,19 +1286,6 @@ export function expandWorkflowIncludes(
     // Re-validate the fully-flattened DAG. Catches a namespaced id colliding with a
     // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
     // equivalent failures inside every recursively expanded loop_group body.
-    //
-    // Deliberately NOT re-running the workflow-class placement check here (#2707 step
-    // 2): a reusable block can legitimately author a native gate without declaring its
-    // own `interactive: true` — it is only ever a load error for the workflow ACTUALLY
-    // being loaded standalone (`parseWorkflow`'s own single-file check already covers
-    // that), not for every name `expandWorkflowIncludes` happens to also process as a
-    // `rawByName` entry. A composed gate's drivability stays exactly what it was before
-    // this PR — an invocation-time question `assertComposedGateDriveable` answers
-    // against the workflow actually being dispatched, because load time cannot tell
-    // which discovered workflow will own a given run (see that function's doc comment;
-    // `expandWorkflowIncludes — composed approval gates are stamped, not rejected
-    // (#1764)` pins this down with a "non-interactive INTERMEDIATE block still expands"
-    // case).
     const structureError = validateDagStructure(expanded.nodes, undefined, expanded.includeAliases);
     if (structureError) {
       throw new IncludeExpansionError(structureError);

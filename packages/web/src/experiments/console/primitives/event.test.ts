@@ -698,3 +698,19 @@ test.each([
     detail: 'web-push',
   });
 });
+
+test('an undelivered pause notice is a system row, not a failure', () => {
+  expect(
+    toRunEvent(
+      raw({
+        event_type: 'pause_notice_undelivered',
+        step_name: 'review',
+        data: { nodeId: 'review', platform: 'slack' },
+      })
+    )
+  ).toMatchObject({
+    kind: 'system',
+    label: 'Pause notice not delivered; the run is still waiting',
+    detail: 'slack',
+  });
+});

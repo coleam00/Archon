@@ -726,29 +726,6 @@ export function createTransactionView(
           },
         });
     },
-    failPausedAttentionWait: async (id, wait, error) => {
-      const run = structuredClone(runs.get(id));
-      if (!run) return { failed: false };
-      const current = run.metadata.wait;
-      if (
-        run.status !== 'paused' ||
-        !isWorkflowWaitContext(current) ||
-        current.kind !== 'attention' ||
-        current.owner !== wait.owner ||
-        current.nodeId !== wait.nodeId ||
-        current.waitingSince !== wait.waitingSince ||
-        (current.owner === 'loop_group' &&
-          (wait.owner !== 'loop_group' ||
-            current.bodyWaitId !== wait.bodyWaitId ||
-            current.iteration !== wait.iteration))
-      )
-        return { failed: false };
-      run.status = 'failed';
-      run.metadata.error = error;
-      delete run.metadata.scheduled_resume;
-      await terminal(run, { workflow_run_id: id, event_type: 'workflow_failed', data: { error } });
-      return { failed: true };
-    },
     clearWorkflowWaitContext: async (id, wait, completion) => {
       const run = runs.get(id);
       if (!run) return { cleared: false };
@@ -766,23 +743,6 @@ export function createTransactionView(
       record(rows.outcome);
       record(rows.node);
       return { cleared: true, nodeEvent: rows.node };
-    },
-    failPausedApproval: async (id, approval, error) => {
-      const run = structuredClone(runs.get(id));
-      if (
-        run?.status !== 'paused' ||
-        !isDeepStrictEqual(run.metadata.approval, JSON.parse(JSON.stringify(approval)))
-      )
-        return { failed: false };
-      run.status = 'failed';
-      run.metadata.error = error;
-      run.metadata.stop_reason = { reason: 'node_error' };
-      await terminal(run, {
-        workflow_run_id: id,
-        event_type: 'workflow_failed',
-        data: { error, exit_reason: 'node_error' },
-      });
-      return { failed: true };
     },
     claimWriteback: async id => {
       const run = runs.get(id);

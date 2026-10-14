@@ -42,7 +42,6 @@ function fixture(config = 'store: files\n'): Fixture {
     join(project, '.archon/workflows/portable.yaml'),
     `name: portable
 description: file-backed lifecycle
-interactive: true
 worktree:
   enabled: false
 nodes:

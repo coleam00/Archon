@@ -572,7 +572,6 @@ export interface WorkflowInvokedProperties {
   usesMcp?: boolean;
   usesSkills?: boolean;
   usesFreshContext?: boolean;
-  interactive?: boolean;
   usedIsolation?: boolean;
   isResume?: boolean;
   shape?: WorkflowShapeProperties;
@@ -816,7 +815,6 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         uses_mcp: Boolean(props.usesMcp),
         uses_skills: Boolean(props.usesSkills),
         uses_fresh_context: Boolean(props.usesFreshContext),
-        interactive: Boolean(props.interactive),
         used_isolation: Boolean(props.usedIsolation),
         is_resume: Boolean(props.isResume),
         ...(props.shape ? workflowShapeWireProps(props.shape) : {}),

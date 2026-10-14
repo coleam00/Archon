@@ -4521,7 +4521,6 @@ export interface components {
         | 'persistent';
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
-      interactive?: boolean;
       /** @enum {string} */
       effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
       fallbackModel?: string;

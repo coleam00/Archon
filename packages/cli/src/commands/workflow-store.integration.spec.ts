@@ -96,7 +96,6 @@ test('real CLI commands pause, approve, resume and query one run without SQL', a
     join(project, '.archon', 'workflows', 'portable.yaml'),
     `name: portable
 description: exercise a supplied CLI host
-interactive: true
 worktree:
   enabled: false
 nodes:
@@ -281,7 +280,6 @@ test('origin-free event waits signal and wake through the supplied host without 
     join(project, '.archon', 'workflows', 'portable-wait.yaml'),
     `name: portable-wait
 description: exercise portable event continuation
-interactive: true
 worktree:
   enabled: false
 nodes:
@@ -448,7 +446,6 @@ async function approveAfter(
     join(project, '.archon', 'workflows', 'raced.yaml'),
     `name: raced
 description: a gate answered while another process acts on the run
-interactive: true
 worktree:
   enabled: false
 nodes:

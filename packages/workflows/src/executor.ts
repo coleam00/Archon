@@ -3142,7 +3142,6 @@ export async function executeWorkflow(
       usesMcp: telemetryNodes.some(n => n.mcp !== undefined),
       usesSkills: telemetryNodes.some(n => n.skills !== undefined),
       usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),
-      interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: isContinuation,
       ...workflowTelemetryShape(deps.providers, workflow, runSource),

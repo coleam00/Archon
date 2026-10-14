@@ -305,8 +305,6 @@ Archon supports eight node types. Exactly one mode field is required per node:
 **Approval** pauses the workflow for human review. The downstream nodes don't run until the user approves in chat, CLI, or web UI:
 
 ```yaml
-interactive: true                 # required at workflow level for web UI delivery
-
 nodes:
   - id: plan
     command: plan-feature

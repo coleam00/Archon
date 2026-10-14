@@ -242,10 +242,6 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
-    failPausedAttentionWait: (id, wait, error) =>
-      write(view => view.failPausedAttentionWait(id, wait, error)),
-    failPausedApproval: (id, approval, error) =>
-      write(view => view.failPausedApproval(id, approval, error)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
       write(view => view.resolveApprovalGate(id, metadata, gateEvents, expected)),
     resolveAndCancelApprovalGate: (id, gateEvents, cancellation, expected) =>
