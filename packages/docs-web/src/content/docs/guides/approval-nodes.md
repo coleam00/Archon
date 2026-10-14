@@ -155,22 +155,39 @@ step. CLI run detail lists the available IDs and commands; the console displays
 the labels and sends the IDs. Older gates without `decisions` retain the legacy
 commands and output described below.
 
-### Explicit Commands (all platforms)
+### Explicit chat commands
 
+For authored decisions, select an exact declared ID and optionally include text:
+
+```text
+/workflow respond <run-id> accept Looks good, proceed
+/workflow respond <run-id> revise Please add tests
 ```
+
+The selected ID and text become `$gate-name.output.decision` and
+`$gate-name.output.text`. Only IDs in that gate's list are accepted.
+
+For default gates without authored decisions, use the binary commands:
+
+```text
 /workflow approve <run-id> looks good
 /workflow reject <run-id> needs changes
 ```
 
-Both resolve the gate **and** continue the run — approving no longer needs a
-follow-up message.
+These commands resolve the default gate and continue or cancel the run according
+to its rejection rules. Slack uses `/archon-workflow` in place of `/workflow`.
 
 ### Asking the chat agent
 
-You can also just say what you want in the conversation. The agent reads the open
-gate along with your message and decides:
+You can also say what you want in the conversation. The agent reads the open
+gate and your full message. For an authored gate, it selects a declared ID only
+when your message clearly expresses that decision, then uses `respond` with your
+words as text. The output is `{decision, text}`. A question or ambiguous message
+leaves the gate open.
 
-```
+For a default gate, the agent uses approve or reject:
+
+```text
 User: "looks good, ship it"
 → agent approves the gate; the run continues
 
@@ -181,27 +198,32 @@ User: "what would that change?"
 → agent answers you; the gate stays open and nothing is resolved
 ```
 
-The agent passes your own words through as the approval comment or the rejection
-reason, so a gate with `capture_response: true` still receives what you typed.
+On default gates, your words become the approval comment or rejection reason.
+A default gate with `capture_response: true` receives the approval comment as
+its node output.
 
 :::caution[Behaviour change]
-Archon used to record **any** message that did not start with `/` as an approval —
-including an objection, which was stored as the approval comment while the run
-carried on doing the thing you objected to. Typing at a gate no longer approves by
-itself. If your message is ambiguous the agent asks instead of guessing, and
-nothing is resolved until you are explicit.
+Archon used to record **any** message that did not start with `/` as an approval,
+including objections. Typing at a gate no longer approves by itself. If your
+message is ambiguous the agent asks instead of guessing.
 
-Two consequences worth knowing:
-
-- Providers without native tool support (Codex, OpenCode, Copilot) resolve the
-  gate by running `archon workflow approve|reject <run-id>` for you instead.
-- If you want a decision recorded with no interpretation at all, use the slash
-  commands above — they are deterministic.
+Providers without native tool support use
+`archon workflow respond <run-id> <decision> [text]` for authored gates, or
+`archon workflow approve|reject` for default gates. When the agent cannot resolve the gate from the conversation, it
+provides an explicit command for you to run. Use the chat commands above to
+record a decision without model interpretation.
 :::
 
 ### CLI
 
-The CLI is non-interactive — use explicit commands:
+The CLI is non-interactive. For authored gates, use a declared ID:
+
+```bash
+archon workflow respond <run-id> accept "Looks good, proceed"
+archon workflow respond <run-id> revise "Please add tests"
+```
+
+For default gates:
 
 ```bash
 # Approve (resumes the workflow immediately)
@@ -214,6 +236,9 @@ bun run cli workflow approve <run-id> --comment "Looks good, proceed"
 bun run cli workflow reject <run-id>
 bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 ```
+
+`approve` and `reject` also work on authored gates that declare those IDs. They
+record the declared decision and text; the authored graph determines what follows.
 
 ### Interactive-loop gates: bare approve finalizes
 

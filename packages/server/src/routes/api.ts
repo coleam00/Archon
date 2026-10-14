@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
 import { deleteWebPushSubscription } from '@archon/core/db/web-push-subscriptions';
@@ -2854,9 +2855,17 @@ export function registerApiRoutes(
       : attention;
   }
 
+  function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
+    const approval = metadata.approval;
+    return isApprovalContext(approval)
+      ? { ...metadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
+      : metadata;
+  }
+
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     return {
       ...row,
+      metadata: toApiRunMetadata(row.metadata),
       attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
@@ -2867,6 +2876,7 @@ export function registerApiRoutes(
   function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
     return {
       ...row,
+      metadata: toApiRunMetadata(row.metadata),
       attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),

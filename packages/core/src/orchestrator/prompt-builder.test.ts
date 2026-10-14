@@ -385,6 +385,39 @@ describe('formatPausedGateSection', () => {
     }
   );
 
+  const authoredGate = {
+    type: 'approval',
+    nodeId: 'review',
+    message: 'Choose a direction',
+    decisionsAuthored: true,
+    decisions: [
+      { id: 'accept', label: 'Accept plan' },
+      { id: 'revise', label: 'Revise plan' },
+    ],
+  };
+
+  test('authored container guidance records the decision and directs continuation to the CLI', () => {
+    const section = formatPausedGateSection(pausedRun(authoredGate, { isolation: 'container' }));
+    expect(section).toContain('respond run-abc accept');
+    expect(section).toContain('records the decision but CANNOT continue the run from here');
+    expect(section).toContain('`archon workflow resume run-abc`');
+    expect(section).not.toContain('no separate resume step');
+  });
+
+  test.each([true, false])(
+    'authored commands use the surface spelling (agentCanResolve: %s)',
+    agentCanResolve => {
+      const section = formatPausedGateSection({
+        ...pausedRun(authoredGate),
+        agentCanResolve,
+        surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+      });
+      expect(section).toContain('`/archon-workflow respond run-abc accept [text]`');
+      expect(section).toContain('`/archon-workflow respond run-abc revise [text]`');
+      expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    }
+  );
+
   test('states the gate facts the agent needs to act on', () => {
     const section = formatPausedGateSection(openGate);
 

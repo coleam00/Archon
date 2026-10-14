@@ -265,13 +265,19 @@ describe('toRun — approval parsing', () => {
     expect(run.approval?.decisionsAuthored).toBe(true);
   });
 
-  test('parses a well-formed approval from metadata', () => {
+  test('keeps default decisions supplied by the API', () => {
     const r = toRun(
       raw({
         id: 'r1',
         workflow_name: 'review',
         status: 'paused',
-        metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+        metadata: {
+          approval: {
+            nodeId: 'gate',
+            message: 'Approve?',
+            decisions: [{ id: 'approve' }, { id: 'reject' }],
+          },
+        },
       })
     );
     expect(r.approval).toEqual({
@@ -342,7 +348,14 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
         id: 'r1',
         workflow_name: 'review',
         status: 'paused',
-        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: null } },
+        metadata: {
+          approval: {
+            nodeId: 'gate',
+            message: 'Approve?',
+            resolved: null,
+            decisions: [{ id: 'approve' }, { id: 'reject' }],
+          },
+        },
       })
     );
     expect(r.approval).toEqual({
