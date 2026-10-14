@@ -37,11 +37,7 @@ export const timerTriggerConfigSchema = z
   })
   .strict();
 
-async function loadTimerConfig(
-  host: WorkflowHost,
-  path: string,
-  validateRunAs = true
-): Promise<z.infer<typeof timerTriggerConfigSchema>> {
+async function loadTimerConfig(path: string): Promise<z.infer<typeof timerTriggerConfigSchema>> {
   const value = timerTriggerConfigSchema.safeParse(
     JSON.parse(await readFile(path, 'utf8')) as unknown
   );
@@ -51,9 +47,15 @@ async function loadTimerConfig(
     );
   if (!isAbsolute(value.data.binding.launch.cwd))
     throw new Error('Trigger execution cwd must be absolute.');
-  if (validateRunAs && !(await host.records.users.getUserById(value.data.binding.runAsUserId)))
-    throw new Error('Trigger binding names an unknown run-as user.');
   return value.data;
+}
+
+async function assertKnownRunAsUser(
+  host: WorkflowHost,
+  config: z.infer<typeof timerTriggerConfigSchema>
+): Promise<void> {
+  if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
+    throw new Error('Trigger binding names an unknown run-as user.');
 }
 
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
@@ -153,7 +155,19 @@ export async function triggerCommand(
         );
       }
     }
-    const config = await loadTimerConfig(host, options.config);
+    const config = await loadTimerConfig(options.config);
+    // A redelivery keeps the binding snapshot of its first acceptance, so today's users
+    // must not turn a recorded delivery into a failure; the store answers replay or
+    // conflict for it. This lookup is the only run-as gate before persistence. It holds
+    // because receipts are never deleted: retention would let a vanished receipt pass
+    // here as an unvalidated first acceptance.
+    const recorded =
+      options.deliveryId !== undefined &&
+      (await host.deps.store.hasStartReceiptForDelivery(
+        config.sourceInstanceId,
+        options.deliveryId
+      ));
+    if (!recorded) await assertKnownRunAsUser(host, config);
     const binding = {
       ...config.binding,
       ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -333,7 +347,8 @@ export async function triggerCommand(
       throw new Error(
         'Usage: archon trigger schedule <install|remove> --config <timer-binding.json>'
       );
-    const config = await loadTimerConfig(host, options.config, args[0] !== 'remove');
+    const config = await loadTimerConfig(options.config);
+    if (args[0] !== 'remove') await assertKnownRunAsUser(host, config);
     const scheduleId = createHash('sha256')
       .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, config.binding.bindingId]))
       .digest('hex');

@@ -28,6 +28,13 @@ export function createInMemoryResourceStartStore(
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
   const capacities = new Map<string, number>();
+  const receiptForDelivery = (
+    sourceInstanceId: string,
+    deliveryId: string
+  ): StartReceiptInspection | undefined =>
+    [...receipts.values()].find(
+      receipt => receipt.sourceInstanceId === sourceInstanceId && receipt.deliveryId === deliveryId
+    );
   const decision = (request: ResourceStartRequestInspection): ResourceStartDisposition => {
     if (request.status === 'admitted')
       return { status: 'admitted', requestId: request.id, runId: request.id };
@@ -142,15 +149,13 @@ export function createInMemoryResourceStartStore(
       }
       return admitted;
     },
+    hasStartReceiptForDelivery: async (sourceInstanceId, deliveryId) =>
+      receiptForDelivery(sourceInstanceId, deliveryId) !== undefined,
     acceptStartReceipt: async (input): ReturnType<IResourceStartStore['acceptStartReceipt']> => {
       const previous =
         input.receipt.deliveryId === null
           ? receipts.get(input.receipt.id)
-          : [...receipts.values()].find(
-              receipt =>
-                receipt.sourceInstanceId === input.receipt.sourceInstanceId &&
-                receipt.deliveryId === input.receipt.deliveryId
-            );
+          : receiptForDelivery(input.receipt.sourceInstanceId, input.receipt.deliveryId);
       if (previous) {
         if (previous.contentDigest !== input.receipt.contentDigest)
           throw new SourceReceiptDigestConflictError();

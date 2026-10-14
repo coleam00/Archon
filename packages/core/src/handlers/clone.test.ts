@@ -634,6 +634,9 @@ describe('cloneRepository', () => {
     afterEach(() => {
       delete process.env.GITLAB_TOKEN;
       delete process.env.GITEA_TOKEN;
+      delete process.env.GITLAB_URL;
+      delete process.env.GITEA_URL;
+      delete process.env.FORGEJO_URL;
     });
 
     test('passes GITLAB_TOKEN with oauth2 credentials for gitlab.com URLs', async () => {
@@ -656,7 +659,8 @@ describe('cloneRepository', () => {
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('passes GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
+    test('passes GITLAB_TOKEN for the configured GITLAB_URL host', async () => {
+      process.env.GITLAB_URL = 'https://gitlab.mycompany.com';
       process.env.GITLAB_TOKEN = 'glpat-selfhosted';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -676,7 +680,8 @@ describe('cloneRepository', () => {
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('passes GITEA_TOKEN for Gitea URLs', async () => {
+    test('passes GITEA_TOKEN for the configured GITEA_URL host', async () => {
+      process.env.GITEA_URL = 'https://gitea.myorg.com';
       process.env.GITEA_TOKEN = 'gitea-token-789';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -696,7 +701,8 @@ describe('cloneRepository', () => {
       delete process.env.GITEA_TOKEN;
     });
 
-    test('passes GITEA_TOKEN for Forgejo URLs', async () => {
+    test('passes GITEA_TOKEN for the configured FORGEJO_URL host', async () => {
+      process.env.FORGEJO_URL = 'https://forgejo.example.org';
       process.env.GITEA_TOKEN = 'forgejo-token';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -794,6 +800,17 @@ describe('cloneRepository', () => {
       const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
       expect(result).toBeUndefined();
       delete process.env.GITLAB_TOKEN;
+    });
+
+    test.each([
+      ['GITLAB_TOKEN', 'https://gitlab.attacker.example/x.git'],
+      ['GITEA_TOKEN', 'https://gitea.attacker.example/x.git'],
+      ['GITEA_TOKEN', 'https://forgejo.attacker.example/x.git'],
+    ])('does not send %s to an unconfigured host named like a forge: %s', (envVar, url) => {
+      process.env[envVar] = 'tok-shouldnotleak';
+      const result = resolveForgeAuth(url);
+      delete process.env[envVar];
+      expect(result).toBeUndefined();
     });
 
     test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', () => {

@@ -130,6 +130,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
+      throw new Error('Unexpected hasStartReceiptForDelivery');
+    }),
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
@@ -171,6 +174,12 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     }),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
+    }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
     }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');

@@ -6,7 +6,9 @@ description: |
   author is a listed maintainer. A maintainer's issue is triaged, and the
   verdict becomes the item's stage and a route label. An outside issue gets
   archon-needs-maintainer and starts no agent until a listed maintainer
-  promotes it by adding archon-triage or a route label.
+  promotes it by adding archon-triage or a route label. With mode eval the run
+  writes nothing: it decides the named issue as it was opened and returns the
+  whole decision as its output.
 
   Use when: trigger bindings start it on issue lifecycle and label events (see
   the SDLC pack README, "Intake").
@@ -44,12 +46,29 @@ inputs:
       Pickup order, a JSON array of "<key> <asc|desc>" with keys urgency,
       importance, size, complexity and created. An item with no value for a
       key sorts after every item that has one.
+  mode:
+    default: "live"
+    description: >-
+      live or eval. Eval writes no request, claim, work item, label or comment:
+      it decides the issue named by number as it was opened, as if no run had
+      seen it, shows triage only its title and body at creation, and returns
+      every field of the decision as the outcome's evaluation. Any other value
+      refuses the run at facts, before anything is read or written.
+  trust:
+    default: "auto"
+    description: >-
+      auto or outside. Outside decides the item as an outside author's whatever
+      the maintainer list says, and refuses an item whose trust is already
+      recorded as maintainer, because recorded trust never changes. There is no
+      maintainer value: any other value refuses the run at facts, before
+      anything is read or written, so no input can raise trust.
 
 returns: outcome
 
 nodes:
   # Trust is decided here, by a script, from the maintainer list at the default
-  # branch's head. Writes only the request and the claim.
+  # branch's head. Writes only the request and the claim in live, and nothing in
+  # eval.
   - id: facts
     script: facts
     runtime: bun
@@ -69,7 +88,8 @@ nodes:
               required: [host, path]
             number: { type: integer }
           required: [repo, number]
-        # The claimed issue's URL, triage's target; empty when nothing waits.
+        # Triage's target: the claimed issue's URL, empty when nothing waits. In
+        # eval, the issue's title and body at creation, without its number.
         target: { type: string }
         decision:
           type: [object, 'null']
@@ -83,7 +103,16 @@ nodes:
             waiting: { type: array, items: { type: string } }
             notes: { type: array, items: { type: object } }
           required: [path, trust, promoted, stage, body_digest, labels, waiting, notes]
-      required: [path, item, target, decision]
+        # What triage was shown in eval; null in live. body_from is current when
+        # the creation body could not be recovered and the current one stood in.
+        seen: &seen
+          type: [object, 'null']
+          properties:
+            title: { type: string }
+            body_digest: { type: string }
+            body_from: { type: string, enum: [creation, current] }
+          required: [title, body_digest, body_from]
+      required: [path, item, target, decision, seen]
 
   # Only a maintainer's item, or an outside item a maintainer promoted at its
   # current body, reaches this agent. Unpublished: the outcome writes the labels
@@ -105,6 +134,7 @@ nodes:
       path: "$facts.output.path"
       item: { from: "$facts.output.item" }
       decision: { from: "$facts.output.decision" }
+      seen: { from: "$facts.output.seen" }
       contract: { from: "$triage.output.contract", if_skipped: null }
       route: { from: "$triage.output.route", if_skipped: null }
       pull_request: { from: "$triage.output.pull_request", if_skipped: null }
@@ -116,6 +146,9 @@ nodes:
       labels: { from: "$triage.output.labels", if_skipped: null }
       summary: { from: "$triage.output.summary", if_skipped: null }
       report: { from: "$triage.output.report", if_skipped: null }
+      proposed_edits: { from: "$triage.output.proposed_edits", if_skipped: null }
+      blocked_reason: { from: "$triage.output.blocked_reason", if_skipped: null }
+      blocked_by: { from: "$triage.output.blocked_by", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -126,4 +159,23 @@ nodes:
         promoted: { type: boolean }
         labels: { type: array, items: { type: string } }
         summary: { type: string }
-      required: [path, item, stage, trust, promoted, labels, summary]
+        # Null in live. In eval, the run's whole decision: the input trust, what
+        # triage was shown, the label delta live would write, this run's history
+        # entries, and triage's verdict (null when triage did not run).
+        evaluation:
+          type: [object, 'null']
+          properties:
+            trust_input: { type: string, enum: [auto, outside] }
+            seen: *seen
+            labels:
+              type: object
+              properties:
+                add: { type: array, items: { type: string } }
+                remove: { type: array, items: { type: string } }
+              required: [add, remove]
+            reasons: { type: array, items: { type: object } }
+            # Triage's verdict as outcome.ts assembles it from fields triage's own
+            # output schema already validated; null when triage did not run.
+            triage: { type: [object, 'null'] }
+          required: [trust_input, seen, labels, reasons, triage]
+      required: [path, item, stage, trust, promoted, labels, summary, evaluation]
