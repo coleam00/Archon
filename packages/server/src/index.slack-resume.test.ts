@@ -239,9 +239,6 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
 }));
 mock.module('@archon/core/db/workflows', () => ({ getWorkflowRun: mockGetWorkflowRun }));
-mock.module('@archon/core/db/resource-starts', () => ({
-  hasStartReceiptForDelivery: async (): Promise<boolean> => false,
-}));
 mock.module('@archon/core/config/store-selection', () => ({
   loadStoreSelection: async (): Promise<'database'> => 'database',
 }));

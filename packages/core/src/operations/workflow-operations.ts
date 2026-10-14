@@ -36,10 +36,17 @@ import {
   gateOccurrence,
   legacyOccurrenceStep,
   attentionForm,
+  attentionLabels,
   attentionOptions,
+  attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
 } from '@archon/workflows/schemas/workflow-run';
+import {
+  attentionLabelKeySchema,
+  attentionLabelsSchema,
+  type AttentionLabels,
+} from '@archon/workflows/schemas/dag-node';
 import type {
   WorkflowRun,
   ApprovalContext,
@@ -95,6 +102,21 @@ export interface ApprovalOperationResult {
 export interface AttentionAnswerRequest {
   choose: readonly string[];
   text?: string;
+}
+
+/** A label write on an attention wait: the occurrence it is for, keys to set and keys to remove. */
+export interface AttentionLabelRequest {
+  occurrence: string;
+  set: Readonly<AttentionLabels>;
+  unset: readonly string[];
+}
+
+/** An attention wait's labels after a write, and the revision that write produced. */
+export interface AttentionLabelResult {
+  runId: string;
+  occurrence: string;
+  revision: number;
+  labels: AttentionLabels;
 }
 
 export interface AttentionAnswerOperationResult extends ApprovalOperationResult {
@@ -467,11 +489,14 @@ export function expectedGateForOccurrence(
   return { nodeId, pauseId: occurrence };
 }
 
+/** An attention wait open to an answer: it has a pause identity an answer can name. */
+type OpenAttentionWait = WorkflowAttentionWaitContext & { pauseId: string };
+
 /**
  * The open attention wait `run` is paused at, refusing every state where an answer to one
  * cannot land. Read-only, so the CLI's detached pre-flight runs it too.
  */
-export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext {
+export function assertAnswerable(run: WorkflowRun): OpenAttentionWait {
   const wait = pausedAttentionWait(run);
   if (wait === undefined) {
     const attention = runAttention(run);
@@ -494,7 +519,55 @@ export function assertAnswerable(run: WorkflowRun): WorkflowAttentionWaitContext
       `Run ${run.id} paused at an attention wait before answers existed. Continue it with resume, ` +
         'or abandon it if it should not continue.'
     );
-  return wait;
+  return { ...wait, pauseId: wait.pauseId };
+}
+
+/**
+ * The occurrence of the open attention wait a label write lands on, refusing every
+ * state where it cannot: a malformed write, a stale occurrence (named first, like an
+ * answer's), a gate, a blocked parent, or a wait already answered. Only `wait: attention`
+ * pauses carry labels. Read-only, so a surface can check before it writes.
+ */
+export function assertLabelable(
+  run: WorkflowRun,
+  request: AttentionLabelRequest,
+  via: RecordSurface
+): string {
+  attentionLabelsSchema.parse(request.set);
+  for (const key of request.unset) attentionLabelKeySchema.parse(key);
+  if (Object.keys(request.set).length === 0 && request.unset.length === 0)
+    throw new Error('A label write needs at least one key to set or unset.');
+  const both = request.unset.find(key => Object.hasOwn(request.set, key));
+  if (both !== undefined) throw new Error(`Label '${both}' is both set and unset.`);
+  assertAnswerAdmissible(run, {
+    via,
+    expectedGate: expectedGateForOccurrence(run, request.occurrence),
+  });
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined) {
+    const attention = runAttention(run);
+    if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+      const children =
+        attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+      throw new Error(
+        `Run ${run.id} is paused waiting on sub-run ${children.join(', ')}. Label the sub-run's item instead.`
+      );
+    }
+    throw new Error(
+      attention?.kind === 'awaiting_response'
+        ? `Run ${run.id} is paused at a gate. Only attention waits carry labels.`
+        : `Run ${run.id} is not paused at an attention wait (status '${run.status}').`
+    );
+  }
+  if (wait.answer !== undefined)
+    throw new Error(
+      `Run ${run.id}'s attention wait was already answered and is awaiting continuation.`
+    );
+  if (wait.pauseId === undefined)
+    throw new Error(
+      `Run ${run.id} paused at an attention wait before pause identities existed; it takes no labels.`
+    );
+  return wait.pauseId;
 }
 
 /**
@@ -959,6 +1032,7 @@ export interface WorkflowOperationsDeps {
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'
     | 'answerAttentionWait'
+    | 'labelAttentionWait'
     | 'cancelResumableRunsForConversation'
     | 'deleteWorkflowNodeSessions'
     | 'listWorkflowRuns'
@@ -1022,6 +1096,12 @@ export interface WorkflowOperations {
     actor: RunActor,
     origin: GateAnswerOrigin
   ) => Promise<AttentionAnswerOperationResult>;
+  labelAttentionWait: (
+    runId: string,
+    request: AttentionLabelRequest,
+    actor: RunActor,
+    via: RecordSurface
+  ) => Promise<AttentionLabelResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
   ) => Promise<{ deleted: number }>;
@@ -1256,7 +1336,7 @@ export function createWorkflowOperations({
     const wait = assertAnswerable(run);
     const answer = attentionAnswerFor(run, wait, request);
     const { answered } = await store.answerAttentionWait(run.id, {
-      ...wait,
+      pauseId: wait.pauseId,
       answer,
       answeredVia: origin.via,
       answeredAt: new Date().toISOString(),
@@ -1284,6 +1364,35 @@ export function createWorkflowOperations({
   ): Promise<AttentionAnswerOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_answer_lookup_failed');
     return answerRun(run, request, actor, origin, 'respond');
+  }
+
+  /**
+   * Merge a label write into the attention wait `runId` is paused at. Who may write is
+   * the same as who may answer. The store checks the occurrence again as it commits, so
+   * a write that loses a race with an answer or a new pause is refused the same way.
+   */
+  async function labelAttentionWait(
+    runId: string,
+    request: AttentionLabelRequest,
+    actor: RunActor,
+    via: RecordSurface
+  ): Promise<AttentionLabelResult> {
+    const run = await getRunOrThrow(runId, 'operations.workflow_label_lookup_failed');
+    await assertMayAct(run, actor, 'respond');
+    const occurrence = assertLabelable(run, request, via);
+    const result = await store.labelAttentionWait(run.id, {
+      pauseId: occurrence,
+      set: request.set,
+      unset: request.unset,
+      via,
+    });
+    if (!result.labeled) throw staleGateError(run.id, await store.getWorkflowRun(run.id));
+    return {
+      runId: run.id,
+      occurrence,
+      revision: attentionRevision(result.wait),
+      labels: attentionLabels(result.wait),
+    };
   }
 
   async function cancelRunAndCleanup(
@@ -2262,6 +2371,7 @@ export function createWorkflowOperations({
     rejectWorkflow,
     respondToWorkflow,
     answerWorkflow,
+    labelAttentionWait,
     resetWorkflowNodeSessions,
   };
 }

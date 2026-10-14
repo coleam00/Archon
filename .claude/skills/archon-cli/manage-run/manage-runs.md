@@ -54,6 +54,9 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
+| Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
+| The queue item one run stands for | `archon workflow attention <run-id> --json` |
+| Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
@@ -90,6 +93,13 @@ archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json  
 the answered wait is a due continuation. Answer only what the user actually decided; an
 undeclared option is refused. A `legacy:` occurrence is a wait paused before answers
 existed: it takes no answer, so `workflow resume` it once its action is done.
+
+To work the whole queue instead of one run, `archon workflow attention --json` lists
+every item that needs someone, each with its `kind`, `occurrence`, `form`, `options`,
+`labels`, typed `project` and pointers to its transcript and artifacts. Answer an item
+by its `runId` and `occurrence` exactly as above. Labels are the user's routing data:
+`--label ci=other` selects one class, and `attention label` writes a classification
+without answering. Archon never routes by them.
 
 When you answer from a run you saw paused earlier, pass the occurrence that
 `workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the
