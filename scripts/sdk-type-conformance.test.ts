@@ -10,7 +10,8 @@ const HELPERS = join(ROOT, 'packages/providers/src/sdk-type-conformance.type-tes
 
 function proofDiagnostics(
   extra = '',
-  replacements: ReadonlyMap<string, string> = new Map()
+  replacements: ReadonlyMap<string, string> = new Map(),
+  proofFile = PROOF
 ): string[] {
   const comparisons = SDK_TYPE_EXCEPTIONS.flatMap((entry, index) => {
     if (entry.kind !== 'boundary') return [];
@@ -53,8 +54,14 @@ ${extra}
   if (parsed.errors.length) throw new Error('Invalid providers tsconfig');
   const host = ts.createCompilerHost(parsed.options);
   const readFile = host.readFile;
-  host.readFile = file => (file === PROOF ? proof : (replacements.get(file) ?? readFile(file)));
-  const program = ts.createProgram([PROOF, HELPERS], parsed.options, host);
+  const virtualSources = new Map(
+    [...replacements, [proofFile, proof] as const].map(([file, text]) => [
+      file.replaceAll('\\', '/'),
+      text,
+    ])
+  );
+  host.readFile = file => virtualSources.get(file.replaceAll('\\', '/')) ?? readFile(file);
+  const program = ts.createProgram([proofFile, HELPERS], parsed.options, host);
   return ts
     .getPreEmitDiagnostics(program)
     .map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
@@ -105,3 +112,52 @@ test('generated comparison rejects drift in the actual ledgered sandbox schema',
     expect.stringContaining('does not satisfy the constraint')
   );
 });
+
+test('compiler host supplies virtual sources with Windows path separators', () => {
+  const proofFile = PROOF.replaceAll('/', '\\');
+  expect(proofDiagnostics('', new Map(), proofFile)).toEqual([]);
+});
+
+test('compiler host applies replacements with Windows path separators', () => {
+  const file = join(ROOT, 'packages/workflows/src/schemas/effort.ts');
+  const original = readFileSync(file, 'utf8');
+  const changed = original.replace(
+    'export type EffortLevel = z.infer<typeof effortLevelSchema>;',
+    "export type EffortLevel = Extract<z.infer<typeof effortLevelSchema>, 'low'>;"
+  );
+  expect(changed).not.toBe(original);
+  expect(proofDiagnostics('', new Map([[file.replaceAll('/', '\\'), changed]]))).toContainEqual(
+    expect.stringContaining('does not satisfy the constraint')
+  );
+});
+
+for (const probe of [
+  {
+    name: 'OAuthCredentials',
+    file: 'packages/core/src/credentials/delivery.ts',
+    original: 'export type OAuthCredentials = Record<string, unknown>;',
+    changed: 'export type OAuthCredentials = Record<string, string>;',
+  },
+  {
+    name: 'EffortLevel',
+    file: 'packages/workflows/src/schemas/effort.ts',
+    original: 'export type EffortLevel = z.infer<typeof effortLevelSchema>;',
+    changed: "export type EffortLevel = Extract<z.infer<typeof effortLevelSchema>, 'low'>;",
+  },
+  {
+    name: 'OAuthLoginCallbacks',
+    file: 'packages/core/src/credentials/subscription-oauth.ts',
+    original: 'onAuth(info: OAuthAuthInfo): void;',
+    changed: 'onAuth(info: number): void;',
+  },
+]) {
+  test(`generated subset comparison rejects incompatible ${probe.name}`, () => {
+    const file = join(ROOT, probe.file);
+    const original = readFileSync(file, 'utf8');
+    const changed = original.replace(probe.original, probe.changed);
+    expect(changed).not.toBe(original);
+    expect(proofDiagnostics('', new Map([[file, changed]]))).toContainEqual(
+      expect.stringContaining('does not satisfy the constraint')
+    );
+  });
+}
