@@ -5109,6 +5109,62 @@ ${fanOut}
     ]);
   });
 
+  it('continuing a fan-out holds a child that is running, without failing the node or cancelling it (#4044)', async () => {
+    await writeWorkflow('fan-ask-live', fanAskChild('fan-ask-live', 'c', '!='));
+    await writeWorkflow(
+      'fan-ask-live-parent',
+      fanAskParent('fan-ask-live-parent', 'fan-ask-live', '["a","b"]', '      max_parallel: 2')
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-live-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    const children = childByItem(store, 'fan-ask-live');
+    const [a, b] = [children.get('a')!, children.get('b')!];
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'fan-ask-live-parent'
+    )!;
+    expect(parentRun.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      childRunIds: [a.id, b.id],
+    });
+
+    // b was answered and its continuation is driving it when the parent is continued.
+    await store.updateWorkflowRun(b.id, { status: 'running' });
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-live-parent'),
+      'goal',
+      { conversationId: 'conv-db' },
+      { ...hydrated! }
+    );
+
+    expect(result.success && 'paused' in result && result.paused).toBe(true);
+    expect(store.events.some(e => e.event_type === 'node_failed' && e.step_name === 'work')).toBe(
+      false
+    );
+    expect((await store.getWorkflowRun(a.id))?.status).toBe('paused');
+    expect((await store.getWorkflowRun(b.id))?.status).toBe('running');
+    const held = await store.getWorkflowRun(parentRun.id);
+    expect(held?.status).toBe('paused');
+    expect(held?.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      childRunIds: [a.id, b.id],
+    });
+  });
+
   it('continuing a fan-out does not re-drive a child that already failed (#4044 D3)', async () => {
     await writeWorkflow(
       'fan-ask-fail',
