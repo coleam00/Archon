@@ -1171,7 +1171,11 @@ function containerLine(phase: string, data: Record<string, unknown>): string {
 }
 
 function toolLine(row: WorkflowEventRow, openToolCalls: OpenToolCalls): string | undefined {
-  const envelope = providerEventEnvelopeSchema.parse(row.data);
+  // A row this build cannot read (another build's provider events) is skipped, as the
+  // transcript reader does; a throw here would only log once per row.
+  const parsed = providerEventEnvelopeSchema.safeParse(row.data);
+  if (!parsed.success) return undefined;
+  const envelope = parsed.data;
   const providerEvent = envelope.event;
   // A call id is unique within its attempt; parallel nodes can repeat one.
   const callKey = JSON.stringify([
