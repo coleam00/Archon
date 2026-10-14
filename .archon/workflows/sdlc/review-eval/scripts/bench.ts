@@ -99,6 +99,9 @@ export interface Case {
   readonly variants: readonly Variant[];
 }
 
+/** A case date carries its zone: read in the local one, variant SHAs would differ by machine. */
+const ZONED_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
 export interface BenchSet {
   /** Absolute path of the set file. */
   readonly path: string;
@@ -134,7 +137,9 @@ export function loadSet(path: string): BenchSet {
     if (caseIds.has(id)) problems.push(`${name}: duplicate case id`);
     caseIds.add(id);
     if (branch === baseBranch) problems.push(`${name}: branch and base_branch must differ`);
-    if (Number.isNaN(Date.parse(date as string))) problems.push(`${name}: date ${String(date)} is not a date`);
+    if (Number.isNaN(Date.parse(date as string)) || !ZONED_DATE.test(date as string)) {
+      problems.push(`${name}: date ${String(date)} is not an ISO 8601 date ending in Z or ±hh:mm`);
+    }
     const workOrderPath = resolve(setDir, workOrder as string);
     if (!existsSync(workOrderPath)) problems.push(`${name}: work order ${workOrderPath} does not exist`);
 
@@ -367,8 +372,10 @@ export function cloneSample(prepared: PreparedCase, bench: Case, variant: string
   gitOrThrow('clone', '-q', '--no-local', origin, checkout);
   gitOrThrow('-C', checkout, 'fetch', '-q', '--no-tags', prepared.store, `refs/variants/${variant}:refs/heads/${bench.branch}`);
   gitOrThrow('-C', checkout, 'checkout', '-q', bench.branch);
-  // FETCH_HEAD names the store, and through it the bench's output directory.
+  // FETCH_HEAD and the reflogs name the store and `refs/variants/<id>`, and through
+  // them the bench's output directory and which variant this is.
   rmSync(join(checkout, '.git', 'FETCH_HEAD'), { force: true });
+  rmSync(join(checkout, '.git', 'logs'), { recursive: true, force: true });
 }
 
 export interface Check {
@@ -376,7 +383,7 @@ export interface Check {
   readonly problems: readonly string[];
 }
 
-const check = (problems: string[]): Check => ({ ok: problems.length === 0, problems });
+const check = (problems: readonly string[]): Check => ({ ok: problems.length === 0, problems });
 
 /** H1 before launch: the checkout's only remote is its local origin, and HEAD is the variant. */
 function sealedBefore(checkout: string, origin: string, expected: string): string[] {
@@ -421,11 +428,37 @@ function versionTruth(run: RunDetail, resolved: ResolvedVersion, lenses: readonl
       problems.push(`lens ${lens} ran on no tier`);
       continue;
     }
-    if (binding.provider !== tiers[tier].provider || binding.model.requested !== tiers[tier].model) {
-      problems.push(`lens ${lens} ran ${binding.provider}/${String(binding.model.requested)}, not ${tier}'s ${tiers[tier].provider}/${tiers[tier].model}`);
+    if (binding.provider === undefined || binding.requested === undefined) {
+      problems.push(`lens ${lens} has no provider binding`);
+    } else if (binding.provider !== tiers[tier].provider || binding.requested !== tiers[tier].model) {
+      problems.push(`lens ${lens} ran ${binding.provider}/${binding.requested}, not ${tier}'s ${tiers[tier].provider}/${tiers[tier].model}`);
     }
   }
   return problems;
+}
+
+export interface HardChecks {
+  readonly checks: { readonly completed: Check; readonly sealed: Check; readonly version: Check };
+  readonly passed: boolean;
+}
+
+/**
+ * Whether a finished sample counts: the run completed, diffed against the case's base
+ * branch (the rest of the seal is checked before launch), and every lens ran on the
+ * version's tiers.
+ */
+export function hardChecks(
+  run: RunDetail,
+  resolved: ResolvedVersion,
+  lenses: readonly string[],
+  bench: Pick<Case, 'base_branch'>
+): HardChecks {
+  const checks = {
+    completed: check(run.status === 'completed' ? [] : [`the run is ${run.status}`]),
+    sealed: check(run.base_branch === bench.base_branch ? [] : [`the run's base branch is ${run.base_branch}, not ${bench.base_branch}`]),
+    version: check(versionTruth(run, resolved, lenses)),
+  };
+  return { checks, passed: checks.completed.ok && checks.sealed.ok && checks.version.ok };
 }
 
 /** Round copies (`code-round-1.md`) are history of a lens file, not another lens. */
@@ -464,15 +497,15 @@ function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
     node: node?.nodeId ?? null,
     tier: binding?.tier ?? null,
     provider: binding?.provider ?? null,
-    model: binding?.model.requested ?? null,
-    resolved_model: reported(binding?.model.resolved),
+    model: binding?.requested ?? null,
+    resolved_model: binding?.resolved ?? null,
     cost_usd: reported(node?.execution?.spend?.costUsd),
     tokens: reported(node?.execution?.spend?.tokens),
   };
 }
 
 /** The run's total provider cost, or null when any agent node reported none. */
-function runCost(run: RunDetail): { cost_usd: number | null; tokens: TokenUsage } {
+export function runCost(run: RunDetail): { cost_usd: number | null; tokens: TokenUsage } {
   let cost: number | null = 0;
   const tokens = { input: 0, output: 0 };
   for (const node of run.nodes) {
@@ -524,30 +557,33 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
         inputs: { ...version.inputs, work_order: workOrder },
         message: reviewMessage(bench),
       });
-      console.log(`${version.label} ${bench.id}/${variant} #${sample}: run ${runId}`);
-      await waitRun(runId);
-      const run = await getRun(runId);
-      const itemDir = join(outDir, 'items', runId);
-      const lenses = collectItem(run, itemDir);
-      if (run.base_branch !== bench.base_branch) sealed.push(`the run's base branch is ${run.base_branch}, not ${bench.base_branch}`);
-      const checks = { sealed: check(sealed), version: check(versionTruth(run, resolved, lenses)) };
-      const passed = checks.sealed.ok && checks.version.ok;
-      const started = Date.parse(run.started_at);
-      appendLine(samplesFile, {
-        case: bench.id,
-        variant,
-        sample,
-        run_id: runId,
-        status: run.status,
-        version,
-        lenses: Object.fromEntries(lenses.map(lens => [lens, lensRecord(run, lens)])),
-        checks,
-        passed,
-        ...runCost(run),
-        duration_ms: run.completed_at === null ? null : Date.parse(run.completed_at) - started,
-        item: relative(outDir, itemDir),
-      });
-      console.log(`${version.label} ${bench.id}/${variant} #${sample}: ${run.status}, lenses ${lenses.join(', ') || 'none'}, hard checks ${passed ? 'passed' : 'FAILED'}`);
+      const name = `${version.label} ${bench.id}/${variant} #${sample}`;
+      console.log(`${name}: run ${runId}`);
+      const identity = { case: bench.id, variant, sample, run_id: runId, version };
+      // The run is paid for: whatever fails from here, its line is written and the batch goes on.
+      try {
+        await waitRun(runId);
+        const run = await getRun(runId);
+        const itemDir = join(outDir, 'items', runId);
+        const lenses = collectItem(run, itemDir);
+        const { checks, passed } = hardChecks(run, resolved, lenses, bench);
+        appendLine(samplesFile, {
+          ...identity,
+          status: run.status,
+          lenses: Object.fromEntries(lenses.map(lens => [lens, lensRecord(run, lens)])),
+          checks,
+          passed,
+          ...runCost(run),
+          duration_ms: run.completed_at === null ? null : Date.parse(run.completed_at) - Date.parse(run.started_at),
+          item: relative(outDir, itemDir),
+        });
+        console.log(`${name}: ${run.status}, lenses ${lenses.join(', ') || 'none'}, hard checks ${passed ? 'passed' : 'FAILED'}`);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        appendLine(samplesFile, { ...identity, error: reason, passed: false });
+        console.error(`${name}: not recorded: ${reason}`);
+        process.exitCode = 1;
+      }
     }
   }
 }

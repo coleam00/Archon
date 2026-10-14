@@ -260,11 +260,17 @@ export interface TokenUsage {
   readonly cacheWrite?: number;
 }
 
+/**
+ * What a bench reads of an agent node's binding. The engine records every field as
+ * optional (an agent node can run with no provider bound), so each is checked here.
+ */
 export interface NodeBinding {
-  readonly provider: string;
+  readonly provider?: string;
   readonly tier?: string;
-  readonly effort?: string;
-  readonly model: { readonly requested?: string; readonly resolved: Observation<string> };
+  /** The model the tier asked for. */
+  readonly requested?: string;
+  /** The model the provider reported it ran, when it reported one. */
+  readonly resolved?: string;
 }
 
 export interface RunNode {
@@ -272,7 +278,6 @@ export interface RunNode {
   readonly state: string;
   readonly execution?: {
     readonly node?: { readonly kind: string };
-    /** A `NodeBinding` on an agent node; other kinds record an empty object. */
     readonly binding?: unknown;
     readonly spend?: {
       readonly costUsd?: Observation<number>;
@@ -281,9 +286,21 @@ export interface RunNode {
   };
 }
 
+const textOrNone = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+
 /** The model binding an agent node ran on; any other node has none. */
 export function agentBinding(node: RunNode | undefined): NodeBinding | undefined {
-  return node?.execution?.node?.kind === 'agent' ? (node.execution.binding as NodeBinding) : undefined;
+  if (node?.execution?.node?.kind !== 'agent') return undefined;
+  const { binding } = node.execution;
+  if (!isObject(binding)) return {};
+  const model = isObject(binding.model) ? binding.model : {};
+  const resolved = isObject(model.resolved) && model.resolved.source === 'provider' ? model.resolved.value : undefined;
+  return {
+    provider: textOrNone(binding.provider),
+    tier: textOrNone(binding.tier),
+    requested: textOrNone(model.requested),
+    resolved: textOrNone(resolved),
+  };
 }
 
 /** The part of `archon workflow get --json --verbose` a bench reads. */
