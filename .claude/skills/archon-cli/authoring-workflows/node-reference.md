@@ -38,6 +38,7 @@ When both are valid sources, give the model both values and state the precedence
 
 Exactly one of these appears per node: `command`, `prompt`, `bash`, `script`,
 `loop`, `loop_group`, `approval`, `cancel`, `wait`, `workflow`, `include`.
+`approval` is deprecated; new pauses use `wait: { attention: ..., form: ... }`.
 
 ### command / prompt — AI nodes
 
@@ -165,7 +166,7 @@ Completion channels — declare at least one, pick by tier:
 
 - `until_bash: "<exit-0 check>"` — completion externally checkable (deterministic)
 - `until_field: <bool>` — completion is the model's judgment, via `output_format`
-- `until: TOKEN` — prose sentinel; interactive gates a human reads ONLY (deprecated elsewhere)
+- `until: TOKEN` — deprecated prose sentinel; use one of the channels above
 
 Also: `fresh_context: true` (each iteration starts clean) and `$LOOP_PREV_OUTPUT`
 for previous-iteration state.
@@ -186,7 +187,7 @@ truthfully rather than blessing a bad last attempt.
         depends_on: [fix]
         context: fresh
         output_format: {type: object, properties: {ready: {type: boolean}}, required: [ready]}
-    until_bash: 'test "$recheck.output.ready" = "true"'
+    until_bash: 'ready=$recheck.output.ready; test "$ready" = "true"'
     max_iterations: 5
 ```
 
@@ -195,28 +196,21 @@ Body is sealed (no external `depends_on`); outer outputs reach bodies via
 previous iteration: prompts text-substitute it, while `when:` conditions resolve it
 as a typed condition reference. A failed body node fails the group immediately.
 
-### approval — human gate
+### approval — deprecated
 
-```yaml
-- id: review-gate
-  approval:
-    message: "Review before proceeding"
-    decisions:
-      - {id: approve, label: Approve}
-      - {id: needs-revision, label: Needs revision}
-  depends_on: [plan]
+`approval:` still loads and runs, but the loader warns once per workflow file, naming
+each node and its replacement. Do not write new ones. Replace:
 
-- id: revise
-  prompt: "Revise using this feedback: $review-gate.output.text"
-  depends_on: [review-gate]
-  when: "$review-gate.output.decision == 'needs-revision'"
-```
-
-The run pauses in the attention queue until the gate is answered, however it was
-started. Use only for interactive sessions or super load-bearing actions. Authored `decisions:` always produce
-structured `{decision, text}` output. `capture_response` and `on_reject` are
-compatibility-only; wire rework explicitly with `when:` as above, or put the gate
-at the end of a `loop_group` when review and revision should repeat.
+- `approval: { message }` → `wait: { attention: <message>, form: approval }`. A legacy
+  reject cancels the run; the attention form continues with `{decision: 'reject'}`, so
+  add a `cancel:` node with `when: "$<id>.output.decision == 'reject'"` where rejecting
+  should end the run.
+- `approval.decisions` → `wait: { attention, form: select, options }` with the same ids
+  and labels; same `{decision, text}` output.
+- `capture_response` → read the answer's `$<id>.output.text`; every form records text.
+- `on_reject` / `$REJECTION_REASON` → a rework node with
+  `when: "$<id>.output.decision == 'reject'"` that reads `$<id>.output.text`, inside a
+  `loop_group` if it should repeat.
 
 ### cancel — terminate deliberately
 
@@ -304,7 +298,28 @@ and `payload`.
 
 The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
 and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
-an answer and never cancels the run; branch on `$ask.output.decision` with `when:`.
+an answer and never cancels the run; branch on `$ask.output.decision` with `when:`:
+
+```yaml
+- id: review
+  depends_on: [plan]
+  wait:
+    attention: "Approve this plan? $plan.output"
+    form: approval
+- id: stop
+  depends_on: [review]
+  when: "$review.output.decision == 'reject'"
+  cancel: "Plan rejected."
+- id: implement
+  depends_on: [review]
+  when: "$review.output.decision == 'approve'"
+  command: implement
+```
+
+Pause only for an interactive session or a super load-bearing action. The run pauses
+in the attention queue until answered, however it was started. To ask after each pass
+of a repeated body, end a `loop_group` body in the wait (it must be the body's sole
+terminal sink) and read the answer next iteration as `$LOOP_PREV.<wait-id>.output.text`.
 
 ## Wiring nodes together
 
@@ -374,6 +389,10 @@ Run them:
 archon workflow test                    # everything discovered
 archon workflow test my-workflow        # one workflow's fixtures
 ```
+
+A reachable attention wait pauses the simulation unless the fixture stubs it; the stub
+stands in for the answer and must match the form's output, e.g.
+`review: { decision: approve, text: "" }`. Deprecated `approval:` gates auto-approve.
 
 Expected-red fixtures are the important ones: a guard that has never been seen
 failing proves nothing. Prove reds red before trusting them. `workflow test`

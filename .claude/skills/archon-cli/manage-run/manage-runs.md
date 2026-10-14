@@ -111,7 +111,7 @@ old pause, so immediately follow it with `workflow wait`. A new pause is still
 reported. If acceptance is unconfirmed after 60 seconds, inspect the run before
 retrying; the child may still continue.
 
-## Interactive-loop gates: comment or no comment is a decision
+## Deprecated interactive-loop gates: comment or no comment is a decision
 
 Read the gate state first:
 
@@ -124,8 +124,9 @@ archon workflow get <run-id> --json | jq .metadata.approval.completionSignaled
 - You approve **with** a comment → another full iteration runs using your text
   as feedback.
 - Reject always needs a reason. Gates with authored `decisions:` expose it as
-  `$gate.output.text`; only legacy `approval.on_reject` prompts receive
-  `$REJECTION_REASON`.
+  `$gate.output.text`; only deprecated `approval.on_reject` prompts receive
+  `$REJECTION_REASON`. At an attention wait, reject is an answer
+  (`decision: reject`) and the run continues.
 
 Choose deliberately after reading what the gate produced — not by reflex.
 
