@@ -888,7 +888,7 @@ Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so
 
 ### `workflow wake`
 
-Wake due durable time waits, event deadlines, signaled events, and scheduled quota resumes without running a server:
+Wake due durable time waits, event deadlines, signaled events, scheduled quota resumes, and answered gates without running a server:
 
 ```bash
 archon workflow wake --json
@@ -1062,7 +1062,7 @@ archon workflow approve <run-id> --comment "Looks good, proceed"
 archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 
-In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming (the run is left resumable for a backgrounded `resume`/`run --resume`).
+In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
 
 #### Detached control verbs
 
@@ -1091,7 +1091,7 @@ archon workflow approve <run-id> --detach --json
 ```
 
 **`--detach --json` deliberately differs from bare `--json`.** Bare `--json` records the
-decision and withholds the inline auto-resume (you drive continuation separately).
+decision and withholds the inline auto-resume (a continuation host continues the run).
 `--detach --json` spawns a child that takes the ordinary inline path, so the run **is**
 driven onward — approve's auto-resume, reject's `on_reject` rework, resume's re-run —
 just outside your shell. The ack carries `continues: true` to say so:

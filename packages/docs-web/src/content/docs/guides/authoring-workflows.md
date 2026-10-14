@@ -823,7 +823,7 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
 
 Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
 
-The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. The same scan continues a gate that was answered without being resumed, for example through `--json`. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
@@ -3363,7 +3363,7 @@ nodes:
 When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
 
 - **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision only)
+- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision; `archon serve` or `archon workflow wake` then continues the run)
 - **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
 - **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`

@@ -572,7 +572,7 @@ read the structured gate state first (`archon workflow get <id> --json` →
 `completionSignaled`, the iteration, and an output excerpt), then finalize with
 `archon workflow approve <id> --json` (no comment) or `manage_run` approve with
 `accept: true` — or iterate by passing feedback. The `--json` approve records the decision
-without resuming; a later `resume` executes the finalize or the next iteration.
+without resuming; the continuation host (`archon serve` or `archon workflow wake`), or a manual `resume`, then executes the finalize or the next iteration.
 
 > **Note**: Interactive loop nodes require `interactive: true` at the **workflow level** as
 > well. If only the loop node has `interactive: true`, a loader warning is emitted and the

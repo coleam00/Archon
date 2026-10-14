@@ -5982,9 +5982,9 @@ export async function workflowCancelCommand(
  * Human mode records the approval on the still-'paused' run (the resolution
  * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
  * inline. `--json` mode records the approval and returns a structured ack
- * WITHOUT resuming — the run stays paused-and-staged, resumable by a
- * backgrounded `resume`/`run --resume` (inline resume would stream output and
- * break the JSON).
+ * WITHOUT resuming (inline resume would stream output and break the JSON); the
+ * answered gate is then a due continuation that `archon serve` or `workflow wake`
+ * continues.
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -6028,8 +6028,8 @@ export async function workflowApproveCommand(
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
-  // stdout, which would corrupt the JSON contract). The run becomes resumable
-  // — drive it to completion with a backgrounded `resume`/`run --resume`.
+  // stdout, which would corrupt the JSON contract). The answered gate is a due
+  // continuation, so a continuation host (`archon serve`, `workflow wake`) continues it.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6166,8 +6166,8 @@ export async function workflowRejectCommand(
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
-  // to stdout, corrupting the JSON contract). When `cancelled` is false the run
-  // is resumable for the rework pass — drive it with a backgrounded `resume`.
+  // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
+  // gate is a due continuation that a continuation host picks up.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6320,8 +6320,7 @@ export async function workflowRespondCommand(
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
-  // auto-resume, mirroring approve/reject — drive it onward with a backgrounded
-  // `resume`/`run --resume`.
+  // auto-resume, mirroring approve/reject; a continuation host continues the answered gate.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);

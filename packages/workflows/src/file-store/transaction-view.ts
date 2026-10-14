@@ -10,8 +10,10 @@ import {
   type WorkflowEventInput,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
+  resumeCursorMatches,
 } from '../store';
 import {
+  answeredGateContinuation,
   isApprovalContext,
   isTerminalRunStatus,
   workflowRunStatusSchema,
@@ -82,19 +84,20 @@ export function createTransactionView(
     run.status === 'failed' ||
     (run.status === 'running' &&
       (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
+  // An answered gate has no time of its own; it sorts after every timed continuation.
   const continuationTime = (run: WorkflowRun): number => {
     const retry = run.metadata.continuation_retry_at;
     const wait = pendingWorkflowWaitDeadline(run);
     const schedule = run.metadata.scheduled_resume;
-    return Date.parse(
+    const at =
       typeof retry === 'string'
         ? retry
         : wait
           ? wait.resumeAt
           : isScheduledWorkflowResume(schedule)
             ? schedule.resumeAt
-            : ''
-    );
+            : undefined;
+    return at === undefined ? Number.POSITIVE_INFINITY : Date.parse(at);
   };
   const gateOpen = (
     run: WorkflowRun | undefined,
@@ -194,6 +197,7 @@ export function createTransactionView(
                 Date.parse(wait.resumeAt) <= now.getTime() ||
                 (wait.kind === 'event' && wait.signaledAt !== undefined)
               );
+            if (answeredGateContinuation(run)) return true;
             const scheduled = run.metadata.scheduled_resume;
             return (
               run.status === 'failed' &&
@@ -202,25 +206,15 @@ export function createTransactionView(
               Date.parse(scheduled.resumeAt) <= now.getTime()
             );
           })
-          .sort((a, b) => continuationTime(a) - continuationTime(b))
+          .sort((a, b) => {
+            const [x, y] = [continuationTime(a), continuationTime(b)];
+            return x === y ? 0 : x < y ? -1 : 1;
+          })
           .slice(0, limit)
       ),
     deferWorkflowContinuation: async (id, retryAt, cursor) => {
       const run = runs.get(id);
-      if (!run) return;
-      const wait = pendingWorkflowWaitDeadline(run);
-      const scheduled = run.metadata.scheduled_resume;
-      if (
-        cursor.kind === 'wait'
-          ? wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt
-          : run.status === 'failed' &&
-            isScheduledWorkflowResume(scheduled) &&
-            !scheduled.triggeredAt &&
-            scheduled.attempt === cursor.attempt &&
-            scheduled.resumeAt === cursor.resumeAt
-      ) {
-        run.metadata.continuation_retry_at = retryAt;
-      }
+      if (run && resumeCursorMatches(run, cursor)) run.metadata.continuation_retry_at = retryAt;
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
@@ -350,6 +344,8 @@ export function createTransactionView(
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
       run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
+      // A gate replaces a finished wait's context, exactly as the SQL store does.
+      delete run.metadata.wait;
       if (suspension) record(suspension);
     },
     resolveApprovalGate: async (
@@ -366,21 +362,8 @@ export function createTransactionView(
     },
     resumeWorkflowRun: async (id, cursor) => {
       const run = row(id);
-      const wait = run.metadata.wait;
       const scheduled = run.metadata.scheduled_resume;
-      const matches =
-        cursor === undefined ||
-        (cursor.kind === 'wait'
-          ? run.status === 'paused' &&
-            isWorkflowWaitContext(wait) &&
-            wait.kind !== 'attention' &&
-            wait.nodeId === cursor.nodeId &&
-            wait.resumeAt === cursor.resumeAt
-          : run.status === 'failed' &&
-            isScheduledWorkflowResume(scheduled) &&
-            scheduled.triggeredAt === undefined &&
-            scheduled.attempt === cursor.attempt &&
-            scheduled.resumeAt === cursor.resumeAt);
+      const matches = cursor === undefined || resumeCursorMatches(run, cursor);
       if (!resumable(run) || !matches) throw new WorkflowNotResumableError(id, run.status);
       if (typeof run.metadata.error === 'string' && run.metadata.error !== '')
         record({
@@ -708,6 +691,9 @@ export function createTransactionView(
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
+      // A wait replaces the previous gate's context, exactly as the SQL store does: a
+      // stale answered gate left beside the wait would read as a gate awaiting continuation.
+      delete run.metadata.approval;
       run.metadata.wait = workflowWaitContextSchema.parse(wait);
       if (pause.kind === 'started')
         record({

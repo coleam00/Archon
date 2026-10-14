@@ -12,6 +12,7 @@ import { lockConversationOwnership } from './conversation-ownership';
 import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
+  resumeCursorMatches,
   type GateResolutionEvent,
 } from '@archon/workflows/store';
 export {
@@ -56,8 +57,8 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import {
   runAttention,
-  isWorkflowWaitContext,
   isScheduledWorkflowResume,
+  workflowRunStatusSchema,
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   workflowWaitContextSchema,
@@ -1065,22 +1066,18 @@ export async function resumeWorkflowRun(
         [id]
       );
       const prior = priorRows.rows[0];
-      if (cursor !== undefined) {
-        const priorMetadata = normalizeMetadata(prior?.metadata);
-        const cursorMatches =
-          cursor.kind === 'wait'
-            ? prior?.status === 'paused' &&
-              isWorkflowWaitContext(priorMetadata.wait) &&
-              priorMetadata.wait.kind !== 'attention' &&
-              priorMetadata.wait.nodeId === cursor.nodeId &&
-              priorMetadata.wait.resumeAt === cursor.resumeAt
-            : prior?.status === 'failed' &&
-              isScheduledWorkflowResume(priorMetadata.scheduled_resume) &&
-              priorMetadata.scheduled_resume.triggeredAt === undefined &&
-              priorMetadata.scheduled_resume.attempt === cursor.attempt &&
-              priorMetadata.scheduled_resume.resumeAt === cursor.resumeAt;
-        if (!cursorMatches) return { rowCount: 0 };
-      }
+      if (
+        cursor !== undefined &&
+        (prior === undefined ||
+          !resumeCursorMatches(
+            {
+              status: workflowRunStatusSchema.parse(prior.status),
+              metadata: normalizeMetadata(prior.metadata),
+            },
+            cursor
+          ))
+      )
+        return { rowCount: 0 };
       const resourceKey = prior?.resource_key ?? undefined;
       if (resourceKey !== undefined && (prior?.status === 'failed' || prior?.status === 'paused')) {
         const { capacity } = await lockResourceSlot(query, resourceKey);
@@ -1879,7 +1876,11 @@ export async function clearWorkflowWaitContext(
   }
 }
 
-/** Return a bounded set of time/deadline waits eligible for a resume claim. */
+/**
+ * Return a bounded set of runs eligible for a resume claim: due time and event waits, due
+ * quota resumes, and answered gates. The gate clause mirrors `answeredGateContinuation`,
+ * which the host re-checks when it builds the claim's cursor.
+ */
 export async function listDueWorkflowContinuations(
   now: Date,
   limit: number
@@ -1908,14 +1909,30 @@ export async function listDueWorkflowContinuations(
     getDatabaseType() === 'postgresql'
       ? "metadata->>'continuation_retry_at'"
       : "json_extract(metadata, '$.continuation_retry_at')";
+  // Text of a dotted metadata path, e.g. `approval.pauseId`.
+  const metadataText = (path: string): string =>
+    getDatabaseType() === 'postgresql'
+      ? `metadata${path
+          .split('.')
+          .map((key, i, keys) => `${i === keys.length - 1 ? '->>' : '->'}'${key}'`)
+          .join('')}`
+      : `json_extract(metadata, '$.${path}')`;
+  const answeredGate = `status = 'paused' AND ${metadataText('wait')} IS NULL
+               AND COALESCE(${metadataText('isolation')}, '') <> 'container'
+               AND ${metadataText('approval.resolved')} IN ('approved', 'rejected')
+               AND ${metadataText('approval.pauseId')} IS NOT NULL
+               AND COALESCE(${metadataText('approval.nodeId')}, '') <> ''
+               AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'writeback')`;
+  const dueAt = `COALESCE(${retryAt}, ${resumeAt}, ${scheduledResumeAt})`;
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
          AND ((status = 'paused' AND ${waitKind} IN ('time', 'event')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
-          OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL))
-       ORDER BY COALESCE(${retryAt}, ${resumeAt}, ${scheduledResumeAt}) ASC
+          OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL)
+          OR (${answeredGate}))
+       ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC
        LIMIT $2`,
       [now.toISOString(), limit]
     );
@@ -2040,19 +2057,29 @@ export async function deferWorkflowContinuation(
     getDatabaseType() === 'postgresql'
       ? "(metadata->'scheduled_resume'->>'attempt')::integer"
       : "json_extract(metadata, '$.scheduled_resume.attempt')";
+  const gatePauseId =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'pauseId'"
+      : "json_extract(metadata, '$.approval.pauseId')";
+  const gateNodeId =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'nodeId'"
+      : "json_extract(metadata, '$.approval.nodeId')";
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET metadata = ${dialect.jsonMerge('metadata', 2)}
        WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4)
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
-           AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5))`,
+           AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
+         OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4))`,
       [
         id,
         JSON.stringify({ continuation_retry_at: retryAt }),
-        cursor.resumeAt,
-        cursor.kind === 'wait' ? cursor.nodeId : null,
+        cursor.kind === 'gate' ? null : cursor.resumeAt,
+        cursor.kind === 'quota' ? null : cursor.nodeId,
         cursor.kind === 'quota' ? cursor.attempt : null,
+        cursor.kind === 'gate' ? cursor.pauseId : null,
       ]
     );
   } catch (error) {
