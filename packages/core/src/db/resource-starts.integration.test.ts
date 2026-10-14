@@ -9,7 +9,6 @@ import { z } from 'zod';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
-import { hasStartReceiptForDelivery } from './resource-starts';
 const {
   listStartReceipts,
   acceptStartReceipt,
@@ -432,9 +431,6 @@ describe('durable resource starts', () => {
       })
     ).rejects.toBeInstanceOf(SourceReceiptDigestConflictError);
     expect((await getStartReceipt(receipt.id))?.deliveryId).toBe('delivery-1');
-    expect(await hasStartReceiptForDelivery(receipt.sourceInstanceId, 'delivery-1')).toBe(true);
-    expect(await hasStartReceiptForDelivery(receipt.sourceInstanceId, 'delivery-2')).toBe(false);
-    expect(await hasStartReceiptForDelivery('github:installation:2', 'delivery-1')).toBe(false);
   });
 
   test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {

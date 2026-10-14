@@ -20,7 +20,7 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
@@ -77,7 +77,11 @@ import {
   registerPiProvider,
   registerOpencodeProvider,
 } from '@archon/providers/in-process';
-import type { ProviderFailure } from '@archon/provider-contract';
+import type {
+  ProviderCapabilities,
+  ProviderRegistry,
+  ProviderFailure,
+} from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
@@ -258,6 +262,9 @@ function createMockStore(): MockWorkflowStore {
     }),
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
+    }),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
+      throw new Error('Unexpected hasStartReceiptForDelivery');
     }),
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
@@ -455,29 +462,242 @@ function authoredOutcomeWrites(
     .filter((outcome): outcome is 'succeeded' | 'failed' => outcome !== undefined);
 }
 
-/** All-true capabilities for Claude mock */
-const mockClaudeCapabilities = () => ({
-  backgroundWork: 'unobserved' as const,
-  sessionResume: true,
-  sessionFork: true,
-  mcp: true,
-  hooks: true,
-  skills: true,
-  plugins: true,
-  agents: true,
-  toolRestrictions: true,
-  structuredOutput: 'enforced' as const,
-  envInjection: true,
-  costControl: true,
-  costReporting: true,
-  effortControl: true,
-  fallbackModel: true,
-  sandbox: true,
-  settingSources: true,
-  nativeTools: true,
-  containerExec: true,
-  requiresAllPropertiesRequired: false,
+describe('executor capability ownership', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'dag-capabilities-'));
+  });
+
+  afterEach(async () => {
+    await removeTempTree(cwd);
+  });
+
+  it('reads capabilities only from the injected descriptors', async () => {
+    const source = await readFile(new URL('./dag-executor.ts', import.meta.url), 'utf8');
+    expect(source.includes('getCapabilities')).toBe(false);
+  });
+
+  for (const kind of ['agent', 'loop'] as const) {
+    it(`rejects unsupported descriptor capabilities before creating a ${kind} provider`, async () => {
+      const store = createMockStore();
+      const deps = createMockDeps(
+        store,
+        withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          skills: false,
+        })
+      );
+      const factory = mock<WorkflowDeps['getAgentProvider']>(() => {
+        throw new Error('Rejected capabilities must not create a provider');
+      });
+      deps.getAgentProvider = factory;
+      const node: DagNode =
+        kind === 'agent'
+          ? {
+              id: 'work',
+              kind,
+              source: { kind: 'inline', prompt: 'work' },
+              skills: ['required-skill'],
+            }
+          : {
+              id: 'work',
+              kind,
+              skills: ['required-skill'],
+              loop: {
+                prompt: 'work',
+                fresh_context: false,
+                max_iterations: 1,
+                until: 'COMPLETE',
+              },
+            };
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-admission', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        )
+      ).rejects.toThrow(
+        "Node 'work' (provider 'claude') names skills, but that provider cannot load what the node names."
+      );
+      expect(factory).not.toHaveBeenCalled();
+    });
+
+    for (const structuredOutput of ['best-effort', 'enforced'] as const) {
+      it(`uses the descriptor's ${structuredOutput} reask policy in a ${kind} node`, async () => {
+        let calls = 0;
+        const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+          async function* () {
+            calls++;
+            yield {
+              type: 'result',
+              sessionId: 'owner-session',
+              structuredOutput: calls === 1 ? { invalid: true } : { done: true },
+            };
+            yield { type: 'settled' };
+          }
+        );
+        const store = createMockStore();
+        const providers = withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          structuredOutput,
+        });
+        const deps = createMockDeps(store, providers);
+        const factory = mock<WorkflowDeps['getAgentProvider']>(() => ({
+          sendQuery,
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          getType: () => 'claude',
+          getCapabilities: () => {
+            throw new Error('Instance capabilities are not the executor owner');
+          },
+        }));
+        deps.getAgentProvider = factory;
+        const output_format = {
+          type: 'object',
+          properties: { done: { type: 'boolean' } },
+          required: ['done'],
+          additionalProperties: false,
+        };
+        const node: DagNode =
+          kind === 'agent'
+            ? {
+                id: 'work',
+                kind,
+                source: { kind: 'inline', prompt: 'work' },
+                output_format,
+                retry: { max_attempts: 0 },
+              }
+            : {
+                id: 'work',
+                kind,
+                output_format,
+                retry: { max_attempts: 0 },
+                loop: {
+                  prompt: 'work',
+                  fresh_context: false,
+                  max_iterations: 1,
+                  until_field: 'done',
+                },
+              };
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-reasks', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        );
+        expect(factory).toHaveBeenCalledTimes(1);
+        expect(sendQuery).toHaveBeenCalledTimes(structuredOutput === 'best-effort' ? 2 : 1);
+        expect(
+          persistedEvents(store).some(
+            event =>
+              event.event_type ===
+              (structuredOutput === 'best-effort' ? 'node_completed' : 'node_failed')
+          )
+        ).toBe(true);
+      });
+    }
+
+    for (const reports of [false, true]) {
+      it(`records descriptor reporting availability (${reports}) in a ${kind} node`, async () => {
+        const store = createMockStore();
+        const deps = createMockDeps(
+          store,
+          withProviderCapabilities(mockProviderRegistry, 'claude', {
+            ...mockClaudeCapabilities(),
+            costReporting: reports,
+            tokenReporting: reports,
+            turnCountReporting: reports,
+            stopReasonReporting: reports,
+            resolvedModelReporting: reports,
+          })
+        );
+        deps.getAgentProvider = mock<WorkflowDeps['getAgentProvider']>(() => ({
+          sendQuery: async function* () {
+            yield {
+              type: 'result',
+              sessionId: 'owner-session',
+              text: '<promise>COMPLETE</promise>',
+            };
+            yield { type: 'settled' };
+          },
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          getType: () => 'claude',
+          getCapabilities: () => {
+            throw new Error('Instance capabilities are not the executor owner');
+          },
+        }));
+        const node: DagNode =
+          kind === 'agent'
+            ? { id: 'work', kind, source: { kind: 'inline', prompt: 'work' } }
+            : {
+                id: 'work',
+                kind,
+                loop: {
+                  prompt: 'work',
+                  fresh_context: false,
+                  max_iterations: 1,
+                  until: 'COMPLETE',
+                },
+              };
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-reporting', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        );
+        const completed = persistedEvents(store).find(
+          event => event.event_type === 'node_completed'
+        );
+        expect(completed).toBeDefined();
+        const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+        const unavailable = {
+          source: 'unavailable',
+          reason: reports ? 'not_reported' : 'unsupported',
+        } as const;
+        expect(record?.metadata?.spend.costUsd).toEqual(unavailable);
+        expect(record?.metadata?.spend.tokens).toEqual(unavailable);
+        expect(record?.metadata?.spend.numTurns).toEqual(unavailable);
+        expect(record?.metadata?.spend.stopReason).toEqual(unavailable);
+        expect(record?.metadata?.binding.model?.resolved).toEqual(unavailable);
+        expect(deps.getAgentProvider).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
 });
+
+function withProviderCapabilities(
+  providers: ProviderRegistry,
+  provider: string,
+  capabilities: ProviderCapabilities
+): ProviderRegistry {
+  const descriptor = providers.get(provider);
+  if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
+  const replacement = { ...descriptor, capabilities };
+  return {
+    get: id => (id === provider ? replacement : providers.get(id)),
+    list: () => providers.list().map(entry => (entry.id === provider ? replacement : entry)),
+    unavailable: id => providers.unavailable?.(id),
+  };
+}
+
+const mockClaudeCapabilities = (): ProviderCapabilities => ({
+  ...getProviderCapabilities('claude'),
+  backgroundWork: 'unobserved',
+});
+
+const mockProviderRegistry = withProviderCapabilities(
+  providerRegistry,
+  'claude',
+  mockClaudeCapabilities()
+);
+
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
   getProviderCapabilities('codex');
@@ -507,14 +727,23 @@ type MockWorkflowDeps<TStore extends IWorkflowStore> = Omit<
 };
 
 function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
-  storeOverride?: TStore
+  storeOverride?: TStore,
+  providers: ProviderRegistry = mockProviderRegistry
 ): MockWorkflowDeps<TStore> {
   const store = storeOverride ?? createMockStore();
   return {
-    providers: providerRegistry,
+    providers,
     store: store as TStore,
     // Mock providers settle like real ones; see settlingProvider.
-    getAgentProvider: provider => settlingProvider(mockGetAgentProviderDag(provider)),
+    getAgentProvider: provider =>
+      settlingProvider({
+        ...mockGetAgentProviderDag(provider),
+        getCapabilities: () => {
+          const descriptor = providers.get(provider);
+          if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
+          return descriptor.capabilities;
+        },
+      }),
     loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
       assistant: 'claude' as const,
       commands: {},
@@ -8454,10 +8683,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
             yield { type: 'settled' };
           });
           const store = createMockStore();
-          const deps = createMockDeps(store);
+          const deps = createMockDeps(
+            store,
+            withProviderCapabilities(mockProviderRegistry, 'claude', {
+              ...mockClaudeCapabilities(),
+              backgroundWork,
+            })
+          );
           deps.getAgentProvider = () => ({
             ...mockGetAgentProviderDag('claude'),
-            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork }),
+            getCapabilities: () => {
+              throw new Error('Instance capabilities are not the executor owner');
+            },
           });
           await executeDagWorkflow(
             dagOptions({
@@ -8509,10 +8746,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
       const store = createMockStore();
       const platform = createMockPlatform();
-      const mockDeps = createMockDeps(store);
+      const mockDeps = createMockDeps(
+        store,
+        withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          backgroundWork: 'reported',
+        })
+      );
       mockDeps.getAgentProvider = () => ({
         ...mockGetAgentProviderDag('claude'),
-        getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
+        getCapabilities: () => {
+          throw new Error('Instance capabilities are not the executor owner');
+        },
       });
       await executeDagWorkflow(
         dagOptions({
@@ -8573,7 +8818,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           const deps = createMockDeps(store);
           deps.getAgentProvider = () => ({
             ...mockGetAgentProviderDag('claude'),
-            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'unobserved' }),
+            getCapabilities: () => {
+              throw new Error('Instance capabilities are not the executor owner');
+            },
           });
           await executeDagWorkflow(
             dagOptions({
@@ -15134,11 +15381,13 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
       yield { type: 'settled', reason: 'turn_complete' };
     });
-    const deps = createMockDeps(store);
-    deps.getAgentProvider = () => ({
-      ...mockGetAgentProviderDag(provider),
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
-    });
+    const deps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, provider, {
+        ...getProviderCapabilities(provider),
+        backgroundWork: 'reported',
+      })
+    );
     const config = {
       ...minimalConfig,
       workflows: {
@@ -24177,20 +24426,15 @@ describe('executeDagWorkflow -- persist_session', () => {
   });
 
   it('persist_session: true on non-resume-capable provider → throws clear error', async () => {
-    // Provider with sessionResume: false
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'no-resume',
-      getCapabilities: () => ({
-        ...mockClaudeCapabilities(),
-        backgroundWork: 'unobserved' as const,
-        sessionResume: false,
-      }),
-    }));
-
     const store = createMockStore();
-    const mockDeps = createMockDeps(store);
+    const mockDeps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionResume: false,
+        sessionFork: false,
+      })
+    );
     const platform = createMockPlatform();
 
     await executeDagWorkflow(
@@ -24223,6 +24467,7 @@ describe('executeDagWorkflow -- persist_session', () => {
         'sessionResume capability.'
     );
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
   });
 
   it('workflow.persist_sessions: true + node unset → node inherits persistence', async () => {
@@ -24459,13 +24704,13 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       const sessionId = opts.plannerSessionId(run);
       yield sessionId === undefined ? { type: 'result' } : { type: 'result', sessionId };
     });
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: opts.sessionFork }),
-    }));
-    const deps = createMockDeps(store);
+    const deps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionFork: opts.sessionFork,
+      })
+    );
     const platforms = { a: createMockPlatform(), b: createMockPlatform() };
     const start = (run: 'a' | 'b'): Promise<unknown> =>
       executeDagWorkflow(
@@ -29582,11 +29827,12 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     nodes: DagNode[],
     store = createMockStore(),
     priorCompletedNodes?: Map<string, PersistedNodeOutput>,
-    priorNodeSessions?: readonly WorkflowRunNodeSession[]
+    priorNodeSessions?: readonly WorkflowRunNodeSession[],
+    providers: ProviderRegistry = mockProviderRegistry
   ): Promise<MockWorkflowStore> {
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: createMockDeps(store, providers),
         conversationId: 'conv-addressable',
         cwd: testDir,
         workflow: { name: 'addressable', nodes },
@@ -30677,15 +30923,18 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(mismatchStore.failWorkflowRun).toHaveBeenCalled();
 
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: false }),
-    }));
-    const capabilityStore = await runAddressableWorkflow(nodes, createMockStore(), priorCompleted, [
-      { ...priorSession, provider: 'claude' },
-    ]);
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
+    const capabilityStore = await runAddressableWorkflow(
+      nodes,
+      createMockStore(),
+      priorCompleted,
+      [{ ...priorSession, provider: 'claude' }],
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionFork: false,
+      })
+    );
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(capabilityStore.failWorkflowRun).toHaveBeenCalled();
   });
