@@ -252,35 +252,49 @@ async start(): Promise<void> {
 
 **Webhooks** (GitHub pattern):
 
+The GitHub route in `packages/server/src/routes/webhooks.ts` uses a Hono context. This excerpt uses that file's `OpenAPIHono` and `GithubWebhookTarget` types and its local `readSignedBody` and `getLog` helpers:
+
 ```typescript
-// In packages/server/src/index.ts, add route
-app.post('/webhooks/your-platform', async (req, res) => {
-  const signature = req.headers['x-signature'];
-  const payload = req.body;
+export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebhookTarget): void {
+  app.post('/webhooks/github', async c => {
+    const eventType = c.req.header('x-github-event');
+    const deliveryId = c.req.header('x-github-delivery');
 
-  await adapter.handleWebhook(payload, signature);
-  res.sendStatus(200);
-});
+    try {
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
 
-// In adapter
-async handleWebhook(payload: any, signature: string): Promise<void> {
-  // Verify signature
-  if (!this.verifySignature(payload, signature)) return;
+      const signature = c.req.header('x-hub-signature-256');
+      if (!signature) {
+        return c.json({ error: 'Missing signature header' }, 400);
+      }
 
-  // Parse event, extract conversationId and message
-  const { conversationId, message, platformUserId } = this.parseEvent(payload);
-  let userId: string | undefined;
-  try {
-    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
-    userId = user.id;
-  } catch (err) {
-    getLog().warn({ err }, 'your_platform.user_resolve_failed');
-  }
+      if (payload.kind === 'read_failed') throw payload.error;
+      if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
-  // Route to orchestrator
-  await handleMessage(this, conversationId, message, {
-    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+      // Receipt acceptance is durable; it does not mean the workflow completed.
+      // GitHub requires explicit redelivery/reconciliation after a failed delivery.
+      const result = await github.receiveWebhook(payload.body, signature, deliveryId, eventType);
+      if (result === 'invalid_signature') return c.json({ error: 'Invalid signature' }, 401);
+      if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
+
+      return c.text('OK', 200);
+    } catch (error) {
+      getLog().error({ err: error as Error, eventType, deliveryId }, 'webhook_endpoint_error');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
   });
+}
+```
+
+`packages/server/src/index.ts` imports and calls the route-registration function when the GitHub adapter is enabled:
+
+```typescript
+import { registerGithubWebhookRoute } from './routes/webhooks';
+
+if (github) {
+  registerGithubWebhookRoute(app, github);
+  getLog().info('github_webhook_registered');
 }
 ```
 
