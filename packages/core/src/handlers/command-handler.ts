@@ -363,7 +363,7 @@ async function handleWorktreeCommand(
           description: `Manual worktree: ${branchName}`,
         });
 
-        await addSafeDirectory(env.workingPath);
+        await addSafeDirectory(toRepoPath(env.workingPath));
 
         // Create database record for isolation environment
         const dbEnv = await isolationEnvDb.create({

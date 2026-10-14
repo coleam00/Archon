@@ -532,7 +532,7 @@ describe('cloneRepository', () => {
         await cloneRepository('https://github.com/owner/repo');
 
         const target = getGitCloneCall()?.[1];
-        expect(target).toBeDefined();
+        if (!target) throw new Error('Clone destination missing');
         expect(spyCloneGitRepository).toHaveBeenCalledTimes(2);
         const { stdout } = await realExecFileAsync('git', [
           'config',
