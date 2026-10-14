@@ -767,6 +767,18 @@ export const attentionOptionsSchema = z
     }
   });
 
+/**
+ * A label key on an attention wait. It is one CLI token with no `=`, so `--label k=v`
+ * and `--set k=v` split unambiguously at the first `=`. The engine gives keys no meaning.
+ */
+export const attentionLabelKeySchema = z
+  .string()
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
+
+/** An attention wait's labels: a flat map of plain strings the engine never interprets. */
+export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());
+export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
+
 /** The answers an `approval` attention wait accepts. */
 export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
   { id: 'approve' },
@@ -845,6 +857,8 @@ const waitConfigVariantSchemas = [
             ),
         ])
         .optional(),
+      /** Values may hold runtime references, resolved when the wait pauses. */
+      labels: attentionLabelsSchema.optional(),
     })
     .superRefine((value, ctx) => {
       const form = value.form ?? 'message';
@@ -889,6 +903,7 @@ export type WaitCondition =
       form: AttentionForm;
       /** Literal options, or the whole `$node.output.<field>` reference resolved at pause time. */
       options?: AttentionOption[] | string;
+      labels?: AttentionLabels;
     };
 
 export function waitCondition(config: WaitConfig): WaitCondition {
@@ -906,6 +921,7 @@ export function waitCondition(config: WaitConfig): WaitCondition {
     message: config.attention,
     form: config.form ?? 'message',
     ...(config.options !== undefined ? { options: config.options } : {}),
+    ...(config.labels !== undefined ? { labels: config.labels } : {}),
   };
 }
 

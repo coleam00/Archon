@@ -2,11 +2,16 @@ import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
+  attentionLabels,
+  attentionRevision,
   isApprovalContext,
   isContainerRun,
   legacyOccurrenceStep,
+  pausedAttentionWait,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
+import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import { z } from 'zod';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { RunAttention, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toError } from '../utils/error';
@@ -29,6 +34,7 @@ export interface ManageRunContext {
     | 'approveWorkflow'
     | 'rejectWorkflow'
     | 'respondToWorkflow'
+    | 'labelAttentionWait'
     | 'resumeWorkflow'
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
@@ -96,6 +102,7 @@ const ACTIONS = [
   'approve',
   'reject',
   'respond',
+  'label',
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
@@ -115,7 +122,7 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
     runId: {
       kind: 'string',
       description:
-        'Run id — required for get/resume/cancel/abandon/approve/reject/respond. Accepts the short (8-char) or full id.',
+        'Run id — required for get/resume/cancel/abandon/approve/reject/respond/label. Accepts the short (8-char) or full id.',
     },
     workflow: {
       kind: 'string',
@@ -139,7 +146,16 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
     occurrence: {
       kind: 'string',
       description:
-        "For approve/reject/respond: the occurrence of the gate or attention wait your answer is for, as action=get reports it ('occurrence: ...'). When given, the answer is refused if the run has since moved to a different pause.",
+        "For approve/reject/respond: the occurrence of the gate or attention wait your answer is for, as action=get reports it ('occurrence: ...'). When given, the answer is refused if the run has since moved to a different pause. Required for label.",
+    },
+    set: {
+      kind: 'string',
+      description:
+        'For action=label: a JSON object of labels to set, string to string, e.g. {"class":"ci-other"}. A key already present is replaced.',
+    },
+    unset: {
+      kind: 'string',
+      description: 'For action=label: a JSON array of label keys to remove, e.g. ["urgency"].',
     },
     // accept deliberately WINS over a simultaneous message (the message is
     // discarded, not recorded): an agent that reflexively attaches a comment to
@@ -169,6 +185,7 @@ const HELP_OVERVIEW = [
   '  approve  — approve a paused gate or attention wait. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused gate or attention wait. Params: runId, message=reason, confirm=true.',
   '  respond  — answer a paused gate or attention wait with any declared decision or option (get shows them). Params: runId, decision, confirm=true, optional message.',
+  '  label    — set or remove labels on a paused attention wait. Params: runId, occurrence, set and/or unset.',
   '',
   'Destructive actions (cancel/abandon/approve/reject/respond) need confirm=true; call once',
   'without it to preview, confirm with the user, then call again with confirm=true.',
@@ -189,6 +206,8 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
     'approve — approve a paused gate or attention wait; the run then continues on its own (no separate resume). Required: runId, confirm=true. Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval — pass the user’s own words, since a gate with capture_response reads it as the node’s output. At an attention wait, approve chooses its `approve` option, or answers a message wait with message as the text. Only paused runs with an approval gate or an attention wait that accepts approve.',
   reject:
     'reject — reject a paused gate or attention wait. Required: runId, confirm=true. Recommended: message (the reason, in the user’s own words). If the gate has an on-reject prompt the run reworks and continues on its own; otherwise it is cancelled and nothing further runs. At an attention wait, reject chooses its `reject` option and never cancels: the run continues and the next node reads the answer.',
+  label:
+    'label — set or remove labels on the attention wait a run is paused at, without answering it. Required: runId, occurrence (as action=get reports it), and set (a JSON object of string labels) and/or unset (a JSON array of keys). A set key replaces the same key; other labels stay. Refused when the run has moved to another pause. Labels are plain data the engine never interprets; they let the user’s own handlers find their items.',
   respond:
     "respond — answer a paused gate with any decision it declared, or an attention wait with one of its options, not just approve/reject. Required: runId, decision, confirm=true. Optional: message (text recorded alongside the decision). Call action=get first — the run detail lists the gate’s declared decisions when it has more than the default pair. decision='approve'/'reject' also works here, but prefer the dedicated approve/reject actions for those; use respond for anything else the gate declared (e.g. 'revise', 'escalate'). An id the gate did not declare fails and names the actual options — nothing is silently cancelled.",
 };
@@ -217,7 +236,7 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
   return {
     name: 'manage_run',
     description:
-      "Inspect and operate this project's workflow runs (list, get, start, resume, cancel, abandon, approve, reject, respond). Call action='help' first to see what each action needs. Destructive actions require confirm=true.",
+      "Inspect and operate this project's workflow runs (list, get, start, resume, cancel, abandon, approve, reject, respond, label). Call action='help' first to see what each action needs. Destructive actions require confirm=true.",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       // Switch on the raw string; unknown values fall through to `default`. No
@@ -244,6 +263,8 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
           case 'reject':
           case 'respond':
             return await handleWrite(ctx, action, input);
+          case 'label':
+            return await handleLabel(ctx, input);
           default:
             return `manage_run: unknown action '${action}'. Call action=help for the list.`;
         }
@@ -337,6 +358,13 @@ function formatRunDetail(run: WorkflowRun): string {
     parts.push(`form: ${attention.form}`);
     if (attention.options.length > 0)
       parts.push(`options: ${attention.options.map(option => option.id).join(', ')}`);
+    const wait = pausedAttentionWait(run);
+    if (wait !== undefined) {
+      const labels = Object.entries(attentionLabels(wait));
+      if (labels.length > 0)
+        parts.push(`labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
+      parts.push(`revision: ${String(attentionRevision(wait))}`);
+    }
     parts.push(`-> ${attentionAnswerAdvice(attention)}`);
   }
   if (
@@ -553,6 +581,58 @@ async function handleWrite(
       return `Responded '${decision}' to ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
     }
   }
+}
+
+const labelKeysSchema = z.array(attentionLabelKeySchema);
+
+/** Parse one JSON-valued label parameter, naming it when it does not match its schema. */
+function parseLabelParam<T>(
+  input: Record<string, unknown>,
+  name: 'set' | 'unset',
+  schema: z.ZodType<T>,
+  empty: T
+): T | string {
+  const raw = input[name];
+  if (raw === undefined) return empty;
+  if (typeof raw !== 'string') return `manage_run: ${name} must be a JSON string.`;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return `manage_run: ${name} is not valid JSON.`;
+  }
+  const parsed = schema.safeParse(value);
+  return parsed.success
+    ? parsed.data
+    : name === 'set'
+      ? 'manage_run: set must be a JSON object whose keys have no "=" or whitespace and whose values are strings.'
+      : 'manage_run: unset must be a JSON array of label keys.';
+}
+
+/** label — merge a label write into the attention wait a project-scoped run is paused at. */
+async function handleLabel(ctx: ManageRunContext, input: Record<string, unknown>): Promise<string> {
+  const runId = typeof input.runId === 'string' ? input.runId.trim() : '';
+  if (runId === '') return 'manage_run: action=label requires a runId.';
+  const occurrence = typeof input.occurrence === 'string' ? input.occurrence.trim() : '';
+  if (occurrence === '')
+    return 'manage_run: action=label requires the occurrence action=get reports.';
+  const set = parseLabelParam(input, 'set', attentionLabelsSchema, {});
+  if (typeof set === 'string') return set;
+  const unset = parseLabelParam(input, 'unset', labelKeysSchema, []);
+  if (typeof unset === 'string') return unset;
+  const run = await getScopedRun(runId, ctx);
+  if (typeof run === 'string') return run;
+  const result = await ctx.operations.labelAttentionWait(
+    run.id,
+    { occurrence, set, unset },
+    ctx.actor,
+    'manage_run'
+  );
+  log.info({ runId: run.id, revision: result.revision }, 'manage_run.label_completed');
+  const labels = Object.entries(result.labels).map(([key, value]) => `${key}=${value}`);
+  return `Labeled run ${run.id.slice(0, 8)} at revision ${String(result.revision)}: ${
+    labels.length > 0 ? labels.join(', ') : 'no labels'
+  }.`;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

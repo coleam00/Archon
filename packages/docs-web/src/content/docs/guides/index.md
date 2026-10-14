@@ -26,6 +26,7 @@ How-to guides for building and running AI coding workflows with Archon.
 
 - [Workflow Triggers](/guides/workflow-triggers/) — Start workflows from schedules and verified GitHub events
 - [Proactive Workflows](/guides/proactive-workflows/) — Let a cheap agent decide whether an event matters, then keep a person on the loop before the run acts
+- [The Attention Queue](/guides/attention-queue/) — List, read, label and answer paused runs as JSON, and route classes of questions to your own handlers
 
 ## Node Features (Claude only)
 

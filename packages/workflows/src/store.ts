@@ -4,12 +4,17 @@ import type { IResourceStartStore } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   answeredPauseContinuation,
+  attentionLabels,
+  attentionRevision,
+  pausedAttentionWait,
   workflowWaitStepName,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type AttentionAnswer,
   type ExpectedApprovalGate,
 } from './schemas/workflow-run';
+import type { AttentionLabels } from './schemas/dag-node';
+import type { RecordSurface } from './schemas/record-surface';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
@@ -244,6 +249,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // An attention wait's answer: `data` carries the surface (`via`), the occurrence it
   // answered and the answer itself; the row's timestamp is when.
   'wait_answered',
+  // A label write on an open attention wait: `data` carries the surface (`via`), the
+  // occurrence, the keys set and unset, and the revision it produced; the row's
+  // timestamp is when.
+  'attention_labeled',
   'wait_completed',
   'wait_expired',
   'quota_resume_scheduled',
@@ -341,6 +350,78 @@ export function waitAnsweredEvent(
     event_type: 'wait_answered',
     step_name: workflowWaitStepName(wait),
     data: { via: wait.answeredVia, occurrence: wait.pauseId, answer: wait.answer },
+  };
+}
+
+/** One answer to an open attention wait, checked against the occurrence it names. */
+export type AttentionAnswerWrite = Required<
+  Pick<WorkflowAttentionWaitContext, 'pauseId' | 'answer' | 'answeredVia' | 'answeredAt'>
+>;
+
+/**
+ * The wait `run` sits at once `write` lands: the stored wait, labels and revision
+ * included, with the answer added. `undefined` when the run is no longer paused at
+ * that unanswered occurrence.
+ */
+export function answeredAttentionWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  write: AttentionAnswerWrite
+): WorkflowAttentionWaitContext | undefined {
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
+    return undefined;
+  return { ...wait, ...write };
+}
+
+/** One label write on an open attention wait, checked against the occurrence it names. */
+export interface AttentionLabelWrite {
+  /** The `pauseId` of the wait the writer read; a write for any other pause is refused. */
+  pauseId: string;
+  set: Readonly<AttentionLabels>;
+  unset: readonly string[];
+  via: RecordSurface;
+}
+
+/**
+ * The wait `run` sits at once `write` lands: its labels with the set keys replaced and
+ * the unset keys removed, one revision on. Undefined when the write cannot land because
+ * the run is not paused at that unanswered attention wait. Every store applies this
+ * inside its write transaction, so the merge and the occurrence check are one rule.
+ */
+export function labeledAttentionWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  write: AttentionLabelWrite
+): WorkflowAttentionWaitContext | undefined {
+  const wait = pausedAttentionWait(run);
+  if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
+    return undefined;
+  const merged = { ...attentionLabels(wait), ...write.set };
+  const labels = Object.fromEntries(
+    Object.entries(merged).filter(([key]) => !write.unset.includes(key))
+  );
+  return { ...wait, labels, revision: attentionRevision(wait) + 1 };
+}
+
+/**
+ * The audit row for a label write, written in the write's transaction by every store.
+ * `wait` is the wait as `labeledAttentionWait` left it.
+ */
+export function attentionLabeledEvent(
+  workflowRunId: string,
+  wait: WorkflowAttentionWaitContext,
+  write: AttentionLabelWrite
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'attention_labeled',
+    step_name: workflowWaitStepName(wait),
+    data: {
+      via: write.via,
+      occurrence: write.pauseId,
+      set: write.set,
+      unset: write.unset,
+      revision: attentionRevision(wait),
+    },
   };
 }
 
@@ -598,16 +679,27 @@ export interface IWorkflowStore
     cursor: WorkflowResumeCursor
   ): Promise<void>;
   /**
-   * Atomically record the answer to one open attention wait and its `wait_answered` audit
-   * row (`waitAnsweredEvent`), without changing lifecycle. `answered` is the stored wait
-   * plus `answer`, `answeredVia` and `answeredAt`. It lands only while the run is still
-   * paused at that wait's `pauseId` and the wait is unanswered; otherwise nothing is
-   * written and `answered` is false.
+   * Atomically add one answer to the stored attention wait (`answeredAttentionWait`) and
+   * commit its `wait_answered` audit row (`waitAnsweredEvent`), without changing
+   * lifecycle. Writes nothing, and returns `answered: false`, when the run is no longer
+   * paused at that unanswered wait.
    */
-  answerAttentionWait(
+  answerAttentionWait(id: string, write: AttentionAnswerWrite): Promise<{ answered: boolean }>;
+  /**
+   * Atomically apply one label write to an open attention wait (`labeledAttentionWait`)
+   * and commit its `attention_labeled` audit row (`attentionLabeledEvent`). Writes
+   * nothing, and returns `labeled: false`, when the run is no longer paused at that
+   * unanswered wait.
+   */
+  labelAttentionWait(
     id: string,
-    answered: WorkflowAttentionWaitContext
-  ): Promise<{ answered: boolean }>;
+    write: AttentionLabelWrite
+  ): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }>;
+  /**
+   * Every row the attention queue reads (`isAttentionQueueRow`), most recently started
+   * first. The rows only: `@archon/workflows/attention-queue` builds the items.
+   */
+  listAttentionQueueRows(): Promise<WorkflowRun[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

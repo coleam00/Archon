@@ -12,6 +12,9 @@ import {
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
   waitAnsweredEvent,
+  labeledAttentionWait,
+  answeredAttentionWait,
+  attentionLabeledEvent,
 } from '../store';
 import {
   answeredPauseContinuation,
@@ -21,6 +24,7 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
@@ -217,23 +221,22 @@ export function createTransactionView(
       const run = runs.get(id);
       if (run && resumeCursorMatches(run, cursor)) run.metadata.continuation_retry_at = retryAt;
     },
-    answerAttentionWait: async (id, answered) => {
+    answerAttentionWait: async (id, write) => {
       const run = runs.get(id);
-      const wait = run?.metadata.wait;
-      if (
-        run?.status !== 'paused' ||
-        !isWorkflowWaitContext(wait) ||
-        wait.kind !== 'attention' ||
-        wait.pauseId === undefined ||
-        wait.pauseId !== answered.pauseId ||
-        wait.answer !== undefined
-      )
-        return { answered: false };
+      const answered = run && answeredAttentionWait(run, write);
+      if (!run || !answered) return { answered: false };
       const stored = workflowWaitContextSchema.parse(answered);
-      if (stored.kind !== 'attention') return { answered: false };
       run.metadata.wait = stored;
-      record(waitAnsweredEvent(id, stored));
+      record(waitAnsweredEvent(id, answered));
       return { answered: true };
+    },
+    labelAttentionWait: async (id, write) => {
+      const run = runs.get(id);
+      const labeled = run && labeledAttentionWait(run, write);
+      if (!run || !labeled) return { labeled: false };
+      run.metadata.wait = labeled;
+      record(attentionLabeledEvent(id, labeled, write));
+      return { labeled: true, wait: structuredClone(labeled) };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
@@ -522,6 +525,8 @@ export function createTransactionView(
       ),
     findAdoptingRuns: async id =>
       structuredClone(newest([...runs.values()].filter(run => run.adopted_from_run_id === id))),
+    listAttentionQueueRows: async () =>
+      structuredClone(newest([...runs.values()].filter(isAttentionQueueRow))),
     findOpenWorkRuns: async options =>
       structuredClone(
         newest(

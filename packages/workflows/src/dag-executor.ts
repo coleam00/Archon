@@ -2340,12 +2340,9 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
+  const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
-  const nodeMcp = await resolveNodeMcp(
-    node.mcp,
-    requireProvider(deps.providers, provider).capabilities,
-    cwd
-  );
+  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2353,7 +2350,7 @@ async function executeNodeInternal(
       tier: resolvedTier,
       effort: resolvedEffort,
       sessionId: resumeSessionId,
-      capabilities: aiClient.getCapabilities(),
+      capabilities,
       checkoutStart: await observeNodeCheckout(ctx),
     }),
     diagnostics: {
@@ -2551,8 +2548,7 @@ async function executeNodeInternal(
   // structured-output validation miss, re-run the stream with the schema errors
   // appended. Enforced providers and non-output_format nodes get 0 reasks.
   const maxReasks =
-    requireProvider(ctx.deps.providers, provider).capabilities.structuredOutput === 'best-effort' &&
-    nodeOptions?.outputFormat
+    capabilities.structuredOutput === 'best-effort' && nodeOptions?.outputFormat
       ? STRUCTURED_OUTPUT_MAX_REASKS
       : 0;
   let accumulatedCostUsd: number | undefined;
@@ -2585,7 +2581,7 @@ async function executeNodeInternal(
     const providerEvents = createProviderEventHandler({
       toolAttention: ctx.toolAttention.createStream({
         nodeId: stepName,
-        reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+        reportedBackgroundWork: capabilities.backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
         env: {
@@ -2676,7 +2672,7 @@ async function executeNodeInternal(
         },
         () =>
           providerEvents.hasOpenTools() ||
-          (aiClient.getCapabilities().backgroundWork === 'reported' &&
+          (capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0),
         shouldStopStream
       )) {
@@ -2772,7 +2768,7 @@ async function executeNodeInternal(
           }
         } else if (msg.type === 'settled') {
           streamSettled =
-            aiClient.getCapabilities().backgroundWork !== 'reported' ||
+            capabilities.backgroundWork !== 'reported' ||
             providerEvents.liveSubtaskIds().length === 0;
           break;
         } else {
@@ -5580,7 +5576,9 @@ async function executeLoopNode(
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
+  let capabilities: ProviderCapabilities;
   try {
+    capabilities = requireProvider(deps.providers, workflowProvider).capabilities;
     aiClient = deps.getAgentProvider(workflowProvider);
   } catch (error) {
     const err = error as Error;
@@ -5600,7 +5598,7 @@ async function executeLoopNode(
     model: resolvedModel,
     tier: resolvedTier,
     effort: resolvedEffort,
-    capabilities: aiClient.getCapabilities(),
+    capabilities,
     checkoutStart: await observeNodeCheckout(ctx),
   });
   if (savedExecution !== undefined) {
@@ -5890,7 +5888,7 @@ async function executeLoopNode(
         createProviderEventHandler({
           toolAttention: ctx.toolAttention.createStream({
             nodeId: stepName,
-            reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+            reportedBackgroundWork: capabilities.backgroundWork === 'reported',
             provider: workflowProvider,
             thresholdMs:
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
@@ -5956,9 +5954,7 @@ async function executeLoopNode(
       let reaskErrors: string[] = [];
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
       const maxReasks =
-        wantsStructured &&
-        requireProvider(ctx.deps.providers, workflowProvider).capabilities.structuredOutput ===
-          'best-effort'
+        wantsStructured && capabilities.structuredOutput === 'best-effort'
           ? STRUCTURED_OUTPUT_MAX_REASKS
           : 0;
 
@@ -6095,7 +6091,7 @@ async function executeLoopNode(
               },
               () =>
                 providerEvents.hasOpenTools() ||
-                (aiClient.getCapabilities().backgroundWork === 'reported' &&
+                (capabilities.backgroundWork === 'reported' &&
                   providerEvents.liveSubtaskIds().length > 0),
               shouldStopStream
             )) {
@@ -6198,7 +6194,7 @@ async function executeLoopNode(
                 // AI-node stream loop for the full rationale.
               } else if (msg.type === 'settled') {
                 iterationSettled =
-                  aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                  capabilities.backgroundWork !== 'reported' ||
                   providerEvents.liveSubtaskIds().length === 0;
                 break;
               } else {
@@ -7158,6 +7154,12 @@ async function executeWaitNode(
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
     const options = resolveAttentionOptions(node.id, condition.options, ctx);
+    const labels =
+      condition.labels === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(condition.labels).map(([key, value]) => [key, resolveEventText(value)])
+          );
     context = {
       ...owner,
       kind: 'attention',
@@ -7166,6 +7168,7 @@ async function executeWaitNode(
       pauseId: randomUUID(),
       form: condition.form,
       ...(options !== undefined ? { options } : {}),
+      ...(labels !== undefined ? { labels } : {}),
     };
   }
 
@@ -10385,7 +10388,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   `Node '${node.id}' cannot resume '${sourceNodeId}': source provider '${sourceHandle.provider}' does not match resolved provider '${provider}'.`
                 );
               }
-              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
+              const caps = requireProvider(ctx.deps.providers, provider).capabilities;
               if (
                 !caps.sessionResume ||
                 (resumeIntent === 'source-fork' && caps.sessionFork !== true)
@@ -10439,12 +10442,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             const usesPersistedScope = nodeUsesPersistedScope(node, ctx.workflowPersistSessions);
 
             if (usesPersistedScope) {
-              // Runtime capability guard via the resolved provider instance (catches the
-              // case where provider was resolved from .archon/config.yaml defaults).
-              // Uses the instance's getCapabilities() rather than the static registry so
-              // tests can substitute mock providers with different caps without registering.
               const handling = persistedSessionHandling(
-                ctx.deps.getAgentProvider(provider).getCapabilities()
+                requireProvider(ctx.deps.providers, provider).capabilities
               );
               if (handling === 'unsupported') {
                 throw new Error(
