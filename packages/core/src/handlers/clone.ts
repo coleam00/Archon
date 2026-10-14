@@ -503,6 +503,7 @@ export async function cloneRepository(
 
     if (existingCodebase) {
       rejectExistingChoice(options);
+      if (appSource) await setupAppRepository(existingCodebase.default_cwd);
       return {
         codebaseId: existingCodebase.id,
         name: existingCodebase.name,
