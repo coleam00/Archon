@@ -259,10 +259,15 @@ describe('subscribeKey — resubscribe during an abandoned in-flight load (#2101
 });
 
 describe('revalidate after an abandoned in-flight load', () => {
-  test.each(['resolve', 'reject'] as const)(
-    'an abandoned load cannot %s into a remounted key after subscriber-less invalidation',
-    async settlement => {
-      const key = `test:remount-after-invalidation:${settlement}`;
+  test.each([
+    ['resolve', 'before'],
+    ['reject', 'before'],
+    ['resolve', 'after'],
+    ['reject', 'after'],
+  ] as const)(
+    'an abandoned load cannot %s %s its replacement settles after subscriber-less invalidation',
+    async (settlement, timing) => {
+      const key = `test:remount-after-invalidation:${settlement}:${timing}`;
       set(key, 'warm');
       let resolveA: (value: string) => void = () => {};
       let rejectA: (error: Error) => void = () => {};
@@ -287,29 +292,81 @@ describe('revalidate after an abandoned in-flight load', () => {
         new Promise(resolve => {
           resolveB = resolve;
         });
-      const unsubscribeB = subscribeKey(key, () => {}, loaderB);
+      let notifications = 0;
+      const unsubscribeB = subscribeKey(key, () => notifications++, loaderB);
       function ErrorView(): string {
         return useEntity(key, loaderB).error?.message ?? 'no error';
       }
       try {
-        resolveB('fresh');
-        await flush();
-        expect(get(key)).toBe('fresh');
-        expect(versionOf(key)).toBe(1);
+        if (timing === 'after') {
+          resolveB('fresh');
+          await flush();
+          expect(get(key)).toBe('fresh');
+          expect(versionOf(key)).toBe(1);
+          expect(notifications).toBe(1);
+        }
 
         if (settlement === 'resolve') resolveA('stale');
         else rejectA(new Error('stale boom'));
         await flush();
 
         expect(renderToStaticMarkup(createElement(ErrorView))).toBe('no error');
+        expect(get(key)).toBe(timing === 'before' ? undefined : 'fresh');
+        expect(versionOf(key)).toBe(timing === 'before' ? 0 : 1);
+        expect(notifications).toBe(timing === 'before' ? 0 : 1);
+
+        if (timing === 'before') {
+          resolveB('fresh');
+          await flush();
+        }
         expect(get(key)).toBe('fresh');
         expect(versionOf(key)).toBe(1);
+        expect(notifications).toBe(1);
+        expect(renderToStaticMarkup(createElement(ErrorView))).toBe('no error');
       } finally {
         unsubscribeB();
         invalidate(key);
       }
     }
   );
+
+  test('subscriber-less invalidation clears an old error before a remounted load settles', async () => {
+    const key = 'test:invalidate-old-error';
+    const unsubscribeA = subscribeKey(
+      key,
+      () => {},
+      () => Promise.reject(new Error('old error'))
+    );
+    await flush();
+
+    let resolveB: (value: string) => void = () => {};
+    const loaderB = (): Promise<string> =>
+      new Promise(resolve => {
+        resolveB = resolve;
+      });
+    function View(): string {
+      const { data, error, loading } = useEntity(key, loaderB);
+      return error?.message ?? (loading ? 'loading' : (data ?? 'no data'));
+    }
+    expect(renderToStaticMarkup(createElement(View))).toBe('old error');
+    unsubscribeA();
+    invalidate(key);
+
+    const unsubscribeB = subscribeKey(key, () => {}, loaderB);
+    try {
+      expect(renderToStaticMarkup(createElement(View))).toBe('loading');
+      expect(get(key)).toBeUndefined();
+      expect(versionOf(key)).toBe(0);
+
+      resolveB('fresh');
+      await flush();
+      expect(renderToStaticMarkup(createElement(View))).toBe('fresh');
+      expect(versionOf(key)).toBe(1);
+    } finally {
+      unsubscribeB();
+      invalidate(key);
+    }
+  });
 
   test('invalidating an abandoned revalidation cannot resurrect a purged key', async () => {
     const key = 'test:invalidate-abandoned-revalidation';
