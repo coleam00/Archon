@@ -15,6 +15,7 @@ import {
   forgePrRecordSchema,
   forgeResponseSchema,
   type ForgeWorkItemRecord,
+  type ForgeSubjectRecord,
   type ForgeLabelRecord,
   mutationTarget,
   mutationAttempt,
@@ -28,7 +29,13 @@ import {
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
-import type { PrRef, RepoRef } from '@archon/forge';
+import {
+  sourceActorSchema,
+  type ForgeSubjectRef,
+  type PrRef,
+  type RepoRef,
+  type SourceActor,
+} from '@archon/forge';
 import {
   GitHubError,
   githubErrorDetail,
@@ -41,6 +48,14 @@ import {
 } from './api';
 
 const repoSchema = z.object({ full_name: z.string().min(1) });
+const actorFields = sourceActorSchema.shape;
+const userSchema = z
+  .object({
+    id: z.union([z.number().int(), actorFields.id]),
+    login: actorFields.login.optional(),
+  })
+  .nullable();
+type User = z.infer<typeof userSchema>;
 const pullSchema = z.object({
   number: z.number().int().positive(),
   node_id: z.string().min(1),
@@ -52,6 +67,7 @@ const pullSchema = z.object({
   merged: z.boolean().optional(),
   merge_commit_sha: z.string().nullable().optional(),
   maintainer_can_modify: z.boolean().nullable().optional(),
+  user: userSchema.optional(),
   head: z.object({ ref: z.string().min(1), sha: z.string().min(1), repo: repoSchema.nullable() }),
   base: z.object({ ref: z.string().min(1), sha: z.string().min(1) }),
 });
@@ -73,6 +89,7 @@ const issueSchema = z.object({
   body: z.string().nullable(),
   state: z.enum(['open', 'closed']),
   pull_request: z.unknown().optional(),
+  user: userSchema.optional(),
 });
 const commentSchema = z.object({
   id: z.union([z.number().int(), z.string().min(1)]),
@@ -81,6 +98,14 @@ const commentSchema = z.object({
   body: z.string().nullable(),
 });
 type Comment = z.infer<typeof commentSchema>;
+
+function actor(host: string, user: User): SourceActor | null {
+  return user ? { host, id: String(user.id), login: user.login ?? null } : null;
+}
+/** A response without `user` reports no author rather than claiming the forge has none. */
+function authorField(host: string, user: User | undefined): { author?: SourceActor | null } {
+  return user === undefined ? {} : { author: actor(host, user) };
+}
 
 function failure(
   operationId: string,
@@ -174,7 +199,7 @@ function unverified(
   observed?: {
     pr?: ForgePrRecord;
     comment?: ForgeCommentRecord;
-    workitem?: ForgeWorkItemRecord;
+    workitem?: ForgeSubjectRecord;
     label?: ForgeLabelRecord;
     landed?: z.infer<typeof landedSchema>;
   }
@@ -481,27 +506,54 @@ async function upsertComment(
 }
 
 type Issue = z.infer<typeof issueSchema>;
-function issueRecord(repo: RepoRef, item: Issue, number = item.number): ForgeWorkItemRecord {
+/**
+ * GitHub's issues endpoint serves pull requests too, and only `pull_request`
+ * distinguishes them.
+ */
+function itemRecord(repo: RepoRef, item: Issue, number = item.number): ForgeSubjectRecord {
   const { root, path } = location(repo);
   if (
     item.number !== number ||
-    item.repository_url.toLowerCase() !== `${root}/repos/${path}`.toLowerCase() ||
-    item.pull_request !== undefined
+    item.repository_url.toLowerCase() !== `${root}/repos/${path}`.toLowerCase()
   ) {
     throw new GitHubError(
       {
         kind: 'invalid_response',
-        message: 'GitHub item read-back did not match the requested issue identity',
+        message: 'GitHub item read-back did not match the requested identity',
       },
       true
     );
   }
   return {
     ref: { repo, number: item.number },
-    kind: 'issue',
+    kind: item.pull_request === undefined ? 'issue' : 'pr',
     url: item.html_url,
     state: item.state,
   };
+}
+function issueRecord(repo: RepoRef, item: Issue, number = item.number): ForgeWorkItemRecord {
+  const record = itemRecord(repo, item, number);
+  if (record.kind !== 'issue')
+    throw new GitHubError(
+      { kind: 'invalid_response', message: `GitHub item ${String(number)} is not an issue` },
+      true
+    );
+  return { ...record, kind: 'issue' };
+}
+function subjectRecord(subject: ForgeSubjectRef, item: Issue): ForgeSubjectRecord {
+  const record = itemRecord(subject.ref.repo, item, subject.ref.number);
+  if (record.kind !== subject.kind)
+    throw new GitHubError(
+      {
+        kind: 'invalid_request',
+        message: `GitHub item ${String(subject.ref.number)} is ${record.kind === 'pr' ? 'a pull request' : 'an issue'}, not ${subject.kind === 'pr' ? 'a pull request' : 'an issue'}`,
+      },
+      true
+    );
+  return record;
+}
+function labelNames(item: Issue): string[] {
+  return item.labels.map(label => label.name);
 }
 async function readIssue(fetchImpl: Fetch, token: string, ref: PrRef): Promise<Issue> {
   const { root, path } = location(ref.repo);
@@ -705,6 +757,95 @@ async function setLabels(
       });
 }
 
+async function addLabel(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.label.add' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: (phase: 'submitted' | 'acknowledged') => void
+): Promise<ForgeResponse> {
+  const { subject, name } = request;
+  const before = await readIssue(fetchImpl, token, subject.ref);
+  const workitem = subjectRecord(subject, before);
+  if (labelNames(before).includes(name))
+    return applied(request, { changed: false, workitem, labels: labelNames(before) });
+  const { root, path } = location(subject.ref.repo);
+  // GitHub creates a label it does not know rather than refusing, and matches
+  // names case-insensitively; adding never creates or renames a repository label.
+  const label = labelSchema.parse(
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/labels/${encodeURIComponent(name)}`
+    )
+  );
+  if (label.name !== name)
+    return refused(request, {
+      kind: 'not_found',
+      message: 'The requested repository label does not exist',
+    });
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(subject.ref.number)}/labels`,
+    { method: 'POST', body: JSON.stringify({ labels: [name] }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const after = await readIssue(fetchImpl, token, subject.ref);
+  const observed = subjectRecord(subject, after);
+  return labelNames(after).includes(name)
+    ? applied(request, { changed: true, workitem: observed, labels: labelNames(after) })
+    : unverified(
+        request,
+        'Label read-back did not include the added label',
+        'the label may be on the item',
+        { workitem: observed }
+      );
+}
+async function removeLabel(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.label.remove' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: (phase: 'submitted' | 'acknowledged') => void
+): Promise<ForgeResponse> {
+  const { subject, name } = request;
+  const before = await readIssue(fetchImpl, token, subject.ref);
+  const workitem = subjectRecord(subject, before);
+  if (!labelNames(before).includes(name))
+    return applied(request, { changed: false, workitem, labels: labelNames(before) });
+  const { root, path } = location(subject.ref.repo);
+  submit('submitted');
+  let changed = true;
+  try {
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/issues/${String(subject.ref.number)}/labels/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+      () => {
+        submit('acknowledged');
+      }
+    );
+  } catch (cause) {
+    // A concurrent writer removed the label first. The read-back below decides,
+    // and this call changed nothing.
+    if (!(cause instanceof GitHubError && cause.detail.status === 404)) throw cause;
+    changed = false;
+  }
+  const after = await readIssue(fetchImpl, token, subject.ref);
+  const observed = subjectRecord(subject, after);
+  return labelNames(after).includes(name)
+    ? unverified(
+        request,
+        'Label read-back still included the removed label',
+        'the label may have been removed',
+        { workitem: observed }
+      )
+    : applied(request, { changed, workitem: observed, labels: labelNames(after) });
+}
+
 export async function handleGithubMutation(
   request: ForgeMutationRequest,
   fetchImpl: Fetch,
@@ -723,6 +864,10 @@ export async function handleGithubMutation(
         return await createWorkItem(request, fetchImpl, token, submit);
       case 'workitem.labels.set':
         return await setLabels(request, fetchImpl, token, submit);
+      case 'workitem.label.add':
+        return await addLabel(request, fetchImpl, token, submit);
+      case 'workitem.label.remove':
+        return await removeLabel(request, fetchImpl, token, submit);
       case 'repo.label.ensure':
         return await ensureLabel(request, fetchImpl, token, submit);
       case 'pr.merge':
@@ -755,37 +900,53 @@ export async function handleGithubWorkItemView(
   fetchImpl: Fetch,
   token: string
 ): Promise<ForgeResponse> {
-  const { root, path } = location(request.ref.repo);
-  const item = issueSchema.parse(
-    await githubRequest(
-      fetchImpl,
-      token,
-      `${root}/repos/${path}/issues/${String(request.ref.number)}`
-    )
-  );
-  if (
-    item.number !== request.ref.number ||
-    item.repository_url.toLowerCase() !== `${root}/repos/${path}`.toLowerCase()
-  )
-    throw new GitHubError(
-      { kind: 'invalid_response', message: 'Work item identity mismatch' },
-      true
-    );
+  const item = await readIssue(fetchImpl, token, request.ref);
   return {
     operationId: request.operationId,
     ok: true,
     result: {
       op: 'workitem.view',
       value: {
-        ref: request.ref,
-        // GitHub's issues endpoint serves pull requests too, and only this field
-        // distinguishes them.
-        kind: item.pull_request === undefined ? 'issue' : 'pr',
-        url: item.html_url,
+        ...itemRecord(request.ref.repo, item, request.ref.number),
         title: item.title,
         body: item.body ?? '',
-        state: item.state,
         labels: item.labels.map(label => label.name),
+        ...authorField(request.ref.repo.host, item.user),
+      },
+    },
+  };
+}
+
+export async function handleGithubWorkItemList(
+  request: Extract<ForgeRequest, { op: 'workitem.list' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  // GitHub's `labels` filter splits on commas, so such a name cannot be asked for.
+  if (request.label.includes(','))
+    return failure(request.operationId, {
+      kind: 'invalid_request',
+      message: 'GitHub cannot list items by a label name that contains a comma',
+    });
+  const { root, path } = location(request.repo);
+  const items = await githubPages(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues?state=open&labels=${encodeURIComponent(request.label)}`,
+    raw => z.array(issueSchema).parse(raw)
+  );
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: request.op,
+      value: {
+        repo: request.repo,
+        label: request.label,
+        // GitHub matches label names case-insensitively; the seam's names are exact.
+        items: items
+          .filter(item => item.labels.some(label => label.name === request.label))
+          .map(item => itemRecord(request.repo, item)),
       },
     },
   };
@@ -801,7 +962,14 @@ export async function handleGithubPrView(
     ok: true,
     result: {
       op: 'pr.view',
-      value: pull ? { pr: prRecord(repo, pull), title: pull.title, body: pull.body ?? '' } : null,
+      value: pull
+        ? {
+            pr: prRecord(repo, pull),
+            title: pull.title,
+            body: pull.body ?? '',
+            ...authorField(repo.host, pull.user),
+          }
+        : null,
     },
   });
   if (request.selector.kind === 'number') {
@@ -962,17 +1130,11 @@ export async function handleGithubPrReviews(
 ): Promise<ForgeResponse> {
   const { root, path } = location(request.ref.repo);
   const fields = reviewItemSchema.shape;
-  const actor = fields.author.unwrap().shape;
   const itemSchema = z.object({
     id: z.union([z.number().int(), fields.id]),
     html_url: fields.url,
     body: fields.body.nullable(),
-    user: z
-      .object({
-        id: z.union([z.number().int(), actor.id]),
-        login: actor.login.optional(),
-      })
-      .nullable(),
+    user: userSchema,
     commit_id: fields.commit.optional(),
     state: fields.state.optional(),
     submitted_at: fields.createdAt.optional(),
@@ -990,9 +1152,7 @@ export async function handleGithubPrReviews(
   ): z.infer<typeof reviewItemSchema> => ({
     kind,
     id: String(item.id),
-    author: item.user
-      ? { host: request.ref.repo.host, id: String(item.user.id), login: item.user.login ?? null }
-      : null,
+    author: actor(request.ref.repo.host, item.user),
     commit: item.commit_id ?? null,
     state: kind === 'review' ? (item.state ?? null) : null,
     createdAt: (kind === 'review' ? item.submitted_at : item.created_at) ?? null,

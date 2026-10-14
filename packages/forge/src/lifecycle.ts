@@ -12,6 +12,7 @@
 
 import { z } from 'zod';
 import {
+  forgeSubjectRefSchema,
   gitObjectIdSchema,
   prRefSchema,
   repoRefSchema,
@@ -123,6 +124,27 @@ export const workItemLabelsSetRequestSchema = requestBase.extend({
   ref: workItemRefSchema,
   labels: labelNamesSchema,
 });
+/**
+ * One label added to or removed from an issue or pull request, leaving every
+ * other label untouched, so concurrent writers on one item cannot drop each
+ * other's labels the way two whole-set replacements can.
+ */
+export const workItemLabelAddRequestSchema = requestBase.extend({
+  op: z.literal('workitem.label.add'),
+  subject: forgeSubjectRefSchema,
+  name: text,
+});
+export const workItemLabelRemoveRequestSchema = requestBase.extend({
+  op: z.literal('workitem.label.remove'),
+  subject: forgeSubjectRefSchema,
+  name: text,
+});
+/** Open issues and pull requests that carry one label. */
+export const workItemListRequestSchema = requestBase.extend({
+  op: z.literal('workitem.list'),
+  repo: repoRefSchema,
+  label: text,
+});
 export const repoLabelEnsureRequestSchema = requestBase.extend({
   op: z.literal('repo.label.ensure'),
   repo: repoRefSchema,
@@ -140,6 +162,9 @@ export const workItemRecordSchema = z.object({
   state: z.enum(['open', 'closed']),
 });
 export type ForgeWorkItemRecord = z.infer<typeof workItemRecordSchema>;
+/** An issue or a pull request, as a label operation or listing observed it. */
+export const subjectRecordSchema = workItemRecordSchema.extend({ kind: z.enum(['issue', 'pr']) });
+export type ForgeSubjectRecord = z.infer<typeof subjectRecordSchema>;
 export const labelRecordSchema = z.object({ name: text, color: text, descriptionDigest: text });
 export type ForgeLabelRecord = z.infer<typeof labelRecordSchema>;
 export const mergeConditionsSchema = z.strictObject({
@@ -196,6 +221,7 @@ export const lifecycleReadRequestSchemas = [
   prViewRequestSchema,
   repoLabelsListRequestSchema,
   prReviewsRequestSchema,
+  workItemListRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
   prMergeRequestSchema,
@@ -207,6 +233,8 @@ export const mutationRequestSchemas = [
   commentUpsertRequestSchema,
   workItemCreateRequestSchema,
   workItemLabelsSetRequestSchema,
+  workItemLabelAddRequestSchema,
+  workItemLabelRemoveRequestSchema,
   repoLabelEnsureRequestSchema,
 ] as const;
 export const mutationRequestSchema = z.discriminatedUnion('op', mutationRequestSchemas);
@@ -215,16 +243,24 @@ export const mutationOperationSchema = z.enum(
   mutationRequestSchemas.map(schema => schema.shape.op.value)
 );
 
-export const workItemViewSchema = workItemRecordSchema.extend({
-  kind: z.enum(['issue', 'pr']),
+// Absent means the plugin does not report an author; null means the forge has none.
+const authorSchema = sourceActorSchema.nullable().optional();
+export const workItemViewSchema = subjectRecordSchema.extend({
   title: z.string(),
   body: z.string(),
   labels: labelNamesSchema.optional(),
+  author: authorSchema,
 });
 export const prViewSchema = z.object({
   pr: forgePrRecordSchema,
   title: z.string(),
   body: z.string(),
+  author: authorSchema,
+});
+export const workItemListSchema = z.object({
+  repo: repoRefSchema,
+  label: text,
+  items: z.array(subjectRecordSchema),
 });
 export const commentRecordSchema = z.object({
   ref: prRefSchema,
@@ -246,7 +282,7 @@ const failureBase = z.object({
 });
 const failureObservations = {
   observed: forgePrRecordSchema.optional(),
-  workitem: workItemRecordSchema.optional(),
+  workitem: subjectRecordSchema.optional(),
   label: labelRecordSchema.optional(),
 };
 export const mutationFailureSchema = z
@@ -284,6 +320,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),
   z.object({ op: prViewRequestSchema.shape.op, value: prViewSchema.nullable() }),
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
+  z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
 ] as const;
 export const mutationResultSchemas = [
   z.object({
@@ -298,6 +335,15 @@ export const mutationResultSchemas = [
   z.object({
     op: workItemLabelsSetRequestSchema.shape.op,
     value: appliedSchema.extend({ workitem: workItemRecordSchema, labels: labelNamesSchema }),
+  }),
+  // `labels` is the item's complete label set as read back after the write.
+  z.object({
+    op: workItemLabelAddRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: subjectRecordSchema, labels: labelNamesSchema }),
+  }),
+  z.object({
+    op: workItemLabelRemoveRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: subjectRecordSchema, labels: labelNamesSchema }),
   }),
   z.object({
     op: repoLabelEnsureRequestSchema.shape.op,
@@ -348,7 +394,8 @@ export const mutationResultSchemas = [
 ] as const;
 
 export function mutationTarget(request: ForgeMutationRequest): ForgeMutationTarget {
-  return 'repo' in request ? request.repo : request.ref;
+  if ('repo' in request) return request.repo;
+  return 'subject' in request ? request.subject.ref : request.ref;
 }
 
 export function mutationAttempt(
