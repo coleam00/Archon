@@ -79,6 +79,17 @@ is correct. Record actual tool execution so a reviewer can audit those judgments
 Your final chat reply is not parsed; normal engine node completion hands the
 report to the checker, including when the report is missing or malformed.
 
+## The target
+
+The workflow started the target before this node and probes its identity after you
+finish, so the target must still be running and serving, unchanged, when you finish.
+Never stop, restart or relaunch it, and never count it among the processes you
+started. An assertion that needs a fresh or relaunched game gets a separate instance
+on another port with its own state, which you start, use and stop by its PID (seen
+live: a verifier read "from a fresh town" as "restart the game", restarted the target
+twice, stopped it on cleanup, and the identity probe found nothing, so a lap whose
+every assertion passed ended inconclusive).
+
 ## Processes
 
 Stop only processes this node started, by the process ID it recorded. Never kill by
