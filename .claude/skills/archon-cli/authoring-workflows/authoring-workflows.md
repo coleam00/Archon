@@ -144,9 +144,11 @@ script language for logic. Ask the user their script-language preference if they
 will maintain it. Declare Python dependencies inline (`deps:` for `uv`); keep
 `node_modules` and virtual environments out of the packaged script tree.
 
-Put shared `.ts`, `.js`, or `.py` modules in `<pack>/.shared/` (subfolders are
-supported). This reserved directory supplies modules, never workflow definitions
-or `script:` targets. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
+Put shared `.ts`, `.js`, or `.py` modules and `.md` documents in
+`<pack>/.shared/` (subfolders are supported). This reserved directory supplies
+modules and documents, never workflow definitions or `script:` targets. Documents
+ship beside the modules in every build, so a script finds one relative to its own
+location and hands its path to a prompt node through `with:`. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
 `../../.shared/result.ts`. Python files can add
 `str(Path(__file__).resolve().parents[2] / ".shared")` to `sys.path` using
 `pathlib.Path`, then import normally; Archon does not inject `PYTHONPATH`.

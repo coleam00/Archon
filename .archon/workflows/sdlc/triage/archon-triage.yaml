@@ -33,8 +33,23 @@ returns: verdict
 outcome_field: ready
 
 nodes:
+  # The directory of the pack's default policy documents in this run's captured
+  # source, the same in a source checkout and a binary install. The prompt names the
+  # policy file it needs and chooses between the project's own and the default.
+  - id: policy
+    script: policy
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        defaults: { type: string }
+      required: [defaults]
+
   - id: triage
     command: triage
+    depends_on: [policy]
+    with:
+      policy_defaults: "$policy.output.defaults"
     # Triage is advisory on both counts, and the engine holds both. It fails this
     # node with the touched paths named if the checkout is modified, and it
     # refuses the artifact pointer below if the report it names does not exist —
