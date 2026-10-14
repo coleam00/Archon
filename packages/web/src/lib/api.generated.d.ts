@@ -3822,7 +3822,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -3858,7 +3864,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           costUsd:
             | {
@@ -3870,7 +3882,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           stopReason:
             | {
@@ -3882,7 +3900,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           numTurns:
             | {
@@ -3894,7 +3918,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
         };
         /** @enum {string} */
@@ -5124,7 +5154,8 @@ export interface components {
                       | 'not_reported'
                       | 'unknown'
                       | 'not_applicable'
-                      | 'invalid';
+                      | 'invalid'
+                      | 'incomplete';
                   };
             };
             /** @enum {string} */
@@ -5168,7 +5199,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             costUsd:
               | {
@@ -5180,7 +5217,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             stopReason:
               | {
@@ -5192,7 +5235,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             numTurns:
               | {
@@ -5204,7 +5253,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */

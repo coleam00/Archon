@@ -2094,7 +2094,7 @@ uncached input is `input - cacheRead - cacheWrite`. An absent cache field means 
 provider did not report it; `0` means the provider reported zero. Which rows carry the
 field at all depends on the sink: the transcript carries it only on a row that reports its
 own spend, while the persisted row carries it on every `node_completed` row except a
-`loop_group` roll-up. So a sum over `node_completed.data.tokens` counts a composed fan-out's
+`loop_group` roll-up and a row whose token count is incomplete (see below). So a sum over `node_completed.data.tokens` counts a composed fan-out's
 scope once per level, and `data.accounting` names each row's role. Run metadata exposes the
 same totals as `total_tokens_in`, `total_tokens_out`, `total_cache_read_tokens`, and
 `total_cache_write_tokens`. A cache total sums every contributing node that reported that
@@ -2119,14 +2119,35 @@ carry that spend, except a composed-instance terminal, which the resume keeps as
 authoritative source for its scope (#3508). JSONL `workflow_complete`
 carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
 `workflow_error` carries the same aggregate when work reported usage before failure. These
-match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
+match run metadata `total_cost_usd` and `total_tokens_*`, except that an incomplete token
+count leaves `tokens` off both rows (see below). On a row that reports its own spend,
 an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
 it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
 rows that row names. Claude reports a session's running total, so Archon subtracts the source
 session's total from its native session transcript when a node resumes or forks, including
 across Archon processes. If that persisted state is missing or invalid, the earlier total is
-unknown and the node's `cost_usd` is absent rather than over-counted. A run that spent nothing
-on AI, such as a bash-only workflow, carries no `cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
+unknown and the first result's cost is absent rather than over-counted. Later results can
+report incremental cost from the newly known baseline, so the node's `cost_usd` can be a
+partial cost that excludes the first interval. Claude tokens cover the main agent, forked
+skills, and subagents included in that cost: input (including cache reads and writes),
+output, cache read, and cache write. Fresh sessions report the full totals;
+resumes and forks subtract the persisted baseline on all four axes. If the token baseline
+is missing or incomplete (including older transcripts that stored only output tokens or
+positive cost with no model totals), or totals are inconsistent, token usage is absent and
+Archon logs `claude.query_tokens_unknown`. Tokens remain unknown for the rest of that query,
+even if later results supply usable totals. The node's tokens also remain absent across
+structured-output reasks and later loop iterations after an unknown interval; cost
+subtraction continues independently.
+An incomplete count is recorded, not dropped: the node's `execution.spend.tokens` (persisted
+as `data.spend.tokens`) is `{ "source": "unavailable", "reason": "incomplete" }` and the row
+carries no `tokens`. Every total containing that node, through retries, loops, fan-outs,
+composed instances, child runs, and resume, is incomplete too: the containing rows omit
+`tokens`, and run metadata sets `total_tokens_unknown: true` with `total_tokens_in`,
+`total_tokens_out`, `total_cache_read_tokens`, `total_cache_write_tokens`, and
+`total_cache_partial` set to `null`. Cost totals keep summing every reported cost. Do not
+sum `tokens` across rows as a run total when any row is incomplete.
+A run that spent nothing on AI, such as a bash-only workflow, carries no `cost_usd` rather
+than `0`. Governance nodes do not yet have complete terminal
 transcript-row coverage, so read usage from the rows that exist rather than treating
 an absent row as zero spend.
 

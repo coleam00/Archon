@@ -1122,6 +1122,7 @@ export async function inspectResumableRun(
     priorCompletedNodes,
     priorUsage: {
       ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
+      ...(snapshot.tokensUnknown ? { tokensUnknown: true } : {}),
       costUsd: snapshot.costUsd,
     },
   };

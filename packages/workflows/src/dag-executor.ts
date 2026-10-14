@@ -750,6 +750,7 @@ function sumTokenUsage(
  */
 export interface PriorRunUsage {
   tokens?: TokenUsage;
+  tokensUnknown?: boolean;
   costUsd: number;
 }
 
@@ -776,6 +777,7 @@ export interface ChildWorkflowOutcome {
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
   tokens?: TokenUsage;
+  tokensUnknown?: boolean;
   error?: string;
 }
 
@@ -889,7 +891,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    tokens,
+    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
 }
@@ -1084,6 +1086,7 @@ async function runNodeRetryLoop(
   let output = initialOutput;
   let accumulatedCostUsd: number | undefined;
   let accumulatedTokens: TokenUsage | undefined;
+  let accumulatedTokensUnknown = false;
   // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
   // for the rest of the loop (#2706): load-shedding windows are minutes-scale, so the
   // node's own short maxRetries would exhaust before the provider recovers.
@@ -1106,7 +1109,10 @@ async function runNodeRetryLoop(
     if (output.costUsd !== undefined) {
       accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
     }
-    if (output.tokens !== undefined) {
+    accumulatedTokensUnknown ||= output.tokensUnknown === true;
+    if (accumulatedTokensUnknown) {
+      accumulatedTokens = undefined;
+    } else if (output.tokens !== undefined) {
       accumulatedTokens = sumTokenUsage(
         [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), output.tokens],
         { nodeId: node.id }
@@ -1167,6 +1173,7 @@ async function runNodeRetryLoop(
   }
   output.costUsd = accumulatedCostUsd;
   output.tokens = accumulatedTokens;
+  output.tokensUnknown = accumulatedTokensUnknown;
   return output;
 }
 
@@ -1347,7 +1354,12 @@ async function assertCheckoutUntouched(
     )
   );
   // Retry accounting is the accumulated cost of all attempts, not only the amended last one.
-  return { ...amended, costUsd: result.costUsd, tokens: result.tokens };
+  return {
+    ...amended,
+    costUsd: result.costUsd,
+    tokens: result.tokens,
+    tokensUnknown: result.tokensUnknown,
+  };
 }
 
 /**
@@ -2317,6 +2329,7 @@ async function executeNodeInternal(
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
 
   let nodeTokens: TokenUsage | undefined;
+  let nodeTokensUnknown = false;
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
@@ -2345,6 +2358,7 @@ async function executeNodeInternal(
         {
           output: { text: extras.output ?? '' },
           tokens: nodeTokens,
+          tokensUnknown: nodeTokensUnknown,
           costUsd: nodeCostUsd,
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
@@ -2616,7 +2630,10 @@ async function executeNodeInternal(
             newSessionId = msg.sessionId;
             if (msg.resumed !== undefined) nodeResumed = msg.resumed;
           }
-          if (msg.tokens !== undefined) {
+          nodeTokensUnknown ||= msg.tokensUnknown === true;
+          if (nodeTokensUnknown) {
+            nodeTokens = undefined;
+          } else if (msg.tokens !== undefined) {
             nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
               nodeId: node.id,
             });
@@ -2764,7 +2781,9 @@ async function executeNodeInternal(
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
-        if (nodeTokens !== undefined) {
+        if (nodeTokensUnknown) {
+          accumulatedTokens = undefined;
+        } else if (nodeTokens !== undefined) {
           accumulatedTokens = sumTokenUsage(
             [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), nodeTokens],
             { nodeId: node.id }
@@ -3015,6 +3034,7 @@ async function executeNodeInternal(
           declaredOutputPaths: result.declaredOutputPaths,
         },
         tokens: nodeTokens,
+        tokensUnknown: nodeTokensUnknown,
         costUsd: nodeCostUsd,
         stopReason: nodeStopReason,
         numTurns: nodeNumTurns,
@@ -4156,7 +4176,7 @@ async function executeLoopGroupNode(
       lifecycle: { status: 'started' },
     }
   );
-  const usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'> = {};
+  const usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> = {};
   let result: LoopGroupBodyResult;
   try {
     result = await executeLoopGroupBody(
@@ -4208,6 +4228,7 @@ async function executeLoopGroupNode(
         ...serializeNodeOutput(execution),
         ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
         ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+        ...(result.tokensUnknown ? { tokensUnknown: true } : {}),
       };
     lifecycle = { status: 'suspended', point: suspensionPoint };
   } else {
@@ -4222,6 +4243,7 @@ async function executeLoopGroupNode(
       },
       costUsd: result.costUsd,
       tokens: result.tokens,
+      tokensUnknown: result.tokensUnknown,
       diagnostics: { loopIterations: result.loopIterations },
     })
   );
@@ -4235,7 +4257,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
-  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'>,
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>,
   workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
@@ -4779,6 +4801,7 @@ async function executeLoopGroupBody(
       warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: undefined,
       totalTokens: undefined,
+      totalTokensUnknown: false,
       stepNamePrefix: bodyStepNamePrefix,
       loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: i }],
       // Deliver this iteration's approval-gate free-text to body exec: nodes via env
@@ -4797,7 +4820,10 @@ async function executeLoopGroupBody(
     if (iterCtx.totalCostUsd !== undefined) {
       usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
     }
-    if (iterCtx.totalTokens !== undefined) {
+    usage.tokensUnknown ||= iterCtx.totalTokensUnknown;
+    if (usage.tokensUnknown) {
+      usage.tokens = undefined;
+    } else if (iterCtx.totalTokens !== undefined) {
       usage.tokens = sumTokenUsage(
         [...(usage.tokens !== undefined ? [usage.tokens] : []), iterCtx.totalTokens],
         { nodeId: node.id, iteration: i }
@@ -5398,6 +5424,7 @@ async function executeLoopNode(
       output?: string;
       costUsd?: number;
       tokens?: TokenUsage;
+      tokensUnknown?: boolean;
       loopIterations?: number;
       data?: Pick<
         NonNullable<NodeExecutionRecord['diagnostics']>,
@@ -5421,6 +5448,10 @@ async function executeLoopNode(
         {
           output: { text: extras.output ?? '' },
           tokens: extras.tokens,
+          tokensUnknown:
+            (execution.spend.tokens.source === 'unavailable' &&
+              execution.spend.tokens.reason === 'incomplete') ||
+            extras.tokensUnknown,
           costUsd: extras.costUsd,
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
@@ -5513,6 +5544,12 @@ async function executeLoopNode(
   });
   if (savedExecution !== undefined) {
     execution.timing.startedAt = savedExecution.timing.startedAt;
+    if (
+      savedExecution.spend.tokens.source === 'unavailable' &&
+      savedExecution.spend.tokens.reason === 'incomplete'
+    ) {
+      execution.spend.tokens = savedExecution.spend.tokens;
+    }
   }
   ctx.currentExecution = execution;
   loopFinalStopReason = undefined;
@@ -5592,6 +5629,9 @@ async function executeLoopNode(
   let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined = persistedLoopCostUsd;
   let loopTotalTokens: TokenUsage | undefined = persistedLoopTokens;
+  let loopTokensUnknown =
+    savedExecution?.spend.tokens.source === 'unavailable' &&
+    savedExecution.spend.tokens.reason === 'incomplete';
   // Concrete model the provider resolved to (#2314). Last-seen wins, like
   // loopFinalStopReason: every iteration runs on the same resolved provider and
   // model, so the final iteration's report is the node's report.
@@ -5638,6 +5678,7 @@ async function executeLoopNode(
         failureKind: 'cancelled',
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
         loopIterations: i - 1,
         data: { status: effectiveStatus, iteration: i },
       });
@@ -5763,6 +5804,7 @@ async function executeLoopNode(
             failureKind: 'cancelled',
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i - 1,
             data: { status: status ?? 'deleted', iteration: i },
           });
@@ -5833,7 +5875,7 @@ async function executeLoopNode(
         if (iterationCost !== undefined) {
           loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterationCost;
         }
-        if (iterationTokens !== undefined) {
+        if (!loopTokensUnknown && iterationTokens !== undefined) {
           loopTotalTokens = sumTokenUsage(
             [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterationTokens],
             { nodeId: node.id }
@@ -6028,7 +6070,11 @@ async function executeLoopNode(
                     );
                   }
                 }
-                if (msg.tokens !== undefined) {
+                loopTokensUnknown ||= msg.tokensUnknown === true;
+                if (loopTokensUnknown) {
+                  iterationTokens = undefined;
+                  loopTotalTokens = undefined;
+                } else if (msg.tokens !== undefined) {
                   iterationTokens = sumTokenUsage(
                     [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
                     {
@@ -6152,6 +6198,7 @@ async function executeLoopNode(
               : {}),
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { iteration: i },
           });
@@ -6175,6 +6222,7 @@ async function executeLoopNode(
             failureKind: 'cancelled',
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { status: effectiveStatus, iteration: i },
           });
@@ -6241,6 +6289,7 @@ async function executeLoopNode(
             failureKind,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { iteration: i },
           });
@@ -6286,6 +6335,7 @@ async function executeLoopNode(
             failureKind,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { iteration: i },
           });
@@ -6333,6 +6383,7 @@ async function executeLoopNode(
                 output: lastIterationOutput,
                 costUsd: loopTotalCostUsd,
                 ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+                ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
                 loopIterations: i,
                 data: { iteration: i },
               }
@@ -6351,6 +6402,7 @@ async function executeLoopNode(
                   output: lastIterationOutput,
                   costUsd: loopTotalCostUsd,
                   ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+                  ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
                   loopIterations: i,
                   data: { iteration: i },
                 }
@@ -6387,6 +6439,7 @@ async function executeLoopNode(
               output: lastIterationOutput,
               costUsd: loopTotalCostUsd,
               ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+              ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
               loopIterations: i,
               data: { iteration: i },
             }
@@ -6414,6 +6467,7 @@ async function executeLoopNode(
             output: lastIterationOutput,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { iteration: i },
           }
@@ -6437,6 +6491,7 @@ async function executeLoopNode(
             failureKind: 'output_contract',
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
             data: { iteration: i },
           }
@@ -6670,6 +6725,7 @@ async function executeLoopNode(
               declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
             },
             tokens: loopTotalTokens,
+            tokensUnknown: loopTokensUnknown,
             costUsd: loopTotalCostUsd,
             stopReason: loopFinalStopReason,
             numTurns: loopTotalNumTurns,
@@ -6703,6 +6759,7 @@ async function executeLoopNode(
         {
           output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
           tokens: loopTotalTokens,
+          tokensUnknown: loopTokensUnknown,
           costUsd: loopTotalCostUsd,
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
@@ -6740,6 +6797,7 @@ async function executeLoopNode(
         ...serializeNodeOutput(execution),
         ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
       };
       const paused = await pauseGateRespectingExternalTransition(
         deps,
@@ -6748,7 +6806,7 @@ async function executeLoopNode(
         { suspension: serializeNodeStateRecord(suspended) }
       );
       if (!paused) {
-        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined) {
+        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined || loopTokensUnknown) {
           await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
         }
         return deferredLoopOutput;
@@ -6782,6 +6840,7 @@ async function executeLoopNode(
           output: lastIterationOutput,
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
           loopIterations: i,
           data: { iteration: i },
         });
@@ -6813,6 +6872,7 @@ async function executeLoopNode(
     output: lastIterationOutput,
     costUsd: loopTotalCostUsd,
     ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
     loopIterations: loop.max_iterations,
     data: { maxIterations: loop.max_iterations },
   });
@@ -7446,7 +7506,8 @@ async function executeWorkflowNode(
     error: string,
     failureKind: NodeFailureKind,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    tokensUnknown?: boolean
   ): Promise<NodeExecutionResult> => {
     // A settled child can fail after spending money. Keep those measurements on the
     // failed node so the run-level accumulator includes the work already performed.
@@ -7459,6 +7520,7 @@ async function executeWorkflowNode(
           output: { text: '' },
           costUsd,
           tokens,
+          tokensUnknown,
         }
       )
     );
@@ -7577,6 +7639,7 @@ async function executeWorkflowNode(
           },
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
+          tokensUnknown: outcome.tokensUnknown,
           diagnostics: { childRunId: outcome.childRunId },
         }
       )
@@ -7639,14 +7702,16 @@ async function executeWorkflowNode(
           outcome.error ?? `Sub-run '${node.workflow}' failed`,
           'child_failed',
           outcome.costUsd,
-          outcome.tokens
+          outcome.tokens,
+          outcome.tokensUnknown
         );
       case 'cancelled':
         return failResult(
           `Sub-run '${node.workflow}' was cancelled`,
           'cancelled',
           outcome.costUsd,
-          outcome.tokens
+          outcome.tokens,
+          outcome.tokensUnknown
         );
       default: {
         // Compile-time exhaustiveness + runtime fail-loud: without this, a status
@@ -7888,14 +7953,7 @@ export async function resolveFanOutChildDefinition(
  * contributes what it burned. That matters most here — `all_done` is the default join,
  * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
  */
-function sumFanOutCost(
-  outcomes: readonly {
-    costUsd?: number;
-    tokens?: TokenUsage;
-    childRunId?: string;
-    status: string;
-  }[]
-): number | undefined {
+function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
@@ -7908,12 +7966,14 @@ function sumFanOutCost(
 }
 
 /**
- * Σ of defined child token usage; undefined when no child reported tokens. Like
+ * Σ of defined child token usage; unavailable if any child explicitly cannot count
+ * its tokens, or if no child reported tokens. Like
  * {@link sumFanOutCost}, this covers every child regardless of outcome.
  */
 function sumFanOutTokens(
-  outcomes: readonly { tokens?: TokenUsage; status: string }[]
+  outcomes: readonly { tokens?: TokenUsage; tokensUnknown?: boolean }[]
 ): TokenUsage | undefined {
+  if (outcomes.some(outcome => outcome.tokensUnknown)) return undefined;
   return sumTokenUsage(
     outcomes.flatMap(outcome => (outcome.tokens !== undefined ? [outcome.tokens] : [])),
     { scope: 'fan_out' }
@@ -7968,6 +8028,7 @@ async function executeFanOutWorkflowNode(
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const stepName = ctx.stepNamePrefix + node.id;
+  let tokensUnknown = false;
 
   // node_failed writer (mirrors executeWorkflowNode.failResult) — a fan-out failure may
   // still carry accumulated cost/tokens so spend over already-run children is tracked.
@@ -7987,6 +8048,7 @@ async function executeFanOutWorkflowNode(
           output: { text: '' },
           costUsd,
           tokens,
+          tokensUnknown,
           diagnostics: {
             fanOut: true,
             ...(blockedOnChildRunId !== undefined ? { blockedOnChildRunId } : {}),
@@ -8014,6 +8076,7 @@ async function executeFanOutWorkflowNode(
           output: { text: output, ...(structured !== undefined ? { structured } : {}) },
           costUsd,
           tokens,
+          tokensUnknown,
           diagnostics: { fanOut: true },
         }
       )
@@ -8382,6 +8445,7 @@ async function executeFanOutWorkflowNode(
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
+  tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   // A completed child's aggregate ELEMENT (#2637): its terminal LOGICAL value via
   // {@link subrunLogicalValue}, so a structured child lands single-encoded
@@ -8534,6 +8598,7 @@ interface ComposeInstanceOutcome {
   providerFailure?: ProviderFailure;
   costUsd?: number;
   tokens?: TokenUsage;
+  tokensUnknown?: boolean;
 }
 
 /**
@@ -8555,6 +8620,7 @@ async function executeComposeFanOutNode(
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const execution = beginExecution(ctx, node);
+  let tokensUnknown = false;
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
 
   const failResult = async (
@@ -8578,6 +8644,7 @@ async function executeComposeFanOutNode(
           output: { text: '' },
           costUsd,
           tokens,
+          tokensUnknown,
           diagnostics: { fanOut: true },
         }
       )
@@ -8601,6 +8668,7 @@ async function executeComposeFanOutNode(
           output: { text: output, ...(structured !== undefined ? { structured } : {}) },
           costUsd,
           tokens,
+          tokensUnknown,
           diagnostics: { fanOut: true },
         }
       )
@@ -8832,7 +8900,11 @@ async function executeComposeFanOutNode(
       const instanceStepNamePrefix = `${instanceScopeName}__`;
       const prior = priorOutputs.get(instanceScopeName);
       if (prior !== undefined) {
+        const spend = prior.execution?.spend;
         return {
+          ...(spend?.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete'
+            ? { tokensUnknown: true }
+            : {}),
           status: 'completed',
           output: prior.output,
           ...(prior.structuredOutput !== undefined
@@ -8931,6 +9003,7 @@ async function executeComposeFanOutNode(
         warnedProviderConflicts: ctx.warnedProviderConflicts,
         totalCostUsd: undefined,
         totalTokens: undefined,
+        totalTokensUnknown: false,
         stepNamePrefix: instanceStepNamePrefix,
         loopGroupPath: ctx.loopGroupPath,
         // A composed instance is its own workflow: its prompts never took the enclosing
@@ -8938,6 +9011,12 @@ async function executeComposeFanOutNode(
         loopBodyScopes: [],
       };
       await runLayers(instanceCtx);
+      // Every instance exit carries the work it already paid for.
+      const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+        ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
+        ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+        tokensUnknown: instanceCtx.totalTokensUnknown,
+      };
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
         // An instance node's typed provider failure is the instance's, unchanged: quota
@@ -8948,8 +9027,7 @@ async function executeComposeFanOutNode(
           output: '',
           error: failed[0].error ?? 'composed instance node failed',
           ...(providerFailure !== undefined ? { providerFailure } : {}),
-          ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
-          ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+          ...instanceUsage,
         };
         try {
           const failedRecord = finishNodeExecution(
@@ -8964,6 +9042,7 @@ async function executeComposeFanOutNode(
               output: { text: '' },
               costUsd: outcome.costUsd,
               tokens: outcome.tokens,
+              tokensUnknown: outcome.tokensUnknown,
               diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
             }
           );
@@ -8986,6 +9065,7 @@ async function executeComposeFanOutNode(
         return {
           status: 'ambiguous',
           output: '',
+          ...instanceUsage,
           error:
             `composed instance ${snapshot.identity} stopped without a terminal state; ` +
             'automatic replay is unsafe',
@@ -8997,8 +9077,7 @@ async function executeComposeFanOutNode(
         ...(terminal.structuredOutput !== undefined
           ? { structuredOutput: terminal.structuredOutput }
           : {}),
-        ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
-        ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+        ...instanceUsage,
       };
       try {
         const completedRecord = finishNodeExecution(
@@ -9013,6 +9092,7 @@ async function executeComposeFanOutNode(
             },
             costUsd: outcome.costUsd,
             tokens: outcome.tokens,
+            tokensUnknown: outcome.tokensUnknown,
             diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
           }
         );
@@ -9033,6 +9113,7 @@ async function executeComposeFanOutNode(
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
+  tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   // If the run stopped underneath us (external pause/cancel mid-flight), do NOT write a
   // terminal aggregate — leave the node unwritten so resume re-drives the incomplete
@@ -9055,6 +9136,7 @@ async function executeComposeFanOutNode(
       ...serializeNodeOutput(execution),
       ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
       ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+      ...(tokensUnknown ? { tokensUnknown: true } : {}),
     };
   }
 
@@ -9299,6 +9381,7 @@ interface RunLayersContext extends RunInputs, RunDerived {
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
   totalCostUsd: number | undefined;
   totalTokens: TokenUsage | undefined;
+  totalTokensUnknown?: boolean;
   /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */
   stepNamePrefix: string;
   /** Complete runtime loop_group lineage for typed body artifacts; empty at top level. */
@@ -10535,7 +10618,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
           }
         }
-        if (output.tokens !== undefined) {
+        ctx.totalTokensUnknown ||= output.tokensUnknown === true;
+        if (ctx.totalTokensUnknown) {
+          ctx.totalTokens = undefined;
+        } else if (output.tokens !== undefined) {
           ctx.totalTokens = sumTokenUsage(
             [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
             { nodeId }
@@ -11616,6 +11702,7 @@ export async function executeDagWorkflow(
     warnedProviderConflicts: new Set<string>(),
     totalCostUsd: priorUsage?.costUsd,
     totalTokens: priorUsage?.tokens,
+    totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
     loopGroupPath: [],
     loopBodyScopes: [],
@@ -11647,6 +11734,16 @@ export async function executeDagWorkflow(
     const usage = {
       // No usage stays absent: a bash-only workflow must not read as a free AI run.
       ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
+      ...(runCtx.totalTokensUnknown
+        ? {
+            total_tokens_unknown: true,
+            total_tokens_in: null,
+            total_tokens_out: null,
+            total_cache_read_tokens: null,
+            total_cache_write_tokens: null,
+            total_cache_partial: null,
+          }
+        : {}),
       ...(runCtx.totalTokens !== undefined
         ? {
             total_tokens_in: runCtx.totalTokens.input,
