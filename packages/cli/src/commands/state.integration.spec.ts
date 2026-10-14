@@ -7,6 +7,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const track = trackTempRoots();
 const cli = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
+const agentShellCli = join(import.meta.dir, 'fixtures', 'workflow-cli-with-agent-shell.ts');
 test('real bash/script nodes commit state with run attribution; CLI conflicts and mismatch refuse writes', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'state-runtime-')));
   const project = join(root, 'project');
@@ -123,6 +124,67 @@ nodes:
       { revision: 3, writer: { kind: 'surface', via: 'cli' } },
       { revision: 2 },
       { revision: 1 },
+    ],
+  });
+}, 30_000);
+
+test("an agent's shell write records its run and node in the state log", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'state-agent-')));
+  const project = join(root, 'project');
+  const home = join(root, 'home');
+  await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
+  await writeFile(
+    join(project, '.archon', 'workflows', 'notes.yaml'),
+    `name: notes
+description: An agent keeps its own notes in state
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: keep-notes
+    prompt: Record that you ran.
+`
+  );
+  const env = {
+    ...process.env,
+    ARCHON_HOME: home,
+    DATABASE_URL: '',
+    WORKFLOW_ID: '',
+    ARCHON_NODE_EXECUTION: '',
+    ARCHON_TELEMETRY_DISABLED: '1',
+  };
+  const run = async (fixture: string, args: string[]): Promise<{ code: number; out: string }> => {
+    const child = Bun.spawn([process.execPath, fixture, ...args], {
+      cwd: project,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { code, out: stdout + stderr };
+  };
+  const workflow = await run(agentShellCli, ['workflow', 'run', 'notes', '--folder']);
+  expect(workflow.code, workflow.out).toBe(0);
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  let runId: string | undefined;
+  try {
+    runId = db.query<{ id: string }, []>('SELECT id FROM remote_agent_workflow_runs').get()?.id;
+  } finally {
+    db.close();
+  }
+  const log = await run(cli, ['state', 'log', 'agent/notes']);
+  expect(log.code, log.out).toBe(0);
+  expect(JSON.parse(log.out)).toMatchObject({
+    revisions: [
+      {
+        revision: 1,
+        value: { noted: true },
+        writer: { kind: 'run', runId, nodePath: 'keep-notes' },
+      },
     ],
   });
 }, 30_000);

@@ -1605,8 +1605,8 @@ or storage failure, `3` revision conflict, `4` oversized value, invalid patch or
 `--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
-Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
-project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
+Inside a bash/script node, or the shell of an AI node's agent, `WORKFLOW_ID` and
+`ARCHON_NODE_EXECUTION` resolve the run's project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
 does not know it fails with exit `5` naming the opened store kind; a missing project or
 node identity also fails. A node reaches only its run's project, or install scope with
 `--install`; `--project` is refused inside a run. Outside a run, the current checkout

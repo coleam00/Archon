@@ -1260,8 +1260,10 @@ guess.
 
 The reference is valid only as the whole value of a `command:` or `script:` binding, and
 only for a producer that executes against the checkout. Anything else is a load error.
-Every `bash:` and `script:` node also receives its own execution identity, including this
-attempt's observation, as JSON in the `ARCHON_NODE_EXECUTION` environment variable. The
+Every `bash:` and `script:` node, and the agent's shell in an AI node (see
+[Durable state documents](#durable-state-documents) for the provider exception), also
+receives its own execution identity, including this attempt's observation, as JSON in the
+`ARCHON_NODE_EXECUTION` environment variable. The
 implement workflow compares these two observations to decide whether an invocation
 changed anything since it started.
 
@@ -1459,10 +1461,8 @@ a guarantee; a prompt instructing an AI node to append is a convention it may no
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
 can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains the free-form
 file area for caches and non-JSON data, with its existing concurrency limitations.
-State documents use the selected store: files, SQLite or PostgreSQL. AI nodes do not yet
-receive `WORKFLOW_ID`, so a write an agent makes by calling `archon state` from its shell is recorded as a CLI write from outside any
-run, not as its run and node. Commit through a bash or script node when the run must
-be recorded. Container runs are not supported because the CLI and store are not delivered there.
+State documents use the selected store: files, SQLite or PostgreSQL. Container runs are
+not supported because the CLI and store are not delivered there.
 
 A document belongs to a project, shared by all its workflows, or to install scope
 (`--install`), shared across projects. A node reaches only its run's project and install
@@ -1531,6 +1531,17 @@ record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` 
 of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
 run, it refuses the write (exit `5`) instead of writing to another project. Operators can inspect
 `archon state log review/ledger` and correct a value using `put --if-revision` or `patch --if-revision`.
+
+An AI node's agent can also write state itself, by running `archon state` from its shell.
+On Claude, Codex, Pi and Copilot the agent's shell receives the same `WORKFLOW_ID` and
+`ARCHON_NODE_EXECUTION`, and `ARCHON_CLI_COMMAND` on the host (empty in a container run),
+so the write records the run and the AI node's path. Configured project env cannot override
+these keys. OpenCode runs every node in one shared server that receives no per-node
+environment: an OpenCode agent's shell carries whatever identity the process hosting that
+server had. Its write is recorded as a CLI write from outside any run when Archon was started
+outside a run, and as the launching node when the run was started from another run's node. Commit
+through a script node when the run must be recorded. Any process that sets a run's `WORKFLOW_ID` and matching
+`ARCHON_NODE_EXECUTION` is recorded as that run: the writer is provenance, not access control.
 
 The ledger prevents lost state updates; it does not make an external review/comment and
 the state commit one transaction. Use resource admission to serialize work that must not

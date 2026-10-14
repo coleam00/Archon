@@ -18725,7 +18725,7 @@ describe('executeDagWorkflow -- env var injection', () => {
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    expect(optionsArg?.env).toEqual({
+    expect(optionsArg?.env).toMatchObject({
       MY_SECRET: 'abc123',
       ANTHROPIC_API_KEY: 'acting-user-secret',
       GIT_AUTHOR_NAME: 'connected-author',
@@ -18738,28 +18738,119 @@ describe('executeDagWorkflow -- env var injection', () => {
     ]);
   });
 
-  it('does not set env on claudeOptions when config.envVars is empty', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
+  describe('run identity', () => {
+    const cliCommand = JSON.stringify(['/opt/archon/bin/archon']);
+    let savedCliCommand: string | undefined;
+    beforeEach(() => {
+      savedCliCommand = process.env.ARCHON_CLI_COMMAND;
+      process.env.ARCHON_CLI_COMMAND = cliCommand;
+    });
+    afterEach(() => {
+      if (savedCliCommand === undefined) delete process.env.ARCHON_CLI_COMMAND;
+      else process.env.ARCHON_CLI_COMMAND = savedCliCommand;
+    });
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'dag-no-env',
-          nodes: [{ id: 'task', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+    const shadowingEnv = {
+      MY_VAR: 'keep-me',
+      WORKFLOW_ID: 'project-run',
+      ARCHON_NODE_EXECUTION: '{"runId":"project-run","path":"elsewhere"}',
+      ARCHON_CLI_COMMAND: '["project-archon"]',
+    };
+
+    async function runIdentityEnv(
+      node: TestWorkflowDefinition['nodes'][number],
+      envVars: Record<string, string>
+    ): Promise<{ env: Record<string, string>; execution: Record<string, unknown> }> {
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-identity', nodes: [node] },
+          workflowRun: makeWorkflowRun('identity-run'),
+          config: { ...minimalConfig, envVars },
+        })
+      );
+      const env = (mockSendQueryDag.mock.calls[0]?.[3] as { env: Record<string, string> }).env;
+      return { env, execution: JSON.parse(env.ARCHON_NODE_EXECUTION ?? '') };
+    }
+
+    it("a prompt: node's environment carries its run, node and the CLI command", async () => {
+      const { env, execution } = await runIdentityEnv(
+        { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+        {}
+      );
+      expect(Object.keys(env).sort()).toEqual([
+        'ARCHON_CLI_COMMAND',
+        'ARCHON_NODE_EXECUTION',
+        'WORKFLOW_ID',
+      ]);
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'notes' });
+      expect(execution).toHaveProperty('invocation');
+      expect(execution).toHaveProperty('attempt');
+    });
+
+    it('project env cannot shadow the identity of a prompt: node', async () => {
+      const { env, execution } = await runIdentityEnv(
+        { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+        shadowingEnv
+      );
+      expect(env.MY_VAR).toBe('keep-me');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'notes' });
+    });
+
+    it("a loop node's iterations carry the loop's run and node", async () => {
+      mockSendQueryDag.mockImplementationOnce(async function* () {
+        yield { type: 'result', sessionId: 's', text: '<promise>COMPLETE</promise>' };
+      });
+      const { env, execution } = await runIdentityEnv(
+        {
+          id: 'iterate',
+          kind: 'loop',
+          loop: { prompt: 'Work.', until: 'COMPLETE', max_iterations: 2, fresh_context: false },
         },
-        workflowRun,
-        config: { ...minimalConfig, envVars: {} },
-      })
-    );
+        shadowingEnv
+      );
+      expect(env.MY_VAR).toBe('keep-me');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(env.ARCHON_CLI_COMMAND).toBe(cliCommand);
+      expect(execution).toMatchObject({ runId: 'identity-run', path: 'iterate' });
+    });
 
-    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
-    const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
-    expect(optionsArg?.env).toBeUndefined();
+    it('a container run owns ARCHON_CLI_COMMAND as empty, so project env cannot supply one', async () => {
+      const execSpy = stubMissingContainer();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(createMockStore()),
+            cwd: testDir,
+            workflow: {
+              name: 'dag-identity',
+              nodes: [
+                { id: 'notes', kind: 'agent', source: { kind: 'inline', prompt: 'Keep notes.' } },
+              ],
+            },
+            workflowRun: makeWorkflowRun('identity-run'),
+            config: { ...minimalConfig, envVars: shadowingEnv },
+            execContext: { kind: 'container', containerId: 'identity-container' },
+          })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+      const env = (mockSendQueryDag.mock.calls[0]?.[3] as { env: Record<string, string> }).env;
+      expect(env.ARCHON_CLI_COMMAND).toBe('');
+      expect(env.WORKFLOW_ID).toBe('identity-run');
+      expect(JSON.parse(env.ARCHON_NODE_EXECUTION ?? '')).toMatchObject({
+        runId: 'identity-run',
+        path: 'notes',
+      });
+    });
   });
 });
 
