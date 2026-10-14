@@ -818,9 +818,11 @@ describe('isolationCleanupCommand', () => {
     expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
   });
 
+  // A record written before worktree_branch_created was persisted has no key.
   it.each([
     { branchCreated: true, branchName: 'stale-branch' },
     { branchCreated: false, branchName: undefined },
+    { branchCreated: 'absent', branchName: undefined },
   ])(
     'destroys a stale environment with no live owning run (branch created: $branchCreated)',
     async ({ branchCreated, branchName }) => {
@@ -829,7 +831,10 @@ describe('isolationCleanupCommand', () => {
           ...mockEnv,
           id: 'env-stale-1',
           branch_name: 'stale-branch',
-          metadata: { ...mockEnv.metadata, worktree_branch_created: branchCreated },
+          metadata:
+            branchCreated === 'absent'
+              ? mockEnv.metadata
+              : { ...mockEnv.metadata, worktree_branch_created: branchCreated },
         },
       ]);
 

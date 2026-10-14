@@ -684,7 +684,13 @@ describe('cleanup-service', () => {
       });
     });
 
-    test('keeps a branch the environment did not create', async () => {
+    test.each([
+      {
+        label: 'says the environment did not create it',
+        metadata: { worktree_branch_created: false },
+      },
+      { label: 'predates the branch-created key', metadata: {} },
+    ])('keeps the branch when the record $label', async ({ metadata }) => {
       const envId = 'env-existing-branch';
 
       mockGetById.mockResolvedValueOnce(
@@ -694,7 +700,7 @@ describe('cleanup-service', () => {
           working_path: '/workspace/worktrees/operator-branch',
           branch_name: 'operator-branch',
           status: 'active',
-          metadata: { worktree_branch_created: false },
+          metadata,
         })
       );
       mockGetCodebase.mockResolvedValueOnce(
