@@ -53,9 +53,10 @@ export { type CleanupOperationResult, type MergedCleanupResult } from '../servic
  * An env a run can still claim is left active even with its directory gone: marking
  * it destroyed invalidates that run's resume handle, and this runs from
  * `listEnvironments()` ahead of the per-item live-run guard in the `isolation
- * cleanup` commands, so a row ghosted here never reaches that guard. Same rule as
- * the scheduled sweep's path-missing branch. The env stays visible in `isolation
- * list` with its missing path, which is the operator's signal to act.
+ * cleanup` commands, so a row ghosted here never reaches that guard. A failed run
+ * stays here too: no outcome is judged here, and those per-item sweeps release
+ * its lock once they settle one. The env stays visible in `isolation list` with
+ * its missing path, which is the operator's signal to act.
  */
 async function reconcileGhosts(
   envs: readonly {

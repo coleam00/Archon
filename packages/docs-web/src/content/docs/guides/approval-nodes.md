@@ -1,6 +1,6 @@
 ---
-title: Approval Nodes
-description: Pause workflows for human review with declared decisions or legacy approve/reject gates.
+title: Asking for an Answer
+description: Pause a workflow until it gets an answer with wait attention forms, and migrate legacy approval gates and interactive loops.
 category: guides
 area: workflows
 audience: [user]
@@ -9,16 +9,20 @@ sidebar:
   order: 4
 ---
 
-DAG workflow nodes support an `approval` field that pauses workflow execution
-until a human selects one of the gate's declared decisions. Use approval nodes to
-insert human review steps between AI-driven nodes — for example, reviewing a generated plan
-before committing to expensive implementation work.
+A workflow that needs input pauses at a `wait: attention` node. The run stops,
+the question waits in the attention queue, and the run continues once someone
+answers it in the form the node declares. Archon does not route the question or
+care who answers: a person in the console or chat, an agent through the CLI, or a
+handler workflow all use the same answer channel.
 
-## Quick Start
+Use it to review a generated plan before expensive work, to pick between options
+an agent produced, or to collect instructions mid-run.
+
+## Quick start
 
 ```yaml
-name: plan-approve-implement
-description: Plan, get approval, then implement
+name: plan-review-implement
+description: Plan, pause for review, then implement
 
 nodes:
   - id: plan
@@ -26,344 +30,256 @@ nodes:
       Analyze the codebase and create a detailed implementation plan.
       $USER_MESSAGE
 
-  - id: review-gate
-    approval:
-      message: "Review the plan above before proceeding with implementation."
+  - id: review
     depends_on: [plan]
+    wait:
+      form: approval
+      attention: |
+        Review the plan before implementation starts:
+
+        $plan.output
+
+  - id: stop
+    depends_on: [review]
+    when: "$review.output.decision == 'reject'"
+    cancel: The plan was rejected.
 
   - id: implement
-    command: implement
-    depends_on: [review-gate]
-```
-
-When execution reaches `review-gate`, the workflow pauses and sends a message
-to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). The pause
-is durable: it waits in the attention queue until someone answers, whether the run
-started in the foreground, with `--detach`, from the web console, or from a trigger.
-If that message cannot be delivered, the run still waits; the failed delivery is
-logged and recorded on the run as a `pause_notice_undelivered` event.
-
-## How legacy approve/reject gates work
-
-1. **Pause**: The executor sets the workflow run status to `paused` and stores
-   the approval context (node ID and message) in the run's metadata.
-2. **Notify**: A message is sent to the user with the approval prompt and
-   instructions for approving or rejecting.
-3. **Wait**: The workflow stays paused until the user takes action. Paused runs
-   block the worktree path guard (no other workflow can start on the same path).
-4. **Approve**: The user approves, which writes a `node_completed` event for
-   the approval node and transitions the run to resumable. Every approve surface
-   also continues a non-container run: the `/workflow approve <run-id>` slash command, the
-   CLI, the Web UI approve button, the in-thread **Approve** button posted by the
-   Slack adapter, and a chat agent resolving the gate on your behalf after you
-   tell it to.
-5. **Reject**: The user rejects.
-   - **Without `on_reject`**: The workflow is cancelled immediately.
-   - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with
-     `$REJECTION_REASON` substituted), then re-pauses at the same gate. This
-     repeats until the user approves or `on_reject.max_attempts` is reached, at
-     which point the workflow is cancelled.
-
-When gates run concurrently in one DAG layer, only one gate per run pauses and
-prompts. The others stay unfinished without prompting; resolving the active gate
-resumes the run and re-runs the remaining gates. This also applies to interactive
-loop gates. Each child workflow has its own run ID and presents its own gate
-independently. Approve or reject the child by its run ID; the parent re-checks its
-children as they finish.
-
-## YAML Schema
-
-```yaml
-- id: gate-name
-  approval:
-    message: "Human-readable prompt shown to the user"
-    decisions:
-      - id: approve
-        label: Ship it
-      - id: revise
-        label: Try again
-      - id: cancel
-  depends_on: [upstream-node]  # optional
-  when: "$plan.output.ready == 'true'"  # optional condition (see note below)
-  trigger_rule: all_success    # optional (default: all_success)
-```
-
-### Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `approval.message` | string | Yes | The message shown to the user when the workflow pauses |
-| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. IDs must be unique; `approve` and `reject` are optional. Cannot be combined with `on_reject` |
-| `approval.decisions[].id` | string | Yes | Exact wire value: lowercase letters and digits separated by single hyphens, such as `needs-revision`. No spaces |
-| `approval.decisions[].label` | string | No | Nonempty display label; selection always sends the ID |
-| `approval.capture_response` | boolean | No | For legacy gates, when `true`, the user's approval comment is stored as `$<node-id>.output` for downstream nodes. Default: `false` |
-| `approval.on_reject.prompt` | string | No | Prompt template run via AI when the user rejects. `$REJECTION_REASON` is substituted with the reject reason. After running, the workflow re-pauses at the same gate |
-| `approval.on_reject.max_attempts` | integer | No | Max times the on_reject prompt runs before the workflow is cancelled. Range: 1–10. Default: 3 |
-
-When `decisions` is absent, Archon synthesizes the legacy **Approve**/**Reject**
-pair. The legacy `capture_response` and `on_reject` behavior described below remains
-available. Explicit decisions produce structured output, `{decision, text}`;
-`capture_response` does not change that output. Every declared decision completes
-the gate and lets the authored graph determine what happens next. An ID such as `cancel` does not cancel by itself; wire it to a
-`cancel:` node when that is the intended outcome. The engine has no per-decision required-text rule. In the console, `approve`
-accepts an optional comment; every other decision requires text before confirmation.
-
-Approval nodes do not support AI-specific fields (`model`, `provider`, `context`,
-`output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`,
-`idle_timeout`) since they don't invoke an AI agent. (The `on_reject.prompt` runs
-as a separate AI node using the workflow's default provider.)
-
-Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`) work as
-expected. Note that a `when:` gating the approval cannot compare the *whole* output of
-an AI producer to a literal — declare `output_format` on the producer and compare a field,
-as above. See
-[`when:` Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
-`retry` is accepted by the schema but has **no effect** on an approval
-node — the approval dispatch path never enters the retry loop. To rework a
-rejected gate, route its declared decision to your own rework node, or use legacy
-`on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)).
-
-## Approving and Rejecting
-
-### Declared decisions
-
-Only the authored ids are accepted. This applies to every response surface,
-including CLI `respond`/`approve`/`reject` and the HTTP routes. `approve` and
-`reject` work only when included in the list. An undeclared decision is refused
-with the allowed ids; the run stays paused and no resolution or resume is recorded.
-
-The displayed label is presentation. Use the exact ID to respond:
-
-```text
-/workflow respond <run-id> revise Please add tests
-```
-
-Slack uses `/archon-workflow respond`. It renders buttons when the choices fit
-its transport limits; otherwise it posts respond commands. The CLI equivalent is:
-
-```bash
-archon workflow respond <run-id> revise "Please add tests"
-```
-
-Text is optional in the engine, CLI and HTTP API and passes through to
-`$gate-name.output.text`. The console requires text for every decision other than
-`approve`, including custom decisions such as `accept` or `revise`. The selected ID
-is available as `$gate-name.output.decision`. Use these fields to wire the next
-step. CLI run detail lists the available IDs and commands; the console displays
-the labels and sends the IDs. Older gates without `decisions` retain the legacy
-commands and output described below.
-
-### Explicit chat commands
-
-For authored decisions, select an exact declared ID and optionally include text:
-
-```text
-/workflow respond <run-id> accept Looks good, proceed
-/workflow respond <run-id> revise Please add tests
-```
-
-The selected ID and text become `$gate-name.output.decision` and
-`$gate-name.output.text`. Only IDs in that gate's list are accepted.
-
-For default gates without authored decisions, use the binary commands:
-
-```text
-/workflow approve <run-id> looks good
-/workflow reject <run-id> needs changes
-```
-
-These commands resolve the default gate and continue a non-container run or cancel
-it according to its rejection rules. Slack uses `/archon-workflow` in place of `/workflow`.
-
-For both authored and default gates, a chat decision that requires further execution
-leaves a container run resumable. Continue it with `archon workflow resume <run-id>`
-from the CLI in the same project; chat cannot resume its container. This also applies
-when the chat agent records the decision for you.
-
-### Asking the chat agent
-
-You can also say what you want in the conversation. The agent reads the open
-gate and your full message. For an authored gate, it selects a declared ID only
-when your message clearly expresses that decision, then uses `respond` with your
-words as text. The output is `{decision, text}`. A question or ambiguous message
-leaves the gate open.
-
-For a default gate, the agent uses approve or reject:
-
-```text
-User: "looks good, ship it"
-→ agent approves the gate; a non-container run continues
-
-User: "no, stop — why is it editing the schema?"
-→ agent rejects the gate with your words as the reason
-
-User: "what would that change?"
-→ agent answers you; the gate stays open and nothing is resolved
-```
-
-On default gates, your words become the approval comment or rejection reason.
-A default gate with `capture_response: true` receives the approval comment as
-its node output.
-
-:::caution[Behaviour change]
-Archon used to record **any** message that did not start with `/` as an approval,
-including objections. Typing at a gate no longer approves by itself. If your
-message is ambiguous the agent asks instead of guessing.
-
-Providers without native tool support use
-`archon workflow respond <run-id> <decision> [text]` for authored gates, or
-`archon workflow approve|reject` for default gates. When the agent cannot resolve the gate from the conversation, it
-provides an explicit command for you to run. Use the chat commands above to
-record a decision without model interpretation.
-:::
-
-### CLI
-
-The CLI is non-interactive. For authored gates, use a declared ID:
-
-```bash
-archon workflow respond <run-id> accept "Looks good, proceed"
-archon workflow respond <run-id> revise "Please add tests"
-```
-
-For default gates:
-
-```bash
-# Approve (resumes the workflow immediately)
-bun run cli workflow approve <run-id>
-bun run cli workflow approve <run-id> --comment "Looks good, proceed"
-
-# Reject
-# Without on_reject: cancels the workflow
-# With on_reject: records feedback, triggers AI rework, re-pauses
-bun run cli workflow reject <run-id>
-bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
-```
-
-`approve` and `reject` also work on authored gates that declare those IDs. They
-record the declared decision and text; the authored graph determines what follows.
-
-### Interactive-loop gates: bare approve finalizes
-
-Interactive **loop** gates (`loop:`/`loop_group:` with `interactive: true`) share these
-approve surfaces but add one rule: when the gate paused on an iteration where any declared
-completion channel fired (the persisted gate message — `metadata.approval.message`, shown
-by `workflow get --json` and `manage_run` — leads with `✅ Completion condition met via`
-or the plural `✅ Completion conditions met via`;
-in chat the same line follows the `⏸ Input required` prefix),
-approving **without a comment** finalizes the loop node from the already-computed output —
-no extra iteration runs. Approving **with** a comment runs another iteration with your
-comment as `$LOOP_USER_INPUT`. Asking the agent to approve without passing anything on
-finalizes too; if you want the finalize to be unambiguous, use `/workflow approve <id>`
-with no comment, the CLI, or the web button. See
-[Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
-for the full semantics, `signal_completes`, and the AI-approver steering pattern.
-
-### Web UI
-
-Open the paused run from the console run list. Its run detail shows the pending
-approval, context, and decision controls. Gates with authored decisions show
-only those decisions with the author's labels, including the label for `approve`
-when declared. Gates without authored decisions show **Continue**, which accepts
-an optional comment. **Reject** opens a feedback field and requires text before submission.
-The server then continues the run on its own, on the platform that started it;
-the gate's rejection rules can instead cancel the run.
-
-**Reject with feedback**: the required, trimmed text is passed to the workflow as
-`$REJECTION_REASON`, available in the `on_reject.prompt`.
-
-**Container runs and gates paused before an upgrade**: a container run, or a gate
-that was already paused when you upgraded to this version, does not continue on its
-own after a Web UI decision. Run `archon workflow resume <run-id>` in the same project.
-
-### REST API
-
-```bash
-# Approve
-curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/approve \
-  -H "Content-Type: application/json" \
-  -d '{"comment": "Approved"}'
-
-# Reject
-curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/reject \
-  -H "Content-Type: application/json" \
-  -d '{"reason": "Needs revision"}'
-```
-
-## Downstream Output
-
-With declared decisions, read `$<node-id>.output.decision` and
-`$<node-id>.output.text`. The following `capture_response` examples apply to
-legacy gates without `decisions`.
-
-By default, the user's approval comment is **not** available downstream —
-`$<node-id>.output` will be an empty string. To capture the comment as node
-output, set `capture_response: true`:
-
-```yaml
-nodes:
-  - id: gate
-    approval:
-      message: "Any special instructions for implementation?"
-      capture_response: true   # Makes the user's comment available as $gate.output
-    depends_on: [plan]
-
-  - id: implement
+    depends_on: [review]
+    when: "$review.output.decision == 'approve'"
     prompt: |
-      Implement the plan. User instructions: $gate.output
-    depends_on: [gate]
+      Implement the plan. Reviewer notes: $review.output.text
+      $plan.output
 ```
 
-Without `capture_response: true`, downstream nodes should not reference
-`$gate.output` — it will be an empty string.
+When execution reaches `review`, the run pauses and the question is sent to the
+conversation that started it. The pause is durable: it waits in the attention
+queue until it is answered, whether the run started in the foreground, with
+`--detach`, from the web console, or from a trigger. If the notice cannot be
+delivered, the run still waits; the failed delivery is logged and recorded on
+the run as a `pause_notice_undelivered` event.
 
-## Rejection with AI Rework (`on_reject`)
+`reject` is an answer like any other and never cancels the run by itself. The
+`stop` node is what ends it; leave it out when a rejection should continue
+somewhere else.
 
-When `on_reject` is configured, a rejection does not cancel the workflow —
-instead, the executor runs an AI prompt with the rejection reason and re-pauses
-at the same gate.
+## Forms
+
+`form` fixes what the wait accepts and what the next node reads:
+
+| Form | Answer accepted | The next node reads |
+|---|---|---|
+| `message` (default) | free text, which may be empty | `{ text }` |
+| `approval` | `approve` or `reject`, plus optional text | `{ decision, text }` |
+| `select` | exactly one declared option id, plus optional text | `{ decision, text }` |
+| `multi_select` | one or more distinct declared option ids, plus optional text | `{ decisions, text }` |
+
+`select` and `multi_select` declare `options`, literally or as one whole
+reference to an upstream output:
 
 ```yaml
-- id: review-gate
-  approval:
-    message: "Review the implementation plan."
-    capture_response: true
-    on_reject:
-      prompt: |
-        The reviewer rejected the plan with this feedback: $REJECTION_REASON
-
-        Revise the plan to address the feedback, then summarize the changes.
-      max_attempts: 3   # After 3 rejections, the workflow is cancelled. Default: 3.
+- id: choose-base
   depends_on: [plan]
+  wait:
+    attention: "Which branch should the fix target?"
+    form: select
+    options:
+      - { id: use-main, label: "Base on main" }
+      - { id: use-dev }
 ```
 
-The `$REJECTION_REASON` variable is substituted with the `--reason` text provided
-by the rejecting user. After the AI rework, the workflow re-pauses so the reviewer
-can approve or reject again.
+The attention message accepts runtime references (`$plan.output`, `$INPUTS.x`).
+See [Attention waits](/guides/authoring-workflows/#attention-waits) for the full
+rules on forms, options and output.
 
-### Lifecycle with on_reject
+## Answering
 
-1. Workflow pauses at approval gate
-2. Reviewer rejects: `rejection_count` incremented, `rejection_reason` stored
-3. If `rejection_count < max_attempts`: `on_reject.prompt` runs via AI, workflow re-pauses
-4. If `rejection_count >= max_attempts`: workflow cancelled
+Every surface accepts the same answers. An undeclared option is refused on every
+surface and the run stays paused.
 
-## Edge Cases
+- **CLI**: [`archon workflow answer`](/reference/cli/#workflow-answer) with the
+  occurrence from `workflow get` or `workflow wait --json`. `approve [text]`,
+  `reject [text]` and `respond <option> [text]` work as shorthand: `approve`
+  answers a `message` wait with its text, and otherwise each verb chooses the
+  option of the same id.
 
-- **Multiple approval nodes**: Supported. Each pauses the workflow independently.
-- **Approval in parallel layer**: Other nodes in the same layer complete normally;
-  the workflow pauses at the layer boundary.
-- **Server restart while paused**: The run persists in the database. The user can
-  still approve or reject after restart.
-- **Abandoning a paused run**: Use `/workflow abandon <id>`.
+  ```bash
+  archon workflow approve <run-id> "Looks good"
+  archon workflow reject <run-id> "Needs tests"
+  archon workflow respond <run-id> use-dev
+  ```
 
-## Design Notes
+- **Chat**: `/workflow approve`, `/workflow reject` and `/workflow respond` with
+  the same arguments (`/archon-workflow` in Slack). You can also say what you
+  want in the conversation. The chat agent reads the open question and your full
+  message, and answers only when your message clearly is one. A question or an
+  ambiguous message leaves the run paused.
+- **Web console**: open the paused run; it shows the question and the form's
+  choices.
+- **HTTP**: `POST /api/workflows/runs/<run-id>/answer` with
+  `{ occurrence, choose?, text? }`.
 
-Approval nodes reuse the existing resume infrastructure. When approved (or
-rejected with an `on_reject` rework), the run **stays `paused`** — the
-resolution is recorded on the pause context as `metadata.approval.resolved`
-(`'approved'` or `'rejected'`), and the resume machinery (which accepts paused
-runs) picks it up via `hydrateResumableRun`. The status you see between
-clicking Approve and the executor resuming is an honest `paused`, never a
-transient `failed`. A `failed` run always means a real failure (it carries
-`metadata.error` or `metadata.failure_reason`).
+An answer names the occurrence it was meant for, so an answer to an earlier pause
+of the same run is refused. Answering through the CLI without `--json` continues
+the run in that process; otherwise `archon serve` or `archon workflow wake`
+continues it. Attention waits are not supported in container-isolated workflows.
+
+## Reading the answer
+
+Downstream nodes read the answer as `$<wait-id>.output.decision`,
+`$<wait-id>.output.decisions` and `$<wait-id>.output.text`, depending on the
+form. Every form records the answer's text, so there is nothing to opt into.
+
+Route on the decision with `when:`:
+
+```yaml
+- id: implement
+  depends_on: [review]
+  when: "$review.output.decision == 'approve'"
+  prompt: "Implement the plan. Notes: $review.output.text"
+```
+
+## Rework until approved
+
+To revise and ask again, put the work and the question in a `loop_group` whose
+body ends in the wait. The next iteration reads the previous answer as
+`$LOOP_PREV.<wait-id>.output`, and `until_bash` ends the loop on approval:
+
+```yaml
+- id: refine-plan
+  depends_on: [plan]
+  loop_group:
+    max_iterations: 3
+    until_bash: 'decision=$review.output.decision; [ "$decision" = "approve" ]'
+    nodes:
+      - id: revise
+        prompt: |
+          Improve this plan: $plan.output
+          Feedback on the previous revision, if any: $LOOP_PREV.review.output.text
+      - id: review
+        depends_on: [revise]
+        wait:
+          form: approval
+          attention: |
+            Review the revised plan:
+
+            $revise.output
+```
+
+The wait must be the body's sole terminal sink. The loader warns when
+`until_bash` does not reference the wait's output, because the loop would then
+ignore every answer. See
+[Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body)
+for how a paused loop group continues.
+
+## Engine-initiated pauses
+
+Two pauses are created by the engine, not authored, and keep their own
+mechanics:
+
+- **Container write-back**: a container run pauses before applying its changes to
+  the checkout. `approve` applies the overlay and `reject` discards it.
+- **A parent blocked on a `workflow:` child**: the child run pauses with its own
+  question. Answer the child by its run id; answering the parent is refused with
+  a redirect to the child, and the parent continues when the child finishes.
+
+## Migrating from approval gates
+
+`approval:` gates and interactive loop gates are deprecated. They still load and
+run exactly as before, and paused runs of the old shapes stay answerable with
+`approve`, `reject` and `respond`. Each file that uses one gets one load warning
+per legacy shape, naming every node that uses it and its replacement. Removing the
+legacy runtime is a later release, whose notes will ask you to answer or abandon
+paused runs of the old shapes first.
+
+Container-isolated workflows cannot migrate yet: a run with container isolation
+refuses any `wait:` node before it starts, so `approval:` is still their only
+authored pause. Keep those gates until waits are supported there; the load
+warning still appears.
+
+| Legacy | Replacement |
+|---|---|
+| `approval: { message }` | `wait: { attention: <message>, form: approval }`. A legacy reject cancels the run; the attention form continues with decision `reject`, so add a `cancel:` node on reject where rejecting should end the run. Archon does not translate this for you. |
+| `approval.decisions` | `form: select` with the same ids and labels as `options`. The output is the same `{ decision, text }`. |
+| `approval.capture_response` | The answer's text, `$<id>.output.text`. Every form records it. |
+| `approval.on_reject` and `$REJECTION_REASON` | A rework node with `when: "$<id>.output.decision == 'reject'"` that reads `$<id>.output.text`. To repeat the rework, use a `loop_group` whose body ends in the wait, with the rework node first reading `$LOOP_PREV.<id>.output.text`. See [Rework until approved](#rework-until-approved). |
+| Interactive loop gates (`interactive: true` with `gate_message` on `loop:` or `loop_group:`, and `$LOOP_USER_INPUT`) | A `loop_group` whose body ends in `wait: attention`. The next iteration reads `$LOOP_PREV.<wait-id>.output`, and `until_bash` checks the answer. |
+
+A plain gate, before and after:
+
+```yaml
+# Before: reject cancels the run
+- id: review
+  depends_on: [plan]
+  approval:
+    message: "Review the plan."
+    capture_response: true
+
+# After: the decision is routed explicitly
+- id: review
+  depends_on: [plan]
+  wait:
+    form: approval
+    attention: "Review the plan."
+
+- id: stop
+  depends_on: [review]
+  when: "$review.output.decision == 'reject'"
+  cancel: The plan was rejected.
+```
+
+Nodes that depended on the gate and should only run on approval need
+`when: "$review.output.decision == 'approve'"`. A downstream reference to
+`$review.output` from a `capture_response` gate becomes `$review.output.text`.
+
+A gate with authored decisions maps one to one:
+
+```yaml
+# Before
+approval:
+  message: "CI failed. What next?"
+  decisions:
+    - { id: rerun-ci, label: "Re-run CI" }
+    - { id: give-up }
+
+# After
+wait:
+  attention: "CI failed. What next?"
+  form: select
+  options:
+    - { id: rerun-ci, label: "Re-run CI" }
+    - { id: give-up }
+```
+
+### Dry runs and fixtures
+
+`archon workflow run --dry-run` auto-approves a legacy gate unless you pass
+`--pause-at-gates`. An attention wait pauses the simulation instead, unless the
+stubs give the wait node a value: that stub stands in for the answer and must
+match the form's output, for example `review: { decision: approve, text: "" }`.
+
+## Legacy gate behavior
+
+This describes the deprecated shapes for runs and workflows that still use them.
+
+- **Approve** records the answer and continues the run. A gate with
+  `capture_response: true` and no `decisions` outputs the approval comment as
+  `$<id>.output`; otherwise its output is empty.
+- **Reject** cancels the run, unless the gate has `on_reject`. Then the
+  `on_reject.prompt` runs with `$REJECTION_REASON` set to the reason, and the run
+  pauses at the same gate again, until approval or `on_reject.max_attempts`
+  (default 3, range 1 to 10) rejections, which cancel the run.
+- **Authored `decisions`** accept only the declared ids through `respond`;
+  `approve` and `reject` work only when declared. Every decision completes the
+  gate with `{ decision, text }` and never cancels by itself.
+- **Interactive loop gates** pause after each iteration. Approving with text runs
+  another iteration with the text as `$LOOP_USER_INPUT`. When a completion signal
+  already fired on that iteration, approving without text finalizes the loop.
+- An `approval:` gate inside a `loop_group` body must be its sole terminal sink,
+  like a wait.
+- While approved or rejected-with-rework, a gate's run stays `paused` with
+  `metadata.approval.resolved` set until the resume machinery picks it up, so a
+  `failed` status always means a real failure.
+- A gate in a container run, or one already paused when you upgraded, does not
+  continue on its own after it is answered. Run `archon workflow resume <run-id>`
+  in the same project.

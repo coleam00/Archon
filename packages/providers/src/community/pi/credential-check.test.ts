@@ -295,6 +295,12 @@ describe('Pi native credentials', () => {
     expect(await check()).toEqual({ state: 'not_connected', source: 'native' });
     expect(await check('local/model')).toEqual({ state: 'not_checked', source: 'native' });
   });
+  test('a delivered Anthropic subscription token is not a Pi credential', async () => {
+    expect(await check(undefined, { ANTHROPIC_OAUTH_TOKEN: secret })).toEqual({
+      state: 'not_connected',
+      source: 'native',
+    });
+  });
   test('a model outside the static catalog is not_checked, as a turn defers it to extensions', async () => {
     expect(await check('anthropic/extension-model')).toEqual({
       state: 'not_checked',

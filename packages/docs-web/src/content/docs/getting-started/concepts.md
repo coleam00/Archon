@@ -33,7 +33,7 @@ Archon ships with bundled workflows. Run `archon workflow list` to see what's av
 
 ## Nodes
 
-Nodes are the building blocks of workflows. Each node does exactly one thing, and every node must specify exactly one of six types:
+Nodes are the building blocks of workflows. Each node does exactly one thing, and every node must specify exactly one type. The common ones:
 
 | Type | What it does |
 |------|-------------|
@@ -41,7 +41,7 @@ Nodes are the building blocks of workflows. Each node does exactly one thing, an
 | `prompt:` | Sends an inline prompt string to an AI agent |
 | `bash:` | Runs a shell script (no AI). Stdout is captured as `$nodeId.output` |
 | `loop:` | Runs an AI prompt repeatedly until a completion signal is detected |
-| `approval:` | Pauses the workflow for human review (approve or reject) |
+| `wait:` | Pauses the run until a time or event arrives, or until an `attention:` question is answered (for example approve or reject) |
 | `cancel:` | Terminates the workflow early with a reason string |
 
 Nodes connect through `depends_on` to form a DAG. You can add conditional branching with `when:` expressions, control join behavior with `trigger_rule`, and override the AI provider or model per node.
