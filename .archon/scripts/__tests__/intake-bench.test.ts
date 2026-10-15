@@ -623,6 +623,11 @@ describe('leaks', () => {
       // Another command in the same line naming the number looks nothing up.
       call('h', 'Bash', { command: 'gh issue view 41 --repo o/r && echo 4' }),
       call('i', 'Bash', { command: 'gh issue view 41\nls 4' }),
+      // The number may close a command substitution or precede a redirect.
+      call('j', 'Bash', { command: 'BODY=$(gh issue view 4)' }),
+      call('k', 'Bash', { command: 'BODY=`gh issue view 4`' }),
+      call('l', 'Bash', { command: 'gh issue view 4>/tmp/i' }),
+      call('m', 'Bash', { command: 'BODY=$(gh issue view 41)' }),
       exec('started'),
       exec('completed'),
       // Writing the report that cites the issue is no lookup.
@@ -635,6 +640,9 @@ describe('leaks', () => {
       'triage: https://github.com/o/r/issues/4#issuecomment-1',
       'triage: gh issue view --repo o/r 4 --comments',
       'triage: gh issue view -R o/r --comments "#4"',
+      'triage: BODY=$(gh issue view 4)',
+      'triage: BODY=`gh issue view 4`',
+      'triage: gh issue view 4>/tmp/i',
       "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'",
     ]);
   });
