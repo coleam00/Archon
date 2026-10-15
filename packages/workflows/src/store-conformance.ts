@@ -642,6 +642,25 @@ export function describeWorkflowStoreConformance(
         status: 'admitted',
       });
     });
+    test('a failed run does not resume into the slot a capacity waiter fills', async () => {
+      const failed = start();
+      const failedId = failed.launch.run.id;
+      await store.admitResourceStart(failed);
+      await store.updateWorkflowRun(failedId, { status: 'running' });
+      await store.failWorkflowRun(failedId, 'failed');
+      const waiter = await admitPaused(start());
+      await store.releasePausedRunSlot(waiter, gateCursor);
+      const holder = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await rejection(claimAnswered(waiter))).toMatchObject({ refusal: 'waiting' });
+      await end(holder.launch.run.id);
+      // No holders and one waiter fill the only slot.
+      expect(await rejection(store.resumeWorkflowRun(failedId))).toMatchObject({
+        blocker: { kind: 'run', id: waiter },
+        refusal: 'failed',
+      });
+      expect((await claimAnswered(waiter)).status).toBe('running');
+    });
     test('release refuses another pause and a run that holds no slot', async () => {
       const id = await admitPaused(start());
       for (const cursor of [
