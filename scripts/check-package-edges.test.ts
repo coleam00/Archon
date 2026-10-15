@@ -1,4 +1,14 @@
-import { readFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
   findEdgeViolations,
@@ -381,4 +391,68 @@ describe('package layering', () => {
       .sort(([a], [b]) => a.localeCompare(b));
     expect(rows).toEqual(expected);
   });
+});
+
+const trackTempRoot = trackTempRoots();
+
+test('the package-edge command rejects a forbidden manifest dependency', () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'package-edge-command-')));
+  mkdirSync(join(root, 'scripts'));
+  copyFileSync(
+    join(import.meta.dir, 'check-package-edges.ts'),
+    join(root, 'scripts/check-package-edges.ts')
+  );
+  symlinkSync(resolve(import.meta.dir, '../node_modules'), join(root, 'node_modules'), 'junction');
+  writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
+  const git = Bun.spawnSync(['git', 'init', '--quiet'], {
+    cwd: root,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(git.exitCode).toBe(0);
+
+  for (const [name, row] of Object.entries(PACKAGE_LAYERING)) {
+    mkdirSync(join(root, 'packages', name), { recursive: true });
+    writeFileSync(
+      join(root, 'packages', name, 'package.json'),
+      JSON.stringify({
+        dependencies: Object.fromEntries(row.runtime.map(dep => [`@archon/${dep}`, 'workspace:*'])),
+        devDependencies: Object.fromEntries(
+          (row.test ?? []).map(dep => [`@archon/${dep}`, 'workspace:*'])
+        ),
+      })
+    );
+  }
+  const run = () =>
+    Bun.spawnSync([process.execPath, 'run', 'scripts/check-package-edges.ts'], {
+      cwd: root,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+  const valid = run();
+  expect(valid.stderr.toString()).toBe('');
+  expect(valid.exitCode).toBe(0);
+  expect(valid.stdout.toString()).toContain('Package edge check passed.');
+
+  const manifestPath = join(root, 'packages/workflows/package.json');
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      dependencies: Object.fromEntries(
+        [...PACKAGE_LAYERING.workflows.runtime, 'core'].map(dep => [
+          `@archon/${dep}`,
+          'workspace:*',
+        ])
+      ),
+      devDependencies: Object.fromEntries(
+        (PACKAGE_LAYERING.workflows.test ?? []).map(dep => [`@archon/${dep}`, 'workspace:*'])
+      ),
+    })
+  );
+  const invalid = run();
+  expect(invalid.exitCode).toBe(1);
+  expect(invalid.stderr.toString()).toContain(
+    `packages/workflows/package.json: workflows declares @archon runtime dependencies [${[...PACKAGE_LAYERING.workflows.runtime, 'core'].sort().join(', ')}]; the layering allows [${[...PACKAGE_LAYERING.workflows.runtime].sort().join(', ')}]`
+  );
+  expect(invalid.stdout.toString()).not.toContain('Package edge check passed.');
 });
