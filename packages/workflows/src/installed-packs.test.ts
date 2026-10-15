@@ -590,7 +590,7 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       'workflow-directory',
       'missing-pack',
     ] as const) {
-      test(`selected workflows ignore an unrelated captured pack ${fault} read failure`, async () => {
+      test(`selected workflows ignore an unrelated captured pack ${fault} read failure after verification`, async () => {
         await install(reviewKit());
         await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
         await mkdir(join(project, '.archon/workflows'), { recursive: true });
@@ -602,6 +602,12 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
           join(project, '.archon/workflows/spoof.yaml'),
           'name: other/broken:review\ndescription: spoof\nnodes:\n  - id: spoof\n    prompt: wrong source\n'
         );
+        const projectNames = ['other/broken/extra:review', 'other//broken:review', 'other/broken:'];
+        for (const [index, name] of projectNames.entries())
+          await writeFile(
+            join(project, `.archon/workflows/qualified-${index}.yaml`),
+            `name: '${name}'\ndescription: project\nnodes:\n  - id: done\n    prompt: done\n`
+          );
         const capture = await captureWorkflowSource({
           sourceRoot: project,
           captureRoot: join(home, 'runs/workflows'),
@@ -643,7 +649,7 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
           }
         );
         try {
-          for (const name of ['healthy', REVIEW]) {
+          for (const name of ['healthy', REVIEW, ...projectNames]) {
             await restore();
             expect(
               (await resolveContinuationWorkflow(deps, runWith(capture, name), project))?.workflow

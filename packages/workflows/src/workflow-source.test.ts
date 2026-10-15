@@ -27,6 +27,8 @@ mock.module('@archon/paths', () => ({
 
 import {
   captureWorkflowSource,
+  installedWorkflowName,
+  parseInstalledWorkflowName,
   capturedSourceRoots,
   assertWorkflowSourceIntegrity,
   loadWorkflowSource,
@@ -1200,4 +1202,25 @@ test('a directory at the captured manifest is terminal invalid source', async ()
   const error = await loadWorkflowSource(capture.anchor.root).catch(error => error);
   expect(error).toBeInstanceOf(WorkflowSourceIntegrityError);
   expect(isSourceReadFailure(error)).toBe(false);
+});
+
+describe('installed workflow names', () => {
+  test('parses the full formatter output', () => {
+    const pack = { owner: 'acme', name: 'review-kit' };
+    expect(parseInstalledWorkflowName(installedWorkflowName(pack, 'review'))).toEqual({
+      ...pack,
+      entrypoint: 'review',
+    });
+  });
+  test.each([
+    'acme/review-kit/extra:review',
+    'acme//review-kit:review',
+    '/review-kit:review',
+    'acme/:review',
+    'acme/review-kit:',
+    'acme/review-kit:review:extra',
+    'review',
+  ])('rejects malformed qualified name %s', name => {
+    expect(parseInstalledWorkflowName(name)).toBeUndefined();
+  });
 });

@@ -898,6 +898,9 @@ the host the run recorded and says when it is not this one.
   run continues by itself at `resumeAt`. Cancel or abandon it to stop it instead.
 - `unreadable` — the run is parked but cannot describe itself (corrupt gate metadata, a
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
+  It also reports `reason: source_release_not_continued` for a container paused by a
+  host-local captured-source read failure. Resume that container by hand on a host
+  that can read its source; see [Attention queue](/guides/attention-queue/).
 
 Two pauses deliberately do **not** wake a waiter, because neither is owed a response: a
 gate or attention wait that has already been answered and is awaiting continuation, and a

@@ -1,3 +1,4 @@
+import * as sourceIntegrity from './workflow-source';
 import * as checkout from './checkout-observation';
 import { prepareRunAiConfiguration } from './run-preflight';
 import type { ExecuteWorkflowOptions } from './executor';
@@ -11,7 +12,7 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'path';
 
@@ -4975,6 +4976,67 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([true, false])(
+    'releases an admitted source restoration read failure (CAS %s)',
+    async released => {
+      const dagCallsBefore = mockExecuteDagWorkflow.mock.calls.length;
+      const root = await mkdtemp(join(tmpdir(), 'source-restoration-'));
+      const scripts = join(root, '.archon/scripts');
+      await mkdir(scripts, { recursive: true });
+      await writeFile(join(scripts, 'check.ts'), 'console.log("ok")');
+      const capture = await sourceIntegrity.captureWorkflowSource({
+        sourceRoot: root,
+        captureRoot: join(root, 'capture'),
+      });
+      const path = join(capture.anchor.root, 'project/.archon/scripts');
+      const release = mock<IWorkflowStore['releaseRunForUnreadableSource']>(async () => ({
+        released,
+      }));
+      const store = makeStore({
+        releaseRunForUnreadableSource: release,
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+        getWorkflowRun: mock(async () => {
+          throw new Error('old owner must stop');
+        }),
+      });
+      const run = makeRun({
+        status: 'running',
+        metadata: {
+          workflow_source: {
+            ...capture.manifest,
+            root: capture.anchor.root,
+          },
+        },
+      });
+      try {
+        await chmod(path, 0o000);
+        const result = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-1',
+          root,
+          makeWorkflow(),
+          'msg',
+          undefined,
+          { preCreatedRun: run, priorCompletedNodes: new Map() }
+        );
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(release).toHaveBeenCalledWith(
+          run.id,
+          expect.objectContaining({
+            nodeId: 'workflow-source',
+            path: capture.anchor.root,
+          })
+        );
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.getWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(dagCallsBefore);
+      } finally {
+        await chmod(path, 0o755);
+        await removeTempTree(root);
+      }
+    }
+  );
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
     const store = makeStore({

@@ -78,6 +78,7 @@ import {
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   isSourceReadFailure,
   captureWorkflowSource,
   capturedSourceRoots,
@@ -95,6 +96,7 @@ import {
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import {
+  CONTINUATION_RETRY_MS,
   continuablePauseCursor,
   deadlineWaitCursor,
   type PersistedNodeOutput,
@@ -1120,10 +1122,12 @@ export async function prepareWorkflowSource(
   try {
     sourceConfig = workflowSourceConfigFrom(await deps.loadConfig(opts.sourceRoot));
   } catch (error) {
+    if (isSourceReadFailure(error)) throw error;
     // A malformed config would otherwise silently narrow what gets frozen.
     throw new Error(
       `Cannot capture workflow source from ${opts.sourceRoot}: its configuration could not ` +
-        `be read (${(error as Error).message}).`
+        `be read (${(error as Error).message}).`,
+      { cause: error }
     );
   }
   await sweepStaleStagedSources();
@@ -3032,6 +3036,21 @@ export async function executeWorkflow(
         );
       }
     } catch (error) {
+      if (isSourceReadFailure(error)) {
+        const path =
+          error instanceof WorkflowSourceUnavailableError ? error.path : recordedSource.root;
+        getLog().warn(
+          { workflowRunId: workflowRun.id, path, err: error },
+          'workflow.source_restore_unreadable'
+        );
+        await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+          nodeId: 'workflow-source',
+          path,
+          error: error instanceof Error ? error.message : String(error),
+          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+        });
+        return { success: true, paused: true, workflowRunId: workflowRun.id };
+      }
       return await failRunOnSource(
         `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
           `(${(error as Error).message}). The run cannot be resumed against different source; ` +

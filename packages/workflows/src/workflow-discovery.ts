@@ -39,6 +39,7 @@ import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import {
   WorkflowSourceUnavailableError,
   installedPackKey,
+  parseInstalledWorkflowName,
   assertWorkflowSourceIntegrity,
   assertCapturedFilesPresent,
   installedWorkflowName,
@@ -1400,10 +1401,8 @@ export function workflowFilesWithoutFailedPacks(
 }
 
 function selectedInstalledPackKey(workflowName: string): string | undefined {
-  const colon = workflowName.indexOf(':');
-  if (colon < 0) return undefined;
-  const [owner, name] = workflowName.slice(0, colon).split('/');
-  return owner && name ? installedPackKey(owner, name).toLowerCase() : undefined;
+  const parsed = parseInstalledWorkflowName(workflowName);
+  return parsed ? installedPackKey(parsed.owner, parsed.name).toLowerCase() : undefined;
 }
 
 export function assertSelectedWorkflowReadable(

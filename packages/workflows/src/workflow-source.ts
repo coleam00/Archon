@@ -288,6 +288,16 @@ export function installedPackKey(owner: string, name: string): string {
   return `${owner}.${name}`;
 }
 
+export function parseInstalledWorkflowName(
+  value: string
+): { owner: string; name: string; entrypoint: string } | undefined {
+  const parts = value.split(':');
+  if (parts.length !== 2 || !parts[1]) return undefined;
+  const segments = parts[0].split('/');
+  if (segments.length !== 2 || !segments[0] || !segments[1]) return undefined;
+  return { owner: segments[0], name: segments[1], entrypoint: parts[1] };
+}
+
 /** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
 export function installedWorkflowName(
   pack: Pick<InstalledPack, 'owner' | 'name'>,
@@ -635,8 +645,9 @@ function dedupeNestedDirs(dirs: readonly string[]): string[] {
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isSystemError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return false;
+    throw error;
   }
 }
 
