@@ -1,0 +1,13 @@
+# Outcome: failed. The real assert-changed guard refuses, so `rounds` fails and
+# `outcome` is skipped; `report` completes not ready with reason failed, and the run fails.
+forge: { source: forge }
+implement__implement:
+  done: true
+  green: false
+  red_cause: ""
+  summary: "stub: blocked: the work order names a module that does not exist"
+fixture:
+  expect: failed
+  fail-node: [implement__assert-changed, rounds]
+  reached: [report]
+exec-code: true
