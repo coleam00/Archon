@@ -17350,6 +17350,34 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     });
   });
 
+  it('propagates a rejected quota pause write while the run is still running', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
+    const store = createMockStore();
+    const failure = new Error('quota pause write failed');
+    store.pauseWorkflowRunForWait.mockRejectedValue(failure);
+
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-credit',
+          cwd: testDir,
+          workflow: investigateWorkflow,
+          workflowRun: makeWorkflowRun('credit-write-failure-run'),
+          config: quotaConfig(),
+        })
+      )
+    ).rejects.toBe(failure);
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-write-failure-run',
+      expect.objectContaining({ kind: 'quota', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'investigate' }
+    );
+    expect(store.getWorkflowRunStatus).toHaveBeenCalledWith('credit-write-failure-run');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('waits when the quota failure comes from a loop-group body node', async () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
     useQuery(quotaExhaustedQuery(resetAt));

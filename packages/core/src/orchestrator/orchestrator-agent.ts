@@ -2651,9 +2651,9 @@ export async function handleMessage(
       workflows,
       caps.nativeTools ? 'tools' : 'commands'
     );
-    // Providers WITHOUT the in-process manage_run tool (Codex/OpenCode/Copilot) get a
+    // Providers WITHOUT the in-process manage_run tool (OpenCode/Copilot) get a
     // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
-    // project's runs over bash. Claude/Pi get the native tool below and are nudged to it
+    // project's runs over bash. Native-tool providers get the tool below and are nudged to it
     // — adding the CLI pointer there would be redundant and steer them onto a bash path
     // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
     // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
@@ -2711,7 +2711,7 @@ export async function handleMessage(
     // reason: on a foreground surface the run would otherwise block the agent loop.
     const pendingLaunch: { launch: ChatLaunch | null } = { launch: null };
 
-    // Providers with in-process native tools (Claude, Pi) launch workflows and
+    // Providers with in-process native tools launch workflows and
     // register projects through typed tools in every chat. Project-scoped chats also
     // get `manage_run` to inspect and operate that project's runs.
     if (caps.nativeTools) {

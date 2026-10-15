@@ -44,18 +44,21 @@ const sdkToolHandlers = new Map<
   (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
 >();
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
-  tool: (
-    name: string,
-    _description: string,
-    _schema: unknown,
-    handler: (
-      args: Record<string, unknown>
-    ) => Promise<{ content: { type: 'text'; text: string }[] }>
-  ) => {
-    sdkToolHandlers.set(name, handler);
-    return { name, handler };
-  },
-  createSdkMcpServer: ({ name }: { name: string }) => ({ type: 'sdk', name, instance: {} }),
+  createSdkMcpServer: ({ name }: { name: string }) => ({
+    type: 'sdk',
+    name,
+    instance: {
+      registerTool: (
+        name: string,
+        _config: unknown,
+        handler: (
+          args: Record<string, unknown>
+        ) => Promise<{ content: { type: 'text'; text: string }[] }>
+      ) => {
+        sdkToolHandlers.set(name, handler);
+      },
+    },
+  }),
   query: mockQuery,
 }));
 

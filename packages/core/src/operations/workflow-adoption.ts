@@ -67,6 +67,14 @@ export async function resolveRegisteredWorktree(
       `Worktree ${env.id} changed during adoption; inspect it and retry`
     );
   }
+  const actualBranch = await getCurrentBranchStrict(toRepoPath(env.working_path));
+  if (!lane.environment.branch_name || actualBranch !== lane.environment.branch_name) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt worktree at '${env.working_path}': expected branch ` +
+        `'${lane.environment.branch_name}' but is now on '${actualBranch ?? 'detached HEAD'}'. ` +
+        'Restore the recorded branch or start a fresh run.'
+    );
+  }
   return env;
 }
 

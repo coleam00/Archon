@@ -929,8 +929,9 @@ inspect the run normally with `workflow get <run-id>`.
 ### `workflow attention`
 
 List, count, stream or read the [attention queue](/guides/attention-queue/): every paused
-run that needs someone, as typed items an answerer can act on without parsing prose.
-Read-only.
+run that needs an answer or inspection, plus observable provider usage-limit waits.
+Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
+continues automatically after reset, and `unreadable` needs inspection. Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project
@@ -956,7 +957,7 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
-`item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
+`item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).

@@ -449,10 +449,13 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
-| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when the run needs no attention |
+| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
-Outside answerers can read the queue, then submit an answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
+Queue items include answerable pauses, `usage_limit` waits that continue automatically
+after reset, and `unreadable` pauses needing inspection. Branch on `kind` before acting:
+only `attention` and `awaiting_response` accept answers. Outside answerers can submit an
+answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
 
 ---
 

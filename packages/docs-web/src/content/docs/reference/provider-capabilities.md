@@ -81,7 +81,7 @@ for the background-start admission and observation cutoff rules.
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
+| In-process native tools | ✅ | ✅ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Strict-mode `required` coverage (every key in `properties` MUST appear in `required`) | ❌ | ✅ | ❌ | ❌ | ❌ |
 

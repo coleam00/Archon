@@ -322,7 +322,7 @@ export async function listAttentionQueue(
 }
 
 /**
- * The item a run stands for, or null when it needs no one now. A parent blocked on
+ * The item a run stands for, or null when it has no queue item. A parent blocked on
  * sub-runs resolves to the first of them that is an item, by the walk `workflow wait`
  * uses. Undefined when the run does not exist.
  */
