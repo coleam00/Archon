@@ -221,6 +221,15 @@ describe('installCredentialHelper', () => {
     expect(result.error.message).toContain('not a git repository');
   });
 
+  test('an unusable ARCHON_HOME fails each queued install instead of rejecting', async () => {
+    process.env.ARCHON_HOME = 'undefined';
+    const failed = installCredentialHelper('/tmp/some-worktree');
+    const queued = installCredentialHelper('/tmp/some-worktree');
+
+    expect((await failed).kind).toBe('failed');
+    expect((await queued).kind).toBe('failed');
+  });
+
   test('returns failed when the path configuration write fails', async () => {
     execSpy.mockImplementation(async (_file, args) => {
       if (args.includes('credential.https://github.com.useHttpPath')) {
