@@ -2057,6 +2057,24 @@ async function requireConversationVisibility(
 }
 
 /**
+ * How a route names its conversation. `platformId` matches a row of any platform,
+ * which is right where the handler then acts on the row it was given. Dispatch and the
+ * SSE stream instead act through the web adapter, which keys everything by
+ * platform id on the `web` platform, so they must authorize that same row
+ * (`webPlatformId`): a public Slack row sharing the id would otherwise admit a
+ * caller into someone's private web chat.
+ */
+type ConversationKey = { platformId: string } | { webPlatformId: string } | { id: string };
+
+function loadConversation(key: ConversationKey): Promise<Conversation | null> {
+  if ('platformId' in key) return conversationDb.findConversationByPlatformId(key.platformId);
+  if ('webPlatformId' in key) {
+    return conversationDb.getConversationByPlatformId('web', key.webPlatformId);
+  }
+  return conversationDb.getConversationById(key.id);
+}
+
+/**
  * The authorization every route naming a conversation goes through. Identity is
  * resolved before the row is loaded, so a refused caller learns nothing about
  * which ids exist, and a non-owner gets the same 404 as a missing row because
@@ -2067,15 +2085,12 @@ async function requireConversationVisibility(
  */
 async function authorizeConversation(
   c: Context,
-  key: { platformId: string } | { id: string },
+  key: ConversationKey,
   access: 'read' | 'write'
 ): Promise<{ conversation: Conversation } | { error: Response }> {
   const visibility = await requireConversationVisibility(c);
   if ('error' in visibility) return visibility;
-  const conversation =
-    'platformId' in key
-      ? await conversationDb.findConversationByPlatformId(key.platformId)
-      : await conversationDb.getConversationById(key.id);
+  const conversation = await loadConversation(key);
   if (!conversation) return { error: apiError(c, 404, 'Conversation not found') };
   if (isConversationVisible(conversation, visibility)) return { conversation };
   if (access === 'read' && (await workflowDb.isRunTranscriptConversation(conversation.id))) {
@@ -2105,7 +2120,7 @@ async function authorizeDispatchConversation(
 ): Promise<{ conversation: Conversation | null } | { error: Response }> {
   if (isConversationOwnershipEnforced()) {
     try {
-      return await authorizeConversation(c, { platformId }, 'write');
+      return await authorizeConversation(c, { webPlatformId: platformId }, 'write');
     } catch (err: unknown) {
       getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
       return { error: apiError(c, 500, 'Failed to load conversation') };
@@ -3327,7 +3342,7 @@ export function registerApiRoutes(
     // streaming ids whose row has not been written yet.
     if (isConversationOwnershipEnforced()) {
       try {
-        const access = await authorizeConversation(c, { platformId: conversationId }, 'read');
+        const access = await authorizeConversation(c, { webPlatformId: conversationId }, 'read');
         if ('error' in access) return access.error;
       } catch (err: unknown) {
         getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');

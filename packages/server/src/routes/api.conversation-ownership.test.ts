@@ -104,13 +104,20 @@ function conversation(overrides: Partial<ConversationRow> = {}): ConversationRow
   };
 }
 
-let stored: ConversationRow | null = conversation();
+// Platform ids are unique per platform only, so two rows can share one. The
+// platform-agnostic lookup returns whichever row it meets first, as the real one may.
+let rows: ConversationRow[] = [conversation()];
 let mockArchonHome = '/tmp/.archon';
 
-const mockFindConversationByPlatformId = mock(async (platformId: string) =>
-  stored?.platform_conversation_id === platformId ? stored : null
+const mockFindConversationByPlatformId = mock(
+  async (platformId: string) => rows.find(r => r.platform_conversation_id === platformId) ?? null
 );
-const mockGetConversationById = mock(async (id: string) => (stored?.id === id ? stored : null));
+const mockGetConversationByPlatformId = mock(
+  async (platformType: string, platformId: string) =>
+    rows.find(r => r.platform_type === platformType && r.platform_conversation_id === platformId) ??
+    null
+);
+const mockGetConversationById = mock(async (id: string) => rows.find(r => r.id === id) ?? null);
 const mockListConversations = mock(async (_visibility: unknown, _filter?: unknown) => []);
 const mockGetOrCreateConversation = mock(
   async (
@@ -126,6 +133,7 @@ const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => 
 
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
+  getConversationByPlatformId: mockGetConversationByPlatformId,
   getConversationById: mockGetConversationById,
   listConversations: mockListConversations,
   getOrCreateConversation: mockGetOrCreateConversation,
@@ -255,6 +263,8 @@ interface Ingress {
   /** OpenAPI method + path, for the route inventory. */
   operation: string;
   access: 'read' | 'write';
+  /** Acts through the web adapter, which knows only `web` rows by platform id. */
+  web?: true;
   call: (app: OpenAPIHono, user?: string) => Response | Promise<Response>;
   /** Side effects a refused caller must never cause. */
   effects: () => readonly { mock: { calls: unknown[] } }[];
@@ -281,6 +291,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'stream',
     operation: 'get /api/stream/{conversationId}',
     access: 'read',
+    web: true,
     call: async (app, user) => {
       const res = await app.request(`/api/stream/${PLATFORM_ID}`, { headers: headersFor(user) });
       // Only an opened stream needs closing; a refusal is a plain JSON body.
@@ -318,6 +329,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'send',
     operation: 'post /api/conversations/{id}/message',
     access: 'write',
+    web: true,
     call: (app, user) =>
       app.request(`/api/conversations/${PLATFORM_ID}/message`, {
         method: 'POST',
@@ -332,6 +344,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'workflow run',
     operation: 'post /api/workflows/{name}/run',
     access: 'write',
+    web: true,
     call: (app, user) =>
       app.request('/api/workflows/demo/run', {
         method: 'POST',
@@ -380,7 +393,7 @@ beforeEach(() => {
   usersDown = false;
   authInstance = null;
   runTranscript = false;
-  stored = conversation();
+  rows = [conversation()];
   mockArchonHome = '/tmp/.archon';
   clearEffects();
 });
@@ -407,7 +420,7 @@ describe('every conversation ingress enforces ownership', () => {
 
       test('an ownerless conversation is reachable by nobody', async () => {
         ownershipEnforced = true;
-        stored = conversation({ user_id: null });
+        rows = [conversation({ user_id: null })];
         expect((await ingress.call(makeApp(), 'alice')).status).toBe(404);
         expectNoEffects(ingress);
       });
@@ -437,17 +450,37 @@ describe('every conversation ingress enforces ownership', () => {
         expect((await ingress.call(makeApp())).status).toBe(200);
       });
 
-      test('chat and forge platforms keep their own access model', async () => {
-        ownershipEnforced = true;
-        stored = conversation({ platform_type: 'slack', user_id: 'user-someone' });
-        expect((await ingress.call(makeApp(), 'bob')).status).toBe(200);
-      });
+      if (ingress.web) {
+        test('a chat-platform row at the id does not admit anyone to the web chat', async () => {
+          ownershipEnforced = true;
+          rows = [
+            conversation({ id: 'internal-slack', platform_type: 'slack', user_id: null }),
+            conversation(),
+          ];
+          expect((await ingress.call(makeApp(), 'bob')).status).toBe(404);
+          expectNoEffects(ingress);
+          expect((await ingress.call(makeApp(), 'alice')).status).toBe(200);
+        });
+
+        test('a chat-platform row alone is not a web chat to act on', async () => {
+          ownershipEnforced = true;
+          rows = [conversation({ platform_type: 'slack', user_id: 'user-someone' })];
+          expect((await ingress.call(makeApp(), 'bob')).status).toBe(404);
+          expectNoEffects(ingress);
+        });
+      } else {
+        test('chat and forge platforms keep their own access model', async () => {
+          ownershipEnforced = true;
+          rows = [conversation({ platform_type: 'slack', user_id: 'user-someone' })];
+          expect((await ingress.call(makeApp(), 'bob')).status).toBe(200);
+        });
+      }
 
       if (ingress.access === 'read') {
         test("a run's transcript stays readable to another signed-in user", async () => {
           ownershipEnforced = true;
           runTranscript = true;
-          stored = conversation({ hidden: true });
+          rows = [conversation({ hidden: true })];
           expect((await ingress.call(makeApp(), 'bob')).status).toBe(200);
           expect(mockIsRunTranscriptConversation).toHaveBeenCalledWith(INTERNAL_ID);
         });
@@ -455,7 +488,7 @@ describe('every conversation ingress enforces ownership', () => {
         test("a run's transcript is still not writable by another user", async () => {
           ownershipEnforced = true;
           runTranscript = true;
-          stored = conversation({ hidden: true });
+          rows = [conversation({ hidden: true })];
           expect((await ingress.call(makeApp(), 'bob')).status).toBe(404);
           expectNoEffects(ingress);
         });
@@ -578,7 +611,7 @@ describe('conversation create', () => {
 // Dispatch used to materialize a conversation at whatever id the caller named.
 describe('dispatch to an unknown conversation id', () => {
   beforeEach(() => {
-    stored = null;
+    rows = [];
   });
 
   for (const ingress of INGRESSES.filter(i => i.name === 'send' || i.name === 'workflow run')) {
