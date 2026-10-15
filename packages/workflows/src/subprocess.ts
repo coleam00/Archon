@@ -1,5 +1,14 @@
+import {
+  armNodeLifeline,
+  confirmGroupGone,
+  currentNodeProcessRecorder,
+  type NodeProcessRecorder,
+} from './node-process-trees';
+import { hostNodeSubprocess, type ExitEvidence } from './host-node-subprocess';
+export { hostNodeSubprocess } from './host-node-subprocess';
+export { recordNodeProcessTrees } from './node-process-trees';
 import { spawn } from 'node:child_process';
-import { terminateTree, forceTerminateWindowsTree } from '@archon/paths/plugin-process';
+import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { CONTAINER_ENV_DENYLIST } from '@archon/provider-contract';
@@ -113,81 +122,6 @@ export function redactSubprocessError(
   return e;
 }
 
-interface NodeProcessRecorder {
-  /** In-flight roots and their termination/owner-watcher responsibilities. */
-  roots: Map<number, { end(): Promise<void>; disarm(): void }>;
-  ended: boolean;
-}
-let nodeProcessRecorder: NodeProcessRecorder | undefined;
-
-/**
- * Record the root of every host node subprocess this process starts, so the run
- * owner's interrupt can end those trees before it exits (#3552). Each root leads its
- * own process group on POSIX; `taskkill /T` walks the tree from the PID on Windows.
- *
- * Process-scoped on purpose: only a foreground CLI owner, which drives exactly one run
- * and holds the process-wide signal handlers for it, turns this on. A detached owner
- * need not: node bodies also watch for owner death when their groups are separate.
- * `archon serve` never records.
- *
- * `end()` refuses every later node subprocess, so a sibling or retry the executor
- * starts while the owner exits never runs.
- */
-export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
-  const recorder: NodeProcessRecorder = { roots: new Map(), ended: false };
-  nodeProcessRecorder = recorder;
-  return {
-    end: async () => {
-      recorder.ended = true;
-      const failed: string[] = [];
-      await Promise.all(
-        [...recorder.roots].map(([pid, tree]) =>
-          tree.end().then(tree.disarm, (error: unknown) => {
-            failed.push(
-              `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
-            );
-          })
-        )
-      );
-      if (failed.length > 0) {
-        throw new Error(`could not end node process trees: ${failed.join(', ')}`);
-      }
-    },
-    release: () => {
-      if (nodeProcessRecorder === recorder) nodeProcessRecorder = undefined;
-    },
-  };
-}
-
-// A node runs in its own session, so terminal hangup or a second Ctrl-C kills the owner
-// without reaching the node, and so does SIGKILL. The watcher sits outside the node's
-// group and session: owner death of any kind closes its stdin before the release line.
-const NODE_LIFELINE = 'IFS= read -r line || kill -s KILL -- "-$1"';
-const GUARDED_NODE_LIFELINE =
-  'IFS= read -r line || { kill -0 "$1" 2>/dev/null && kill -s KILL -- "-$1"; }';
-
-function armNodeLifeline(
-  pgid: number,
-  onError: (error: Error) => void,
-  guardRoot = false
-): () => void {
-  const watcher = spawn(
-    '/bin/sh',
-    ['-c', guardRoot ? GUARDED_NODE_LIFELINE : NODE_LIFELINE, 'archon-node-lifeline', String(pgid)],
-    {
-      detached: true,
-      stdio: ['pipe', 'ignore', 'ignore'],
-    }
-  );
-  watcher.unref();
-  watcher.once('error', onError);
-  // EPIPE only means the watcher already exited, so there is nothing left to disarm.
-  watcher.stdin?.on('error', () => undefined);
-  return () => {
-    watcher.stdin?.end('\n');
-  };
-}
-
 interface SubprocessRetention {
   logDir: string;
   workflowRunId: string;
@@ -250,6 +184,7 @@ export async function runSubprocess(
     options.protectedCredentialValues
   );
   const retention = options.retention;
+  const nodeProcessRecorder = currentNodeProcessRecorder();
   // Container env is delivered in argv, while either execution mode can echo a
   // credential in output. Sanitize at the shared boundaries below so every downstream
   // reader — the rejection's consumers and the retained evidence alike — sees the same
@@ -338,32 +273,6 @@ export async function runSubprocess(
 // Only the owner holds the write end; EOF covers even SIGKILL, without signal handlers.
 const SETUP_LIFELINE =
   '{ while IFS= read -r; do :; done; kill -KILL 0; } <&0 >/dev/null 2>&1 &\n"$@" </dev/null';
-const TERMINATION_CONFIRM_MS = 1000;
-
-class ProcessGroupStillRunningError extends Error {}
-
-async function confirmGroupGone(pid: number): Promise<void> {
-  const deadline = Date.now() + TERMINATION_CONFIRM_MS;
-  let probeError: unknown;
-  while (true) {
-    try {
-      process.kill(-pid, 0);
-      probeError = undefined;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ESRCH') return;
-      if (code !== 'EPERM') throw error;
-      probeError = error;
-    }
-    if (Date.now() >= deadline) {
-      throw (
-        probeError ?? new ProcessGroupStillRunningError(`Process group ${pid} is still running`)
-      );
-    }
-    await new Promise<void>(resolve => setTimeout(resolve, 25));
-  }
-}
-
 async function execOwnedProcessGroup(
   cmd: string,
   args: string[],
@@ -489,161 +398,6 @@ async function execOwnedProcessGroup(
         ...(!failure ? { code: closed.code } : {}),
         signal: closed.signal,
         timedOut,
-        cmd: `${cmd} ${args.join(' ')}`,
-        spawnargs: args,
-      }
-    );
-  }
-  return output;
-}
-
-export const hostNodeSubprocess = { exec: execNodeBody };
-
-type ExitEvidence = { code: number | null; signal: string | null };
-
-async function execNodeBody(
-  cmd: string,
-  args: string[],
-  options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
-): Promise<{ stdout: string; stderr: string }> {
-  const recorder = nodeProcessRecorder;
-  if (recorder?.ended) throw new Error('The run owner is terminating; node subprocess not started');
-  const posix = process.platform !== 'win32';
-  const child = spawn(cmd, args, {
-    cwd: options.cwd,
-    env: options.env,
-    detached: posix,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  const pid = child.pid;
-  let observedExit: ExitEvidence | undefined;
-  let failure: RawSubprocessRejection | undefined;
-  let cleanupError: Error | undefined;
-  let timedOut = false;
-  let termination: Promise<void> | undefined;
-  let stopped!: () => void;
-  const stopCompleted = new Promise<void>(resolve => {
-    stopped = resolve;
-  });
-  let disarm = (): void => undefined;
-  const terminate = async (): Promise<void> => {
-    if (pid === undefined) return;
-    if (!posix) {
-      if (observedExit)
-        throw new Error(`Process ${pid} exited before tree termination could be proved`);
-      await forceTerminateWindowsTree(pid);
-      const deadline = Date.now() + TERMINATION_CONFIRM_MS;
-      while (!observedExit) {
-        if (Date.now() >= deadline) throw new Error(`Process ${pid} did not exit after taskkill`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-      return;
-    }
-    const signal = (value: NodeJS.Signals): void => {
-      if (observedExit) return;
-      try {
-        process.kill(-pid, value);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-      }
-    };
-    signal('SIGTERM');
-    try {
-      await confirmGroupGone(pid);
-    } catch (error) {
-      // Once the leader exits we can probe its group, but must never signal it again.
-      if (observedExit || !(error instanceof ProcessGroupStillRunningError)) throw error;
-      signal('SIGKILL');
-      await confirmGroupGone(pid);
-    }
-  };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const stop = (): Promise<void> => {
-    clearTimeout(timer);
-    termination ??= terminate()
-      .catch((error: unknown) => {
-        cleanupError = error instanceof Error ? error : new Error(String(error));
-      })
-      .finally(stopped);
-    return termination;
-  };
-  const closed = new Promise<void>(resolve => {
-    child.once('error', error => {
-      failure = error;
-    });
-    child.once('exit', (code, signal) => {
-      observedExit = { code, signal };
-      disarm();
-      child.stdin?.destroy();
-      if (pid !== undefined) recorder?.roots.delete(pid);
-    });
-    child.once('close', resolve);
-  });
-  if (pid !== undefined) {
-    if (posix)
-      disarm = armNodeLifeline(
-        pid,
-        error => {
-          failure = new Error(`Could not start node owner-death watcher: ${error.message}`);
-          void stop();
-        },
-        true
-      );
-    recorder?.roots.set(pid, {
-      end: async () => {
-        await stop();
-        if (cleanupError) throw cleanupError;
-      },
-      disarm,
-    });
-  }
-  timer = setTimeout(() => {
-    timedOut = true;
-    void stop();
-  }, options.timeout);
-  const maxBuffer = 1024 * 1024;
-  const streams = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-  for (const name of ['stdout', 'stderr'] as const) {
-    child[name]?.on('data', (chunk: Buffer) => {
-      const previous = streams[name];
-      streams[name] = Buffer.concat([previous, chunk.subarray(0, maxBuffer - previous.length)]);
-      if (previous.length + chunk.length > maxBuffer && !failure) {
-        failure = Object.assign(new Error(`${name} maxBuffer length exceeded`), {
-          code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-        });
-        void stop();
-      }
-    });
-  }
-  await Promise.race([closed, stopCompleted]);
-  clearTimeout(timer);
-  await termination;
-  child.stdout?.destroy();
-  child.stderr?.destroy();
-  if (cleanupError) child.unref();
-  const output = {
-    stdout: streams.stdout.toString('utf8'),
-    stderr: streams.stderr.toString('utf8'),
-  };
-  if (timedOut || failure || cleanupError || observedExit?.code !== 0) {
-    throw Object.assign(
-      failure ??
-        new Error(
-          cleanupError
-            ? `Could not terminate subprocess tree: ${cleanupError.message}`
-            : timedOut
-              ? `Command timed out after ${options.timeout} ms`
-              : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
-        ),
-      {
-        ...output,
-        ...(!failure ? { code: timedOut ? null : observedExit?.code } : {}),
-        signal: timedOut ? 'SIGTERM' : observedExit?.signal,
-        killed: timedOut,
-        timedOut,
-        observedExit,
-        cleanupError,
         cmd: `${cmd} ${args.join(' ')}`,
         spawnargs: args,
       }

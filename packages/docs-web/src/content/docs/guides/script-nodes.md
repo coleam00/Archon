@@ -82,7 +82,10 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    With stderr empty, the stdout tail becomes the diagnostic. The script body
    is never echoed back to users. A timeout also fails by default. Set
    `on_timeout: skip` when the result is optional and downstream nodes handle
-   its absence with an `if_skipped` binding.
+   its absence with an `if_skipped` binding. Host timeouts wait for process-tree
+   cleanup. Failed or unproved cleanup fails the node with the termination error,
+   even with `on_timeout: skip`; downstream scheduling follows `trigger_rule`.
+   See [Node fields](/guides/authoring-workflows#node-fields).
 5. **Retain.** Regardless of outcome, capped and credential-redacted tails of
    both streams are written to the run transcript as an `exec_output` row — see
    [Retained subprocess evidence](/guides/authoring-workflows#retained-subprocess-evidence).
@@ -120,7 +123,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
-| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. Host execution requires successful process-tree cleanup; failed or unproved cleanup fails with the termination error and follows authored `trigger_rule` scheduling. See [Node fields](/guides/authoring-workflows#node-fields). The default is failed. The persisted skip cause is `timeout` |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
@@ -470,8 +473,9 @@ Then reference it by name from any repo's workflow:
 - **JSON repair and reasks** — a certified script's stdout must be exactly right
   the first time. There is no fence stripping and no second attempt: stdout that
   does not match the declared schema is a bug in the script.
-- **Interactive prompts** — the script runs headlessly; any `stdin` read will
-  see EOF immediately.
+- **Interactive prompts** — host scripts receive an unwritten, open stdin pipe;
+  reads can wait until timeout. Do not depend on interactive input. Container
+  scripts receive no stdin through `docker exec`.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
 - **Cancelling mid-execution** — script subprocesses are killed on workflow
   cancel, but there's no cooperative cancellation signal. Design scripts to

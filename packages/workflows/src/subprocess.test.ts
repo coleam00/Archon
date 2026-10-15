@@ -89,6 +89,59 @@ posixOnly('a node whose root exited stays endable while its job holds the output
   }
 });
 
+for (const runtime of ['bash', 'bun'] as const) {
+  posixOnly(
+    `owner interruption reports unproved cleanup after a ${runtime} root exits`,
+    async () => {
+      const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-owner-held-')));
+      const ready = join(dir, 'ready');
+      const worker = join(dir, 'worker.js');
+      writeFileSync(
+        worker,
+        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`
+      );
+      const trees = recordNodeProcessTrees();
+      const rootFile = join(dir, 'root');
+      const node = runSubprocess(
+        { kind: 'host' },
+        runtime === 'bash' ? '/bin/bash' : process.execPath,
+        runtime === 'bash'
+          ? ['-c', `echo $$ > '${rootFile}'; '${process.execPath}' --no-env-file '${worker}' &`]
+          : [
+              '--no-env-file',
+              '-e',
+              `require('node:fs').writeFileSync(${JSON.stringify(rootFile)}, String(process.pid)); require('node:child_process').spawn(process.execPath, ['--no-env-file', ${JSON.stringify(worker)}], {stdio:'inherit'}); setTimeout(() => process.exit(0), 100);`,
+            ],
+        {
+          cwd: dir,
+          timeout: 30000,
+          env: {},
+          killTreeOnTimeout: true,
+          retention: { standalone: true },
+        }
+      ).catch((error: unknown) => error as RawSubprocessRejection);
+      try {
+        await waitUntil('descendant readiness', () => existsSync(ready));
+        await waitUntil(
+          'root exit',
+          () => existsSync(rootFile) && !processExists(Number(readFileSync(rootFile, 'utf8')))
+        );
+        await expect(trees.end()).rejects.toThrow('still running');
+        const error = await node;
+        expect(error).toHaveProperty('cleanupError');
+        expect(processExists(Number(readFileSync(ready, 'utf8')))).toBe(true);
+      } finally {
+        trees.release();
+        if (existsSync(ready)) {
+          const pid = Number(readFileSync(ready, 'utf8'));
+          if (processExists(pid)) process.kill(pid, 'SIGKILL');
+        }
+        await node;
+      }
+    }
+  );
+}
+
 function lifelineWatches(pgid: number): boolean {
   const ps = Bun.spawnSync(['/bin/ps', '-A', '-o', 'args=']);
   return ps.stdout
@@ -249,6 +302,41 @@ function runNode(script: string, timeout = 5000): ReturnType<typeof runSubproces
     killTreeOnTimeout: true,
   });
 }
+
+test('ending recorded node bodies stops a live wrapper and its grandchild', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-owner-live-')));
+  const marker = join(dir, 'marker');
+  const ready = join(dir, 'ready');
+  const root = join(dir, 'root');
+  const worker = join(dir, 'worker.js');
+  writeFileSync(
+    worker,
+    `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+  );
+  const trees = recordNodeProcessTrees();
+  const node = runNode(
+    `require('node:fs').writeFileSync(${JSON.stringify(root)}, String(process.pid)); require('node:child_process').spawn(process.execPath, ['--no-env-file', ${JSON.stringify(worker)}], {stdio: 'inherit'}); setInterval(() => {}, 1000);`,
+    30000
+  ).catch((error: unknown) => error as RawSubprocessRejection);
+  try {
+    await waitUntil('grandchild readiness', () => existsSync(ready));
+    expect(processExists(Number(readFileSync(root, 'utf8')))).toBe(true);
+    await trees.end();
+    expect(await node).toMatchObject({ timedOut: false, cleanupError: undefined });
+    await Bun.sleep(1800);
+    expect(existsSync(marker)).toBe(false);
+    expect(processExists(Number(readFileSync(ready, 'utf8')))).toBe(false);
+  } finally {
+    trees.release();
+    for (const file of [ready, root]) {
+      if (existsSync(file)) {
+        const pid = Number(readFileSync(file, 'utf8'));
+        if (processExists(pid)) process.kill(pid, 'SIGKILL');
+      }
+    }
+    await node;
+  }
+});
 
 posixOnly('node timeout escalates only while its leader remains alive', async () => {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-escalate-')));
