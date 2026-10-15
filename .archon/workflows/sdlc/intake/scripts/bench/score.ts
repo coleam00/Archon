@@ -6,9 +6,9 @@
  *
  * The judgement bars (duplicates, fixed, not planned) are the operator's marks: a row
  * counts when the operator marked that version's run right. The structured signals
- * the scorer can read on its own stand beside them. A row whose batch failed a hard
- * check, whose run did not pass, or whose run looked the issue up is left out of the
- * accuracy numbers and counted separately.
+ * the scorer can read on its own stand beside them. A run that did not pass counts
+ * against the bars as not right. A row whose batch failed a hard check or whose run
+ * looked the issue up is left out of the accuracy numbers and counted separately.
  */
 
 import { join } from 'node:path';
@@ -321,7 +321,7 @@ export function renderScore(result: Score): string {
     row('dispositions matched', each(version => pct(version.dispositions.agree, version.dispositions.rows))),
     row('marks: right / wrong / partly / unmarked', each(version => `${String(version.marks.right)} / ${String(version.marks.wrong)} / ${String(version.marks.partly)} / ${String(version.marks.unmarked)}`)),
     row('leaked rows (excluded)', each(version => `${String(version.leaks.length)}${version.leaks.length > 0 ? ` (${version.leaks.join(', ')})` : ''}`)),
-    row('runs that did not pass (excluded)', each(version => `${String(version.unscored.length)}${version.unscored.length > 0 ? ` (${version.unscored.join(', ')})` : ''}`)),
+    row('runs that did not pass (counted as not right)', each(version => `${String(version.unscored.length)}${version.unscored.length > 0 ? ` (${version.unscored.join(', ')})` : ''}`)),
     row('cost total', each(version => `$${version.cost.total.toFixed(4)}${version.cost.unreported > 0 ? ` (${String(version.cost.unreported)} unreported)` : ''}`)),
     row('wall time per item, median', each(version => (version.median_ms === null ? '-' : `${(version.median_ms / 1000).toFixed(0)} s`))),
   ];
