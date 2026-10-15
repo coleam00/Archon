@@ -1,3 +1,5 @@
+export const GITHUB_PAT_KEYS = ['GITHUB_TOKEN', 'GH_TOKEN'] as const;
+
 export type GitHubAuthModeDecision =
   | { kind: 'app' }
   | { kind: 'pat' }

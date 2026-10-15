@@ -1196,6 +1196,7 @@ describe('GitHub setup wizard', () => {
     .toString();
   const pat = 'ghp_fixture_token';
   let appId: string;
+  let appSlug: string;
   let inputValidation: (string | Error | undefined)[];
   let webhookSecret: string;
   let botDisplayName: string;
@@ -1225,6 +1226,7 @@ describe('GitHub setup wizard', () => {
     mkdirSync(join(root, '.archon'));
     target = join(root, '.archon', '.env');
     appId = '123';
+    appSlug = 'fixture-app';
     inputValidation = [];
     webhookSecret = 'fixture-webhook-secret';
     botDisplayName = 'Archon';
@@ -1280,7 +1282,7 @@ describe('GitHub setup wizard', () => {
         keyValidation.push(error);
         return error ? cancelled : keyPath;
       }
-      if (options.message === 'GitHub App slug (optional):') return 'fixture-app';
+      if (options.message === 'GitHub App slug (optional):') return appSlug;
       return '';
     });
     const secret = spyOn(prompts, 'password').mockImplementation(async options => {
@@ -1542,6 +1544,118 @@ describe('GitHub setup wizard', () => {
       expect(messages).not.toContain(webhookSecret);
       expect(messages).not.toContain(privateKey);
       expect(existsSync(join(root, 'home', '.env'))).toBe(false);
+    }
+  );
+
+  it('loads fresh App configuration when the optional slug is unanswered', async () => {
+    appSlug = '';
+    expect(await run()).toBe(0);
+    expect(loadGitHubAppConfig(read())?.slug).toBe('archon');
+  });
+
+  const blankAppCases = (['add', 'update', 'fresh'] as const).flatMap(mode =>
+    [false, true].flatMap(force =>
+      (['home', 'project'] as const).flatMap(selectedScope =>
+        (['path', 'inline'] as const).flatMap(source =>
+          ['', '   '].flatMap(blank =>
+            (['selected', 'other'] as const).flatMap(placement => {
+              const keys = ['GITHUB_APP_SLUG', 'GITHUB_APP_INSTALLATION_ID'];
+              if (placement === 'other' && selectedScope === 'home') {
+                keys.push(
+                  'GITHUB_APP_ID',
+                  source === 'path' ? 'GITHUB_APP_PRIVATE_KEY_PATH' : 'GITHUB_APP_PRIVATE_KEY'
+                );
+              }
+              return keys.map(key => ({
+                mode,
+                force,
+                selectedScope,
+                source,
+                blank,
+                placement,
+                key,
+              }));
+            })
+          )
+        )
+      )
+    )
+  );
+
+  it.each(blankAppCases)(
+    'handles blank App overlay $key in $placement ($mode, $selectedScope, $source, force=$force, blank="$blank")',
+    async scenario => {
+      setupMode = scenario.mode;
+      scope = scenario.selectedScope;
+      keySource = scenario.source;
+      appSlug = '';
+      target = resolveScopedEnvPath(scope, root);
+      const otherPath = resolveScopedEnvPath(scope === 'home' ? 'project' : 'home', root);
+      const blankPath = scenario.placement === 'selected' ? target : otherPath;
+      const original = serializeEnv({ [scenario.key]: scenario.blank, CUSTOM_KEY: 'keep' });
+      writeFileSync(blankPath, original);
+      const result = await run(scenario.force);
+      const blocked = scenario.placement === 'other';
+      expect(result).toBe(blocked ? 1 : 0);
+      if (blocked) {
+        expect(readFileSync(otherPath, 'utf8')).toBe(original);
+        expect(existsSync(target)).toBe(false);
+      } else {
+        const homePath = resolveScopedEnvPath('home', root);
+        const home = existsSync(homePath) ? parseDotenv(readFileSync(homePath, 'utf8')) : {};
+        const projectPath = resolveScopedEnvPath('project', root);
+        const project = existsSync(projectPath)
+          ? parseDotenv(readFileSync(projectPath, 'utf8'))
+          : {};
+        expect(loadGitHubAppConfig({ ...home, ...project })).toMatchObject({
+          appId: '123',
+          privateKey,
+          slug: 'archon',
+        });
+        if (!scenario.force) expect(read().CUSTOM_KEY).toBe('keep');
+      }
+    }
+  );
+
+  it.each(['GITHUB_APP_SLUG', 'GITHUB_APP_INSTALLATION_ID'])(
+    'Add removes selected blank %s even when GitHub collection is skipped',
+    async key => {
+      setupMode = 'add';
+      writeFileSync(
+        target,
+        serializeEnv({
+          GITHUB_APP_ID: '123',
+          GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
+          WEBHOOK_SECRET: webhookSecret,
+          [key]: '   ',
+        })
+      );
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        expect(await run()).toBe(0);
+        expect(loadGitHubAppConfig(read())).toMatchObject({
+          appId: '123',
+          slug: 'archon',
+          privateKey,
+        });
+        expect(read()[key]).toBeUndefined();
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
+
+  it.each(['GITHUB_APP_SLUG', 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH'])(
+    'project App proposal safely overrides a home blank %s',
+    async key => {
+      writeFileSync(resolveScopedEnvPath('home', root), serializeEnv({ [key]: '   ' }));
+      expect(await run()).toBe(0);
+      const home = parseDotenv(readFileSync(resolveScopedEnvPath('home', root), 'utf8'));
+      expect(loadGitHubAppConfig({ ...home, ...read() })).toMatchObject({
+        appId: '123',
+        slug: 'fixture-app',
+        privateKey,
+      });
     }
   );
 

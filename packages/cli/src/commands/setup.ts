@@ -38,13 +38,14 @@ import {
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
 import { join, dirname, resolve } from 'path';
+import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import { copyArchonSkill } from './skill';
 import { setInstallDefault } from './ai';
 import { homedir } from 'os';
 import { randomBytes, createPrivateKey } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
-import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { GITHUB_PAT_KEYS, selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
@@ -205,7 +206,6 @@ type GitHubConfig = {
     }
 );
 
-const GITHUB_PAT_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
 const GITHUB_APP_PRIVATE_KEY_KEYS = [
   'GITHUB_APP_PRIVATE_KEY',
   'GITHUB_APP_PRIVATE_KEY_PATH',
@@ -1652,8 +1652,7 @@ export function generateEnvContent(config: SetupConfig): string {
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
     if (config.github.mode === 'pat') {
-      lines.push(['GH_TOKEN', config.github.token]);
-      lines.push(['GITHUB_TOKEN', config.github.token]);
+      for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
     } else {
       const app = config.github;
       lines.push(
@@ -1903,6 +1902,49 @@ interface WriteScopedEnvResult {
   forced: boolean;
 }
 
+function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
+  const preservedKeys: string[] = [];
+  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
+  const proposed = parseDotenv(content);
+  if (replaceGitHubAuth) {
+    for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+  } else if (
+    proposed.GITHUB_APP_ID ||
+    (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
+  ) {
+    for (const key of GITHUB_APP_KEYS) {
+      if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
+    }
+    for (const key of GITHUB_PAT_KEYS) {
+      if (!existing[key]) delete existing[key];
+    }
+  } else if (proposed.GITHUB_TOKEN) {
+    for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
+      if (!existing[key]) delete existing[key];
+    }
+  }
+  const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
+  if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
+    // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
+    preservedKeys.push(existingPrivateKey);
+    for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
+  }
+  const merged: Record<string, string> = { ...existing };
+  for (const [key, value] of Object.entries(proposed)) {
+    const prior = existing[key];
+    // Treat whitespace-only existing values as empty — otherwise a
+    // copy-paste stray `   ` would silently defeat the wizard's update for
+    // that key forever.
+    const priorIsEmpty = prior === undefined || prior.trim() === '';
+    if (!(key in existing) || priorIsEmpty) {
+      merged[key] = value;
+    } else {
+      preservedKeys.push(key);
+    }
+  }
+  return { content: serializeEnv(merged), preservedKeys };
+}
+
 /**
  * Write env content to exactly one archon-owned file, selected by scope.
  * Merge-only by default (existing non-empty values win, user-added keys
@@ -1949,39 +1991,9 @@ export function writeScopedEnv(
     // existing-only keys (user customizations) are preserved verbatim, except
     // an old Archon Codex setup, which moves to its new names (#3562).
     const existingRaw = readFileSync(targetPath, 'utf-8');
-    const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
-    const proposed = parseDotenv(content);
-    if (options.replaceGitHubAuth) {
-      for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
-    } else if (proposed.GITHUB_APP_ID) {
-      for (const key of GITHUB_PAT_KEYS) {
-        if (!existing[key]) delete existing[key];
-      }
-    } else if (proposed.GITHUB_TOKEN) {
-      for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
-        if (!existing[key]) delete existing[key];
-      }
-    }
-    const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
-    if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
-      // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
-      preservedKeys.push(existingPrivateKey);
-      for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
-    }
-    const merged: Record<string, string> = { ...existing };
-    for (const [key, value] of Object.entries(proposed)) {
-      const prior = existing[key];
-      // Treat whitespace-only existing values as empty — otherwise a
-      // copy-paste stray `   ` would silently defeat the wizard's update for
-      // that key forever.
-      const priorIsEmpty = prior === undefined || prior.trim() === '';
-      if (!(key in existing) || priorIsEmpty) {
-        merged[key] = value;
-      } else {
-        preservedKeys.push(key);
-      }
-    }
-    finalContent = serializeEnv(merged);
+    const merged = mergeScopedEnv(content, existingRaw, options.replaceGitHubAuth ?? false);
+    preservedKeys.push(...merged.preservedKeys);
+    finalContent = merged.content;
   }
 
   // 0o600 — env files hold secrets. Prevents group/world-readable writes on a
@@ -2332,6 +2344,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   let replaceGitHubAuth = false;
+  let otherGitHubEnv: Record<string, string> = {};
   const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
   if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
     cancel(
@@ -2347,6 +2360,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     );
     if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
       const other = parseDotenv(readFileSync(otherEnvPath, 'utf8'));
+      otherGitHubEnv = other;
       const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
       if (conflictingKeys.some(key => other[key])) {
         cancel(
@@ -2382,6 +2396,22 @@ async function runSetup(options: SetupOptions): Promise<void> {
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
     const envContent = generateEnvContent(config);
+    if (
+      config.github?.mode === 'app' ||
+      (!config.github && selectGitHubAuthMode(saved).kind === 'app')
+    ) {
+      const selected = parseDotenv(
+        !force && existsSync(targetEnvPath)
+          ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth)
+              .content
+          : envContent
+      );
+      const effective =
+        scope === 'project'
+          ? { ...otherGitHubEnv, ...selected }
+          : { ...selected, ...otherGitHubEnv };
+      loadGitHubAppConfig(effective);
+    }
     writeResult = writeScopedEnv(envContent, {
       scope,
       repoPath: options.repoPath,
