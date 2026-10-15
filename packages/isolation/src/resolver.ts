@@ -475,13 +475,12 @@ export class IsolationResolver {
    * Logs errors but never throws - stale cleanup should not block resolution.
    */
   private async markDestroyedBestEffort(env: IsolationEnvironmentRow): Promise<void> {
-    const envId = env.id;
     try {
       await this.store.markWorktreeDestroyed(env);
     } catch (cleanupError) {
       const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       getLog().error(
-        { err, errorType: err.constructor.name, isolationEnvId: envId },
+        { err, errorType: err.constructor.name, isolationEnvId: env.id },
         'isolation_cleanup_failed'
       );
     }
