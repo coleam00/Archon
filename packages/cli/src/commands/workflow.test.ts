@@ -9649,7 +9649,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             settled: Promise.resolve({ success: true, workflowRunId: run.id }),
           });
           const output = spyOn(console, 'log').mockImplementation(() => {});
-          const clock = spyOn(Date, 'now').mockReturnValue(Date.now());
+          const clock = spyOn(Date, 'now').mockReturnValue(Date.parse(wait.resumeAt) - 20);
           try {
             await workflowRunCommand(host, testHome, 'plan', 'go', {
               noWorktree: true,
