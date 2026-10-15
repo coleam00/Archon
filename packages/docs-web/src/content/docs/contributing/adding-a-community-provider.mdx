@@ -51,7 +51,7 @@ Each runtime reports its own event types, and the provider maps them to the cont
 
 Assistant text becomes `agent_message_chunk`; tool use becomes `tool_call`. The provider reports the turn's `result` separately from completion of background work. It tracks visible tasks and live background tasks from the SDK's lifecycle events. An idle notification ends the turn only after a result has been observed and both task sets are empty. A running notification resets the result condition for the next turn.
 
-If the stream closes while observed work remains, it ends without `settled`. Otherwise, a stream that closes without a result produces a failure result (`stream_ended_without_result`), then `settled`. An early idle notification alone produces neither completion nor failure.
+If the stream closes while observed work remains, or before reaching idle after background work was observed, it ends without `settled`. Once those settlement conditions hold, a stream that closes without a result produces a failure result (`stream_ended_without_result`), then `settled`. An early idle notification alone produces neither completion nor failure.
 
 **Codex app-server** ([`packages/providers/src/codex/provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/codex/provider.ts)): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
