@@ -16,7 +16,11 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  readWorktreeCreationId,
+  WorktreeUncommittedChangesError,
+} from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -495,7 +499,7 @@ async function handleWorktreeCommand(
           };
         }
         // Provide friendly error for uncommitted changes
-        if (err.message.includes('untracked files') || err.message.includes('modified')) {
+        if (error instanceof WorktreeUncommittedChangesError) {
           return {
             success: false,
             message:

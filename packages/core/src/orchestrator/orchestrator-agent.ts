@@ -2899,8 +2899,7 @@ interface ChatTurn {
  * The chat message for a failed turn's result. The provider's typed failure decides the
  * advice, as it decides retry in the workflow engine. A result without one comes from a
  * provider that does not report `failure` yet; its subtype and SDK detail still go
- * through the text formatter so actionable cases like "Not logged in" keep their advice
- * (#1983).
+ * through credential redaction and are shown as diagnostics without inferred advice.
  */
 function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
   if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
