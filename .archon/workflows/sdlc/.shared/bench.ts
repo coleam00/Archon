@@ -185,9 +185,21 @@ export function snapshotSource(repoRoot: string, sha: string, outDir: string): s
 /** An `archon ... --json` call that answered `ok: false`: it refused, and no run it started is left working. */
 export class ArchonRefused extends Error {}
 
-/** One `archon ... --json` call in `cwd`: its parsed document, or a throw carrying what it said. */
-export async function archonJson(args: readonly string[], cwd?: string): Promise<Record<string, unknown>> {
-  const child = Bun.spawn(['archon', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+/**
+ * One `archon ... --json` call in `cwd`, with `env` over the bench's own environment:
+ * its parsed document, or a throw carrying what it said.
+ */
+export async function archonJson(
+  args: readonly string[],
+  cwd?: string,
+  env?: Readonly<Record<string, string>>
+): Promise<Record<string, unknown>> {
+  const child = Bun.spawn(['archon', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+  });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -219,6 +231,8 @@ export interface Launch {
   readonly message: string;
   /** `--model` rebindings, such as a judge's `large=<spec>`. */
   readonly model?: Readonly<Record<string, string>>;
+  /** Variables over the bench's environment; a detached run keeps the environment it was launched with. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** Start one detached run in `cwd` itself, with no worktree, and return its id. */
@@ -240,7 +254,7 @@ export async function launch(run: Launch): Promise<string> {
     '--json',
     run.message,
   ];
-  const ack = await archonJson(args);
+  const ack = await archonJson(args, undefined, run.env);
   if (typeof ack.runId !== 'string' || ack.runId === '') {
     throw new Error(`archon workflow run ${run.workflow} acknowledged no runId`);
   }

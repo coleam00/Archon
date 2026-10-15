@@ -9,8 +9,9 @@
  *
  * Eval batches read the set's own repository and must write nothing to it: its batch
  * issues and its state documents are read before and after, and any difference fails
- * the batch. Live batches run intake for real, but only on scratch repositories that
- * hold copies of the batch's issues, one repository per version.
+ * the batch. An eval run's `gh` lookups of a batch issue answer as the issue was at
+ * creation (./lookups.ts). Live batches run intake for real, but only on scratch
+ * repositories that hold copies of the batch's issues, one repository per version.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -45,6 +46,7 @@ import type { Contract, Route } from '../../../.shared/labels.ts';
 import { remoteFor, urlRepo } from '../../../.shared/remote.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { INTAKE_PATHS } from '../../../.shared/workitem.ts';
+import { type CreationView, type LabelEvent, type LookupServer, creationLabels, serveLookups } from './lookups.ts';
 import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts';
 
 type Repo = QualifiedPr['repo'];
@@ -388,6 +390,93 @@ export function postedComments(before: Snapshot, after: Snapshot): string[] {
   });
 }
 
+// --- what a batch issue was at creation ---------------------------------------------
+
+const BATCH_ISSUE_QUERY = [
+  'query($owner: String!, $name: String!, $number: Int!) {',
+  'repository(owner: $owner, name: $name) { issue(number: $number) {',
+  'id url createdAt author { login }',
+  'labelEvents: timelineItems(first: 20, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) { nodes {',
+  '__typename',
+  '... on LabeledEvent { createdAt actor { login } label { name } }',
+  '... on UnlabeledEvent { createdAt actor { login } label { name } } } }',
+  'refs: timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) { pageInfo { hasNextPage } nodes {',
+  '... on CrossReferencedEvent { source { ... on PullRequest { url merged mergeCommit { oid } } } }',
+  '... on ConnectedEvent { subject { ... on PullRequest { url merged mergeCommit { oid } } } } } }',
+  '} } }',
+].join(' ');
+
+export interface BatchIssue {
+  readonly view: CreationView;
+  /** Merged pull requests whose merge commit is in the batch base and that reference the issue. */
+  readonly merged_on_base: readonly string[];
+}
+
+/**
+ * One batch row's issue as it was opened, and the merged pull requests on the base
+ * that reference it. A reference is evidence the issue is fixed on the base, not
+ * proof: merges to a working branch close nothing, and a fix may say only `Refs`.
+ */
+export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: string): BatchIssue {
+  const where = issueKey(repo, row.number);
+  const slash = repo.path.indexOf('/');
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      'graphql',
+      '--hostname',
+      repo.host,
+      '-f',
+      `query=${BATCH_ISSUE_QUERY}`,
+      '-f',
+      `owner=${repo.path.slice(0, slash)}`,
+      '-f',
+      `name=${repo.path.slice(slash + 1)}`,
+      '-F',
+      `number=${String(row.number)}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) throw new Error(`reading ${where} at creation failed: ${result.stderr.toString().trim()}`);
+  const answer: unknown = JSON.parse(result.stdout.toString());
+  const data = isObject(answer) && isObject(answer.data) ? answer.data : {};
+  const issue = isObject(data.repository) && isObject(data.repository.issue) ? data.repository.issue : {};
+  const { id, url, createdAt, author, labelEvents, refs } = issue;
+  if (typeof id !== 'string' || typeof url !== 'string' || typeof createdAt !== 'string') {
+    throw new Error(`${where} answered without its id, url and creation time`);
+  }
+  if (isObject(refs) && isObject(refs.pageInfo) && refs.pageInfo.hasNextPage === true) {
+    throw new Error(`${where} has more than 100 cross-references; the bench reads only the first page`);
+  }
+  const nodes = (connection: unknown): unknown[] => (isObject(connection) && Array.isArray(connection.nodes) ? connection.nodes : []);
+  const events = nodes(labelEvents).flatMap((event): LabelEvent[] => {
+    if (!isObject(event) || typeof event.createdAt !== 'string' || !isObject(event.label) || typeof event.label.name !== 'string') return [];
+    const actor = isObject(event.actor) && typeof event.actor.login === 'string' ? event.actor.login : null;
+    return [{ createdAt: event.createdAt, actor, label: event.label.name, removed: event.__typename === 'UnlabeledEvent' }];
+  });
+  const login = isObject(author) && typeof author.login === 'string' ? author.login : null;
+  const merged = new Set<string>();
+  for (const node of nodes(refs)) {
+    const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;
+    if (!isObject(pr) || pr.merged !== true || typeof pr.url !== 'string' || !isObject(pr.mergeCommit)) continue;
+    const oid = pr.mergeCommit.oid;
+    if (typeof oid === 'string' && git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base).code === 0) merged.add(pr.url);
+  }
+  return {
+    view: {
+      number: row.number,
+      id,
+      url,
+      title: row.title,
+      body: row.body,
+      labels: creationLabels(login, createdAt, events),
+      created_at: createdAt,
+    },
+    merged_on_base: [...merged],
+  };
+}
+
 // --- one run, one line --------------------------------------------------------------
 
 /** Triage's judgement, as every bench path reports it. A field the path cannot see is absent. */
@@ -440,8 +529,12 @@ export interface Line {
   readonly verdict: Verdict | null;
   readonly cost_usd: number | null;
   readonly duration_ms: number | null;
-  /** Commands, fetches and searches that looked up the issue being judged. */
+  /** Lookups of the judged issue that the creation-time answer did not cover. */
   readonly leak: readonly string[];
+  /** Lookups of the judged issue that the creation-time answer covered; absent on older lines. */
+  readonly answered_at_creation?: readonly string[];
+  /** Merged pull requests on the batch base that reference the row's issue; absent on older lines. */
+  readonly merged_on_base?: readonly string[];
   /** The run's triage report, copied under the output directory. */
   readonly report: string | null;
 }
@@ -471,9 +564,9 @@ export function runCost(nodes: readonly RunNode[]): number | null {
  * `n` or `#n` as an argument of `gh issue view`, before or after its flags and up to
  * the next command, the end of a command substitution or a redirect. A flag value may
  * hold parentheses (`--jq '(.body)'`), so `$(gh issue view 41) 4` also matches; that
- * false positive is rare and errs toward reporting. A match is a reporting flag that
- * moves the row out of the accuracy numbers; it never changes how a run is launched
- * or retried.
+ * false positive is rare and errs toward reporting. A match is a lookup of the issue;
+ * one the creation-time answer did not cover is a leak, a reporting flag that moves
+ * the row out of the accuracy numbers. Neither changes how a run is launched or retried.
  */
 export function issueTokens(repo: Repo, number: number): RegExp[] {
   const path = repo.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -486,28 +579,44 @@ export function issueTokens(repo: Repo, number: number): RegExp[] {
   ];
 }
 
+/** A shell command without its here-documents' bodies, which are text a command writes, not runs. */
+function withoutHeredocs(command: string): string {
+  const kept: string[] = [];
+  let terminator: string | undefined;
+  for (const line of command.split('\n')) {
+    if (terminator !== undefined) {
+      if (line.trim() === terminator) terminator = undefined;
+      continue;
+    }
+    const opened = /<<-?[ \t]*['"\\]*([A-Za-z_]\w*)['"\\]*/.exec(line);
+    if (opened !== null) terminator = opened[1];
+    kept.push(opened === null ? line : line.slice(0, opened.index) + line.slice(opened.index + opened[0].length));
+  }
+  return kept.join('\n');
+}
+
 /**
  * What a recorded provider event looked up: the command it ran, the URL it fetched or
  * the query it searched. A tool call carries these as its input; Codex records a
  * shell command it runs through unified exec as a `command_execution` subtask, whose
  * start and end both name it. A file write is no lookup, though the report it writes
- * may cite the issue.
+ * may cite the issue, and neither is a here-document a shell command writes it with.
  */
 function lookupOf(event: Record<string, unknown>): { id: string; text: string } | undefined {
   if (event.type === 'tool_call' && isObject(event.rawInput)) {
     const { command, url, query } = event.rawInput;
-    const text = [command, url, query].filter(value => typeof value === 'string').join('\n');
+    const text = [typeof command === 'string' ? withoutHeredocs(command) : command, url, query].filter(value => typeof value === 'string').join('\n');
     return text === '' ? undefined : { id: String(event.toolCallId), text };
   }
   if (event.type === 'subtask' && event.taskType === 'command_execution' && typeof event.description === 'string') {
-    return { id: String(event.taskId), text: event.description };
+    return { id: String(event.taskId), text: withoutHeredocs(event.description) };
   }
   return undefined;
 }
 
 /** Each lookup in a run's transcript that names the issue, once, by what it ran. */
-export function findLeaks(transcript: string, tokens: readonly RegExp[]): string[] {
-  const leaks = new Map<string, string>();
+export function findLookups(transcript: string, tokens: readonly RegExp[]): string[] {
+  const lookups = new Map<string, string>();
   for (const text of transcript.split('\n')) {
     if (text.trim() === '') continue;
     let line: unknown;
@@ -518,9 +627,25 @@ export function findLeaks(transcript: string, tokens: readonly RegExp[]): string
     }
     if (!isObject(line) || line.type !== 'provider_event' || !isObject(line.event)) continue;
     const lookup = lookupOf(line.event);
-    if (lookup !== undefined && tokens.some(token => token.test(lookup.text))) leaks.set(lookup.id, `${String(line.step)}: ${lookup.text}`);
+    if (lookup !== undefined && tokens.some(token => token.test(lookup.text))) lookups.set(lookup.id, `${String(line.step)}: ${lookup.text}`);
   }
-  return [...leaks.values()];
+  return [...lookups.values()];
+}
+
+const GH_LOOKUP = /\bgh\s+(?:issue\s+view|api)\b/;
+
+/**
+ * Split a run's lookups of the judged issue into those the creation-time answer
+ * covered and the leaks. A `gh issue view` or `gh api` lookup is covered when the
+ * run's lookup server answered the row's issue at creation at least once; a URL
+ * fetch, curl or search never is. The server cannot tell which of the run's gh calls
+ * a request came from, so in an intake run, whose own facts read goes through it
+ * too, the check proves the run's gh reached the server, not each call. A shell line
+ * that both runs gh and curls the issue counts as covered.
+ */
+export function splitLookups(lookups: readonly string[], answeredRowIssue: boolean): { answered: string[]; leak: string[] } {
+  const answered = answeredRowIssue ? lookups.filter(lookup => GH_LOOKUP.test(lookup)) : [];
+  return { answered, leak: lookups.filter(lookup => !answered.includes(lookup)) };
 }
 
 const nonEmpty = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
@@ -588,6 +713,10 @@ export interface BatchContext {
   readonly batchRun: string;
   readonly base: string;
   readonly outDir: string;
+  /** Each batch issue as it was at creation, by number: what an eval run's lookups answer with. */
+  readonly views: ReadonlyMap<number, CreationView>;
+  /** Merged pull requests on the base that reference each row's issue, by row id. */
+  readonly mergedOnBase: ReadonlyMap<string, readonly string[]>;
 }
 
 function inputsFor(run: RowRun, set: BenchSet): Record<string, string> {
@@ -638,7 +767,10 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   let status = 'not_started';
   let detail: RunDetail | undefined;
   let decided: { path: IntakePath | null; verdict: Verdict | null } = { path: null, verdict: null };
+  let lookups: LookupServer | undefined;
   try {
+    // Live runs judge scratch copies, which hold no outcome to hide.
+    if (run.live === undefined) lookups = serveLookups(context.set.repo, context.views);
     runId = await launch({
       workflow: WORKFLOWS[workflow],
       cwd: run.cwd,
@@ -646,6 +778,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
       config: resolved.config,
       inputs: inputsFor(run, context.set),
       message: BENCH_MESSAGE,
+      env: lookups?.env,
     });
     status = await waitRun(runId);
     detail = await getRun(runId);
@@ -658,6 +791,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   } catch (error) {
     fail(error);
     if (runId !== null && status === 'not_started') status = 'unknown';
+  } finally {
+    lookups?.stop();
   }
 
   const nodes = detail?.nodes ?? [];
@@ -671,7 +806,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   } else if (decided.verdict !== null) {
     problems.push(`${triageNodeId(workflow)} recorded no model binding, so its version is unproven`);
   }
-  let leak: string[] = [];
+  let lookedUp: string[] = [];
   let report: string | null = null;
   try {
     if (detail?.transcript_path != null && existsSync(detail.transcript_path)) {
@@ -679,7 +814,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
         ...issueTokens(context.set.repo, row.number),
         ...(run.live === undefined ? [] : issueTokens(run.live.repo, run.live.number)),
       ];
-      leak = findLeaks(readFileSync(detail.transcript_path, 'utf8'), tokens);
+      lookedUp = findLookups(readFileSync(detail.transcript_path, 'utf8'), tokens);
     } else if (decided.verdict !== null) {
       problems.push('the transcript is unavailable, so the leak check was not performed');
     }
@@ -692,6 +827,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   } catch (error) {
     fail(error);
   }
+  const { answered, leak } = splitLookups(lookedUp, (lookups?.answered(row.number) ?? 0) > 0);
   const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
 
   const line: Line = {
@@ -717,6 +853,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     cost_usd: detail === undefined ? null : runCost(nodes),
     duration_ms: Number.isFinite(ended) ? ended : null,
     leak,
+    answered_at_creation: answered,
+    merged_on_base: context.mergedOnBase.get(row.id) ?? [],
     report,
   };
   appendLine(join(context.outDir, SAMPLES_FILE), line);
@@ -823,7 +961,19 @@ export interface BatchOptions {
 export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; checks: BatchChecks }> {
   const { set, rows, outDir, live } = options;
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
-  const context: BatchContext = { set, batch: options.batch, batchRun: `${String(options.batch)}-${stamp}`, base: options.base, outDir };
+  const issues = new Map<number, BatchIssue>();
+  for (const row of rows) {
+    if (!issues.has(row.number)) issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));
+  }
+  const context: BatchContext = {
+    set,
+    batch: options.batch,
+    batchRun: `${String(options.batch)}-${stamp}`,
+    base: options.base,
+    outDir,
+    views: new Map([...issues].map(([number, issue]) => [number, issue.view])),
+    mergedOnBase: new Map(rows.map(row => [row.id, issues.get(row.number)?.merged_on_base ?? []])),
+  };
   const runs = options.versions.map(({ resolved, checkout }) =>
     rows.map((row): RowRun => {
       const cwd = checkout(row);

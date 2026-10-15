@@ -26,17 +26,19 @@ import {
   CHECKS_FILE,
   checkScratch,
   loadLive,
-  findLeaks,
+  findLookups,
   issueTokens,
   type Line,
   postedComments,
   runCost,
+  splitLookups,
   type Snapshot,
   snapshotChanges,
   toVerdict,
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
+import { answerLookup, atCreation, type CreationView, creationLabels } from '../../workflows/sdlc/intake/scripts/bench/lookups';
 import { MARKS_FILE, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
@@ -500,6 +502,59 @@ describe('bench run', () => {
     expect(checks[0].checks.posted_text.problems).toEqual(expect.arrayContaining([expect.stringContaining('github.com/o/r#12: 1 comment(s) posted')]));
   });
 
+  it('answers a lookup of the judged issue as it was at creation, and the lookup is not a leak', () => {
+    const { run, cli } = bench({
+      lookupIssue: 11,
+      issues: [
+        {
+          number: 11,
+          labels: ['bug', 'archon-ready'],
+          comments: 1,
+          createdAt: '2026-10-01T10:00:00Z',
+          labelEvents: [
+            { createdAt: '2026-10-01T10:00:01Z', actor: 'someone', label: 'bug' },
+            { createdAt: '2026-10-01T11:00:00Z', actor: 'Maintainer', label: 'archon-ready' },
+          ],
+        },
+        { number: 12, labels: ['bug'], comments: 2 },
+      ],
+    });
+    const { status, stderr, lines } = run('base');
+    expect([status, stderr]).toEqual([0, '']);
+    const triaged = lines.find(line => line.row === '11');
+    const n = Number(triaged?.run_id?.slice('run-'.length));
+    const looked = JSON.parse(readFileSync(join(cli, `lookup-run-${String(n)}.json`), 'utf8'));
+    expect(looked.data.repository.issue).toEqual({
+      id: 'I_11',
+      number: 11,
+      title: 'Issue 11 as opened',
+      body: 'The body 11 was opened with.',
+      state: 'OPEN',
+      stateReason: null,
+      closedAt: null,
+      url: 'https://github.com/o/r/issues/11',
+      labels: { nodes: [{ name: 'bug' }], totalCount: 1 },
+      comments: { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } },
+    });
+    expect(triaged?.leak).toEqual([]);
+    expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
+  });
+
+  it('records the merged pull requests on the base that reference the row issue', () => {
+    const { run, repo, cli } = bench();
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    const refs = [
+      { url: 'https://github.com/o/r/pull/30', merged: true, oid: ok(repo, 'rev-parse', 'HEAD') },
+      { url: 'https://github.com/o/r/pull/31', merged: true, oid: 'f'.repeat(40) },
+      { url: 'https://github.com/o/r/pull/32', merged: false, oid: null },
+    ];
+    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
+    const { status, lines } = run('base');
+    expect(status).toBe(0);
+    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30']);
+    expect(lines.find(line => line.row === '12-outside')?.merged_on_base).toEqual([]);
+  });
+
   it('fails the batch when a trust: outside row runs an agent node', () => {
     const { run } = bench({ outsideAgentRuns: true });
     const { status, checks } = run('base');
@@ -524,7 +579,7 @@ describe('hard checks', () => {
   });
 
   it('fail the batch on a posted comment', () => {
-    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '' } as const;
+    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '', views: new Map(), mergedOnBase: new Map() } as const;
     const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted']);
     expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted'] }]);
   });
@@ -636,7 +691,7 @@ describe('leaks', () => {
       call('e', 'Write', { file_path: 'triage.md', content: 'See https://github.com/o/r/issues/4' }),
       event({ type: 'text', text: 'issues/4' }),
     ].join('\n');
-    expect(findLeaks(transcript, issueTokens(REPO, 4))).toEqual([
+    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual([
       'triage: gh issue view 4 --repo o/r',
       'triage: https://github.com/o/r/issues/4#issuecomment-1',
       'triage: gh issue view --repo o/r 4 --comments',
@@ -647,6 +702,111 @@ describe('leaks', () => {
       'triage: gh issue view 4>/tmp/i',
       "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'",
     ]);
+  });
+  it('do not flag a shell here-document that writes the report citing the issue', () => {
+    const event = (body: Record<string, unknown>) => JSON.stringify({ type: 'provider_event', step: 'triage', event: body });
+    const heredoc = "cat > /runs/1/triage.md <<'EOF'\n# Triage: o/r#4\nSee https://github.com/o/r/issues/4\nEOF\ncat /runs/1/triage.md";
+    const transcript = [
+      event({ type: 'subtask', taskId: 'command:t:1', taskType: 'command_execution', status: 'completed', description: `/bin/zsh -lc "mkdir -p /runs/1 && ${heredoc}"` }),
+      event({ type: 'tool_call', toolCallId: 'a', name: 'Bash', rawInput: { command: heredoc } }),
+      event({ type: 'tool_call', toolCallId: 'b', name: 'Bash', rawInput: { command: `gh issue view 4 > /tmp/i && ${heredoc}` } }),
+    ].join('\n');
+    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(['triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md \ncat /runs/1/triage.md']);
+  });
+});
+
+describe('lookups', () => {
+  const view = (number: number): CreationView => ({
+    number,
+    id: `I_${String(number)}`,
+    url: `https://github.com/o/r/issues/${String(number)}`,
+    title: `Issue ${String(number)} as opened`,
+    body: 'As opened.',
+    labels: ['bug'],
+    created_at: '2026-10-01T10:00:00Z',
+  });
+  const views = new Map([[4, view(4)]]);
+  const closedConnection = { nodes: [{ body: 'Fixed.' }], totalCount: 1 };
+
+  it('rewrite each batch issue in an answer to its creation view, by node id, URL or repository-scoped number', () => {
+    // gh issue view: IssueByNumber, the issue under an alias of data.repository.
+    const byNumber = atCreation(
+      { data: { repository: { hasIssuesEnabled: true, issue: { __typename: 'Issue', number: 4, title: 'Now', body: 'Now.', state: 'CLOSED', stateReason: 'COMPLETED', closedAt: 'x', closed: true, updatedAt: 'later', labels: { nodes: [{ name: 'bug' }, { name: 'archon-ready' }], totalCount: 2 }, comments: closedConnection, milestone: { title: 'v1' } } } } },
+      views,
+      { repoScoped: true, forcedNumber: 4 }
+    );
+    expect(byNumber.value).toEqual({
+      data: {
+        repository: {
+          hasIssuesEnabled: true,
+          issue: {
+            __typename: 'Issue',
+            number: 4,
+            title: 'Issue 4 as opened',
+            body: 'As opened.',
+            state: 'OPEN',
+            stateReason: null,
+            closedAt: null,
+            closed: false,
+            updatedAt: '2026-10-01T10:00:00Z',
+            labels: { nodes: [{ name: 'bug' }], totalCount: 1 },
+            comments: { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        },
+      },
+    });
+    expect([...byNumber.answered]).toEqual([4]);
+    // A REST read, by its html_url; another issue in the same answer is left as it is.
+    const rest = atCreation(
+      [
+        { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'closed', state_reason: 'completed', comments: 3, labels: [{ name: 'x' }], assignees: [{ login: 'm' }] },
+        { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
+      ],
+      views,
+      { repoScoped: false }
+    );
+    expect(rest.value).toEqual([
+      { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'open', state_reason: null, comments: 0, labels: [{ name: 'bug' }] },
+      { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
+    ]);
+    // gh issue list --search --json number,state,title: a node with neither id nor url.
+    const search = atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } }, views, { repoScoped: true });
+    expect(search.value).toEqual({ data: { search: { nodes: [{ number: 4, state: 'OPEN', title: 'Issue 4 as opened' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } });
+    // Outside the set's repository, a number alone names nothing.
+    expect(atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED' }] } } }, views, { repoScoped: false }).answered.size).toBe(0);
+  });
+
+  it('answer a batch issue history locally and forward anything else unchanged', async () => {
+    const calls: string[] = [];
+    const upstream = async (url: string): Promise<Response> => {
+      calls.push(url);
+      return new Response('{"number": 5, "state":"closed"}', { headers: { 'content-type': 'application/json' } });
+    };
+    const comments = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/comments', { headers: { host: 'api.github.com' } }), REPO, views, upstream);
+    expect([await comments.response.json(), comments.answered, calls]).toEqual([[], [4], []]);
+    const labels = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/labels'), REPO, views, upstream);
+    expect(await labels.response.json()).toEqual([{ name: 'bug' }]);
+    const other = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/5?x=1', { headers: { host: 'api.github.com' } }), REPO, views, upstream);
+    expect([await other.response.text(), other.answered, calls]).toEqual(['{"number": 5, "state":"closed"}', [], ['https://api.github.com/repos/o/r/issues/5?x=1']]);
+  });
+
+  it('read the labels the author set at creation, not those added later or by others', () => {
+    const at = (seconds: number) => new Date(Date.parse('2026-10-01T10:00:00Z') + seconds * 1000).toISOString();
+    const events = [
+      { createdAt: at(1), actor: 'a', label: 'bug', removed: false },
+      { createdAt: at(2), actor: 'a', label: 'area: cli', removed: false },
+      { createdAt: at(3), actor: 'a', label: 'area: cli', removed: true },
+      { createdAt: at(5), actor: 'm', label: 'archon-ready', removed: false },
+      { createdAt: at(14 * 3600), actor: 'a', label: 'enhancement', removed: false },
+    ];
+    expect(creationLabels('a', '2026-10-01T10:00:00Z', events)).toEqual(['bug']);
+    expect(creationLabels(null, '2026-10-01T10:00:00Z', events)).toEqual([]);
+  });
+
+  it('count a gh lookup as answered only when the run reached the server, and a fetch never', () => {
+    const lookups = ['triage: gh issue view 4 --repo o/r', 'triage: gh api repos/o/r/issues/4/events', 'triage: https://github.com/o/r/issues/4'];
+    expect(splitLookups(lookups, true)).toEqual({ answered: lookups.slice(0, 2), leak: lookups.slice(2) });
+    expect(splitLookups(lookups, false)).toEqual({ answered: [], leak: lookups });
   });
 });
 
@@ -801,6 +961,51 @@ describe('score', () => {
     const [a, b] = score({ ...set, rows: [...set.rows, notPlanned, closeDisposed, blockDisposed] }, out).versions;
     // a proposes a close on the closed duplicate, fixed and not-planned rows too.
     expect([a.false_closes, b.false_closes]).toEqual([['22'], ['2']]);
+  });
+
+  it('excuses a close on an open row a merged base PR references, unless marked wrong', () => {
+    const out = benchOut();
+    const fixedOnBase = { merged_on_base: ['https://github.com/o/r/pull/40'] };
+    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', fixedOnBase));
+    const excused = score(set, out).versions[1];
+    expect([excused.false_closes, excused.excused_closes]).toEqual([[], ['2']]);
+    expect(renderScore(score(set, out))).toContain('0, 1 excused by a merged base PR (2): pass');
+    expect(renderPage(set, out, 1)).toContain('A merged pull request on the base references this issue: <a href="https://github.com/o/r/pull/40">');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'wrong', note: '' });
+    expect([score(set, out).versions[1].false_closes, score(set, out).versions[1].excused_closes]).toEqual([['2'], []]);
+  });
+
+  it('lets a mark override the expected answer for closes and dispositions, but not for type', () => {
+    const out = benchOut();
+    expect(renderPage(set, out, 1)).toContain('Counts as a false close unless you mark it right.');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: '' });
+    const blocked = row(10, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
+    const ready = { verdict: { ...line('a', blocked, '2-y').verdict!, contract: 'READY' as const, route: 'plan' as const } };
+    appendLine(join(out, SAMPLES_FILE), line('a', blocked, '2-y', ready));
+    appendLine(join(out, SAMPLES_FILE), line('b', blocked, '2-y', { verdict: { ...ready.verdict, contract: 'BLOCKED', route: null } }));
+    const withBlocked: BenchSet = { ...set, rows: [...set.rows, blocked] };
+    const before = score(withBlocked, out).versions;
+    expect([before[0].dispositions.agree, before[1].dispositions.agree]).toEqual([0, 1]);
+    appendLine(join(out, MARKS_FILE), { run_id: 'a-10-2-y', batch: 2, row: '10', label: 'a', mark: 'right', note: '' });
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-10-2-y', batch: 2, row: '10', label: 'b', mark: 'wrong', note: '' });
+    const [a, b] = score(withBlocked, out).versions;
+    expect([a.dispositions.agree, b.dispositions.agree]).toEqual([1, 0]);
+    expect(b.false_closes).toEqual([]);
+    // b's type on row 2 still disagrees with the human label, whatever the mark.
+    expect(b.type.agree).toBe(0);
+  });
+
+  it('reads a bar with no applicable rows as not applicable', () => {
+    const out = benchOut();
+    const result = score(set, out);
+    expect(renderScore(result)).toContain('| every `trust: outside` row ran no agent node | 0 of 0 ran one: not applicable |');
+    expect(result.versions[0].bars.not_planned.status).toBe('not applicable');
+    const empty = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
+    appendLine(join(empty, SAMPLES_FILE), line('a', fixed, '2-y'));
+    appendLine(join(empty, CHECKS_FILE), checks('2-y', true));
+    const closedOnly = renderScore(score(set, empty));
+    expect(closedOnly).toContain('| false closes (none allowed) | 0: not applicable |');
+    expect(closedOnly).toContain('| `type` agreement (at least 80%) | -: not applicable |');
   });
 
   it('counts a close proposal that links the canonical issue, and shows its link', () => {

@@ -377,6 +377,12 @@ are the operator's and stay outside the pack and the repository.
   version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
+  An eval run's `gh` calls go through a lookup server the runner starts for that run
+  (gh's `http_unix_socket`, set in a throwaway `GH_CONFIG_DIR`). It answers a batch
+  issue as it was at creation: its pinned title and body, the labels its author set
+  at creation, no comments, open. A batch issue's comments, events and timeline
+  answer as empty; anything else answers as live. Each line also records the merged
+  pull requests on the base that reference the row's issue.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
@@ -386,16 +392,21 @@ are the operator's and stay outside the pack and the repository.
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
   operator marks each run right, wrong or partly right, and marks land in
-  `marks.jsonl`, so they tally across batches.
+  `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
+  expected answer for false closes and dispositions, not for `type`, and the page says
+  so beside each verdict it applies to.
 - **Score.** `score` prints one column per version from each version's latest line
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
   the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a command, fetch or search that looked
-  up the judged issue, left out of the accuracy numbers), cost over the runs in
+  open, unless the operator dispositioned it closed or marked the run right; a close
+  that a merged pull request on the base references is excused unless marked wrong),
+  dispositions matched (a right or wrong mark decides), the `type` confusion matrix
+  with `enhancement` read as `feature`, leaks (a lookup of the judged issue that the
+  creation-time answer did not cover, left out of the accuracy numbers), cost over the runs in
   which an agent ran (`unreported` when no provider reported one) and wall time, and
-  which versions got each disagreement right. It does not choose a winner.
+  which versions got each disagreement right. A bar with no applicable rows reads
+  `not applicable`. It does not choose a winner.
 
 ## Composition validation
 

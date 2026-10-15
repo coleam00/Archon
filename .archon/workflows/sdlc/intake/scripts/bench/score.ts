@@ -6,9 +6,12 @@
  *
  * The judgement bars (duplicates, fixed, not planned) are the operator's marks: a row
  * counts when the operator marked that version's run right. The structured signals
- * the scorer can read on its own stand beside them. A run that did not pass counts
- * against the bars as not right. A row whose batch failed a hard check or whose run
- * looked the issue up is left out of the accuracy numbers and counted separately.
+ * the scorer can read on its own stand beside them. A mark also overrides the
+ * expected answer for false closes and dispositions, but not for `type`, whose ground
+ * truth is the human label. A run that did not pass counts against the bars as not
+ * right. A row whose batch failed a hard check or whose run looked the issue up past
+ * the creation-time answer is left out of the accuracy numbers and counted separately.
+ * A bar with no applicable rows is not applicable.
  */
 
 import { join } from 'node:path';
@@ -88,12 +91,22 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
 }
 
 /**
- * Whether proposing to close this row is a false close: the issue was still open when
- * the set was pinned, and no disposition of the operator's says it should close. On a
- * closed row, a close proposal is what the duplicate, fixed and not-planned bars reward.
+ * What a close proposal on this row is before the operator's mark. Null when the line
+ * proposes no close, or the row was closed when the set was pinned (the duplicate,
+ * fixed and not-planned bars reward that close), or the operator dispositioned it
+ * closed. `excused` when a merged pull request on the batch base references the
+ * issue, which may have fixed it though merges to a working branch close nothing;
+ * otherwise `false`.
  */
-export function falseClose(row: Row, verdict: Line['verdict']): boolean {
-  return verdict?.contract === 'NO_ACTION' && GROUP_OPEN[row.group] && row.known.disposition?.contract !== 'NO_ACTION';
+export function closeCheck(row: Row, line: Line): 'false' | 'excused' | null {
+  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group] || row.known.disposition?.contract === 'NO_ACTION') return null;
+  return (line.merged_on_base ?? []).length > 0 ? 'excused' : 'false';
+}
+
+/** Whether a close counts as false: a `right` mark clears a false close, and a `wrong` mark convicts an excused one. */
+export function falseClose(row: Row, line: Line, mark: MarkValue | undefined): boolean {
+  const checked = closeCheck(row, line);
+  return checked === 'false' ? mark !== 'right' : checked === 'excused' && mark === 'wrong';
 }
 
 /** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
@@ -118,7 +131,7 @@ const HARD_CHECKS: Readonly<Record<CheckName, string>> = {
 };
 const CHECK_NAMES = Object.keys(HARD_CHECKS) as CheckName[];
 
-export type BarStatus = 'pass' | 'fail' | 'pending' | 'no rows';
+export type BarStatus = 'pass' | 'fail' | 'pending' | 'not applicable';
 
 export interface MarkedBar {
   readonly rows: number;
@@ -144,6 +157,10 @@ export interface VersionScore {
   readonly outside: { readonly rows: number; readonly ran_agent: number };
   readonly bars: Readonly<Record<(typeof BARS)[number]['group'], MarkedBar>>;
   readonly false_closes: readonly string[];
+  /** Closes a merged pull request on the base excused and no `wrong` mark convicted. */
+  readonly excused_closes: readonly string[];
+  /** Judged lines on rows that were open, where a close can be false. */
+  readonly open_rows: number;
   readonly type: { readonly rows: number; readonly agree: number; readonly matrix: Readonly<Record<string, Readonly<Record<string, number>>>> };
   readonly dispositions: { readonly rows: number; readonly agree: number };
   readonly marks: Readonly<Record<MarkValue | 'unmarked', number>>;
@@ -187,7 +204,7 @@ function scoreVersion(
     const inGroup = judged.filter(line => line.group === group);
     const right = inGroup.filter(line => markOf(line) === 'right').length;
     const unmarked = inGroup.filter(line => markOf(line) === undefined).length;
-    const status: BarStatus = total === 0 ? 'no rows' : unmarked > 0 ? 'pending' : right / total >= atLeast ? 'pass' : 'fail';
+    const status: BarStatus = total === 0 ? 'not applicable' : unmarked > 0 ? 'pending' : right / total >= atLeast ? 'pass' : 'fail';
     return {
       rows: total,
       right,
@@ -215,11 +232,16 @@ function scoreVersion(
     matrix[human] = { ...matrix[human], [predicted]: (matrix[human]?.[predicted] ?? 0) + 1 };
   }
   // A dispositioned run that did not pass counts in the denominator, never as a match.
+  // A right or wrong mark decides a match; otherwise the verdict is compared with the disposition.
   const dispositioned = scored.filter(line => line.group === 'dispositioned');
   const dispositionAgree = dispositioned.filter(line => {
     const expected = rows.get(line.row)?.known.disposition;
-    return line.passed && expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
+    const mark = markOf(line);
+    if (!line.passed) return false;
+    if (mark === 'right' || mark === 'wrong') return mark === 'right';
+    return expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
   }).length;
+  const openLines = judged.filter(line => GROUP_OPEN[line.group]);
 
   // A run in which no agent ran spent nothing on the version, so it would only pull the mean down.
   const costs = lines.filter(line => line.run_id !== null && line.agent_nodes.length > 0);
@@ -234,7 +256,11 @@ function scoreVersion(
     failed_batches: batchRuns.filter(batchRun => checks.get(batchRun)?.passed !== true),
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
     bars: Object.fromEntries(BARS.map(entry => [entry.group, bar(entry.group, entry.at_least)])) as VersionScore['bars'],
-    false_closes: judged.filter(line => falseClose(rows.get(line.row) as Row, line.verdict)).map(line => line.row),
+    false_closes: openLines.filter(line => falseClose(rows.get(line.row) as Row, line, markOf(line))).map(line => line.row),
+    excused_closes: openLines
+      .filter(line => closeCheck(rows.get(line.row) as Row, line) === 'excused' && markOf(line) !== 'wrong')
+      .map(line => line.row),
+    open_rows: openLines.length,
     type: { rows: typed.length, agree, matrix },
     dispositions: { rows: dispositioned.length, agree: dispositionAgree },
     marks: {
@@ -301,6 +327,8 @@ export function score(set: BenchSet, outDir: string): Score {
 
 const pct = (part: number, whole: number): string => (whole === 0 ? '-' : `${String(part)}/${String(whole)} (${Math.round((part / whole) * 100)}%)`);
 const passFail = (ok: boolean): string => (ok ? 'pass' : 'fail');
+const NOT_APPLICABLE: BarStatus = 'not applicable';
+const listed = (rows: readonly string[]): string => (rows.length > 0 ? ` (${rows.join(', ')})` : '');
 
 /** The score as Markdown: the table, each version's type matrix, then the disagreements. */
 export function renderScore(result: Score): string {
@@ -319,7 +347,7 @@ export function renderScore(result: Score): string {
     ...CHECK_NAMES.map(name => row(HARD_CHECKS[name], each(version => String(version.hard[name])))),
     row('failed batch runs (excluded)', each(version => version.failed_batches.join(', ') || 'none')),
     row('**Bars**', each(() => '')),
-    row('every `trust: outside` row ran no agent node', each(version => `${String(version.outside.ran_agent)} of ${String(version.outside.rows)} ran one: ${passFail(version.outside.ran_agent === 0 && version.outside.rows > 0)}`)),
+    row('every `trust: outside` row ran no agent node', each(version => `${String(version.outside.ran_agent)} of ${String(version.outside.rows)} ran one: ${version.outside.rows === 0 ? NOT_APPLICABLE : passFail(version.outside.ran_agent === 0)}`)),
     ...BARS.map(bar =>
       row(
         `${bar.label} (at least ${Math.round(bar.at_least * 100)}%, by marks)`,
@@ -331,8 +359,11 @@ export function renderScore(result: Score): string {
         })
       )
     ),
-    row('false closes (none allowed)', each(version => `${String(version.false_closes.length)}${version.false_closes.length > 0 ? ` (${version.false_closes.join(', ')})` : ''}: ${passFail(version.false_closes.length === 0)}`)),
-    row(`\`type\` agreement (at least ${String(TYPE_BAR * 100)}%)`, each(version => `${pct(version.type.agree, version.type.rows)}: ${version.type.rows === 0 ? 'no rows' : passFail(version.type.agree / version.type.rows >= TYPE_BAR)}`)),
+    row('false closes (none allowed)', each(version => {
+      const excused = version.excused_closes.length > 0 ? `, ${String(version.excused_closes.length)} excused by a merged base PR${listed(version.excused_closes)}` : '';
+      return `${String(version.false_closes.length)}${listed(version.false_closes)}${excused}: ${version.open_rows === 0 ? NOT_APPLICABLE : passFail(version.false_closes.length === 0)}`;
+    })),
+    row(`\`type\` agreement (at least ${String(TYPE_BAR * 100)}%)`, each(version => `${pct(version.type.agree, version.type.rows)}: ${version.type.rows === 0 ? NOT_APPLICABLE : passFail(version.type.agree / version.type.rows >= TYPE_BAR)}`)),
     row('cost per item, mean (no bar)', each(version => (version.cost.mean === null ? 'unreported' : `$${version.cost.mean.toFixed(4)}`))),
     row('**Recorded**', each(() => '')),
     row('dispositions matched', each(version => pct(version.dispositions.agree, version.dispositions.rows))),

@@ -2,7 +2,8 @@
  * The evaluation page for one batch: every row's versions side by side, each with
  * its verdict and route, the five typed fields, any close proposal or maintainer
  * recommendation with its links, cost and time, and the triage report. The operator
- * marks each version right, wrong or partly right, with a note.
+ * marks each version right, wrong or partly right, with a note. Where a mark overrides
+ * the scorer's expected answer, the page says so beside the verdict.
  *
  * A small local server renders the page from the output directory on every request
  * and appends each mark to the directory's marks file, so marks tally across batches
@@ -13,7 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BatchChecks, Line } from './runner.ts';
-import { MARKS, type MarkValue, judgedBy, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
+import { MARKS, type MarkValue, closeCheck, judgedBy, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
 import { type BenchSet, type Row, batchRows } from './set.ts';
 
 function escape(text: string): string {
@@ -34,13 +35,13 @@ function known(row: Row): string {
     row.known.type === undefined ? '' : `human type <b>${escape(row.known.type)}</b>`,
     row.known.disposition === undefined
       ? ''
-      : `dispositioned <b>${escape(row.known.disposition.contract)}${row.known.disposition.route === undefined ? '' : `/${escape(row.known.disposition.route)}`}</b>${row.known.disposition.note === undefined ? '' : `: ${escape(row.known.disposition.note)}`}`,
+      : `dispositioned <b>${escape(row.known.disposition.contract)}${row.known.disposition.route === undefined ? '' : `/${escape(row.known.disposition.route)}`}</b>${row.known.disposition.note === undefined ? '' : `: ${escape(row.known.disposition.note)}`} (a right or wrong mark overrides it)`,
     row.body_from === 'current' ? '<i>creation body unrecoverable; the current body stood in</i>' : '',
   ];
   return facts.filter(fact => fact !== '').join(' · ');
 }
 
-function verdictCell(line: Line, outDir: string): string {
+function verdictCell(line: Line, row: Row, outDir: string): string {
   const parts: string[] = [`<div>judged by <b>${escape(judgedBy(line))}</b></div>`];
   if (line.path !== null) parts.push(`<div>intake path <b>${escape(line.path)}</b></div>`);
   const { verdict } = line;
@@ -52,6 +53,11 @@ function verdictCell(line: Line, outDir: string): string {
       const { closure } = verdict;
       const target = closure == null ? '' : `: ${closure.kind === 'duplicate' ? 'duplicate of' : 'delivered by'} ${link(closure.url)}`;
       parts.push(`<div><b>Proposes close</b> without a person${target}</div>`);
+      const checked = closeCheck(row, line);
+      if (checked === 'false') parts.push('<div class="warn">Counts as a false close unless you mark it right.</div>');
+      if (checked === 'excused') {
+        parts.push(`<div>A merged pull request on the base references this issue: ${(line.merged_on_base ?? []).map(link).join(', ')}. The close counts as false only if you mark it wrong.</div>`);
+      }
     }
     if (verdict.blocked_reason != null) parts.push(`<div><b>Maintainer recommendation:</b> ${escape(verdict.blocked_reason)}</div>`);
     if ((verdict.blocked_by ?? []).length > 0) parts.push(`<div>waits on ${(verdict.blocked_by ?? []).map(link).join(', ')}</div>`);
@@ -67,6 +73,9 @@ function verdictCell(line: Line, outDir: string): string {
   const cost = line.cost_usd === null ? 'cost unreported' : `$${line.cost_usd.toFixed(4)}`;
   const time = line.duration_ms === null ? '' : `, ${(line.duration_ms / 1000).toFixed(0)} s`;
   parts.push(`<div class="meta">${escape(cost)}${escape(time)} · run ${escape(line.run_id ?? 'none')}</div>`);
+  if ((line.answered_at_creation ?? []).length > 0) {
+    parts.push(`<div>Looked the issue up; answered as it was at creation: ${(line.answered_at_creation ?? []).map(escape).join('; ')}</div>`);
+  }
   if (line.leak.length > 0) parts.push(`<div class="warn">Looked the issue up (excluded from accuracy): ${line.leak.map(escape).join('; ')}</div>`);
   if (line.problems.length > 0) parts.push(`<div class="warn">${line.problems.map(escape).join('<br>')}</div>`);
   if (line.report !== null && existsSync(join(outDir, line.report))) {
@@ -123,7 +132,7 @@ export function renderPage(set: BenchSet, outDir: string, batch: number): string
       const line = lines.get(label)?.get(row.id);
       if (line === undefined) return '<td><i>not run</i></td>';
       const mark = line.run_id === null ? undefined : marks.get(line.run_id);
-      return `<td>${verdictCell(line, outDir)}${markable(line, checks) ? markForm(line, mark) : '<div class="warn">Batch run failed a hard check: nothing to mark.</div>'}</td>`;
+      return `<td>${verdictCell(line, row, outDir)}${markable(line, checks) ? markForm(line, mark) : '<div class="warn">Batch run failed a hard check: nothing to mark.</div>'}</td>`;
     });
     return `<section>
 <h2>${escape(row.id)}: ${escape(row.title)}</h2>

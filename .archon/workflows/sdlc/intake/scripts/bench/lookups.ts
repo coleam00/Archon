@@ -1,0 +1,266 @@
+/**
+ * An eval run's tracker lookups, answered as each batch issue was at creation.
+ *
+ * A run judging a batch issue must not see how it ended, yet its agent and its
+ * scripts read the tracker through `gh`. The runner starts one lookup server per run
+ * on a unix socket and launches the run with a `GH_CONFIG_DIR` whose `config.yml` is
+ * the operator's own with `http_unix_socket` set to it, so every `gh` call of the run
+ * reaches the server. A `gh` on `PATH` would not do: Codex runs each command in a
+ * login shell that rebuilds `PATH` from the user's profile, while `GH_CONFIG_DIR`
+ * survives it. The server forwards every request to the real host unchanged, then
+ * rewrites each batch issue in the answer to its creation view, and answers a batch
+ * issue's comments, events and timeline as empty without forwarding. Anything else
+ * answers as live.
+ *
+ * A batch issue is recognised by machine identifiers only: its GraphQL node id or web
+ * URL anywhere in an answer, and, for a GraphQL request whose variables name the set's
+ * repository, its number. A raw GraphQL query with literals that asks for none of
+ * those passes live; so does a lookup outside `gh`, which the transcript scan reports.
+ */
+
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { QualifiedPr } from '../../../.shared/forge.ts';
+import { isObject } from '../../../.shared/typed.ts';
+
+type Repo = QualifiedPr['repo'];
+
+/** What a batch issue answers with: the issue as it was opened. */
+export interface CreationView {
+  readonly number: number;
+  /** The GraphQL node id. */
+  readonly id: string;
+  /** The web URL. */
+  readonly url: string;
+  readonly title: string;
+  readonly body: string;
+  readonly labels: readonly string[];
+  readonly created_at: string;
+}
+
+export interface LabelEvent {
+  readonly createdAt: string;
+  readonly actor: string | null;
+  readonly label: string;
+  readonly removed: boolean;
+}
+
+/** How long after creation an author's own labelling still counts as part of opening the issue. */
+const CREATION_WINDOW_MS = 60_000;
+
+/**
+ * The labels an issue was opened with. GitHub records a label set at creation, by
+ * `gh issue create --label` or an issue template, as the author's labelled event a
+ * second or two after the issue; a later label, by anyone, is part of its outcome.
+ */
+export function creationLabels(author: string | null, createdAt: string, events: readonly LabelEvent[]): string[] {
+  const labels: string[] = [];
+  if (author === null) return labels;
+  const until = Date.parse(createdAt) + CREATION_WINDOW_MS;
+  for (const event of events) {
+    if (event.actor !== author || Date.parse(event.createdAt) > until) continue;
+    const at = labels.indexOf(event.label);
+    if (event.removed && at !== -1) labels.splice(at, 1);
+    else if (!event.removed && at === -1) labels.push(event.label);
+  }
+  return labels;
+}
+
+const KEPT = new Set([
+  'id',
+  'node_id',
+  'number',
+  'url',
+  'html_url',
+  'repository_url',
+  '__typename',
+  'databaseId',
+  'author',
+  'user',
+  'author_association',
+  'authorAssociation',
+  'createdAt',
+  'created_at',
+]);
+const CLEARED = new Set(['stateReason', 'state_reason', 'closedAt', 'closed_at', 'closed_by']);
+const EMPTY_CONNECTION = { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
+
+const isConnection = (value: unknown): boolean => isObject(value) && ('nodes' in value || 'edges' in value || 'totalCount' in value);
+
+/**
+ * The creation view of one issue object, in the shape it arrived in. Only the keys
+ * listed here survive, so a field the tracker adds later cannot carry the outcome.
+ */
+function creationObject(original: Readonly<Record<string, unknown>>, view: CreationView): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(original)) {
+    if (KEPT.has(key)) result[key] = value;
+    else if (key === 'title') result[key] = view.title;
+    else if (key === 'body') result[key] = view.body;
+    else if (key === 'state') result[key] = typeof value === 'string' && value === value.toUpperCase() ? 'OPEN' : 'open';
+    else if (CLEARED.has(key)) result[key] = null;
+    else if (key === 'closed') result[key] = false;
+    else if (key === 'updatedAt' || key === 'updated_at') result[key] = view.created_at;
+    else if (key === 'labels' && Array.isArray(value)) result[key] = view.labels.map(name => ({ name }));
+    else if (key === 'labels' && isConnection(value)) result[key] = { nodes: view.labels.map(name => ({ name })), totalCount: view.labels.length };
+    else if (key === 'comments' && typeof value === 'number') result[key] = 0;
+    else if (isConnection(value)) result[key] = EMPTY_CONNECTION;
+  }
+  return result;
+}
+
+const sameText = (a: unknown, b: string): boolean => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
+
+/** How a GraphQL request named its subject: in the set's repository, and which issue number it asked for. */
+export interface LookupScope {
+  readonly repoScoped: boolean;
+  readonly forcedNumber?: number;
+}
+
+/** `value` with every batch issue in it replaced by its creation view, and the numbers that were. */
+export function atCreation(
+  value: unknown,
+  views: ReadonlyMap<number, CreationView>,
+  scope: LookupScope
+): { value: unknown; answered: Set<number> } {
+  const answered = new Set<number>();
+  const byIdentity = (object: Readonly<Record<string, unknown>>): CreationView | undefined => {
+    for (const view of views.values()) {
+      if (object.id === view.id || object.node_id === view.id || sameText(object.url, view.url) || sameText(object.html_url, view.url)) return view;
+    }
+    return undefined;
+  };
+  const visit = (node: unknown, forced: CreationView | undefined): unknown => {
+    if (Array.isArray(node)) return node.map(entry => visit(entry, undefined));
+    if (!isObject(node)) return node;
+    const view = byIdentity(node) ?? forced ?? (scope.repoScoped && typeof node.number === 'number' ? views.get(node.number) : undefined);
+    if (view !== undefined) {
+      answered.add(view.number);
+      return creationObject(node, view);
+    }
+    return Object.fromEntries(Object.entries(node).map(([key, inner]) => [key, visit(inner, undefined)]));
+  };
+  if (!scope.repoScoped || !isObject(value)) return { value: visit(value, undefined), answered };
+  // Under a repository query for a batch issue's number, each object directly beneath
+  // `data.repository` is that issue, whatever alias names it.
+  const forced = scope.forcedNumber === undefined ? undefined : views.get(scope.forcedNumber);
+  const data = value.data;
+  if (forced === undefined || !isObject(data) || !isObject(data.repository)) return { value: visit(value, undefined), answered };
+  const repository = Object.fromEntries(Object.entries(data.repository).map(([key, inner]) => [key, visit(inner, isObject(inner) ? forced : undefined)]));
+  const rest = Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'repository').map(([key, inner]) => [key, visit(inner, undefined)]));
+  return { value: { ...value, data: { ...rest, repository } }, answered };
+}
+
+/** The scope a GraphQL request body names through its variables. */
+function scopeOf(body: string | undefined, repo: Repo): LookupScope {
+  let request: unknown;
+  try {
+    request = body === undefined ? undefined : JSON.parse(body);
+  } catch {
+    return { repoScoped: false };
+  }
+  const variables = isObject(request) && isObject(request.variables) ? request.variables : {};
+  const [owner, name] = repo.path.split('/');
+  const repoScoped = sameText(variables.owner, owner) && (sameText(variables.repo, name) || sameText(variables.name, name));
+  return repoScoped && typeof variables.number === 'number' ? { repoScoped, forcedNumber: variables.number } : { repoScoped };
+}
+
+const DROPPED_REQUEST_HEADERS = ['host', 'accept-encoding', 'connection', 'content-length'];
+const DROPPED_RESPONSE_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding'];
+
+/** Answer one request a run's `gh` sent, and the batch issue numbers the answer covered. */
+export async function answerLookup(
+  request: Request,
+  repo: Repo,
+  views: ReadonlyMap<number, CreationView>,
+  upstream: (url: string, init: RequestInit) => Promise<Response>
+): Promise<{ response: Response; answered: number[] }> {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/^\/api\/v3(?=\/)/, '');
+  const history = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/(comments|events|timeline|labels)$/.exec(path);
+  const local = history !== null && sameText(history[1], repo.path) ? views.get(Number(history[2])) : undefined;
+  if (request.method === 'GET' && local !== undefined && history !== null) {
+    const answer = history[3] === 'labels' ? local.labels.map(name => ({ name })) : [];
+    return { response: Response.json(answer), answered: [local.number] };
+  }
+
+  const host = request.headers.get('host') ?? url.host;
+  const headers = new Headers(request.headers);
+  for (const name of DROPPED_REQUEST_HEADERS) headers.delete(name);
+  const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
+  const forwarded = await upstream(`https://${host}${url.pathname}${url.search}`, { method: request.method, headers, body });
+  const responseHeaders = new Headers(forwarded.headers);
+  for (const name of DROPPED_RESPONSE_HEADERS) responseHeaders.delete(name);
+  const bytes = await forwarded.arrayBuffer();
+  const init = { status: forwarded.status, statusText: forwarded.statusText, headers: responseHeaders };
+  const unchanged = { response: new Response(bytes, init), answered: [] };
+  if (!(forwarded.headers.get('content-type') ?? '').includes('json')) return unchanged;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return unchanged;
+  }
+  const rewritten = atCreation(parsed, views, url.pathname.endsWith('/graphql') ? scopeOf(body, repo) : { repoScoped: false });
+  if (rewritten.answered.size === 0) return unchanged;
+  return { response: new Response(JSON.stringify(rewritten.value), init), answered: [...rewritten.answered] };
+}
+
+/** The operator's gh configuration directory, in gh's own order of precedence. */
+export function ghConfigDir(env: Readonly<Record<string, string | undefined>>): string {
+  if (env.GH_CONFIG_DIR) return env.GH_CONFIG_DIR;
+  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, 'gh');
+  if (process.platform === 'win32' && env.AppData) return join(env.AppData, 'GitHub CLI');
+  return join(homedir(), '.config', 'gh');
+}
+
+export interface LookupServer {
+  /** The launch environment that sends the run's `gh` calls to this server. */
+  readonly env: { readonly GH_CONFIG_DIR: string };
+  /** How many requests the server answered with this batch issue's creation view. */
+  answered(number: number): number;
+  stop(): void;
+}
+
+/**
+ * Start one run's lookup server. Its gh config is the operator's with the socket set,
+ * and its `hosts.yml` links to the operator's, so the run authenticates as the
+ * operator does. The directory lives under the system temp directory because a unix
+ * socket path is capped near 104 bytes on macOS.
+ */
+export function serveLookups(repo: Repo, views: ReadonlyMap<number, CreationView>): LookupServer {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-bench-'));
+  try {
+    const socket = join(dir, 'gh.sock');
+    const operator = ghConfigDir(process.env);
+    const configFile = join(operator, 'config.yml');
+    const config: unknown = existsSync(configFile) ? (Bun.YAML.parse(readFileSync(configFile, 'utf8')) ?? {}) : {};
+    if (!isObject(config)) throw new Error(`${configFile} is not a mapping`);
+    writeFileSync(join(dir, 'config.yml'), Bun.YAML.stringify({ ...config, http_unix_socket: socket }, null, 2));
+    if (existsSync(join(operator, 'hosts.yml'))) symlinkSync(join(operator, 'hosts.yml'), join(dir, 'hosts.yml'));
+    const counts = new Map<number, number>();
+    const server = Bun.serve({
+      unix: socket,
+      async fetch(request) {
+        const { response, answered } = await answerLookup(request, repo, views, (url, init) => fetch(url, init));
+        for (const number of answered) counts.set(number, (counts.get(number) ?? 0) + 1);
+        return response;
+      },
+      error(error) {
+        return new Response(`the bench lookup server could not answer: ${error.message}`, { status: 502 });
+      },
+    });
+    return {
+      env: { GH_CONFIG_DIR: dir },
+      answered: number => counts.get(number) ?? 0,
+      stop() {
+        void server.stop(true);
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
