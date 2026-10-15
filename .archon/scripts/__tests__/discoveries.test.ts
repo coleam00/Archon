@@ -166,7 +166,8 @@ describe('the decision record', () => {
     ]);
     const unposted = new Map([['first-key', stored('first-key', { kind: 'tracked', issue: ISSUE, comment: 'evidence' })]]);
     const elsewhere: AgentDecision = { outcome: 'track', key: 'first-key', refs: queued, title: 't', issue: { ...ISSUE, number: 8 }, comment: null, reason: 'r' };
-    for (const decision of [drop('first-key', queued), elsewhere]) {
+    const otherRepo: AgentDecision = { ...elsewhere, issue: { repo: { host: REPO.host, path: 'example/other' }, number: 7 } };
+    for (const decision of [drop('first-key', queued), elsewhere, otherRepo]) {
       expect(checkDecisions(queued, [decision], unposted)).toEqual([
         'key first-key has an unposted evidence comment; it can only be tracked on the same issue',
       ]);

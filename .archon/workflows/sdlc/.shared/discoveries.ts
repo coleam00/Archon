@@ -14,7 +14,7 @@
  * pass working it.
  */
 
-import type { QualifiedPr } from './forge.ts';
+import { type QualifiedPr, sameRepo } from './forge.ts';
 import type { DiscoveryRecord } from './report.ts';
 import { isObject } from './typed.ts';
 
@@ -344,7 +344,9 @@ export function checkDecisions(
       }
       if (
         prior.kind === 'tracked' &&
-        (decision.outcome !== 'track' || decision.issue.number !== prior.issue.number)
+        (decision.outcome !== 'track' ||
+          decision.issue.number !== prior.issue.number ||
+          !sameRepo(decision.issue.repo, prior.issue.repo))
       ) {
         problems.push(`key ${decision.key} has an unposted evidence comment; it can only be tracked on the same issue`);
       }
