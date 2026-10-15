@@ -650,8 +650,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           actorUserId,
           target
         );
-        if (outcome.kind !== 'waiting_for_capacity') return outcome.kind;
-        return outcome.refusal === 'waiting' ? 'waiting_for_capacity' : 'not_resumed';
+        return outcome.kind === 'resource_busy' ? 'not_resumed' : outcome.kind;
       });
       slackBridge.attach();
 

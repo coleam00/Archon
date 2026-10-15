@@ -12,7 +12,7 @@ import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { ResumeRefusal, WorkflowResumeCursor } from '@archon/workflows/store';
+import type { WorkflowResumeCursor } from '@archon/workflows/store';
 
 const log = createLogger('workflow-resume-service');
 const CONTINUATION_SCAN_INTERVAL_MS = 5_000;
@@ -99,13 +99,13 @@ export async function workflowResumeTargetForRun(
 }
 
 /**
- * `waiting_for_capacity`: the run's resource is busy, so it stays paused or failed;
- * `refusal` says whether it keeps its place as a capacity waiter, and `message` says
- * what blocks it and who continues it.
+ * The run's resource is busy: `waiting_for_capacity` keeps the paused run's place as a
+ * capacity waiter, `resource_busy` leaves it failed or not-ready paused with no place.
+ * `message` says what blocks it and who continues it.
  */
 export type ServerResumeOutcome =
   | { kind: 'resumed' }
-  | { kind: 'waiting_for_capacity'; refusal: ResumeRefusal; message: string }
+  | { kind: 'waiting_for_capacity' | 'resource_busy'; message: string }
   | { kind: 'not_resumed' };
 
 export async function resumeWorkflowRunFromServer(
@@ -124,12 +124,8 @@ export async function resumeWorkflowRunFromServer(
       );
     }
     if (admission.kind === 'accepted') return { kind: 'resumed' };
-    if (admission.kind === 'waiting_for_capacity')
-      return {
-        kind: 'waiting_for_capacity',
-        refusal: admission.refusal,
-        message: admission.message,
-      };
+    if (admission.kind === 'waiting_for_capacity' || admission.kind === 'resource_busy')
+      return { kind: admission.kind, message: admission.message };
     return { kind: 'not_resumed' };
   } catch (error) {
     log.warn({ err: error, runId: run.id }, 'workflow_resume_headless_unexpected_error');

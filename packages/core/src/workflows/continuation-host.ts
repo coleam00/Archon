@@ -36,13 +36,18 @@ type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
-  /** The run's resource is full; it stays paused or failed and is retried after a deferral. */
+  /** The run's resource is full; it stays paused and keeps its place as a capacity waiter. */
   | {
       kind: 'waiting_for_capacity';
       blocker: WorkflowResourceBusyError['blocker'];
-      /** Only `waiting` keeps the run's place as a capacity waiter. */
-      refusal: ResumeRefusal;
       /** The refusal as an operator reads it (`WorkflowResourceBusyError`). */
+      message: string;
+    }
+  /** The run's resource is full; it stays failed or not-ready paused and holds no place. */
+  | {
+      kind: 'resource_busy';
+      blocker: WorkflowResourceBusyError['blocker'];
+      refusal: Exclude<ResumeRefusal, 'waiting'>;
       message: string;
     }
   | { kind: 'unavailable'; reason: string; sourceError?: WorkflowSourceIntegrityError };
@@ -140,13 +145,12 @@ export async function resumeWorkflowContinuation(
       error instanceof RunLiveOwnerAlreadyOwnedError
     )
       return { kind: 'not-accepted' };
-    if (error instanceof WorkflowResourceBusyError)
-      return {
-        kind: 'waiting_for_capacity',
-        blocker: error.blocker,
-        refusal: error.refusal,
-        message: error.message,
-      };
+    if (error instanceof WorkflowResourceBusyError) {
+      const { blocker, refusal, message } = error;
+      return refusal === 'waiting'
+        ? { kind: 'waiting_for_capacity', blocker, message }
+        : { kind: 'resource_busy', blocker, refusal, message };
+    }
     throw error;
   }
 }

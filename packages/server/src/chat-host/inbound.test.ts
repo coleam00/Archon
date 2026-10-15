@@ -30,8 +30,10 @@ const { registerChatInbound } = await import('./inbound');
 /** A resume refused for capacity, with the refusal the store derives from the run's state. */
 const refuseForCapacity = (): void => {
   resume.mockImplementationOnce(async (_host: unknown, run: unknown) => ({
-    kind: 'waiting_for_capacity',
-    refusal: resumeRefusal(run as WorkflowRun, undefined),
+    kind:
+      resumeRefusal(run as WorkflowRun, undefined) === 'waiting'
+        ? 'waiting_for_capacity'
+        : 'resource_busy',
     message: 'busy',
   }));
 };

@@ -127,8 +127,7 @@ export function registerChatInbound(
         actor.kind === 'user' ? actor.userId : undefined,
         target
       );
-      // Only a capacity waiter keeps a place a continuation host continues from.
-      return outcome.kind === 'waiting_for_capacity' && outcome.refusal === 'waiting'
+      return outcome.kind === 'waiting_for_capacity'
         ? { resumed: false, waitingForCapacity: true }
         : { resumed: outcome.kind === 'resumed' };
     } catch (err) {

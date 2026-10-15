@@ -61,7 +61,6 @@ test('a continuation refused for capacity waits for capacity instead of failing'
   expect(admission).toEqual({
     kind: 'waiting_for_capacity',
     blocker,
-    refusal: 'waiting',
     message: expect.stringContaining('keeps its place'),
   });
   expect(close).toHaveBeenCalledTimes(1);

@@ -4037,7 +4037,8 @@ export function registerApiRoutes(
           run,
           actor.kind === 'user' ? actor.userId : undefined
         );
-        if (headless.kind === 'waiting_for_capacity') return apiError(c, 409, headless.message);
+        if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
+          return apiError(c, 409, headless.message);
         if (headless.kind === 'not_resumed') {
           return apiError(
             c,

@@ -127,13 +127,19 @@ test('reports refusal, deferral and settlement failures instead of admission-onl
   });
 });
 
-test('a continuation waiting for capacity is reported and the pass succeeds', async () => {
+test('a continuation refused for capacity is reported as what it is and the pass succeeds', async () => {
   scan.mockResolvedValue([
     {
       runId: 'full',
       kind: 'waiting_for_capacity',
       blocker: { kind: 'run', id: 'holder' },
-      refusal: 'waiting',
+      message: 'busy',
+    },
+    {
+      runId: 'quota',
+      kind: 'resource_busy',
+      blocker: { kind: 'request', id: 'queued' },
+      refusal: 'failed',
       message: 'busy',
     },
   ]);
@@ -141,7 +147,10 @@ test('a continuation waiting for capacity is reported and the pass succeeds', as
   expect(output[0]).toMatchObject({
     ok: true,
     accepted: 0,
-    outcomes: [{ runId: 'full', kind: 'waiting_for_capacity', blocker: { id: 'holder' } }],
+    outcomes: [
+      { runId: 'full', kind: 'waiting_for_capacity', blocker: { id: 'holder' } },
+      { runId: 'quota', kind: 'resource_busy', refusal: 'failed', blocker: { id: 'queued' } },
+    ],
   });
 });
 

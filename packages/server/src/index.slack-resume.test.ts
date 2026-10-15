@@ -786,14 +786,12 @@ describe('Slack workflow resume composition', () => {
       );
       mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
         kind: 'waiting_for_capacity',
-        refusal: 'waiting',
         message: 'busy',
       });
       expect(await capturedResume?.('run-1', 'U123')).toBe('waiting_for_capacity');
       // A refused run that keeps no place is not waiting for capacity.
       mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
-        kind: 'waiting_for_capacity',
-        refusal: 'failed',
+        kind: 'resource_busy',
         message: 'busy',
       });
       expect(await capturedResume?.('run-1', 'U123')).toBe('not_resumed');

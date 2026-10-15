@@ -138,6 +138,14 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
       runId,
       kind: outcome.kind,
       blocker: outcome.blocker,
+      message: outcome.message,
+      ...deferral,
+    };
+  if (outcome.kind === 'resource_busy')
+    return {
+      runId,
+      kind: outcome.kind,
+      blocker: outcome.blocker,
       refusal: outcome.refusal,
       message: outcome.message,
       ...deferral,
@@ -150,6 +158,7 @@ function successful(outcome: SettledOutcome): boolean {
     outcome.deferError === undefined &&
     (outcome.kind === 'not-accepted' ||
       outcome.kind === 'waiting_for_capacity' ||
+      outcome.kind === 'resource_busy' ||
       (outcome.kind === 'accepted' && outcome.status !== 'failed'))
   );
 }

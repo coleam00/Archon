@@ -725,19 +725,22 @@ describe('workflow continuation scanner', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('reports a resume refused for capacity with the refusal, not as not resumed', async () => {
+  test.each([
+    ['waiting', 'waiting_for_capacity'],
+    ['paused', 'resource_busy'],
+    ['failed', 'resource_busy'],
+  ] as const)('a %s capacity refusal reports %s', async (refusal, kind) => {
     const paused = run('wait-busy', 'paused', {});
     mockResumeWorkflow.mockResolvedValueOnce(paused);
     mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
       workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
-    const busy = new WorkflowResourceBusyError(paused.id, { kind: 'run', id: 'holder' }, 'paused');
+    const busy = new WorkflowResourceBusyError(paused.id, { kind: 'run', id: 'holder' }, refusal);
     mockHydrateResumableRun.mockRejectedValueOnce(busy);
 
     await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toEqual({
-      kind: 'waiting_for_capacity',
-      refusal: 'paused',
+      kind,
       message: busy.message,
     });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
