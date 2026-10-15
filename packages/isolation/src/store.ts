@@ -23,6 +23,7 @@ export async function recordWorktreeAdoption(
   store: Pick<IIsolationStore, 'updateMetadata'>,
   env: IsolationEnvironmentRow
 ): Promise<IsolationEnvironmentRow> {
+  if (env.provider !== 'worktree') return env;
   await store.updateMetadata(env.id, { adopted: true });
   createLogger('isolation.store').warn(
     {
