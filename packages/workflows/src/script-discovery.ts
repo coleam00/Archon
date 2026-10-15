@@ -298,23 +298,9 @@ async function discoverInstalledPackScripts(
   onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  const requestedPacks =
-    requestedNames &&
-    new Set(
-      [...requestedNames].flatMap(name => {
-        const reference = parsePackagedResourceReference(name);
-        return reference?.owner.source === 'installed' ? [reference.owner.pack] : [];
-      })
-    );
-  if (requestedPacks?.size === 0) return scripts;
   const listed = await listInstalledPacks(roots.installed);
   if (roots.installed.kind === 'captured') {
-    const captureRoot = roots.installed.captureRoot;
-    const failure = listed.errors.find(
-      error =>
-        requestedPacks === undefined ||
-        [...requestedPacks].some(key => error.path === join(captureRoot, 'installed', key))
-    );
+    const failure = listed.errors[0];
     if (failure) throw failure.cause ?? new Error(failure.message);
   }
   for (const pack of listed.packs) {

@@ -53,12 +53,7 @@ import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
-import {
-  assertSelectedWorkflowReadable,
-  workflowFilesWithoutFailedPacks,
-  discoverWorkflowsWithConfig,
-  resolveWorkflowCommandContents,
-} from './workflow-discovery';
+import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
   capturedSourceReadGuard,
@@ -8147,7 +8142,6 @@ export async function resolveFanOutChildDefinition(
     );
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
     // is reachable here only by the composition that names it.
-    assertSelectedWorkflowReadable(errors, targetName);
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
     const definition = resolveWorkflowName(targetName, definitions);
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
@@ -8155,7 +8149,6 @@ export async function resolveFanOutChildDefinition(
     if (!definition) {
       const relevantError =
         errors.find(error => {
-          if (error.installedPackKey !== undefined) return false;
           const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
           return error.workflowName !== undefined
             ? error.workflowName === targetName
@@ -8163,9 +8156,7 @@ export async function resolveFanOutChildDefinition(
         }) ??
         errors.find(
           error =>
-            error.installedPackKey === undefined &&
-            error.workflowName === undefined &&
-            isSourceReadFailure(error.cause, verifiedFiles)
+            error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)
         );
       if (relevantError !== undefined && isSourceReadFailure(relevantError.cause, verifiedFiles)) {
         throw relevantError.cause;
@@ -8177,7 +8168,7 @@ export async function resolveFanOutChildDefinition(
     const commandContents = await resolveWorkflowCommandContents(
       sourceRoots,
       [definition],
-      workflowFilesWithoutFailedPacks(sourceRoots, verifiedFiles, errors)
+      verifiedFiles
     );
     for (const content of commandContents.values()) {
       if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {

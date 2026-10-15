@@ -89,6 +89,7 @@ import {
   type InstalledPacksRoot,
   workflowSourceConfigFrom,
   type WorkflowSourceManifest,
+  type WorkflowSourceCapture,
   type WorkflowSourceAnchor,
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
@@ -103,7 +104,7 @@ import {
   type WorkflowResumeCursor,
 } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
-import { assertSelectedWorkflowReadable, discoverWorkflowsWithConfig } from './workflow-discovery';
+import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
 import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
 import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
@@ -982,12 +983,9 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
-  assertSelectedWorkflowReadable(errors, run.workflow_name);
   const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
-    const readErrors = errors.filter(
-      error => error.installedPackKey === undefined && error.errorType === 'read_error'
-    );
+    const readErrors = errors.filter(error => error.errorType === 'read_error');
     // Incomplete discovery cannot prove that the verified capture lacks the workflow.
     if (readErrors.length > 0) {
       throw new Error(
@@ -1378,13 +1376,12 @@ async function runChildWorkflow(
       // table (.archon/workflow-language-constitution.md) and locked by
       // `describe('workflow: late resolution is a deliberate affordance')` in
       // subrun.test.ts.
-      const { workflows, errors } = await discoverWorkflowsWithConfig(
+      const { workflows } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
         deps.providers,
         childSource.roots
       );
-      assertSelectedWorkflowReadable(errors, childWorkflowName);
       childWorkflow = resolveWorkflowName(
         childWorkflowName,
         workflows.map(w => w.workflow)
@@ -3011,30 +3008,11 @@ export async function executeWorkflow(
     const recordedSource = recordedSourceState.record;
     // Verifies the digest against the one the RUN recorded — not merely that the
     // directory exists, and not merely that the capture agrees with itself.
+    let loaded: WorkflowSourceCapture;
     try {
-      const loaded = await resolveRunSourceCapture(workflowRun.metadata);
-      if (!loaded) throw new Error('workflow source record disappeared during resolution');
-      workflowSourceRoots = capturedSourceRoots(loaded.anchor);
-      getLog().debug(
-        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-        'workflow.source_restored'
-      );
-      if (recordedSource.source_config === undefined) {
-        // A run from before the row carried `source_config`. The manifest sits outside
-        // the digest, so nothing can prove these settings are the ones the run started
-        // with; what pinning them now buys is closing the window. From here on they are
-        // held beside the digest, and a later edit to the manifest is refused like any
-        // other drift instead of being re-read on every resume for the life of the run.
-        const pinned = { ...recordedSource, source_config: loaded.anchor.config };
-        workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
-        await deps.store.updateWorkflowRun(workflowRun.id, {
-          metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
-        });
-        getLog().warn(
-          { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-          'workflow.source_config_pinned_from_manifest'
-        );
-      }
+      const capture = await resolveRunSourceCapture(workflowRun.metadata);
+      if (!capture) throw new Error('workflow source record disappeared during resolution');
+      loaded = capture;
     } catch (error) {
       if (isSourceReadFailure(error)) {
         const path =
@@ -3043,18 +3021,58 @@ export async function executeWorkflow(
           { workflowRunId: workflowRun.id, path, err: error },
           'workflow.source_restore_unreadable'
         );
-        await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
           nodeId: 'workflow-source',
           path,
           error: error instanceof Error ? error.message : String(error),
           retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
         });
-        return { success: true, paused: true, workflowRunId: workflowRun.id };
+        if (released) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            'Workflow paused because its captured source could not be read. Continuation will retry the source read.'
+          );
+          return { success: true, paused: true, workflowRunId: workflowRun.id };
+        }
+        const current = await deps.store.getWorkflowRun(workflowRun.id);
+        if (current?.status === 'paused') {
+          return { success: true, paused: true, workflowRunId: workflowRun.id };
+        }
+        if (current?.status === 'completed') {
+          return { success: true, workflowRunId: workflowRun.id };
+        }
+        return {
+          success: false,
+          workflowRunId: workflowRun.id,
+          error: 'Workflow status changed before source release',
+        };
       }
       return await failRunOnSource(
         `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
           `(${(error as Error).message}). The run cannot be resumed against different source; ` +
           'start a fresh run to execute the current workflow.'
+      );
+    }
+    workflowSourceRoots = capturedSourceRoots(loaded.anchor);
+    getLog().debug(
+      { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+      'workflow.source_restored'
+    );
+    if (recordedSource.source_config === undefined) {
+      // A run from before the row carried `source_config`. The manifest sits outside
+      // the digest, so nothing can prove these settings are the ones the run started
+      // with; what pinning them now buys is closing the window. From here on they are
+      // held beside the digest, and a later edit to the manifest is refused like any
+      // other drift instead of being re-read on every resume for the life of the run.
+      const pinned = { ...recordedSource, source_config: loaded.anchor.config };
+      workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
+      await deps.store.updateWorkflowRun(workflowRun.id, {
+        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
+      });
+      getLog().warn(
+        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+        'workflow.source_config_pinned_from_manifest'
       );
     }
   } else if (isResume) {

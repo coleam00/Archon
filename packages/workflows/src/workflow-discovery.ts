@@ -22,7 +22,7 @@
  */
 import { type ProviderRegistry } from '@archon/provider-contract';
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { basename, dirname, join, resolve, sep } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -38,8 +38,6 @@ import * as archonPaths from '@archon/paths';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import {
   WorkflowSourceUnavailableError,
-  installedPackKey,
-  parseInstalledWorkflowName,
   assertWorkflowSourceIntegrity,
   assertCapturedFilesPresent,
   installedWorkflowName,
@@ -1019,13 +1017,12 @@ export async function discoverWorkflows(
     const workflows: WorkflowWithSource[] = [];
     const support: WorkflowWithSource[] = [];
     const listed = await listInstalledPacks(roots.installed);
-    for (const { path, message, cause, packKey } of listed.errors) {
+    for (const { path, message, cause } of listed.errors) {
       allErrors.push({
         filename: path,
         error: message,
         errorType: 'read_error',
         cause,
-        installedPackKey: packKey,
       });
     }
     for (const pack of listed.packs) {
@@ -1038,7 +1035,7 @@ export async function discoverWorkflows(
         label,
         configuredEnvNames
       );
-      allErrors.push(...loaded.errors.map(error => ({ ...error, installedPackKey: pack.key })));
+      allErrors.push(...loaded.errors);
       const entrypointByPath = new Map(
         Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
       );
@@ -1081,9 +1078,7 @@ export async function discoverWorkflows(
         });
       }
       const expandedScope = await expandScope(files);
-      allErrors.push(
-        ...expandedScope.errors.map(error => ({ ...error, installedPackKey: pack.key }))
-      );
+      allErrors.push(...expandedScope.errors);
       for (const expanded of expandedScope.workflows) {
         (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
       }
@@ -1100,42 +1095,13 @@ export async function discoverWorkflows(
     const legacy = await expandScope(workflowsByFile);
     allErrors.push(...legacy.errors);
     const installed = await discoverInstalled();
-    const remainingFiles = workflowFilesWithoutFailedPacks(roots, verifiedFiles, allErrors);
-    const installedPrefix =
-      roots.installed.kind === 'captured'
-        ? join(roots.installed.captureRoot, 'installed') + sep
-        : undefined;
-    await Promise.all(
-      [...(remainingFiles ?? [])].map(async path => {
-        try {
-          await assertCapturedFilesPresent(new Set([path]));
-        } catch (cause) {
-          if (installedPrefix === undefined || !path.startsWith(installedPrefix)) throw cause;
-          const key = path.slice(installedPrefix.length).split(sep)[0];
-          allErrors.push({
-            filename: path,
-            installedPackKey: key,
-            errorType: 'read_error',
-            error: cause instanceof Error ? cause.message : String(cause),
-            cause: new WorkflowSourceUnavailableError(path, cause),
-          });
-        }
-      })
-    );
+    await assertCapturedFilesPresent(verifiedFiles);
     const installedNames = new Set(
       [...installed.workflows, ...installed.support].map(entry => entry.workflow.name)
     );
     const workflows: WorkflowWithSource[] = [];
-    const failedInstalledKeys = new Set(
-      allErrors.flatMap(error =>
-        error.installedPackKey ? [error.installedPackKey.toLowerCase()] : []
-      )
-    );
     for (const entry of legacy.workflows) {
-      if (
-        installedNames.has(entry.workflow.name) ||
-        failedInstalledKeys.has(selectedInstalledPackKey(entry.workflow.name) ?? '')
-      ) {
+      if (installedNames.has(entry.workflow.name)) {
         allErrors.push({
           filename: entry.workflow.name,
           error: `The ${entry.source} workflow named '${entry.workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
@@ -1148,27 +1114,12 @@ export async function discoverWorkflows(
     workflows.push(...installed.workflows);
     if (roots.kind === 'captured') {
       const failure = allErrors.find(
-        error =>
-          error.installedPackKey === undefined &&
-          error.errorType === 'read_error' &&
-          isSourceReadFailure(error.cause, verifiedFiles)
+        error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)
       );
       if (failure) {
         throw isSourceReadFailure(failure.cause)
           ? failure.cause
           : new WorkflowSourceUnavailableError(failure.filename, failure.cause);
-      }
-      for (let index = 0; index < allErrors.length; index++) {
-        const error = allErrors[index];
-        if (
-          error.installedPackKey !== undefined &&
-          isSourceReadFailure(error.cause, verifiedFiles)
-        ) {
-          allErrors[index] = {
-            ...error,
-            cause: new WorkflowSourceUnavailableError(error.filename, error.cause),
-          };
-        }
       }
     }
     getLog().info(
@@ -1383,38 +1334,6 @@ export async function discoverWorkflows(
   }
 
   return finish();
-}
-
-export function workflowFilesWithoutFailedPacks(
-  roots: WorkflowSourceRoots,
-  verifiedFiles: ReadonlySet<string> | undefined,
-  errors: readonly WorkflowLoadError[]
-): ReadonlySet<string> | undefined {
-  if (verifiedFiles === undefined || roots.installed.kind !== 'captured') return verifiedFiles;
-  const installedRoot = join(roots.installed.captureRoot, 'installed');
-  const failedRoots = errors.flatMap(error =>
-    error.installedPackKey === undefined ? [] : [join(installedRoot, error.installedPackKey) + sep]
-  );
-  return new Set(
-    [...verifiedFiles].filter(path => !failedRoots.some(root => path.startsWith(root)))
-  );
-}
-
-function selectedInstalledPackKey(workflowName: string): string | undefined {
-  const parsed = parseInstalledWorkflowName(workflowName);
-  return parsed ? installedPackKey(parsed.owner, parsed.name).toLowerCase() : undefined;
-}
-
-export function assertSelectedWorkflowReadable(
-  errors: readonly WorkflowLoadError[],
-  workflowName: string
-): void {
-  const key = selectedInstalledPackKey(workflowName);
-  if (key === undefined) return;
-  const failure = errors.find(
-    error => error.installedPackKey?.toLowerCase() === key && isSourceReadFailure(error.cause)
-  );
-  if (failure) throw failure.cause;
 }
 
 /**

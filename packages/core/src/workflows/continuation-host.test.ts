@@ -948,7 +948,7 @@ for (const scope of [
   'project-shared',
   'global-shared',
 ] as const) {
-  test(`${scope} script inspection failure isolates healthy workflows and retries its owner`, async () => {
+  test(`${scope} script inspection failure blocks the capture and retries until readable`, async () => {
     const shared = scope.endsWith('-shared');
     const base =
       scope === 'project' || shared
@@ -992,7 +992,10 @@ for (const scope of [
       DEFAULT_WORKFLOW_SOURCE_CONFIG,
       scope === 'installed' ? 'acme/pack:deliver' : shared ? 'shared' : 'deliver'
     );
-    const cause = Object.assign(new Error('temporary I/O failure'), { code: 'EIO' });
+    const cause = Object.assign(new Error('temporary I/O failure'), {
+      code: 'EIO',
+      syscall: 'stat',
+    });
     const stat = fs.stat;
     const inspect = spyOn(fs, 'stat').mockImplementation(
       new Proxy(stat, {
@@ -1020,7 +1023,7 @@ for (const scope of [
       };
       expect(
         await resolveRunWorkflow(createWorkflowDeps(), healthy, fixture.root, {})
-      ).toMatchObject({ ok: true });
+      ).toMatchObject({ ok: false });
       if (shared) {
         expect(
           await resolveRunWorkflow(
@@ -1029,7 +1032,7 @@ for (const scope of [
             fixture.root,
             {}
           )
-        ).toMatchObject({ ok: true });
+        ).toMatchObject({ ok: false });
       }
       await expectDiscoveryRecovery(fixture, () => inspect.mockRestore());
     } finally {

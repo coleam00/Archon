@@ -1,5 +1,6 @@
 import * as sourceIntegrity from './workflow-source';
 import * as checkout from './checkout-observation';
+import { createTransactionView } from './file-store/transaction-view';
 import { prepareRunAiConfiguration } from './run-preflight';
 import type { ExecuteWorkflowOptions } from './executor';
 /**
@@ -4989,16 +4990,6 @@ describe('finally backstop', () => {
         captureRoot: join(root, 'capture'),
       });
       const path = join(capture.anchor.root, 'project/.archon/scripts');
-      const release = mock<IWorkflowStore['releaseRunForUnreadableSource']>(async () => ({
-        released,
-      }));
-      const store = makeStore({
-        releaseRunForUnreadableSource: release,
-        getWorkflowRunStatus: mock(async () => 'running' as const),
-        getWorkflowRun: mock(async () => {
-          throw new Error('old owner must stop');
-        }),
-      });
       const run = makeRun({
         status: 'running',
         metadata: {
@@ -5008,8 +4999,20 @@ describe('finally backstop', () => {
           },
         },
       });
+      const rows = new Map([[run.id, structuredClone(run)]]);
+      const view = createTransactionView(rows, [], async () => null);
+      const release = mock<IWorkflowStore['releaseRunForUnreadableSource']>(async (id, input) => {
+        if (!released) await view.cancelWorkflowRun(id, { reason: 'Operator abandoned the run' });
+        return view.releaseRunForUnreadableSource(id, input);
+      });
+      const store = makeStore({
+        releaseRunForUnreadableSource: release,
+        getWorkflowRunStatus: mock(async () => rows.get(run.id)?.status ?? null),
+        getWorkflowRun: mock(view.getWorkflowRun),
+      });
       try {
         await chmod(path, 0o000);
+        const before = Date.now();
         const result = await executeWorkflow(
           makeDeps(store),
           makePlatform(),
@@ -5020,7 +5023,16 @@ describe('finally backstop', () => {
           undefined,
           { preCreatedRun: run, priorCompletedNodes: new Map() }
         );
-        expect(result).toMatchObject({ success: true, paused: true });
+        expect(result).toMatchObject(
+          released ? { success: true, paused: true } : { success: false }
+        );
+        if (!released) {
+          expect('paused' in result && result.paused).not.toBe(true);
+          expect((await view.getWorkflowRun(run.id))?.status).toBe('cancelled');
+        }
+        const retryAt = Date.parse(release.mock.calls[0][1].retryAt);
+        expect(retryAt).toBeGreaterThanOrEqual(before + 60_000);
+        expect(retryAt).toBeLessThanOrEqual(Date.now() + 60_000);
         expect(release).toHaveBeenCalledWith(
           run.id,
           expect.objectContaining({
@@ -5029,7 +5041,8 @@ describe('finally backstop', () => {
           })
         );
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(store.getWorkflowRun).not.toHaveBeenCalled();
+        if (released) expect(store.getWorkflowRun).not.toHaveBeenCalled();
+        else expect(store.getWorkflowRun).toHaveBeenCalledWith(run.id);
         expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(dagCallsBefore);
       } finally {
         await chmod(path, 0o755);
@@ -5037,6 +5050,46 @@ describe('finally backstop', () => {
       }
     }
   );
+  it.each(['EACCES', 'ENOSPC'])(
+    'surfaces a legacy source-config pinning write failure (%s)',
+    async code => {
+      const root = await mkdtemp(join(tmpdir(), 'source-pinning-'));
+      try {
+        const capture = await sourceIntegrity.captureWorkflowSource({
+          sourceRoot: root,
+          captureRoot: join(root, 'capture'),
+        });
+        const { source_config: _config, ...legacy } = capture.manifest;
+        const run = makeRun({
+          metadata: { workflow_source: { ...legacy, root: capture.anchor.root } },
+        });
+        const cause = Object.assign(new Error('metadata write failed'), { code, syscall: 'open' });
+        const store = makeStore({
+          releaseRunForUnreadableSource: mock(async () => ({ released: true })),
+          updateWorkflowRun: mock(async (_id, update) => {
+            if (update.metadata?.workflow_source) throw cause;
+          }),
+        });
+        await expect(
+          executeWorkflow(
+            makeDeps(store),
+            makePlatform(),
+            'conv-1',
+            root,
+            makeWorkflow(),
+            'msg',
+            undefined,
+            { preCreatedRun: run, priorCompletedNodes: new Map() }
+          )
+        ).rejects.toBe(cause);
+        expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
+
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
     const store = makeStore({

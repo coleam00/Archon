@@ -9,7 +9,7 @@
 import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
-import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmod, cp, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -30,7 +30,6 @@ import {
   type WorkflowSourceCapture,
 } from './workflow-source';
 import * as sourceIntegrity from './workflow-source';
-import { formatPackagedResourceReference } from './packaged-workflow';
 import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
 import { isAgentNode, type ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
@@ -152,6 +151,28 @@ afterEach(() => {
 });
 
 describe('installed packs in the catalog', () => {
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a failed installed workflow does not reserve impossible manifest entrypoint names',
+    async () => {
+      await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
+      const name = 'other/broken:review extra';
+      await writeFile(
+        join(project, '.archon/workflows/project.yaml'),
+        `name: '${name}'\ndescription: Project\nnodes:\n  - id: done\n    prompt: done\n`
+      );
+      const path = join(
+        packTreePath(join(home, 'plugins'), 'other/repo', COMMIT_A),
+        'review/code-review.yaml'
+      );
+      try {
+        await chmod(path, 0o000);
+        expect(names((await discover()).workflows)).toContain(name);
+      } finally {
+        await chmod(path, 0o644);
+      }
+    }
+  );
+
   test('installed MCP declarations stay checkout-only despite adjacent and home configs', async () => {
     registerBuiltinProviders();
     await install({
@@ -462,7 +483,6 @@ describe('installed pack boundaries', () => {
     expect(errors.filter(error => error.filename.startsWith('acme/review-kit/'))).toEqual([
       {
         filename: 'acme/review-kit/crowded',
-        installedPackKey: 'acme.review-kit',
         error:
           "Packaged workflow 'acme/review-kit/crowded' must contain exactly one .yaml or .yml file (found 2).",
         errorType: 'validation_error',
@@ -590,146 +610,52 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       'workflow-directory',
       'missing-pack',
     ] as const) {
-      test(`selected workflows ignore an unrelated captured pack ${fault} read failure after verification`, async () => {
+      test(`a persistent unrelated pack ${fault} fault blocks continuation until readable`, async () => {
         await install(reviewKit());
         await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
-        await mkdir(join(project, '.archon/workflows'), { recursive: true });
-        await writeFile(
-          join(project, '.archon/workflows/healthy.yaml'),
-          'name: healthy\ndescription: healthy\nnodes:\n  - id: done\n    prompt: done\n'
-        );
-        await writeFile(
-          join(project, '.archon/workflows/spoof.yaml'),
-          'name: other/broken:review\ndescription: spoof\nnodes:\n  - id: spoof\n    prompt: wrong source\n'
-        );
-        const projectNames = ['other/broken/extra:review', 'other//broken:review', 'other/broken:'];
-        for (const [index, name] of projectNames.entries())
-          await writeFile(
-            join(project, `.archon/workflows/qualified-${index}.yaml`),
-            `name: '${name}'\ndescription: project\nnodes:\n  - id: done\n    prompt: done\n`
-          );
         const capture = await captureWorkflowSource({
           sourceRoot: project,
           captureRoot: join(home, 'runs/workflows'),
         });
-        const roots = capturedSourceRoots(capture.anchor);
-        const broken = join(
-          capture.anchor.root,
-          'installed/other.broken',
+        const pack = join(capture.anchor.root, 'installed/other.broken');
+        const broken =
           fault === 'manifest'
-            ? 'archon-plugin.json'
+            ? join(pack, 'archon-plugin.json')
             : fault === 'workflow-file'
-              ? 'review/code-review.yaml'
+              ? join(pack, 'review/code-review.yaml')
               : fault === 'workflow-directory'
-                ? 'review'
-                : ''
-        );
-        const mode = fault === 'workflow-directory' ? 0o755 : 0o644;
-        let moved = false;
-        const heldPack = join(capture.anchor.root, 'held-pack');
-        const restore = async (): Promise<void> => {
-          if (fault === 'missing-pack') {
-            if (moved) await rename(heldPack, broken);
-            moved = false;
-          } else await chmod(broken, mode);
-        };
-        const breakSource = async (): Promise<void> => {
-          if (fault === 'missing-pack') {
-            await rename(broken, heldPack);
-            moved = true;
-          } else await chmod(broken, 0o000);
-        };
-        const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
-        const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
-          async sourceRoots => {
-            await restore();
-            const files = await verify(sourceRoots);
-            await breakSource();
-            return files;
-          }
-        );
+                ? join(pack, 'review')
+                : pack;
+        const held = join(home, 'held-pack');
+        const failure =
+          fault === 'missing-pack'
+            ? sourceIntegrity.WorkflowSourceIntegrityError
+            : sourceIntegrity.WorkflowSourceUnavailableError;
         try {
-          for (const name of ['healthy', REVIEW, ...projectNames]) {
-            await restore();
-            expect(
-              (await resolveContinuationWorkflow(deps, runWith(capture, name), project))?.workflow
-                .name
-            ).toBe(name);
-            const composed = await resolveFanOutChildDefinition(deps, project, name, roots);
-            expect('definition' in composed && composed.definition.name).toBe(name);
-          }
+          if (fault === 'missing-pack') await rename(pack, held);
+          else await chmod(broken, 0o000);
           await expect(
-            resolveFanOutChildDefinition(deps, project, 'other/broken:review', roots)
-          ).rejects.toBeInstanceOf(sourceIntegrity.WorkflowSourceUnavailableError);
-          await restore();
+            resolveContinuationWorkflow(deps, runWith(capture, REVIEW), project)
+          ).rejects.toBeInstanceOf(failure);
           await expect(
-            resolveContinuationWorkflow(deps, runWith(capture, 'other/broken:review'), project)
-          ).rejects.toBeInstanceOf(sourceIntegrity.WorkflowSourceUnavailableError);
+            resolveFanOutChildDefinition(deps, project, REVIEW, capturedSourceRoots(capture.anchor))
+          ).rejects.toBeInstanceOf(failure);
         } finally {
-          verifier.mockRestore();
-          await restore();
+          if (fault === 'missing-pack') await rename(held, pack);
+          else await chmod(broken, fault === 'workflow-directory' ? 0o755 : 0o644);
         }
+        expect(
+          (await resolveContinuationWorkflow(deps, runWith(capture, REVIEW), project))?.workflow
+            .name
+        ).toBe(REVIEW);
+        const composed = await resolveFanOutChildDefinition(
+          deps,
+          project,
+          REVIEW,
+          capturedSourceRoots(capture.anchor)
+        );
+        expect('definition' in composed && composed.definition.name).toBe(REVIEW);
       });
     }
-
-    test('selected scripts ignore another captured pack read failure', async () => {
-      await install(reviewKit());
-      await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
-      await mkdir(join(project, '.archon/scripts'), { recursive: true });
-      await writeFile(join(project, '.archon/scripts/healthy.ts'), 'console.log("ok");');
-      await mkdir(join(home, 'scripts'), { recursive: true });
-      await writeFile(join(home, 'scripts/global-healthy.ts'), 'console.log("ok");');
-      const tree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
-      for (const dir of [
-        join(project, '.archon/workflows/review-kit'),
-        join(home, 'workflows/review-kit'),
-      ]) {
-        await mkdir(dirname(dir), { recursive: true });
-        await cp(tree, dir, { recursive: true });
-      }
-      const capture = await captureWorkflowSource({
-        sourceRoot: project,
-        captureRoot: join(home, 'runs/scripts'),
-      });
-      const roots = capturedSourceRoots(capture.anchor);
-      const broken = join(capture.anchor.root, 'installed/other.broken/archon-plugin.json');
-      const healthy = formatPackagedResourceReference(
-        { source: 'installed', pack: 'acme.review-kit', workflow: 'review' },
-        'check'
-      );
-      const selectedBroken = formatPackagedResourceReference(
-        { source: 'installed', pack: 'other.broken', workflow: 'review' },
-        'check'
-      );
-      await chmod(broken, 0o000);
-      try {
-        for (const name of ['healthy', 'global-healthy']) {
-          expect((await discoverScriptsForCwd(project, roots, new Set([name]))).has(name)).toBe(
-            true
-          );
-        }
-        for (const source of ['project', 'global', 'bundled'] as const) {
-          const name = formatPackagedResourceReference(
-            { source, pack: 'review-kit', workflow: 'review' },
-            'check'
-          );
-          const sourceRoots =
-            source === 'bundled' ? { ...roots, bundledWorkflows: roots.globalWorkflows } : roots;
-          expect(
-            (await discoverScriptsForCwd(project, sourceRoots, new Set([name]))).has(name)
-          ).toBe(true);
-        }
-        expect((await discoverScriptsForCwd(project, roots, new Set([healthy]))).has(healthy)).toBe(
-          true
-        );
-        await expect(
-          discoverScriptsForCwd(project, roots, new Set([selectedBroken]))
-        ).rejects.toMatchObject({
-          cause: expect.objectContaining({ code: 'EACCES' }),
-        });
-      } finally {
-        await chmod(broken, 0o644);
-      }
-    });
   }
 );

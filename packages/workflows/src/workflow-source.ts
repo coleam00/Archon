@@ -288,16 +288,6 @@ export function installedPackKey(owner: string, name: string): string {
   return `${owner}.${name}`;
 }
 
-export function parseInstalledWorkflowName(
-  value: string
-): { owner: string; name: string; entrypoint: string } | undefined {
-  const parts = value.split(':');
-  if (parts.length !== 2 || !parts[1]) return undefined;
-  const segments = parts[0].split('/');
-  if (segments.length !== 2 || !segments[0] || !segments[1]) return undefined;
-  return { owner: segments[0], name: segments[1], entrypoint: parts[1] };
-}
-
 /** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
 export function installedWorkflowName(
   pack: Pick<InstalledPack, 'owner' | 'name'>,
@@ -325,7 +315,7 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
  */
 export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
   packs: InstalledPack[];
-  errors: { path: string; message: string; cause?: unknown; packKey?: string }[];
+  errors: { path: string; message: string; cause?: unknown }[];
 }> {
   const packs: InstalledPack[] = [];
   const errors: Awaited<ReturnType<typeof listInstalledPacks>>['errors'] = [];
@@ -389,7 +379,7 @@ export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
       }
       packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
     } catch (error) {
-      errors.push({ path: dir, message: (error as Error).message, cause: error, packKey: key });
+      errors.push({ path: dir, message: (error as Error).message, cause: error });
     }
   }
   return { packs, errors };
