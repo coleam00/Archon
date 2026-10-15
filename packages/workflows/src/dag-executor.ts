@@ -55,8 +55,11 @@ import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
+  isSourceReadFailure,
+  isSystemError,
   liveSourceRoots,
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { resolveWorkflowName } from './router';
@@ -1009,6 +1012,9 @@ async function waitForNodeRetry(
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
+
+/** How long a released run waits before a continuation scan claims it; matches the host's deferral. */
+const SOURCE_RELEASE_RETRY_MS = 60_000;
 
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
@@ -3315,6 +3321,35 @@ function unsettledTurnError(
   return `${cause}${tasks} Its work may be incomplete.`;
 }
 
+/**
+ * This host could not read the run's frozen source for a node (`isSourceReadFailure`).
+ * Not a node outcome: it leaves the layer join like a budget refusal, and
+ * `executeDagWorkflow` releases the run to be continued by a host that can read it.
+ */
+class RunSourceUnreadableError extends Error {
+  readonly path?: string;
+  constructor(
+    /** The node's persisted step name. */
+    readonly nodeId: string,
+    cause: unknown
+  ) {
+    const path =
+      cause instanceof WorkflowSourceUnavailableError
+        ? cause.path
+        : isSystemError(cause) && typeof cause.path === 'string'
+          ? cause.path
+          : undefined;
+    super(
+      `This host could not read the run's source for node '${nodeId}': ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = 'RunSourceUnreadableError';
+    this.path = path;
+  }
+}
+
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
 class NodeFailure extends Error {
   constructor(
@@ -3796,7 +3831,12 @@ async function executeScriptNode(
     }
   );
   if (!isInlineScript(finalScript)) {
-    await assertWorkflowSourceIntegrity(workflowSourceRoots);
+    try {
+      await assertWorkflowSourceIntegrity(workflowSourceRoots);
+    } catch (error) {
+      if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+      throw error;
+    }
   }
 
   // One-release migration warn for any literal user-controlled var ref that no
@@ -3854,13 +3894,17 @@ async function executeScriptNode(
   } else {
     // Named script — look up across repo and home scopes.
     // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
-    // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
-    // isn't mis-attributed by the outer catch's "permission denied (check cwd
-    // permissions)" branch — that branch is for execFileAsync EACCES.
+    // Discovery has its own try/catch so a read error on a scripts directory isn't
+    // mis-attributed by the outer catch's "permission denied (check cwd permissions)"
+    // branch, which is for execFileAsync EACCES. A read error is this host's problem, not
+    // the run's: it releases the run (#4209). Anything else, such as a duplicate script
+    // name, is source that was read and found invalid, and fails the node.
     let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
     try {
       scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]));
     } catch (discoveryErr) {
+      if (isSourceReadFailure(discoveryErr))
+        throw new RunSourceUnreadableError(stepName, discoveryErr);
       const err = discoveryErr as Error;
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
       getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
@@ -4285,8 +4329,13 @@ async function executeLoopGroupNode(
       stepNamePrefix
     );
   } catch (error) {
-    // Durable-write rejection belongs to run recovery, not a failed node outcome.
-    if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+    // Durable-write rejection and an unreadable source belong to run recovery, not a
+    // failed node outcome.
+    if (
+      error instanceof TerminalStatusWriteError ||
+      error instanceof NodeEventWriteError ||
+      error instanceof RunSourceUnreadableError
+    )
       throw error;
     const err = error instanceof Error ? error : new Error(String(error));
     getLog().error({ err, nodeId: node.id }, 'loop_group_node.execution_failed');
@@ -9624,6 +9673,7 @@ function settledValuesOrThrow<T>(
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
     failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
+    failures.find(result => result.reason instanceof RunSourceUnreadableError) ??
     failures[0];
   if (selected === undefined) return values;
   for (const failure of failures) {
@@ -10678,6 +10728,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 }
               )
             );
+            // The attempt is recorded so it does not read as running; the run itself is
+            // released once the layer settles.
+            if (error instanceof RunSourceUnreadableError) throw error;
             await safeSendMessage(
               ctx.platform,
               ctx.conversationId,
@@ -12004,7 +12057,41 @@ export async function executeDagWorkflow(
     return;
   }
 
+  /**
+   * Pause the run instead of failing it: this host could not read its source (#4209).
+   * The release is a store compare-and-swap on `running`, so an operator's abandon or a
+   * sibling gate that already moved the row wins. It runs after the layer settled, so
+   * nothing of this run still executes here when another host may claim it.
+   */
+  const releaseRunForUnreadableSource = async (error: RunSourceUnreadableError): Promise<void> => {
+    getLog().warn(
+      { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
+      'dag.run_released_source_unreadable'
+    );
+    const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+      nodeId: error.nodeId,
+      ...(error.path !== undefined ? { path: error.path } : {}),
+      error: error.message,
+      retryAt: new Date(Date.now() + SOURCE_RELEASE_RETRY_MS).toISOString(),
+    });
+    if (!released) {
+      getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
+      return;
+    }
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸️ Run paused, not failed: this host could not read its frozen source${
+        error.path !== undefined ? ` at ${error.path}` : ''
+      } for node '${error.nodeId}'. A host that can read it continues the run on its next continuation scan.\n` +
+        `Resume: \`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\` | ` +
+        `Abandon: \`${spellWorkflowCommand(platform, `abandon ${workflowRun.id}`)}\``,
+      { workflowId: workflowRun.id, nodeName: error.nodeId }
+    );
+  };
+
   await persistAuthoredOutcome();
+  let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
   } catch (error) {
@@ -12013,10 +12100,11 @@ export async function executeDagWorkflow(
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight. A run-budget refusal also escapes the join; it
-    // fails the run here instead of propagating.
-    if (error instanceof RunBudgetRefusedError) {
-      // The refused node's thunk threw, so spend its attempts already made never reached
-      // the in-memory totals. The durable rows hold all of it.
+    // fails the run here instead of propagating. An unreadable source escapes it too; the
+    // run is released below and takes the normal tail, which leaves a paused run alone.
+    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
+      // The thunk that threw never reported its spend, nor did its settled siblings, so
+      // the in-memory totals miss it. The durable rows hold all of it.
       try {
         const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
         // The fold sums to 0 when nothing reported cost; keep a run with no AI usage absent.
@@ -12028,27 +12116,32 @@ export async function executeDagWorkflow(
       } catch (readError) {
         getLog().error(
           { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.run_budget_usage_refresh_failed'
+          'dag.unwind_usage_refresh_failed'
         );
       }
     }
-    await persistRunUsage();
-    try {
-      await persistAuthoredOutcome();
-    } catch (outcomeError) {
-      getLog().error(
-        { err: outcomeError as Error, workflowRunId: workflowRun.id },
-        'dag.authored_outcome_persist_failed_during_unwind'
-      );
+    if (error instanceof RunSourceUnreadableError) {
+      sourceUnreadable = error;
+    } else {
+      await persistRunUsage();
+      try {
+        await persistAuthoredOutcome();
+      } catch (outcomeError) {
+        getLog().error(
+          { err: outcomeError as Error, workflowRunId: workflowRun.id },
+          'dag.authored_outcome_persist_failed_during_unwind'
+        );
+      }
+      if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
+        await failRunForBudget(runBudget, error.refusal);
+        return;
+      }
+      throw error;
     }
-    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
-      await failRunForBudget(runBudget, error.refusal);
-      return;
-    }
-    throw error;
   } finally {
     await runCtx.toolAttention.refresh();
   }
+  if (sourceUnreadable !== undefined) await releaseRunForUnreadableSource(sourceUnreadable);
 
   // Normal return has no primary error to preserve, so a verdict persistence failure
   // remains visible to the caller. These two small calls intentionally mirror the

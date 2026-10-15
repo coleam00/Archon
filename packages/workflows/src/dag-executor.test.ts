@@ -20,7 +20,7 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
@@ -169,7 +169,11 @@ import {
   type ModelAliasPreset,
   type RawTiersConfig,
 } from './model-validation';
-import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
+import {
+  captureWorkflowSource,
+  capturedSourceRoots,
+  type WorkflowSourceRoots,
+} from './workflow-source';
 import { CONTAINER_MARKER_PROBE } from './checkout-observation';
 
 function composeScope(
@@ -228,6 +232,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 
 function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
+  const getWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(async _id => 'running');
   return {
     getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
       throw new Error('Unexpected event feed read');
@@ -305,6 +310,12 @@ function createMockStore(): MockWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
+      async () => {
+        getWorkflowRunStatus.mockImplementation(async () => 'paused');
+        return { released: true };
+      }
+    ),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
     ),
@@ -375,7 +386,7 @@ function createMockStore(): MockWorkflowStore {
     ),
     updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(async (_id, _updates) => {}),
     updateWorkflowActivity: mock<IWorkflowStore['updateWorkflowActivity']>(async _id => {}),
-    getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async _id => 'running'),
+    getWorkflowRunStatus,
     completeWorkflowRun: mock<IWorkflowStore['completeWorkflowRun']>(
       async (_id, _completion, _metadata) => {}
     ),
@@ -21184,6 +21195,193 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
+  describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a source this host cannot read (#4209)',
+    () => {
+      const checkNode: ExecNode = {
+        id: 'run-check',
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'check',
+      };
+
+      /** Capture `check.ts` (which writes `marker`), then make the captured scripts unreadable. */
+      async function unreadableCapture(marker: string): Promise<{
+        roots: WorkflowSourceRoots;
+        captureRoot: string;
+        restore: () => Promise<void>;
+      }> {
+        const scriptsDir = join(testDir, '.archon', 'scripts');
+        const captureRoot = join(testDir, 'capture');
+        await mkdir(scriptsDir, { recursive: true });
+        await writeFile(
+          join(scriptsDir, 'check.ts'),
+          `await Bun.write(${JSON.stringify(marker)}, "ran")`
+        );
+        const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+        const capturedScripts = join(captureRoot, 'project', '.archon', 'scripts');
+        await chmod(capturedScripts, 0o000);
+        return {
+          roots: capturedSourceRoots(capture.anchor),
+          captureRoot,
+          restore: () => chmod(capturedScripts, 0o755),
+        };
+      }
+
+      function expectReleased(store: MockWorkflowStore, nodeId: string): void {
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+        expect(store.releaseRunForUnreadableSource.mock.calls[0]?.[1]).toMatchObject({ nodeId });
+        const failed = persistedEvents(store).filter(
+          event => event.event_type === 'node_failed' && event.step_name === nodeId
+        );
+        expect(failed).toHaveLength(1);
+      }
+
+      it('an unreadable captured scripts directory after admission leaves the run resumable, not failed', async () => {
+        const mockDeps = createMockDeps();
+        const marker = join(testDir, 'ran');
+        const capture = await unreadableCapture(marker);
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflow: { name: 'source-unreadable', nodes: [checkNode] },
+              workflowRun: makeWorkflowRun('source-unreadable-run', { status: 'paused' }),
+              workflowSourceRoots: capture.roots,
+            })
+          );
+        } finally {
+          await capture.restore();
+        }
+
+        expectReleased(mockDeps.store, 'run-check');
+        expect(mockDeps.store.releaseRunForUnreadableSource.mock.calls[0]?.[1].path).toStartWith(
+          capture.captureRoot
+        );
+        await expect(readFile(marker, 'utf-8')).rejects.toThrow();
+      });
+
+      it('a released run completes when a later pass can read its source', async () => {
+        const mockDeps = createMockDeps();
+        const marker = join(testDir, 'ran');
+        const capture = await unreadableCapture(marker);
+        const workflowRun = makeWorkflowRun('source-released-run', { status: 'paused' });
+        const options = dagOptions({
+          deps: mockDeps,
+          cwd: testDir,
+          workflow: { name: 'source-released', nodes: [checkNode] },
+          workflowRun,
+          workflowSourceRoots: capture.roots,
+        });
+        try {
+          await executeDagWorkflow(options);
+        } finally {
+          await capture.restore();
+        }
+        expectReleased(mockDeps.store, 'run-check');
+
+        // The next claim moves the row back to running.
+        mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+        await executeDagWorkflow(options);
+
+        expect(await readFile(marker, 'utf-8')).toBe('ran');
+        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+      });
+
+      it('an unreadable live scripts directory releases the run instead of failing it', async () => {
+        const mockDeps = createMockDeps();
+        const scriptsDir = join(testDir, '.archon', 'scripts');
+        await mkdir(scriptsDir, { recursive: true });
+        await writeFile(join(scriptsDir, 'check.ts'), 'console.log("ok")');
+        await chmod(scriptsDir, 0o000);
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflow: { name: 'live-source-unreadable', nodes: [checkNode] },
+              workflowRun: makeWorkflowRun('live-source-unreadable-run'),
+            })
+          );
+        } finally {
+          await chmod(scriptsDir, 0o755);
+        }
+
+        expectReleased(mockDeps.store, 'run-check');
+      });
+
+      it('a loop_group body that cannot read its source releases the run', async () => {
+        const mockDeps = createMockDeps();
+        const capture = await unreadableCapture(join(testDir, 'ran'));
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflow: {
+                name: 'loop-source-unreadable',
+                nodes: [
+                  dagNodeSchema.parse({
+                    id: 'group',
+                    loop_group: {
+                      until_bash: 'exit 0',
+                      max_iterations: 1,
+                      nodes: [{ id: 'body', script: 'check', runtime: 'bun' }],
+                    },
+                  }),
+                ],
+              },
+              workflowRun: makeWorkflowRun('loop-source-unreadable-run'),
+              workflowSourceRoots: capture.roots,
+            })
+          );
+        } finally {
+          await capture.restore();
+        }
+
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+        const failedGroup = persistedEvents(mockDeps.store).filter(
+          event => event.event_type === 'node_failed' && event.step_name === 'group'
+        );
+        expect(failedGroup).toHaveLength(1);
+      });
+
+      it('an operator transition that already moved the row wins over the release', async () => {
+        const mockDeps = createMockDeps();
+        mockDeps.store.releaseRunForUnreadableSource.mockImplementation(async () => {
+          mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
+          return { released: false };
+        });
+        const platform = createMockPlatform();
+        const capture = await unreadableCapture(join(testDir, 'ran'));
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              platform,
+              cwd: testDir,
+              workflow: { name: 'source-release-lost', nodes: [checkNode] },
+              workflowRun: makeWorkflowRun('source-release-lost-run'),
+              workflowSourceRoots: capture.roots,
+            })
+          );
+        } finally {
+          await capture.restore();
+        }
+
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(
+          deliveredMessages(platform).some(text => text.includes('Run paused, not failed'))
+        ).toBe(false);
+      });
+    }
+  );
+
   it('refuses a captured named script changed by an earlier node without consuming retries', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -21244,6 +21442,8 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect((failedEvents[0][0] as { data: { error: string } }).data.error).toContain(
       'captured source has changed'
     );
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
   });
 
   it('refuses a replaced capture even when its new manifest is internally consistent', async () => {
@@ -22022,6 +22222,8 @@ describe('executeDagWorkflow -- script nodes', () => {
       event => event.event_type === 'node_failed' && event.step_name === 'gone-script'
     );
     expect(failed?.data?.error).toBe(resolutionFailure);
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
   });
 
   it('bun script node does not leak repo .env from execution cwd (#1135)', async () => {

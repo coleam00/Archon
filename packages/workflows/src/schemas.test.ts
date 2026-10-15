@@ -2751,6 +2751,17 @@ describe('runAttention', () => {
     expect(attention?.kind).toBe('attention');
   });
 
+  test('a run released for an unreadable source owns its own resumption', () => {
+    const attention = runAttention({
+      id: 'run-1',
+      status: 'paused',
+      metadata: {
+        source_release: { nodeId: 'check', releasedAt: '2026-08-28T10:00:00.000Z' },
+      },
+    });
+    expect(attention).toBeNull();
+  });
+
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
     const attention = runAttention({ id: 'run-1', status: 'paused' as WorkflowRunStatus });
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });

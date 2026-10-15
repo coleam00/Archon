@@ -16,6 +16,9 @@ import {
   resumeCursorMatches,
   waitContinuedEvent,
   workflowUnpausedEvent,
+  sourceReleaseMetadata,
+  sourceReleasedEvent,
+  type SourceReleaseWrite,
   type GateResolutionEvent,
   type PauseCursor,
 } from '@archon/workflows/store';
@@ -73,6 +76,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
   CAPACITY_WAIT_METADATA_KEY,
+  SOURCE_RELEASE_METADATA_KEY,
   readCapacityWait,
 } from '@archon/workflows/schemas/workflow-run';
 import { resourceResumeBlocker, resumeRefusal } from '@archon/workflows/resource-start-store';
@@ -1091,6 +1095,7 @@ export async function resumeWorkflowRun(
         [RUN_STOP_REASON_METADATA_KEY]: null,
         continuation_retry_at: null,
         [CAPACITY_WAIT_METADATA_KEY]: null,
+        [SOURCE_RELEASE_METADATA_KEY]: null,
         ...(scheduled !== null && triggeredAt !== null
           ? { scheduled_resume: { ...scheduled, triggeredAt } }
           : {}),
@@ -1755,6 +1760,32 @@ export async function pauseWorkflowRunForWait(
   }
 }
 
+/** Release a running run whose source this host could not read (see `IWorkflowStore`). */
+export async function releaseRunForUnreadableSource(
+  id: string,
+  release: SourceReleaseWrite
+): Promise<{ released: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'paused', last_activity_at = ${dialect.now()},
+             metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND status = 'running'`,
+        [id, JSON.stringify(sourceReleaseMetadata(release, new Date().toISOString()))]
+      );
+      if ((result.rowCount ?? 0) === 0) return { released: false };
+      await insertWorkflowEvent(query, sourceReleasedEvent(id, release));
+      return { released: true };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_source_release_failed');
+    throw new Error(`Failed to release workflow run for unreadable source: ${err.message}`);
+  }
+}
+
 /** Atomically consume one exact wait cursor and persist its completed node snapshot. */
 export async function clearWorkflowWaitContext(
   id: string,
@@ -1792,7 +1823,8 @@ export async function clearWorkflowWaitContext(
 
 /**
  * Return a bounded set of runs eligible for a resume claim: due time and event waits, due
- * quota resumes, and answered gates and attention waits. The answered clauses mirror
+ * quota resumes, answered gates and attention waits, and runs released for an unreadable
+ * source. The answered clauses mirror
  * `continuablePause`, which the host re-checks when it builds the claim's cursor.
  */
 export async function listDueWorkflowContinuations(
@@ -1829,7 +1861,9 @@ export async function listDueWorkflowContinuations(
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
           OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL)
           OR (${answeredGate})
-          OR (${answeredAttention}))
+          OR (${answeredAttention})
+          OR (status = 'paused' AND ${metadataText('source_release.nodeId')} IS NOT NULL
+              AND COALESCE(${metadataText('isolation')}, '') <> 'container'))
        ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC
        LIMIT $2`,
       [now.toISOString(), limit]
@@ -1943,6 +1977,8 @@ export async function deferWorkflowContinuation(
   const gatePauseId = metadataText('approval.pauseId');
   const gateNodeId = metadataText('approval.nodeId');
   const waitPauseId = metadataText('wait.pauseId');
+  const releaseNodeId = metadataText('source_release.nodeId');
+  const releasedAt = metadataText('source_release.releasedAt');
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs
@@ -1951,14 +1987,16 @@ export async function deferWorkflowContinuation(
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
          OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
-         OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4))`,
+         OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4)
+         OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $7))`,
       [
         id,
         JSON.stringify({ continuation_retry_at: retryAt }),
-        cursor.kind === 'answered' ? null : cursor.resumeAt,
+        cursor.kind === 'wait' || cursor.kind === 'quota' ? cursor.resumeAt : null,
         cursor.kind === 'quota' ? null : cursor.nodeId,
         cursor.kind === 'quota' ? cursor.attempt : null,
         cursor.kind === 'answered' ? cursor.pauseId : null,
+        cursor.kind === 'source' ? cursor.releasedAt : null,
       ]
     );
   } catch (error) {

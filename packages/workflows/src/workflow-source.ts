@@ -497,6 +497,32 @@ function sourceReadError(path: string, error: unknown): unknown {
   }
 }
 
+/**
+ * True when `error` means this host failed to read the source, as opposed to source that
+ * was read and found wrong (a digest mismatch, a replaced capture, an unparseable
+ * manifest) or simply absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
+ * Node system error (string `code` and `syscall`) on the error or its `cause` chain.
+ */
+export function isSourceReadFailure(error: unknown): boolean {
+  if (error instanceof WorkflowSourceUnavailableError) return true;
+  if (error instanceof WorkflowSourceIntegrityError) return false;
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (isSystemError(current)) return true;
+  }
+  return false;
+}
+
+/** A Node or Bun system call failure, such as `readdir` failing with `EACCES`. */
+export function isSystemError(
+  error: unknown
+): error is Error & { code: string; syscall: string; path?: unknown } {
+  return (
+    error instanceof Error &&
+    typeof (error as { code?: unknown }).code === 'string' &&
+    typeof (error as { syscall?: unknown }).syscall === 'string'
+  );
+}
+
 /** Where a run's executable source came from, and what was frozen. */
 export interface WorkflowSourceCapture {
   /** The authoring directory this was captured from. */

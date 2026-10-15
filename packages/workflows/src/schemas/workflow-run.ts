@@ -767,6 +767,30 @@ export function readCapacityWait(
 }
 
 /**
+ * Key under which a run released after this host could not read its frozen source
+ * (#4209) records where it stopped: `{ nodeId, releasedAt, path? }`. Written by
+ * `releaseRunForUnreadableSource`, cleared by `resumeWorkflowRun`. It makes the paused
+ * run a due `source` continuation, so any host that can read the source continues it.
+ */
+export const SOURCE_RELEASE_METADATA_KEY = 'source_release';
+
+const sourceReleaseSchema = z.object({
+  nodeId: z.string().min(1),
+  releasedAt: z.string().datetime({ offset: true }),
+  path: z.string().optional(),
+});
+
+export type SourceRelease = z.infer<typeof sourceReleaseSchema>;
+
+/** Typed view of the source release; undefined when the run carries none this build can read. */
+export function readSourceRelease(
+  metadata: Record<string, unknown> | undefined
+): SourceRelease | undefined {
+  const parsed = sourceReleaseSchema.safeParse(metadata?.[SOURCE_RELEASE_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
  * Key under which a run records what its DISPATCHING surface resolved for it (#2454).
  *
  * A resume re-enters the executor with whatever the resuming surface happens to hold,
@@ -1351,10 +1375,10 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 
   const raw = run.metadata?.approval;
   if (raw === undefined) {
-    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is
-    // a run parked with nothing that describes why, which nothing but an outside
-    // response can unstick.
-    return isWorkflowWaitContext(run.metadata?.wait)
+    // No gate recorded. A durable `wait:` and a source release own their own
+    // resumption. Anything else is a run parked with nothing that describes why, which
+    // nothing but an outside response can unstick.
+    return isWorkflowWaitContext(run.metadata?.wait) || readSourceRelease(run.metadata)
       ? null
       : unreadableAttention(
           run.id,

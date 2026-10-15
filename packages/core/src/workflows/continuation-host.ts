@@ -19,6 +19,7 @@ import {
   answeredPauseContinuation,
   isContainerRun,
   isScheduledWorkflowResume,
+  readSourceRelease,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -156,6 +157,8 @@ export async function resumeWorkflowContinuation(
 }
 
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
+  const release = run.status === 'paused' ? readSourceRelease(run.metadata) : undefined;
+  if (release) return { kind: 'source', nodeId: release.nodeId, releasedAt: release.releasedAt };
   const wait = pendingWorkflowWaitDeadline(run);
   if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
   const answered = answeredPauseContinuation(run);

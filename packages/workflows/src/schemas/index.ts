@@ -237,6 +237,7 @@ export {
   pendingWorkflowWaitDeadline,
   workflowWaitStepName,
   isScheduledWorkflowResume,
+  readSourceRelease,
   isRunBlockedOnChild,
   isFanOutBlockReleased,
   suspendReasonSchema,

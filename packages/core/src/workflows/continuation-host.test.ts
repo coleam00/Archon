@@ -117,6 +117,21 @@ describe('continuation host scanner', () => {
       { kind: 'quota', attempt: 1, resumeAt: '2026-08-24T11:00:00.000Z' },
     ]);
   });
+  test('resumes a run released for an unreadable source with its exact release cursor', async () => {
+    const release = { nodeId: 'check', releasedAt: '2026-08-24T11:00:00.000Z' };
+    mockListDueWorkflowContinuations.mockResolvedValue([
+      run('released-1', 'paused', { source_release: release }),
+    ]);
+    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
+
+    await expect(
+      scanDueWorkflowContinuations(new Date('2026-08-24T11:01:01.000Z'), resume)
+    ).resolves.toBe(1);
+    expect(resume.mock.calls[0]).toEqual([
+      expect.objectContaining({ id: 'released-1' }),
+      { kind: 'source', ...release },
+    ]);
+  });
   test('resumes due event waits through the shared resume CAS', async () => {
     mockListDueWorkflowContinuations.mockResolvedValue([
       run('event-1', 'paused', {

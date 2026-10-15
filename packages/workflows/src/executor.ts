@@ -55,6 +55,7 @@ import {
   pendingWorkflowWaitDeadline,
   runAttention,
   isScheduledWorkflowResume,
+  readSourceRelease,
   isWaitNode,
   isIncludeDirective,
   runMayPersistSessions,
@@ -1161,6 +1162,9 @@ export async function inspectResumableRun(
   const hasReRunGateState = reRunsOwnNodeOnResume(approvalContext, candidate.metadata);
   const hasWaitState = isWorkflowWaitContext(candidate.metadata?.wait);
   const hasScheduledResume = isScheduledWorkflowResume(candidate.metadata?.scheduled_resume);
+  // Released before its first node could read source (#4209): nothing completed yet.
+  const hasSourceRelease =
+    candidate.status === 'paused' && readSourceRelease(candidate.metadata) !== undefined;
   // A valid composed instance start is always preceded by its durable fan-out plan.
   // Do not treat an arbitrary unresolved node_started row as resumable: ordinary nodes
   // have no ambiguity guard and replaying one could duplicate its side effects.
@@ -1177,6 +1181,7 @@ export async function inspectResumableRun(
     !hasReRunGateState &&
     !hasWaitState &&
     !hasScheduledResume &&
+    !hasSourceRelease &&
     !hasFanOutRecoveryState
   ) {
     getLog().info(

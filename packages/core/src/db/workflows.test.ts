@@ -899,7 +899,7 @@ describe('workflows database', () => {
       expect(JSON.parse(params[1] as string)).toEqual({
         continuation_retry_at: '2026-08-25T10:01:00.000Z',
       });
-      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null]);
+      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null, null]);
     });
 
     test('keys quota backoff to the exact attempt cursor', async () => {
@@ -913,7 +913,7 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null]);
+      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null, null]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {
@@ -1861,6 +1861,7 @@ describe('workflows database', () => {
           stop_reason: null,
           continuation_retry_at: null,
           capacity_wait: null,
+          source_release: null,
         }),
       ]);
       // Third call: SELECT
@@ -1914,6 +1915,7 @@ describe('workflows database', () => {
           stop_reason: null,
           continuation_retry_at: null,
           capacity_wait: null,
+          source_release: null,
         }),
       ]);
     });
