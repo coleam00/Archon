@@ -195,8 +195,10 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
     expect(resolved.adoptedRun.id).toBe('run-detached');
     expect(resolved.lane.kind).toBe('reuse-worktree');
     if (resolved.lane.kind === 'reuse-worktree') {
-      expect(resolved.lane.workingPath).toBe('/tmp/ops-client/.worktrees/run-detached');
-      expect(resolved.lane.envId).toBe('env-detached');
+      expect(resolved.lane.environment.working_path).toBe(
+        '/tmp/ops-client/.worktrees/run-detached'
+      );
+      expect(resolved.lane.environment.id).toBe('env-detached');
     }
   });
 
