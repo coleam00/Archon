@@ -169,13 +169,16 @@ export function pausedAttentionWait(
   return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
 }
 
+/** The form and literal options an attention wait declares, paused or authored. */
+type AttentionDeclaration = { form?: AttentionForm; options?: readonly AttentionOption[] };
+
 /** The form an attention wait is answered in; a wait from before forms is a message. */
-export function attentionForm(wait: WorkflowAttentionWaitContext): AttentionForm {
+export function attentionForm(wait: AttentionDeclaration): AttentionForm {
   return wait.form ?? 'message';
 }
 
 /** The ids an attention wait's answer may choose from: none for a message. */
-export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly AttentionOption[] {
+export function attentionOptions(wait: AttentionDeclaration): readonly AttentionOption[] {
   switch (attentionForm(wait)) {
     case 'message':
       return [];
@@ -185,6 +188,31 @@ export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly A
     case 'multi_select':
       return wait.options ?? [];
   }
+}
+
+/**
+ * Why choosing `choose` does not answer a wait in `form` that declares the option ids
+ * `declared`, or undefined when it does: a message takes only text; approval and select
+ * take exactly one declared option; multi_select takes one or more distinct declared
+ * options. Every answer surface, and a dry run's authored answer, holds this one rule.
+ */
+export function attentionChoiceProblem(
+  form: AttentionForm,
+  declared: readonly string[],
+  choose: readonly string[]
+): string | undefined {
+  if (form === 'message') return choose.length > 0 ? 'takes only text, not an option.' : undefined;
+  const undeclared = choose.filter(id => !declared.includes(id));
+  if (undeclared.length > 0)
+    return `does not declare option '${undeclared.join("', '")}'. Declared options: ${declared.join(', ')}.`;
+  if (form === 'multi_select') {
+    if (choose.length === 0) return 'needs at least one option.';
+    if (new Set(choose).size !== choose.length) return 'takes each option at most once.';
+    return undefined;
+  }
+  return choose.length === 1
+    ? undefined
+    : `takes exactly one option. Declared options: ${declared.join(', ')}.`;
 }
 
 /** An attention wait's current labels. */

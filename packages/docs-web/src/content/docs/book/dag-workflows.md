@@ -243,7 +243,7 @@ dependency. `if_skipped` affects output bindings, not trigger eligibility.
 
 ## Node Types
 
-Archon supports eight node types. Exactly one mode field is required per node:
+These are the common node types. Exactly one mode field is required per node:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
@@ -253,7 +253,7 @@ Archon supports eight node types. Exactly one mode field is required per node:
 | **Script** | `script: "..."` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or a package-local/shared named reference. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
 | **Loop Group** | `loop_group: { until: SIGNAL, nodes: [...] }` | Repeat a multi-node sub-DAG body until a completion condition is met (cross-node iteration). See [Loop Nodes](/guides/loop-nodes/). |
-| **Approval** | `approval: { message: "..." }` | Pause the workflow for a human approve/reject decision. See [Approval Nodes](/guides/approval-nodes/). |
+| **Wait** | `wait: { attention: "...", form: approval }` | Pause until the question is answered (or a time or event arrives). The answer becomes the node's output. See [Attention waits](/guides/authoring-workflows/#attention-waits). The older `approval:` node is deprecated. |
 | **Cancel** | `cancel: "reason string"` | Terminate the workflow run (status: cancelled, not failed). Usually gated with `when:`. |
 
 **Command** is the most common. Use it for anything you'll reuse across workflows.
@@ -302,19 +302,25 @@ Archon supports eight node types. Exactly one mode field is required per node:
     fresh_context: true
 ```
 
-**Approval** pauses the workflow for human review. The downstream nodes don't run until the user approves in chat, CLI, or web UI:
+**Wait** with an `attention:` question pauses the run until someone answers in chat, the CLI, or the console. The `approval` form records `{decision, text}`. Rejecting is an answer, not a cancel, so branch on the decision:
 
 ```yaml
 nodes:
   - id: plan
     command: plan-feature
-  - id: review-gate
-    approval:
-      message: "Review the plan above."
+  - id: review
+    wait:
+      attention: "Review the plan above."
+      form: approval
     depends_on: [plan]
+  - id: stop
+    cancel: "Plan rejected."
+    when: "$review.output.decision == 'reject'"
+    depends_on: [review]
   - id: implement
     command: implement
-    depends_on: [review-gate]
+    when: "$review.output.decision == 'approve'"
+    depends_on: [review]
 ```
 
 **Cancel** terminates the workflow with a reason string. Pair with `when:` for guarded exits — the run shows as `cancelled` rather than `failed`:

@@ -1,6 +1,6 @@
 /**
  * Install the git credential helper into a cloned worktree so long-running
- * workflows can refresh installation tokens without rewriting the remote URL.
+ * workflows can refresh installation tokens without a token in the remote URL.
  *
  * Flow:
  *   1. Atomically replace the managed credential helper in `~/.archon/bin/`
@@ -8,6 +8,7 @@
  *   2. Register the helper on the worktree's git config:
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *      `credential.https://github.com.useHttpPath = true`
+ *   3. Strip credentials from the worktree's github.com remote URLs.
  *
  * The caller (the GitHub adapter or URL registration in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
@@ -85,6 +86,13 @@ async function install(repoPath: string): Promise<CredentialHelperInstallResult>
       ['-C', repoPath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
       { timeout: 5000 }
     );
+    const cleanedKeys = await removeGitHubUrlCredentials(repoPath);
+    if (cleanedKeys.length > 0) {
+      getLog().info(
+        { worktreePath: repoPath, keys: cleanedKeys },
+        'github_auth.remote_url_credentials_removed'
+      );
+    }
     getLog().info(
       { worktreePath: repoPath, helperPath },
       'github_auth.credential_helper_registered'
@@ -93,4 +101,62 @@ async function install(repoPath: string): Promise<CredentialHelperInstallResult>
   } catch (err) {
     return { kind: 'failed', error: err as Error };
   }
+}
+
+/**
+ * Git uses credentials embedded in a remote URL without asking any helper, so
+ * a clone made with an older PAT would keep pushing with it. Returns the
+ * rewritten config keys; the URLs themselves are never logged.
+ */
+async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
+  let listed: string;
+  try {
+    ({ stdout: listed } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'config', '--local', '-z', '--get-regexp', '^remote\\..*\\.(url|pushurl)$'],
+      { timeout: 5000 }
+    ));
+  } catch (err) {
+    // Exit 1 means no remote URL is configured.
+    if ((err as { code?: unknown }).code === 1) return [];
+    throw err;
+  }
+  const urlsByKey = new Map<string, string[]>();
+  for (const entry of listed.split('\0')) {
+    const newline = entry.indexOf('\n');
+    if (newline === -1) continue;
+    const key = entry.slice(0, newline);
+    urlsByKey.set(key, [...(urlsByKey.get(key) ?? []), entry.slice(newline + 1)]);
+  }
+  const cleanedKeys: string[] = [];
+  for (const [key, urls] of urlsByKey) {
+    const cleaned = urls.map(withoutGitHubCredentials);
+    if (cleaned.every((url, index) => url === urls[index])) continue;
+    // A failure message repeats argv; its GitHub URLs are already cleaned.
+    const [first, ...rest] = cleaned;
+    await execFileAsync('git', ['-C', repoPath, 'config', '--local', '--replace-all', key, first], {
+      timeout: 5000,
+    });
+    for (const url of rest) {
+      await execFileAsync('git', ['-C', repoPath, 'config', '--local', '--add', key, url], {
+        timeout: 5000,
+      });
+    }
+    cleanedKeys.push(key);
+  }
+  return cleanedKeys;
+}
+
+function withoutGitHubCredentials(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com') return url;
+  if (!parsed.username && !parsed.password) return url;
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.href;
 }
