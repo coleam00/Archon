@@ -1134,13 +1134,11 @@ export async function loadWorkflowSource(
   }
   const digest = foldDigest(entries);
   if (digest !== manifest.digest) {
-    throw new WorkflowSourceUnavailableError(
-      captureRoot,
-      new Error(
-        `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
-          `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
-          'The captured source has changed since the run started.'
-      )
+    throw new WorkflowSourceIntegrityError(
+      `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
+        `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
+        'The captured source has changed since the run started.',
+      captureRoot
     );
   }
   if (manifest.engine_version !== BUNDLED_VERSION) {

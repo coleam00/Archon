@@ -734,9 +734,16 @@ describe('the capture is authoritative, not advisory', () => {
       'TAMPERED'
     );
 
-    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toThrow(
-      WorkflowSourceIntegrityError
-    );
+    const error = await loadWorkflowSource(capture.anchor.root).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorkflowSourceIntegrityError);
+    expect(error).toMatchObject({
+      name: 'WorkflowSourceIntegrityError',
+      path: capture.anchor.root,
+    });
+    // The bytes are readable; they changed. The message must not send the operator to
+    // check permissions.
+    expect((error as Error).message).toContain('does not match its recorded digest');
+    expect((error as Error).message).not.toContain('cannot be read');
   });
 
   test('a run whose capture no longer verifies refuses to resolve a source root', async () => {
