@@ -14221,6 +14221,42 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
+  it.each(['missing', 'mismatched'] as const)(
+    'refuses a %s adoption environment before lane capture or execution',
+    async reason => {
+      setupAdoptMocks();
+      const isolationDb = await import('@archon/core/db/isolation-environments');
+      const getById = isolationDb.getById as ReturnType<typeof mock>;
+      getById.mockReset();
+      getById.mockResolvedValueOnce(
+        reason === 'missing'
+          ? null
+          : {
+              id: 'env-9',
+              provider: 'worktree',
+              working_path: '/foreign/worktree',
+              metadata: {},
+            }
+      );
+      (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
+      const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockClear();
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+          adoptRunId: 'run-old',
+        })
+      ).rejects.toThrow(
+        reason === 'missing' ? 'Isolation environment env-9 not found' : 'does not match'
+      );
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
+      const captures = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls;
+      expect(
+        captures.every(call => (call[1] as { sourceRoot: string }).sourceRoot === '/test/path')
+      ).toBe(true);
+    }
+  );
+
   it('re-freezes workflow source from the inherited worktree on the reuse-worktree lane', async () => {
     setupAdoptMocks();
     const isolationDb = await import('@archon/core/db/isolation-environments');

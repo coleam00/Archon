@@ -216,7 +216,10 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+} from '@archon/core/operations/workflow-adoption';
 import {
   attentionProjectForCwd,
   attentionQueueSource,
@@ -2797,11 +2800,13 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        const env = await host.records.isolation.getById(lane.envId);
-        if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
-        await recordWorktreeAdoption(host.records.isolation, env, codebase.default_cwd);
-        workingCwd = lane.workingPath;
-        isolationEnvId = lane.envId;
+        const env = await adoptRegisteredWorktree(
+          host.records.isolation,
+          lane,
+          codebase.default_cwd
+        );
+        workingCwd = env.working_path;
+        isolationEnvId = env.id;
         adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below

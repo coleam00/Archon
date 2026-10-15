@@ -13,7 +13,11 @@
  */
 import { existsSync } from 'fs';
 import { getCurrentBranchStrict, localBranchExists, toBranchName, toRepoPath } from '@archon/git';
-import type { TaskBranchSelection } from '@archon/isolation';
+import {
+  recordWorktreeAdoption,
+  type IIsolationStore,
+  type TaskBranchSelection,
+} from '@archon/isolation';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   type ContinuationMode,
@@ -46,6 +50,21 @@ export type AdoptionLane =
     }
   | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };
+
+export async function adoptRegisteredWorktree(
+  store: Pick<IIsolationStore, 'getById' | 'updateMetadata'>,
+  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>,
+  repoPath: string
+) {
+  const env = await store.getById(lane.envId);
+  if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
+  if (env.working_path !== lane.workingPath) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt: worktree path '${lane.workingPath}' does not match isolation environment ${env.id} at '${env.working_path}'.`
+    );
+  }
+  return recordWorktreeAdoption(store, env, repoPath);
+}
 
 export interface ResolvedWorkflowAdoption {
   adoptedRun: WorkflowRun;

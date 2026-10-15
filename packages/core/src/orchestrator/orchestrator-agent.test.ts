@@ -624,8 +624,12 @@ const mockAdoptionMetadata = mock(async (_id: string, _metadata: Record<string, 
 const mockResumedEnvironment = mock(
   async (): Promise<ReturnType<typeof makeIsolationEnvironment> | null> => null
 );
+const mockAdoptedEnvironment = mock(
+  async (): Promise<AgentIsolationEnvironment | null> =>
+    makeIsolationEnvironment({ working_path: '/wt/adopted' })
+);
 mock.module('../db/isolation-environments', () => ({
-  getById: mock(async () => makeIsolationEnvironment()),
+  getById: mockAdoptedEnvironment,
   findLatestByCodebaseAndWorkingPath: mockResumedEnvironment,
   updateMetadata: mockAdoptionMetadata,
 }));
@@ -2534,6 +2538,42 @@ describe('workflow dispatch routing', () => {
       isolation_env_id: 'env-1',
     });
   });
+
+  test.each(['missing', 'mismatched'] as const)(
+    'foreground adoption refuses a %s environment before capture',
+    async reason => {
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted', envId: 'env-1' },
+      });
+      mockAdoptedEnvironment.mockResolvedValueOnce(
+        reason === 'missing' ? null : makeIsolationEnvironment()
+      );
+      mockPrepareWorkflowSource.mockClear();
+      mockAdoptionMetadata.mockClear();
+      mockLogger.warn.mockClear();
+      const platform = makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowAdoptRunId: 'prior-run',
+      });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining(
+          reason === 'missing' ? 'Isolation environment env-1 not found' : 'does not match'
+        )
+      );
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+      expect(
+        mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+      ).toHaveLength(0);
+    }
+  );
 
   test('adopt with checkout-branch lane materializes the exact adopted branch', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));

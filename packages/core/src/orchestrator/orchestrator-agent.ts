@@ -112,7 +112,11 @@ import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
 import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
-import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+  WorkflowAdoptionError,
+} from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -947,7 +951,11 @@ async function dispatchOrchestratorWorkflowOwned(
   // whatever branch that worktree carries, so the frozen source must come from THERE —
   // capturing from the parent checkout would mix vintages exactly as #2660 describes.
   // A checkout-branch lane captures a read-only snapshot before isolation exists.
-  const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
+  const adoptedEnvironment =
+    adoptionLane?.kind === 'reuse-worktree'
+      ? await adoptRegisteredWorktree(sqlIsolation, adoptionLane, codebase.default_cwd)
+      : undefined;
+  const captureCwd = adoptedEnvironment?.working_path ?? runCwd;
   let branchPrepared: Awaited<ReturnType<typeof prepareRunAiConfiguration>> | undefined;
   if (!willContinueExistingRun && adoptionLane?.kind !== 'checkout-branch') {
     freshCaptured = await captureFreshSource(
@@ -1231,19 +1239,16 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       if (env?.status === 'active')
         await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
-    } else if (adoptionLane?.kind === 'reuse-worktree') {
-      const env = await sqlIsolation.getById(adoptionLane.envId);
-      if (!env) throw new Error(`Isolation environment ${adoptionLane.envId} not found`);
-      await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
+    } else if (adoptedEnvironment) {
       // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
       // instead of cutting a fresh one (same shape as the background dispatch in
       // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
       // checkout.
-      cwd = adoptionLane.workingPath;
+      cwd = adoptedEnvironment.working_path;
       await db
         .updateConversation(conversation.id, {
           cwd,
-          isolation_env_id: adoptionLane.envId,
+          isolation_env_id: adoptedEnvironment.id,
         })
         .catch((e: unknown) => {
           getLog().warn(

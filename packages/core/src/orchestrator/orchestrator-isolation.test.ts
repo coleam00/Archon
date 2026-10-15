@@ -1073,6 +1073,27 @@ describe('dispatchBackgroundWorkflow', () => {
     ]);
   });
 
+  test('background adoption refuses a lane path that differs from its environment before capture', async () => {
+    const env = makeEnvRow();
+    mockAdoptedEnv.mockResolvedValueOnce(env);
+    mockAdoptionMetadata.mockClear();
+    mockLogger.warn.mockClear();
+    await expect(
+      dispatchBackgroundWorkflow(
+        makeRoutingCtx({
+          adoptionLane: { kind: 'reuse-worktree', workingPath: '/foreign/worktree', envId: env.id },
+        }),
+        makeWorkflow()
+      )
+    ).rejects.toThrow('does not match');
+    expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+    expect(
+      mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+    ).toHaveLength(0);
+  });
+
   test('background adoption refuses a worktree from another clone of the same codebase', async () => {
     const root = track(
       await realpath(await mkdtemp(join(tmpdir(), 'archon-background-adoption-')))
