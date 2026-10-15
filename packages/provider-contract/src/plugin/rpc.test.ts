@@ -129,7 +129,7 @@ test('initialize rejects unsupported ACP or Archon protocol versions and missing
     { protocolVersion: 2, agentCapabilities: { _meta: { archon: descriptor } }, authMethods: [] },
     {
       protocolVersion: 1,
-      agentCapabilities: { _meta: { archon: { ...descriptor, protocol: 2 } } },
+      agentCapabilities: { _meta: { archon: { ...descriptor, protocol: 1 } } },
       authMethods: [],
     },
     { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },

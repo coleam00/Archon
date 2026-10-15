@@ -1510,7 +1510,9 @@ describe('validateWorkflowResources — skills search roots', () => {
     const missing = missingSkillIssues(issues);
     expect(missing).toHaveLength(1);
     expect(missing[0].level).toBe('error');
-    expect(missing[0].message).toContain('.claude/skills/');
+    expect(missing[0].message).toContain('installed elsewhere');
+    expect(missing[0].hint).toContain(join(tmpDir, '.claude', 'skills'));
+    expect(missing[0].hint).not.toContain('.agents');
   });
 
   test('Claude accepts a skill under <cwd>/.claude/skills/', async () => {
@@ -1543,6 +1545,14 @@ describe('validateWorkflowResources — skills search roots', () => {
       providerRegistry
     );
     expect(missingSkillIssues(issues)).toHaveLength(0);
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        field: 'skills',
+        level: 'warning',
+        message: "Skill 'home-skill' is available only in a host user directory",
+        hint: expect.stringContaining('Container runs'),
+      })
+    );
   });
 
   test('Claude accepts a user skill from the configured CLAUDE_CONFIG_DIR', async () => {
@@ -1555,9 +1565,7 @@ describe('validateWorkflowResources — skills search roots', () => {
       skillsWorkflow('custom-user-skill'),
       tmpDir,
       providerRegistry,
-      {
-        claudeConfigDir: configDir,
-      }
+      { env: { CLAUDE_CONFIG_DIR: configDir } }
     );
 
     expect(missingSkillIssues(issues)).toHaveLength(0);
@@ -1571,9 +1579,7 @@ describe('validateWorkflowResources — skills search roots', () => {
       skillsWorkflow('home-only'),
       tmpDir,
       providerRegistry,
-      {
-        claudeConfigDir: configDir,
-      }
+      { env: { CLAUDE_CONFIG_DIR: configDir } }
     );
 
     expect(missingSkillIssues(issues)).toHaveLength(1);
@@ -1592,9 +1598,11 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missing).toHaveLength(1);
     expect(missing[0].level).toBe('warning');
     expect(missing[0].nodeId).toBe('step1');
-    expect(missing[0].message).toContain("Claude skill 'nonexistent-skill' not found");
-    expect(missing[0].message).toContain('built-in');
-    expect(missing[0].hint).toContain('.claude/skills/nonexistent-skill/SKILL.md');
+    expect(missing[0].message).toContain("Skill 'nonexistent-skill' not found");
+    expect(missing[0].hint).toContain(
+      join(tmpDir, '.claude', 'skills', 'nonexistent-skill', 'SKILL.md')
+    );
+    expect(missing[0].hint).toContain('built-in');
   });
 
   test('Claude skill directory without SKILL.md still errors', async () => {
@@ -1693,9 +1701,10 @@ describe('validateWorkflowResources — skills search roots', () => {
 
     const missing = missingSkillIssues(issues);
     expect(missing).toHaveLength(1);
-    // Claude-specific wording proves the alias-resolved provider drove the
+    // Claude's declared roots prove the alias-resolved provider drove the
     // check, rather than the workflow-level 'codex' default.
-    expect(missing[0].message).toContain('Claude skill');
+    expect(missing[0].message).toContain(join(tmpDir, '.claude', 'skills'));
+    expect(missing[0].message).not.toContain('.agents');
     expect(issues.some(issue => issue.message.includes("Provider 'codex' cannot load"))).toBe(
       false
     );
@@ -1725,9 +1734,7 @@ describe('validateWorkflowResources — skills search roots', () => {
       skillsWorkflow('user-only'),
       tmpDir,
       providerRegistry,
-      {
-        claudeSettingSources: ['project'],
-      }
+      { assistants: { claude: { settingSources: ['project'] } } }
     );
 
     expect(missingSkillIssues(issues)).toHaveLength(1);
@@ -1752,6 +1759,118 @@ describe('validateWorkflowResources — skills search roots', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
 
     expect(missingSkillIssues(issues)).toHaveLength(1);
+  });
+
+  describe('a plugin provider that declares skillDiscovery', () => {
+    const pi = providerRegistry.get('pi');
+    if (!pi) throw new Error('Pi is not registered');
+    const stub = {
+      ...pi,
+      id: 'stub-plugin',
+      displayName: 'Stub',
+      builtIn: false,
+      capabilities: { ...pi.capabilities, skills: true, settingSources: true },
+      skillDiscovery: {
+        project: ['.stub/skills'],
+        user: ['skills'],
+        userDirectory: { env: 'STUB_HOME', home: '.stub' },
+      },
+    };
+    const registry: ProviderRegistry = {
+      get: id => (id === stub.id ? stub : providerRegistry.get(id)),
+      list: () => [...providerRegistry.list(), stub],
+    };
+
+    async function stageAt(dir: string, name: string): Promise<void> {
+      await mkdir(join(dir, name), { recursive: true });
+      await writeFile(join(dir, name, 'SKILL.md'), `# ${name}\n`);
+    }
+
+    function stubWorkflow(skillName: string): WorkflowDefinition {
+      return makeWorkflow(
+        'test',
+        [
+          {
+            id: 'step1',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'do work' },
+            skills: [skillName],
+          } as unknown as DagNode,
+        ],
+        'stub-plugin'
+      );
+    }
+
+    test('accepts a skill under its declared project root', async () => {
+      await stageAt(join(tmpDir, '.stub', 'skills'), 'stub-skill');
+      const issues = await validateWorkflowResources(stubWorkflow('stub-skill'), tmpDir, registry);
+      expect(missingSkillIssues(issues)).toHaveLength(0);
+    });
+
+    test('rejects a skill installed only under a shared root it does not declare', async () => {
+      await stageSkill(tmpDir, '.agents', 'shared-skill');
+      const issues = await validateWorkflowResources(
+        stubWorkflow('shared-skill'),
+        tmpDir,
+        registry
+      );
+      const missing = missingSkillIssues(issues);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].level).toBe('error');
+      expect(missing[0].message).toContain("Stub skill 'shared-skill'");
+    });
+
+    test('project skills draw no host-user warning; user skills do, even when HOME is under cwd', async () => {
+      process.env.HOME = join(tmpDir, 'home');
+      await stageSkill(tmpDir, '.agents', 'shared-skill');
+      await stageSkill(tmpDir, '.claude', 'claude-skill');
+      await stageAt(join(tmpDir, '.stub', 'skills'), 'stub-skill');
+      await stageSkill(process.env.HOME, '.agents', 'user-skill');
+      const skillIssues = async (provider: string, skill: string) =>
+        (
+          await validateWorkflowResources(
+            makeWorkflow(
+              'test',
+              [
+                {
+                  id: 'step1',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'do work' },
+                  skills: [skill],
+                } as unknown as DagNode,
+              ],
+              provider
+            ),
+            tmpDir,
+            registry
+          )
+        ).filter(issue => issue.field === 'skills');
+
+      expect(await skillIssues('pi', 'shared-skill')).toEqual([]);
+      expect(await skillIssues('claude', 'claude-skill')).toEqual([]);
+      expect(await skillIssues('stub-plugin', 'stub-skill')).toEqual([]);
+      expect(await skillIssues('pi', 'user-skill')).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          message: "Skill 'user-skill' is available only in a host user directory",
+        }),
+      ]);
+    });
+
+    test('its install-level settingSources gate the user root', async () => {
+      await stageAt(join(fakeHome, '.stub', 'skills'), 'user-skill');
+      const workflow = stubWorkflow('user-skill');
+      expect(
+        missingSkillIssues(await validateWorkflowResources(workflow, tmpDir, registry))
+      ).toHaveLength(0);
+
+      const issues = await validateWorkflowResources(workflow, tmpDir, registry, {
+        assistants: { 'stub-plugin': { settingSources: ['project'] } },
+      });
+      const missing = missingSkillIssues(issues);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].level).toBe('error');
+    });
   });
 
   test('Claude empty settingSources rejects every declared skill', async () => {

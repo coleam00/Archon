@@ -1,10 +1,11 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '../wire';
 import type { IAgentProvider, SendQueryOptions } from '../../agent-provider';
 import type { CredentialStatus } from '../../credential-status';
 import type { ProviderChunk } from '../../events';
 import type { ProviderPluginDescriptor } from '../wire';
 
 export const descriptor: ProviderPluginDescriptor = {
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'test-provider',
   displayName: 'Test provider',
   version: '1',

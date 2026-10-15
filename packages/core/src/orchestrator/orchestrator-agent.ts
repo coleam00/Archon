@@ -2609,8 +2609,6 @@ export async function handleMessage(
       }
     }
 
-    // Claude supports the preset object for prompt caching; other providers
-    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
     // Providers with in-process tools launch and register through typed tools; the
     // others still write command lines that the command scan reads from the reply.
     let systemAppend = await buildOrchestratorSystemAppend(
@@ -2628,17 +2626,12 @@ export async function handleMessage(
     if (conversation.codebase_id !== null && !caps.nativeTools) {
       systemAppend += `\n\n${buildRunManagementSection()}`;
     }
-    const systemPrompt =
-      providerKey === 'claude'
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
-        : systemAppend;
-
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
       model: chatRequest.model,
-      systemPrompt,
+      appendSystemPrompt: systemAppend,
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);

@@ -6,7 +6,7 @@
  * Packs are written the way `archon plugin add` leaves them (a receipt under
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
-import { providerRegistry } from '@archon/providers';
+import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -275,6 +275,33 @@ describe('installed packs in the catalog', () => {
 });
 
 describe('installed pack boundaries', () => {
+  test('an incompatible provider receipt is reported without hiding installed workflows', async () => {
+    await install(reviewKit());
+    const file = receiptPath(join(home, 'plugins'), 'owner/stale-provider');
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'owner/stale-provider',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'provider',
+          name: 'stale-provider',
+          description: 'test',
+          executable: 'archon-provider-claude',
+        },
+        commit: COMMIT_A,
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: 'archon-provider-claude', sha256: 'b'.repeat(64) }],
+        descriptor: { ...claudeDescriptor, protocol: 1 },
+      })
+    );
+    const { workflows, errors } = await discover();
+    expect(names(workflows)).toContain(REVIEW);
+    expect(errors.some(error => error.error.includes(file))).toBe(true);
+  });
+
   test('another pack and a project workflow cannot include a support workflow', async () => {
     await install(reviewKit());
     await install({

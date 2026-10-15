@@ -1,17 +1,32 @@
 import { join } from 'node:path';
+import { createLogger } from '@archon/paths';
+import { receiptPath } from '@archon/plugin-manifest/store';
 import type { ChatPluginDescriptor } from '@archon/chat-contract';
 import { isChatReceipt } from '@archon/plugin-manifest';
-import { readReceipts } from '@archon/plugin-manifest/store';
+import { loadRuntimeReceipts } from '../utils/plugin-receipts';
 import type { PlatformPolicy } from './types';
 
-export async function chatPluginPolicies(pluginsDir: string): Promise<PlatformPolicy[]> {
-  const receipts = await readReceipts(pluginsDir).catch((error: unknown) => {
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}. Run archon plugin update <id> or archon plugin remove <id>`,
-      { cause: error }
+// Policy registration and process startup share this selection, so a receipt that
+// cannot start never owns a platform policy either.
+async function usableChatReceipts(pluginsDir: string) {
+  const receipts = (await loadRuntimeReceipts(pluginsDir)).filter(isChatReceipt);
+  return receipts.flatMap(receipt => {
+    const executable = receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
+    if (receipt.files.some(file => file.path === executable))
+      return [{ descriptor: receipt.descriptor, executable }];
+    createLogger('core.chat-plugins').warn(
+      {
+        receipt: receiptPath(pluginsDir, receipt.id),
+        reason: 'receipt does not own its executable',
+      },
+      `Plugin unavailable. Run archon plugin update ${receipt.id} or archon plugin remove ${receipt.id}`
     );
+    return [];
   });
-  return receipts.filter(isChatReceipt).map(({ descriptor }) => ({
+}
+
+export async function chatPluginPolicies(pluginsDir: string): Promise<PlatformPolicy[]> {
+  return (await usableChatReceipts(pluginsDir)).map(({ descriptor }) => ({
     id: descriptor.id,
     ...descriptor.policy,
   }));
@@ -32,16 +47,11 @@ export async function loadChatPlugins(pluginsDir: string): Promise<
     argv: readonly [string, ...string[]];
   }[]
 > {
-  const receipts = (await readReceipts(pluginsDir)).filter(isChatReceipt);
   const ids = new Set<string>();
-  return receipts.map(receipt => {
-    const { descriptor, manifest } = receipt;
+  return (await usableChatReceipts(pluginsDir)).map(({ descriptor, executable }) => {
     if (ids.has(descriptor.id))
       throw new Error(`Duplicate installed chat platform ${descriptor.id}`);
     ids.add(descriptor.id);
-    const executable = manifest.executable + (process.platform === 'win32' ? '.exe' : '');
-    if (!receipt.files.some(file => file.path === executable))
-      throw new Error(`Chat receipt ${receipt.id} does not own its executable`);
     return { descriptor, argv: [join(pluginsDir, executable)] };
   });
 }
