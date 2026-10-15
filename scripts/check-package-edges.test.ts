@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { findEdgeViolations, type PackageManifest } from './check-package-edges';
+import { readFileSync } from 'node:fs';
+import {
+  findEdgeViolations,
+  findLayeringViolations,
+  PACKAGE_LAYERING,
+  type Layering,
+  type PackageManifest,
+} from './check-package-edges';
 
 function manifests(): PackageManifest[] {
   return [
@@ -237,5 +244,114 @@ describe('plain-Zod engine boundary', () => {
         ],
       })
     ).toEqual([]);
+  });
+});
+
+describe('package layering', () => {
+  const layering: Layering = {
+    contract: { runtime: [] },
+    engine: { runtime: ['contract'], test: ['providers'] },
+    providers: { runtime: ['contract'] },
+  };
+
+  test('accepts manifests that declare exactly their layering row', () => {
+    expect(findLayeringViolations(manifests(), layering)).toEqual([]);
+  });
+
+  test('rejects a runtime edge the layering does not allow', () => {
+    const packages = manifests();
+    packages[0].dependencies = { ...packages[0].dependencies, '@archon/providers': 'workspace:*' };
+    expect(findLayeringViolations(packages, layering)).toEqual([
+      {
+        file: 'packages/engine/package.json',
+        message:
+          'engine declares @archon runtime dependencies [contract, providers]; the layering allows [contract]',
+      },
+      {
+        file: 'packages/engine/package.json',
+        message:
+          'engine declares test-only @archon devDependencies [none]; the layering allows [providers]',
+      },
+    ]);
+  });
+
+  for (const field of ['peerDependencies', 'optionalDependencies'] as const) {
+    test(`counts ${field} as runtime edges`, () => {
+      const packages = manifests();
+      packages[1][field] = { '@archon/providers': 'workspace:*' };
+      expect(findLayeringViolations(packages, layering)).toEqual([
+        {
+          file: 'packages/contract/package.json',
+          message:
+            'contract declares @archon runtime dependencies [providers]; the layering allows [none]',
+        },
+      ]);
+    });
+  }
+
+  test('rejects a test-only edge the layering does not allow', () => {
+    const packages = manifests();
+    packages[2].devDependencies = { '@archon/engine': 'workspace:*' };
+    expect(findLayeringViolations(packages, layering)).toEqual([
+      {
+        file: 'packages/providers/package.json',
+        message:
+          'providers declares test-only @archon devDependencies [engine]; the layering allows [none]',
+      },
+    ]);
+  });
+
+  test('rejects an allowed edge the manifest no longer declares', () => {
+    const packages = manifests();
+    delete packages[0].dependencies;
+    expect(findLayeringViolations(packages, layering)).toEqual([
+      {
+        file: 'packages/engine/package.json',
+        message:
+          'engine declares @archon runtime dependencies [none]; the layering allows [contract]',
+      },
+    ]);
+  });
+
+  test('rejects a package without a row and a row without a package', () => {
+    expect(
+      findLayeringViolations(
+        [...manifests().slice(1), { path: 'packages/new/package.json' }],
+        layering
+      )
+    ).toEqual([
+      {
+        file: 'packages/new/package.json',
+        message:
+          'new has no row in PACKAGE_LAYERING (scripts/check-package-edges.ts) or the package table in .archon/architecture.md',
+      },
+      {
+        file: 'scripts/check-package-edges.ts',
+        message: 'PACKAGE_LAYERING has a row for engine, which is not a workspace package',
+      },
+    ]);
+  });
+
+  test('the package table in .archon/architecture.md equals PACKAGE_LAYERING', () => {
+    const doc = readFileSync(new URL('../.archon/architecture.md', import.meta.url), 'utf8');
+    const table = doc.split('### Packages')[1]?.split('\n### ')[0] ?? '';
+    const names = (cell: string | undefined): string[] =>
+      [...(cell ?? '').matchAll(/`([^`]+)`/g)].map(match => match[1]).sort();
+    const rows = Object.fromEntries(
+      table
+        .split('\n')
+        .filter(line => line.startsWith('| `'))
+        .map(line => {
+          const [name, , runtime, testOnly] = line.split('|').slice(1, -1);
+          return [names(name)[0], { runtime: names(runtime), test: names(testOnly) }];
+        })
+    );
+    const expected = Object.fromEntries(
+      Object.entries(PACKAGE_LAYERING).map(([name, row]) => [
+        name,
+        { runtime: [...row.runtime].sort(), test: [...(row.test ?? [])].sort() },
+      ])
+    );
+    expect(rows).toEqual(expected);
   });
 });
