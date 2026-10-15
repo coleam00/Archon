@@ -1,6 +1,7 @@
 # Dry-run fixture: delivery dies when the implementer declares a blocker and changed
-# nothing. The real assert-changed guard refuses, the loop group fails, and the
-# failure cascade blocks ship's outcome join even though triage succeeded.
+# nothing. The real assert-changed guard refuses and the loop group fails. Deliver's
+# report still completes not ready with reason failed, ship's outcome relays it, and
+# the run fails.
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }
@@ -21,4 +22,5 @@ implement__implement:
 fixture:
   expect: failed
   fail-node: [implement__assert-changed, deliver__rounds]
+  reached: [deliver__report, outcome, report]
 exec-code: true

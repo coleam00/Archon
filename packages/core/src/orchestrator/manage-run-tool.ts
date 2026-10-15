@@ -42,12 +42,6 @@ export interface ManageRunContext {
   /** The project (codebase) this chat is scoped to. */
   codebaseId: string;
   /**
-   * Launch a workflow in the background and return a user-facing result line
-   * (including a friendly error for an unknown name). Omitted when the dispatch
-   * context isn't available — `start` is then rejected.
-   */
-  startWorkflow?: (workflowName: string, message: string) => Promise<string>;
-  /**
    * Continuation seam for a gate the agent just resolved. Called with the run
    * reloaded AFTER the committed decision leaves it resumable
    * — never for a reject that cancelled the run, which is already terminal.
@@ -95,7 +89,6 @@ const ACTIONS = [
   'help',
   'list',
   'get',
-  'start',
   'resume',
   'cancel',
   'abandon',
@@ -124,10 +117,6 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       description:
         'Run id — required for get/resume/cancel/abandon/approve/reject/respond/label. Accepts the short (8-char) or full id.',
     },
-    workflow: {
-      kind: 'string',
-      description: 'Workflow name to launch — required for action=start.',
-    },
     decision: {
       kind: 'string',
       description:
@@ -136,7 +125,7 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
     message: {
       kind: 'string',
       description:
-        'Free text whose meaning depends on the action: start=the prompt/instructions; approve=optional comment; reject=the reason; respond=text recorded alongside the decision.',
+        'Free text whose meaning depends on the action: approve=optional comment; reject=the reason; respond=text recorded alongside the decision.',
     },
     confirm: {
       kind: 'boolean',
@@ -178,7 +167,6 @@ const HELP_OVERVIEW = [
   'Actions (call action=help subtool=<name> for details):',
   '  list     — recent runs in this project (id, workflow, status, authored outcome, active nodes). No params.',
   '  get      — one run’s detail. Params: runId.',
-  '  start    — launch a workflow in the background. Params: workflow, message.',
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
   '  cancel   — stop a running run. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
@@ -194,8 +182,6 @@ const HELP_OVERVIEW = [
 const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   list: 'list — recent runs for this project, most recent first. No parameters. Returns id · workflow · status · authored outcome when declared · active node(s).',
   get: 'get — full detail for one run. Required: runId (short or full). Returns status, authored outcome when declared, start/finish times, and error if any. Scoped to this project.',
-  start:
-    'start — launch a workflow in the background. Required: workflow (name). Recommended: message (what it should do). It appears in the runs list and the workflow dock.',
   resume:
     'resume — validate that a failed/paused run can resume from its completed nodes. Required: runId. Does NOT re-run it — it stays in its current status; continue it from the run’s controls or by re-invoking the workflow.',
   cancel:
@@ -214,7 +200,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
 
 /**
  * The `manage_run` native tool. Lets a project-scoped chat agent inspect and
- * operate this project’s workflow runs — list/get (read), start (launch), and
+ * operate this project’s workflow runs — list/get (read) and
  * the lifecycle writes resume/cancel/abandon/approve/reject — without the user
  * typing slash commands.
  *
@@ -236,7 +222,7 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
   return {
     name: 'manage_run',
     description:
-      "Inspect and operate this project's workflow runs (list, get, start, resume, cancel, abandon, approve, reject, respond, label). Call action='help' first to see what each action needs. Destructive actions require confirm=true.",
+      "Inspect and operate this project's workflow runs (list, get, resume, cancel, abandon, approve, reject, respond, label). Call action='help' first to see what each action needs. Destructive actions require confirm=true.",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       // Switch on the raw string; unknown values fall through to `default`. No
@@ -254,8 +240,6 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
             const run = await getScopedRun(runId, ctx);
             return typeof run === 'string' ? run : formatRunDetail(run);
           }
-          case 'start':
-            return await handleStart(ctx, input);
           case 'resume':
           case 'cancel':
           case 'abandon':
@@ -403,17 +387,6 @@ function formatRunDetail(run: WorkflowRun): string {
 
 // ─── Write handlers ─────────────────────────────────────────────────────────
 
-async function handleStart(ctx: ManageRunContext, input: Record<string, unknown>): Promise<string> {
-  if (ctx.startWorkflow === undefined) {
-    return 'manage_run: launching workflows is not available in this context.';
-  }
-  const workflow = typeof input.workflow === 'string' ? input.workflow.trim() : '';
-  if (workflow === '') return 'manage_run: action=start requires a workflow name.';
-  const message = typeof input.message === 'string' ? input.message.trim() : '';
-  log.info({ codebaseId: ctx.codebaseId, workflow }, 'manage_run.start_requested');
-  return await ctx.startWorkflow(workflow, message);
-}
-
 /** resume / cancel / abandon / approve / reject / respond — all by-id, project-scoped. */
 async function handleWrite(
   ctx: ManageRunContext,
@@ -542,8 +515,7 @@ async function handleWrite(
         : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop runs another iteration with it.${continues}`;
     }
     case 'reject': {
-      const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor, origin);
+      const result = await ctx.operations.rejectWorkflow(id, message, ctx.actor, origin);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -556,15 +528,10 @@ async function handleWrite(
       // respondToWorkflow validates `decision` itself and throws a clear error
       // naming the gate's actual options on a mismatch — caught by the tool's
       // outer try/catch and returned as text, never a silent no-op.
-      // Mirrors the chat/HTTP respond surfaces' default: an empty message on
-      // decision='reject' becomes 'Rejected' rather than reaching a new-mode
-      // gate's structured output as ''.
-      const respondText =
-        message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
       const result = await ctx.operations.respondToWorkflow(
         id,
         decision,
-        respondText,
+        message,
         ctx.actor,
         origin
       );

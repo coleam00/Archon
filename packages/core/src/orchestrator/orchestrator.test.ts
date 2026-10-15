@@ -237,7 +237,8 @@ const providerCapabilities: ProviderCapabilities = {
   fallbackModel: true,
   sandbox: true,
   settingSources: true,
-  nativeTools: true,
+  // The command-scan tests below model a provider without in-process tools.
+  nativeTools: false,
   containerExec: true,
   requiresAllPropertiesRequired: false,
 };
@@ -334,6 +335,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+    attentionNotices: [],
     paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
     workflows: {
@@ -964,7 +966,31 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ id: expect.any(String) }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        'commands'
+      );
+    });
+
+    test('teaches the typed tools to a provider with in-process tools', async () => {
+      mockGetProviderCapabilities.mockImplementation(() => ({
+        ...providerCapabilities,
+        nativeTools: true,
+      }));
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      try {
+        await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
+      } finally {
+        mockGetProviderCapabilities.mockImplementation(() => providerCapabilities);
+      }
+
+      expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Array),
+        expect.any(Array),
+        'tools'
       );
     });
 
@@ -982,7 +1008,8 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        'commands'
       );
     });
 
@@ -1055,6 +1082,7 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
@@ -1096,6 +1124,7 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
@@ -1141,6 +1170,7 @@ describe('orchestrator-agent handleMessage', () => {
           small: { provider: 'claude', model: 'haiku' },
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {

@@ -35,9 +35,12 @@ export function loadAppPrivateKey(env: NodeJS.ProcessEnv = process.env): string 
       return contents;
     } catch (err) {
       if (err instanceof AppPrivateKeyError) throw err;
+      // The value may be a key pasted into the wrong variable, and the fs error
+      // repeats it, so only the errno code is surfaced.
+      const code = (err as NodeJS.ErrnoException).code;
       throw new AppPrivateKeyError(
-        `Failed to read GITHUB_APP_PRIVATE_KEY_PATH (${path}): ${(err as Error).message}`,
-        err
+        `Failed to read the file named by GITHUB_APP_PRIVATE_KEY_PATH${code ? ` (${code})` : ''}. ` +
+          'Set it to the path of a readable .pem file, or put the key itself in GITHUB_APP_PRIVATE_KEY.'
       );
     }
   }

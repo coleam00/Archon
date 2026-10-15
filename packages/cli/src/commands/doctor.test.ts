@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
+import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as git from '@archon/git';
@@ -65,6 +66,93 @@ describe('checkGhAuth', () => {
     execSpy.mockRestore();
   });
 
+  const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  it('validates App inline and file keys locally without gh or remote access', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doctor-app-'));
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected fetch'));
+    try {
+      const keyPath = join(root, 'app.pem');
+      writeFileSync(keyPath, privateKey);
+      for (const keyEnv of [
+        { GITHUB_APP_PRIVATE_KEY: privateKey.replaceAll('\n', '\\n') },
+        { GITHUB_APP_PRIVATE_KEY_PATH: keyPath },
+      ]) {
+        expect(await checkGhAuth({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
+          label: 'GitHub App',
+          status: 'pass',
+          message: 'App mode configured (local configuration valid; GitHub access not checked)',
+        });
+      }
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await removeTempTree(root);
+    }
+  });
+
+  it('reports incomplete, invalid and conflicting App configuration without exposing secrets', async () => {
+    for (const env of [
+      { GITHUB_APP_ID: '123' },
+      { GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: 'invalid', GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: 'bad-private-key-secret' },
+      {
+        GITHUB_APP_ID: '123',
+        GITHUB_APP_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----',
+      },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: '/missing/archon-key.pem' },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey, GITHUB_TOKEN: 'pat-secret' },
+    ]) {
+      const result = await checkGhAuth(env);
+      expect(result.label).toBe('GitHub App');
+      expect(result.status).toBe('fail');
+      expect(result.message).not.toContain(privateKey);
+      expect(result.message).not.toContain('pat-secret');
+      expect(result.message).not.toContain('bad-private-key-secret');
+    }
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not print a private key pasted into GITHUB_APP_PRIVATE_KEY_PATH', async () => {
+    const sentinel = 'sentinel-private-key-material';
+    const pastedKey = `-----BEGIN PRIVATE KEY-----\n${sentinel}\n-----END PRIVATE KEY-----`;
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+        ])
+      ).toBe(1);
+      const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
+      expect(printed).toContain('GITHUB_APP_PRIVATE_KEY_PATH');
+      expect(printed).not.toContain(sentinel);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('renders App results and returns the corresponding doctor exit status', async () => {
+    const output = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
+        ])
+      ).toBe(0);
+      expect(JSON.stringify(output.mock.calls)).toContain('GitHub App');
+      expect(await doctorCommand([() => checkGhAuth({ GITHUB_APP_ID: '123' })])).toBe(1);
+      expect(JSON.stringify(output.mock.calls)).not.toContain(privateKey);
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   it('returns skip when no GitHub token is set', async () => {
     const result = await checkGhAuth({});
     expect(result.status).toBe('skip');
@@ -100,6 +188,7 @@ describe('checkAssistantLogin', () => {
     assistant: 'claude',
     assistants: { claude: {}, codex: {}, pi: { model: 'anthropic/claude-sonnet-4-6' } },
     streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
+    attentionNotices: [],
     paths: { workspaces: '/unused', worktrees: '/unused' },
     concurrency: { maxConversations: 1 },
     workflows: { autoResumeOnQuotaReset: false, quotaMaxAttempts: 1, quotaDeadlineMs: 1 },
@@ -268,6 +357,16 @@ describe('checkAssistantLogin', () => {
         message: 'pi: uses the credential connected in Archon',
       });
       expect(native).toHaveBeenCalledTimes(1);
+      // Pi cannot use a connected Claude subscription, so doctor checks the native login
+      // and, finding none, points at the provider that can.
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'oauth', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toEqual({
+        label: 'Assistant login',
+        status: 'fail',
+        message:
+          'pi: no native credential, and the anthropic subscription connected in Archon runs on `provider: claude`, not on pi. Use `provider: claude`, or give pi its own anthropic API key.',
+      });
+      expect(native).toHaveBeenCalledTimes(2);
       // With no model in Archon config, doctor cannot tell which connected vendor the run
       // uses, so a missing native login is a warning that names the connected one.
       load.mockResolvedValue({
@@ -280,7 +379,7 @@ describe('checkAssistantLogin', () => {
         status: 'warn',
         message: expect.stringContaining('anthropic'),
       });
-      expect(native).toHaveBeenCalledTimes(2);
+      expect(native).toHaveBeenCalledTimes(3);
       // A credential Pi cannot use does not soften a missing native login.
       rows.mockResolvedValue([{ provider: 'not-a-pi-vendor', kind: 'api_key', label: null }]);
       expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
@@ -996,7 +1095,7 @@ describe('checkConnectedProviders', () => {
   type Status = Awaited<ReturnType<ProviderDeps['getStoredCredentialStatus']>>;
 
   function depsWith(
-    rows: { provider: string; kind: string; label: string | null }[],
+    rows: Awaited<ReturnType<ProviderDeps['listUserProviderKeys']>>,
     statuses: Record<string, Status> = {}
   ): () => Promise<ProviderDeps> {
     return async () => ({

@@ -234,7 +234,7 @@ Archon replaces variables in command text before sending to the AI. The most com
 | `$WORKFLOW_ID` | Unique workflow run ID |
 | `$CONTEXT` | GitHub issue/PR context (if available) |
 
-See the [Variable Reference](/reference/variables/) for the complete list, including `$LOOP_USER_INPUT`, `$REJECTION_REASON`, node output references, substitution order, and context variable behavior.
+See the [Variable Reference](/reference/variables/) for the complete list, including the deprecated `$LOOP_USER_INPUT` and `$REJECTION_REASON`, node output references, substitution order, and context variable behavior.
 
 ### Usage Pattern
 

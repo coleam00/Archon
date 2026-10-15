@@ -16,12 +16,7 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import {
-  classifyIsolationError,
-  getIsolationProvider,
-  readWorktreeCreationId,
-  worktreeRegistrationMetadata,
-} from '@archon/isolation';
+import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -53,6 +48,7 @@ import {
   type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { createRegisteredWorktree } from '../workflows/registered-worktree';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
@@ -346,19 +342,20 @@ async function handleWorktreeCommand(
       }
 
       try {
-        // Use isolation provider for worktree creation
         ensureIsolationConfigured();
-        const provider = getIsolationProvider();
-        const env = await provider.create({
-          codebaseId: conversation.codebase_id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: toRepoPath(mainPath),
-          workflowType: 'task',
-          identifier: branchName,
-          description: `Manual worktree: ${branchName}`,
+        const { env, envId } = await createRegisteredWorktree(isolationEnvDb, {
+          request: {
+            codebaseId: conversation.codebase_id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: toRepoPath(mainPath),
+            workflowType: 'task',
+            identifier: branchName,
+            description: `Manual worktree: ${branchName}`,
+          },
+          workflowId: `task-${branchName}`,
+          createdByPlatform: conversation.platform_type,
         });
 
-        // Add to git safe.directory
         await execFileAsync('git', [
           'config',
           '--global',
@@ -367,21 +364,8 @@ async function handleWorktreeCommand(
           env.workingPath,
         ]);
 
-        // Create database record for isolation environment
-        const dbEnv = await isolationEnvDb.create({
-          codebase_id: conversation.codebase_id,
-          workflow_type: 'task',
-          workflow_id: `task-${branchName}`,
-          provider: 'worktree',
-          working_path: env.workingPath,
-          branch_name: env.branchName ?? branchName,
-          created_by_platform: conversation.platform_type,
-          metadata: { ...worktreeRegistrationMetadata(env.metadata) },
-        });
-
-        // Update conversation with isolation info (use database UUID)
         await db.updateConversation(conversation.id, {
-          isolation_env_id: dbEnv.id,
+          isolation_env_id: envId,
           cwd: env.workingPath,
         });
 
@@ -390,7 +374,7 @@ async function handleWorktreeCommand(
         const shortPath = shortenPath(env.workingPath, mainPath);
         return {
           success: true,
-          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
+          message: `Worktree created!\n\nBranch: ${env.branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
           modified: true,
         };
       } catch (error) {
@@ -404,9 +388,7 @@ async function handleWorktreeCommand(
             message: 'Failed to create worktree: conversation state changed. Please try again.',
           };
         }
-        // Classified, not raw: the note an isolation failure carries about a
-        // leftover workspace lives outside `err.message`.
-        return { success: false, message: classifyIsolationError(err) };
+        return { success: false, message: err.message };
       }
     }
 
@@ -600,6 +582,9 @@ async function handleWorktreeCommand(
           msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
           for (const branch of result.removed) {
             msg += `  • ${branch}\n`;
+          }
+          for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+            msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
           }
         } else {
           msg += `No ${cleanupType} worktrees to clean up.\n`;
@@ -1054,13 +1039,9 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('approve <id> [comment]')}\n\nApproves a paused workflow run.`,
         };
       }
-      // Pass the RAW comment through (undefined when the user typed none) —
-      // approveWorkflow defaults the recorded comment internally, but "no
-      // feedback" must survive so a signal-bearing interactive-loop gate
-      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
-      // the HTTP route and CLI.
-      const rawComment = args.slice(2).join(' ');
-      const comment = rawComment.length > 0 ? rawComment : undefined;
+      // approveWorkflow owns the empty-comment default and the "no feedback"
+      // reading an interactive-loop gate finalizes on (#2074).
+      const comment = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.approveWorkflow(runId, comment, actor, {
@@ -1090,7 +1071,7 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('reject <id> [reason]')}\n\nRejects a paused workflow run.`,
         };
       }
-      const reason = args.slice(2).join(' ') || 'Rejected';
+      const reason = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.rejectWorkflow(runId, reason, actor, {
@@ -1141,12 +1122,7 @@ async function handleWorkflowCommand(
             `are sugar for the dedicated ${cmd('approve|reject')} commands).`,
         };
       }
-      const rawText = args.slice(3).join(' ');
-      // Mirrors the dedicated /workflow reject command's default: an empty reason
-      // becomes 'Rejected' rather than reaching a new-mode gate's structured
-      // output as ''. Only for decision === 'reject' — respond's other decisions
-      // (including 'approve', which stays optional/undefined) are unaffected.
-      const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
+      const text = args.slice(3).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.respondToWorkflow(runId, decision, text, actor, {

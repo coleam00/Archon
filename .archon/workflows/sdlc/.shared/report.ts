@@ -109,3 +109,19 @@ export function caveats(
 ): string {
   return discoveries(artifacts, options.listingFile);
 }
+
+/**
+ * The summary a tail's report node writes when a node failure kept the run from
+ * reaching its outcome. It names no result: the engine's terminal record names the
+ * failed node, and nothing here may read as a delivery.
+ */
+export function failed(
+  artifacts: string,
+  options: { readonly listingFile: string | undefined }
+): string {
+  return (
+    'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
+    'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
+    caveats(artifacts, options)
+  );
+}

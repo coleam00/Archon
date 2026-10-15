@@ -10,12 +10,14 @@
  */
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { join, resolve } from 'path';
-import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
+import * as helperInstaller from '../github-auth/credential-helper-install';
+import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { AppNotInstalledError } from '../github-auth/errors';
 import type * as CodebaseDb from '../db/codebases';
 import type * as Commands from '../utils/commands';
 import { quoteCommandArg } from '../utils/command-args';
@@ -29,19 +31,14 @@ import { createMockLogger } from '../test/mocks/logger';
 const { findCommandFiles: discoverCommandFiles, isPathInside } =
   await import('@archon/paths/archon-paths');
 
-const appRequest = mock(async (route: string) => ({
-  data: route.startsWith('GET ')
-    ? { id: 42 }
-    : { token: 'ghs_app_clone', expires_at: new Date(Date.now() + 3600000).toISOString() },
-}));
+const appRequest = mock(async () => {
+  throw Object.assign(new Error('Not Found'), { status: 404 });
+});
 mock.module('@octokit/rest', () => ({
   Octokit: class {
     request = appRequest;
   },
 }));
-const appPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
-  .privateKey.export({ type: 'pkcs8', format: 'pem' })
-  .toString();
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
 const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
@@ -146,7 +143,6 @@ import {
   registerRepository,
   registerFolder,
   inspectProjectBaseBranch,
-  resolveForgeAuth,
 } from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
@@ -403,6 +399,174 @@ describe('cloneRepository', () => {
     delete process.env.GITEA_TOKEN;
   });
 
+  describe('GitHub App registration', () => {
+    const getInstallationToken = mock(
+      async (_owner: string, _repo: string) => 'installation-secret'
+    );
+    const options = { githubAppAuth: { getInstallationToken } };
+    let helper: ReturnType<typeof spyOn<typeof helperInstaller, 'installCredentialHelper'>>;
+
+    beforeEach(() => {
+      getInstallationToken.mockReset();
+      getInstallationToken.mockResolvedValue('installation-secret');
+      mockCreateCodebase.mockResolvedValue(makeCodebase());
+      helper = spyOn(helperInstaller, 'installCredentialHelper').mockResolvedValue({
+        kind: 'installed',
+        helperPath: '/helper',
+      });
+    });
+    afterEach(() => helper.mockRestore());
+
+    test.each([
+      'https://github.com/owner/repo.git',
+      'github.com/owner/repo',
+      'git@github.com:owner/repo.git',
+    ])('clones %s with installation credentials and sets up before persistence', async url => {
+      helper.mockImplementation(async () => {
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        return { kind: 'installed', helperPath: '/helper' };
+      });
+      const result = await cloneRepository(url, options);
+      expect(getInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+      expect(spyCloneGitRepository).toHaveBeenCalledWith(
+        result.repositoryUrl,
+        gitUtils.toRepoPath(result.defaultCwd),
+        { credentials: { username: 'x-access-token', password: 'installation-secret' } }
+      );
+      expect(helper).toHaveBeenCalledWith(result.defaultCwd);
+      expect(
+        JSON.stringify([result, mockLogger.info.mock.calls, mockLogger.debug.mock.calls])
+      ).not.toContain('installation-secret');
+      process.env.GITHUB_TOKEN = 'pat';
+      await cloneRepository('https://github.com/owner/repo');
+      expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toEqual({
+        credentials: { username: 'x-access-token', password: 'pat' },
+      });
+      await cloneRepository('https://gitlab.com/owner/repo', options);
+      expect(getInstallationToken).toHaveBeenCalledTimes(1);
+      expect(helper).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects HTTP GitHub URLs before token lookup for clone and inspection', async () => {
+      const url = 'http://github.com/owner/repo';
+      await expect(cloneRepository(url, options)).rejects.toThrow('HTTPS');
+      await expect(inspectProjectBaseBranch({ url }, options)).rejects.toThrow('HTTPS');
+      expect(getInstallationToken).not.toHaveBeenCalled();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+    });
+
+    test('restricts App credentials and helper setup to the exact GitHub host', async () => {
+      await cloneRepository('https://github.com/owner/repo', options);
+      await cloneRepository('https://github.com.attacker.test/owner/repo', options);
+      expect(getInstallationToken).toHaveBeenCalledTimes(1);
+      expect(helper).toHaveBeenCalledTimes(1);
+      expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toBeUndefined();
+    });
+
+    test('fixed installation preserves missing-installation guidance for clone and inspection', async () => {
+      appRequest.mockClear();
+      const provider = createGitHubAppAuthProvider({
+        appId: '123',
+        privateKey: 'synthetic-key',
+        slug: 'archon',
+        defaultInstallationId: 555,
+      });
+      const fixedOptions = { githubAppAuth: provider };
+      const url = 'https://github.com/missing/repo';
+      await expect(cloneRepository(url, fixedOptions)).rejects.toThrow('not installed');
+      await expect(inspectProjectBaseBranch({ url }, fixedOptions)).rejects.toThrow(
+        'not installed'
+      );
+      expect(appRequest).toHaveBeenCalledTimes(2);
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+    });
+
+    test('surfaces an unavailable installation before cloning or persistence', async () => {
+      getInstallationToken.mockRejectedValue(new AppNotInstalledError('owner', 'repo', 'archon'));
+      await expect(cloneRepository('https://github.com/owner/repo', options)).rejects.toThrow(
+        'not installed'
+      );
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('removes a fresh checkout when helper setup fails', async () => {
+      helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
+      await expect(cloneRepository('https://github.com/owner/repo', options)).rejects.toThrow(
+        'credential helper'
+      );
+      expect(spyFsRm).toHaveBeenCalledWith('/home/test/.archon/workspaces/owner/repo/source', {
+        recursive: true,
+      });
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    });
+
+    test.each(['https://github.com/owner/repo', 'https://github.com/owner/repo.git'])(
+      'refreshes the helper on an existing registration stored as %s and preserves it on setup failure',
+      async storedUrl => {
+        spyFsAccess.mockResolvedValue(undefined);
+        const existing = makeCodebase({ default_cwd: '/existing/checkout' });
+        mockFindCodebaseByRepoUrl.mockImplementation(async (url: string) =>
+          url === storedUrl ? existing : null
+        );
+        expect((await cloneRepository('github.com/owner/repo', options)).alreadyExisted).toBe(true);
+        expect(mockFindCodebaseByRepoUrl).toHaveBeenCalledWith(storedUrl);
+        expect(helper).toHaveBeenCalledWith('/existing/checkout');
+        helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
+        await expect(cloneRepository('github.com/owner/repo', options)).rejects.toThrow(
+          'credential helper'
+        );
+        expect(getInstallationToken).not.toHaveBeenCalled();
+        expect(spyCloneGitRepository).not.toHaveBeenCalled();
+        expect(spyFsRm).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+      }
+    );
+
+    test('uses App credentials for inspection and installs the helper before explicit branch validation', async () => {
+      const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+      const remote = spyOn(gitUtils, 'getDefaultRemote').mockResolvedValue('origin');
+      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+        status: 'available',
+        defaultBranch: gitUtils.toBranchName('dev'),
+        branches: [gitUtils.toBranchName('dev')],
+      });
+      try {
+        await inspectProjectBaseBranch({ url: 'https://github.com/owner/repo.git' }, options);
+        expect(inspection).toHaveBeenCalledWith({
+          kind: 'url',
+          url: 'https://github.com/owner/repo.git',
+          credentials: { username: 'x-access-token', password: 'installation-secret' },
+        });
+        expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(helper).not.toHaveBeenCalled();
+        inspection.mockImplementation(async () => {
+          expect(helper).toHaveBeenCalled();
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          return {
+            status: 'available',
+            defaultBranch: gitUtils.toBranchName('dev'),
+            branches: [gitUtils.toBranchName('dev')],
+          };
+        });
+        await cloneRepository('https://github.com/owner/repo', { ...options, baseBranch: 'dev' });
+        getInstallationToken.mockRejectedValue(new AppNotInstalledError('owner', 'repo'));
+        await expect(
+          inspectProjectBaseBranch({ url: 'https://github.com/owner/repo' }, options)
+        ).rejects.toThrow('not installed');
+      } finally {
+        syntax.mockRestore();
+        remote.mockRestore();
+        inspection.mockRestore();
+      }
+    });
+  });
+
   test('GitHub remote inspection uses password credentials without changing the URL', async () => {
     process.env.GH_TOKEN = 'inspection-token';
     const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
@@ -604,122 +768,6 @@ describe('cloneRepository', () => {
       });
     });
 
-    test.each([false, true])(
-      'uses the App installation for clone and inspection beside ambient GH_TOKEN (reject=%j)',
-      async reject => {
-        process.env.GITHUB_APP_ID = '123';
-        process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
-        const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
-          status: 'available',
-          defaultBranch: gitUtils.toBranchName('main'),
-          branches: [gitUtils.toBranchName('main')],
-        });
-        appRequest.mockClear();
-        mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
-        if (reject)
-          appRequest.mockRejectedValueOnce(
-            Object.assign(new Error('installation access denied'), { status: 403 })
-          );
-        try {
-          if (reject) {
-            await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-              'installation access denied'
-            );
-            expect(spyCloneGitRepository).not.toHaveBeenCalled();
-          } else {
-            await cloneRepository('https://github.com/owner/repo');
-            expect(getGitCloneCall()?.[2]).toEqual({
-              credentials: { username: 'x-access-token', password: 'ghs_app_clone' },
-            });
-            await inspectProjectBaseBranch({ url: 'https://github.com/owner/repo.git' });
-            expect(inspection).toHaveBeenCalledWith({
-              kind: 'url',
-              url: 'https://github.com/owner/repo.git',
-              credentials: { username: 'x-access-token', password: 'ghs_app_clone' },
-            });
-            expect(appRequest).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/installation', {
-              owner: 'owner',
-              repo: 'repo',
-            });
-          }
-        } finally {
-          delete process.env.GITHUB_APP_ID;
-          delete process.env.GITHUB_APP_PRIVATE_KEY;
-          inspection.mockRestore();
-        }
-      }
-    );
-
-    test('clones and inspects anonymously when the App is not installed on the repository', async () => {
-      process.env.GITHUB_APP_ID = '123';
-      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
-      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
-        status: 'available',
-        defaultBranch: gitUtils.toBranchName('main'),
-        branches: [gitUtils.toBranchName('main')],
-      });
-      const notInstalled = (): Error => Object.assign(new Error('Not Found'), { status: 404 });
-      appRequest.mockClear();
-      appRequest.mockRejectedValueOnce(notInstalled()).mockRejectedValueOnce(notInstalled());
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
-      try {
-        await cloneRepository('https://github.com/other/public-repo');
-        expect(getGitCloneCall()?.[2]).toBeUndefined();
-        await inspectProjectBaseBranch({ url: 'https://github.com/other/public-repo' });
-        expect(inspection).toHaveBeenCalledWith({
-          kind: 'url',
-          url: 'https://github.com/other/public-repo',
-          credentials: undefined,
-        });
-        expect(appRequest).toHaveBeenCalledTimes(2);
-      } finally {
-        delete process.env.GITHUB_APP_ID;
-        delete process.env.GITHUB_APP_PRIVATE_KEY;
-        inspection.mockRestore();
-      }
-    });
-
-    test('rejects an HTTP GitHub URL instead of sending it an App installation token', async () => {
-      process.env.GITHUB_APP_ID = '123';
-      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
-      appRequest.mockClear();
-      try {
-        await expect(cloneRepository('http://github.com/owner/repo')).rejects.toThrow(
-          'GitHub App authentication requires an HTTPS repository URL.'
-        );
-        expect(spyCloneGitRepository).not.toHaveBeenCalled();
-        expect(appRequest).not.toHaveBeenCalled();
-      } finally {
-        delete process.env.GITHUB_APP_ID;
-        delete process.env.GITHUB_APP_PRIVATE_KEY;
-      }
-    });
-
-    test('uses SSH authentication for SSH-scheme App clone and inspection', async () => {
-      process.env.GITHUB_APP_ID = '123';
-      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
-      const url = 'ssh://git@github.com/owner/repo.git';
-      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
-        status: 'available',
-        defaultBranch: gitUtils.toBranchName('main'),
-        branches: [gitUtils.toBranchName('main')],
-      });
-      appRequest.mockClear();
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
-      try {
-        await cloneRepository(url);
-        expect(getGitCloneCall()?.[0]).toBe(url);
-        expect(getGitCloneCall()?.[2]).toBeUndefined();
-        await inspectProjectBaseBranch({ url });
-        expect(inspection).toHaveBeenCalledWith({ kind: 'url', url, credentials: undefined });
-        expect(appRequest).not.toHaveBeenCalled();
-      } finally {
-        delete process.env.GITHUB_APP_ID;
-        delete process.env.GITHUB_APP_PRIVATE_KEY;
-        inspection.mockRestore();
-      }
-    });
-
     test('passes GITHUB_TOKEN as request-scoped clone credentials', async () => {
       process.env.GITHUB_TOKEN = 'ghp_github_token_456';
       delete process.env.GH_TOKEN;
@@ -893,41 +941,43 @@ describe('cloneRepository', () => {
 
   // ── resolveForgeAuth unit tests ──────────────────────────────────────────
   describe('resolveForgeAuth', () => {
-    test('returns GH_TOKEN as password credentials for github.com', async () => {
+    const { resolveForgeAuth } = require('./clone');
+
+    test('returns GH_TOKEN as password credentials for github.com', () => {
       process.env.GH_TOKEN = 'ghp_abc';
-      const result = await resolveForgeAuth('https://github.com/owner/repo');
+      const result = resolveForgeAuth('https://github.com/owner/repo');
       expect(result).toEqual({ username: 'x-access-token', password: 'ghp_abc' });
       delete process.env.GH_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN as oauth2 password credentials for gitlab.com', async () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials for gitlab.com', () => {
       process.env.GITLAB_TOKEN = 'glpat-xyz';
-      const result = await resolveForgeAuth('https://gitlab.com/owner/repo');
+      const result = resolveForgeAuth('https://gitlab.com/owner/repo');
       expect(result).toEqual({ username: 'oauth2', password: 'glpat-xyz' });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('returns undefined when the credential env var is not set', async () => {
+    test('returns undefined when the credential env var is not set', () => {
       delete process.env.GH_TOKEN;
-      const result = await resolveForgeAuth('https://github.com/owner/repo');
+      const result = resolveForgeAuth('https://github.com/owner/repo');
       expect(result).toBeUndefined();
     });
 
-    test('returns undefined for unknown forge', async () => {
-      const result = await resolveForgeAuth('https://bitbucket.org/owner/repo');
+    test('returns undefined for unknown forge', () => {
+      const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
       expect(result).toBeUndefined();
     });
 
-    test('resolves GH_TOKEN for bare host/path form without protocol', async () => {
+    test('resolves GH_TOKEN for bare host/path form without protocol', () => {
       process.env.GH_TOKEN = 'ghp_bare';
-      const result = await resolveForgeAuth('github.com/owner/repo');
+      const result = resolveForgeAuth('github.com/owner/repo');
       expect(result).toEqual({ username: 'x-access-token', password: 'ghp_bare' });
       delete process.env.GH_TOKEN;
     });
 
-    test('does not match forge name in URL path (security)', async () => {
+    test('does not match forge name in URL path (security)', () => {
       process.env.GITLAB_TOKEN = 'glpat-leaked';
-      const result = await resolveForgeAuth('https://evil.example.com/gitlab/mirror');
+      const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
       expect(result).toBeUndefined();
       delete process.env.GITLAB_TOKEN;
     });
@@ -936,60 +986,58 @@ describe('cloneRepository', () => {
       ['GITLAB_TOKEN', 'https://gitlab.attacker.example/x.git'],
       ['GITEA_TOKEN', 'https://gitea.attacker.example/x.git'],
       ['GITEA_TOKEN', 'https://forgejo.attacker.example/x.git'],
-    ])('does not send %s to an unconfigured host named like a forge: %s', async (envVar, url) => {
+    ])('does not send %s to an unconfigured host named like a forge: %s', (envVar, url) => {
       process.env[envVar] = 'tok-shouldnotleak';
-      const result = await resolveForgeAuth(url);
+      const result = resolveForgeAuth(url);
       delete process.env[envVar];
       expect(result).toBeUndefined();
     });
 
-    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', async () => {
+    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_123';
-      const result = await resolveForgeAuth('https://git.example.com/group/app.git');
+      const result = resolveForgeAuth('https://git.example.com/group/app.git');
       expect(result).toEqual({ username: 'gitea_tok_123', password: '' });
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN as oauth2 password credentials when GITLAB_URL matches', async () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials when GITLAB_URL matches', () => {
       process.env.GITLAB_URL = 'https://code.mycompany.com';
       process.env.GITLAB_TOKEN = 'glpat-corp';
-      const result = await resolveForgeAuth('https://code.mycompany.com/team/project');
+      const result = resolveForgeAuth('https://code.mycompany.com/team/project');
       expect(result).toEqual({ username: 'oauth2', password: 'glpat-corp' });
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('matches configured forge authentication by explicit authority', async () => {
+    test('matches configured forge authentication by explicit authority', () => {
       process.env.GITLAB_URL = 'https://code.mycompany.com:8443';
       process.env.GITLAB_TOKEN = 'glpat-port';
 
-      expect(await resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
+      expect(resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
         username: 'oauth2',
         password: 'glpat-port',
       });
-      expect(
-        await resolveForgeAuth('https://code.mycompany.com:9443/team/project')
-      ).toBeUndefined();
+      expect(resolveForgeAuth('https://code.mycompany.com:9443/team/project')).toBeUndefined();
 
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', async () => {
+    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_secret';
-      const result = await resolveForgeAuth('https://evil.example.com/repo');
+      const result = resolveForgeAuth('https://evil.example.com/repo');
       expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
 
-    test('URL fallback does not activate when token env var is unset', async () => {
+    test('URL fallback does not activate when token env var is unset', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       delete process.env.GITEA_TOKEN;
-      const result = await resolveForgeAuth('https://git.example.com/group/app');
+      const result = resolveForgeAuth('https://git.example.com/group/app');
       expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
     });

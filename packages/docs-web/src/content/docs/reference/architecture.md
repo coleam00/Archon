@@ -921,7 +921,7 @@ supported.
 - `$BASE_BRANCH` - Base branch (from config or auto-detected)
 - `$DOCS_DIR` - Documentation directory path (configured, default `docs/`)
 - `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT` - GitHub issue/PR context (empty when unavailable)
-- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context (see the [Variables reference](/reference/variables/))
+- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context; the first two are deprecated with legacy gates (see the [Variables reference](/reference/variables/))
 
 **Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 

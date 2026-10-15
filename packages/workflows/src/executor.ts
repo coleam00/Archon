@@ -111,6 +111,9 @@ import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
 export {
+  resolveRunSourceCapture,
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   recordSelectedWorkflow,
   capturedSourceRoots,
   loadWorkflowSource,
@@ -369,7 +372,7 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
  * bags when per-user provider keys are disabled, no userId is present, the
- * deps adapter is absent, or no vendor is required. Delivery and file-write
+ * deps adapter is absent, or preflight connected no vendor. Delivery and file-write
  * failures stop execution rather than falling back to ambient credentials.
  */
 async function resolveUserProviderEnvForWorkflow(
@@ -383,11 +386,13 @@ async function resolveUserProviderEnvForWorkflow(
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
     return { env: {}, protectedValues: [] };
   }
-  const vendors = [...new Set(requirements.flatMap(r => (r.vendor ? [r.vendor] : [])))];
+  // Only vendors preflight connected: a stored credential no node's provider consumes
+  // (a Claude subscription in a Pi-only run) is neither refreshed nor delivered.
+  const vendors = [...connectedVendors];
   if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;
   try {
-    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, [...connectedVendors]);
+    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, vendors);
   } catch (error) {
     if (error instanceof StoredCredentialDeliveryError) {
       const requirement = requirements.find(r => r.vendor === error.vendor);
@@ -968,14 +973,21 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    run.workflow_name,
-    workflows.map(w => w.workflow)
-  );
+  const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
+    const readErrors = errors.filter(error => error.errorType === 'read_error');
+    // Incomplete discovery cannot prove that the verified capture lacks the workflow.
+    if (readErrors.length > 0) {
+      throw new Error(
+        `Cannot continue run of '${run.workflow_name}': captured source discovery at ` +
+          `${capture.anchor.root} could not finish reading its workflows.`,
+        { cause: readErrors }
+      );
+    }
     throw new WorkflowSourceIntegrityError(
       `Cannot continue run of '${run.workflow_name}': its captured source at ` +
-        `${capture.anchor.root} no longer contains that workflow.`
+        `${capture.anchor.root} no longer contains that workflow.`,
+      capture.anchor.root
     );
   }
   return { workflow, roots, workflows, errors };

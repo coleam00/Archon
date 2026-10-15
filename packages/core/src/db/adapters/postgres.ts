@@ -308,4 +308,18 @@ export const postgresDialect: SqlDialect = {
   daysSince(column: string): string {
     return `EXTRACT(EPOCH FROM (NOW() - ${column})) / 86400`;
   },
+
+  jsonText(column: string, path: string): string {
+    const keys = path.split('.');
+    const last = keys.length - 1;
+    return column + keys.map((key, i) => `${i === last ? '->>' : '->'}'${key}'`).join('');
+  },
+
+  jsonRemove(column: string, ...keys: string[]): string {
+    return [column, ...keys.map(key => `'${key}'`)].join(' - ');
+  },
+
+  rowLock(table?: string): string {
+    return table === undefined ? ' FOR UPDATE' : ` FOR UPDATE OF ${table}`;
+  },
 };

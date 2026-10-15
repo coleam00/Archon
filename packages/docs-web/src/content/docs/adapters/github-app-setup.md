@@ -85,7 +85,7 @@ Install the App on every org or personal account that holds repos your team oper
 2. Pick the org → grant access to all repos (or selected repos).
 3. Repeat for every org/account.
 
-> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config needed unless you're a single-install team — see `GITHUB_APP_INSTALLATION_ID` below.
+> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config is needed. `GITHUB_APP_INSTALLATION_ID` only pins the installation used for adapter API operations — see below.
 
 ## Step 6: Configure Archon
 
@@ -99,9 +99,8 @@ WEBHOOK_SECRET=<same value as on the GitHub side>
 # Optional:
 # GITHUB_APP_SLUG=archon-bot         # defaults to 'archon'; set this if you named your App
 #                                    # differently. The bot's posted-comment login is `<slug>[bot]`.
-# GITHUB_APP_INSTALLATION_ID=98765   # skip the per-(owner, repo) installation lookup when you only
-#                                    # have one installation. Saves one HTTP round trip per new
-#                                    # repo after a restart.
+# GITHUB_APP_INSTALLATION_ID=98765   # use a fixed installation for adapter API operations.
+#                                    # Repository tokens still verify the repository installation.
 ```
 
 CLI workflow run, `--detach`, resume, wake, and signal use `GITHUB_APP_ID` plus either private-key setting. They do not require `WEBHOOK_SECRET`; that setting is required for the server's webhook adapter. Each detached child initializes its own provider from the inherited configuration.
@@ -178,9 +177,9 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 ### Long-running workflow `git push`
 
-Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
+Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling and adding a codebase by URL: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. Git skips credential helpers when a remote URL carries credentials, so the same setup removes any token embedded in the repository's `https://github.com` remote URLs, such as one left by an older PAT-mode clone. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
 
-The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If installation or registration fails, repository setup stops before sync or workflow dispatch; a later setup retries registration and repairs partial config.
+The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If helper installation or registration fails, repository setup stops before URL registration, sync, or workflow dispatch; a later setup retries registration and repairs partial config.
 
 ### Long-running workflow `gh`
 
@@ -278,10 +277,15 @@ If the external POST probe returns anything other than `404` or `403` from the p
 ## Migration from PAT mode
 
 1. Register the App and install on your orgs (Steps 1–5 above).
-2. Add `GITHUB_APP_*` env vars (Step 6).
+2. Add `GITHUB_APP_*` env vars (Step 6). In Docker, put them in the container environment (the compose `.env`), not `/.archon/.env`; see [GitHub CLI authentication](/deployment/docker/#github-cli-authentication).
 3. **Remove** `GITHUB_TOKEN` from your env (or comment it out). Archon refuses to start if both are set.
-4. Restart Archon.
-5. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
+4. **Remove** `GH_TOKEN` if you set it to the same PAT. Archon starts with it set, but the GitHub CLI in the container keeps using the old PAT.
+5. Restart Archon.
+6. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
+
+In App mode, adding a private GitHub codebase by URL and inspecting its base branch use the repository's installation token; no PAT is needed. The clone keeps a credential-free remote URL and receives the credential helper before registration completes. If the App is not installed, Archon reports installation guidance. Adding an already-registered URL refreshes the helper on that checkout without cloning it again.
+
+Run `archon doctor` to validate local App configuration after migration. A passing App check confirms the ID and RSA key are valid locally; it does not confirm GitHub accepts them or that the App has repository access.
 
 ## Troubleshooting
 

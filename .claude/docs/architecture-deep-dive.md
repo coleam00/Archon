@@ -31,7 +31,9 @@ Slack event
           → buildFullPrompt() (orchestrator-agent.ts:450)
             → If conversation has codebase → buildProjectScopedPrompt() (prompt-builder.ts:153)
             → Otherwise → buildOrchestratorPrompt() (prompt-builder.ts:116)
-            → Prompt includes: registered projects, discovered workflows, /invoke-workflow format
+            → Prompt includes: registered projects, discovered workflows, and how to launch:
+              the invoke_workflow / register_project tools (Claude, Pi) or the
+              /invoke-workflow / /register-project command lines (other providers)
           → sessionDb.getActiveSession() → transitionSession('first-message') if none (orchestrator-agent.ts:462)
           → getAgentProvider(conversation.ai_assistant_type) (orchestrator-agent.ts:470)
           → cwd = getArchonWorkspacesPath() (orchestrator-agent.ts:458)
@@ -39,9 +41,11 @@ Slack event
 
           AI responds with natural language ± structured commands:
             → filterToolIndicators(assistantMessages) — strip emoji-prefixed tool noise (orchestrator-agent.ts:711)
-            → parseOrchestratorCommands() (orchestrator-agent.ts:719)
+            → Claude, Pi: invoke_workflow queues a launch, dispatched via dispatchOrchestratorWorkflow()
+              after the turn; register_project registers inside the tool call
+            → Other providers: parseOrchestratorCommands() scans the reply
               → If /invoke-workflow found → dispatchOrchestratorWorkflow()
-              → If /register-project found → handleRegisterProject()
+              → If /register-project found → registerProject()
               → Otherwise → send remaining text to user via platform.sendMessage()
 ```
 

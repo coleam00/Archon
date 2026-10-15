@@ -53,6 +53,7 @@ import {
   isNodeContextResume,
   isComposeFanOutNode,
   INPUT_NAME_SOURCE,
+  inputEnvKey,
 } from './schemas';
 import {
   canonicalValueText,
@@ -275,7 +276,15 @@ function attachIncludeOutputAliases(node: DagNode, aliases: IncludeOutputAliases
 }
 
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
-class IncludeExpansionError extends Error {}
+class IncludeExpansionError extends Error {
+  constructor(
+    message: string,
+    readonly errorType: WorkflowLoadError['errorType'] = 'validation_error',
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Composed-node metadata (#1764)
@@ -582,7 +591,13 @@ function applyInputsMacro(
   missing: Set<string>,
   includeNode: IncludeDirective
 ): void {
-  const substitute = (text: string, shielded?: ReadonlySet<string>): string =>
+  const substitute = (
+    text: string,
+    shielded?: ReadonlySet<string>,
+    // Canonical text (#2637): a typed input splices as its one deterministic
+    // representation (strings raw, everything else canonical JSON text).
+    render: (name: string) => string = name => canonicalValueText(args[name])
+  ): string =>
     text.replace(INPUTS_REF, (match, name: string) => {
       // A name the node's own `with:` binds is neither the caller's to supply nor the
       // caller's to override — it resolves at run time from the nearest source in the
@@ -597,9 +612,7 @@ function applyInputsMacro(
         missing.add(name);
         return match;
       }
-      // Canonical text (#2637): a typed input splices as its one deterministic
-      // representation (strings raw, everything else canonical JSON text).
-      return canonicalValueText(args[name]);
+      return render(name);
     });
 
   // Value-position substitution (#2637): in a `with:` map value, a string that is
@@ -642,6 +655,20 @@ function applyInputsMacro(
     )
       return slot.value;
     if (slot.surface === 'condition') return substituteWhen(slot.value);
+    // Executable source never receives an input value (#2115): the shell delivers each
+    // input as INPUTS_<UPPER_SNAKE>, so a bash body keeps the author's macro as a quoted
+    // reference to that variable. Inline script languages share no safe quoting form,
+    // so there the macro is refused and the author reads the env var directly.
+    if (slot.surface === 'shell')
+      return substitute(slot.value, undefined, name => `"\${${inputEnvKey(name)}}"`);
+    if (slot.surface === 'script') {
+      const name = slot.value.matchAll(INPUTS_REF).next().value?.[1];
+      if (name !== undefined)
+        throw new IncludeExpansionError(
+          `Node '${includeNode.id}': included node '${slot.owner.id}' script uses '$INPUTS.${name}', which would splice the input value into script source. Read it from the environment as ${inputEnvKey(name)} instead.`
+        );
+      return slot.value;
+    }
     // Names a command node supplies itself. Only its compiled body reads them: the
     // executor merges the node's resolved bindings OVER the run inputs into the `$INPUTS`
     // bag it builds for the prompt, and nothing else (dag-executor.ts). So the shield is
@@ -1019,7 +1046,14 @@ function materializeBlockCommandPrompts(
 
   if (isAgentNode(node) && node.source.kind === 'command') {
     const compiled = compile(node.source.name);
-    if (compiled.error !== undefined) throw new IncludeExpansionError(compiled.error);
+    if (compiled.error !== undefined) {
+      const content = commandContents.get(node.source.name);
+      throw new IncludeExpansionError(
+        compiled.error,
+        isIncludeCommandReadError(content) ? 'read_error' : 'validation_error',
+        { cause: isIncludeCommandReadError(content) ? content.cause : undefined }
+      );
+    }
     // The node's own `with:` map has no home on the inline variant, so it moves to the
     // engine-private payload the executor resolves for a materialized node (#2964).
     // It cannot be resolved here: a binding reads a sibling's output mid-run, which is
@@ -1131,7 +1165,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1177,7 +1213,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1329,7 +1367,7 @@ export function expandWorkflowIncludes(
     } catch (e) {
       if (e instanceof IncludeExpansionError) {
         failed.add(name);
-        errors.push({ filename: name, error: e.message, errorType: 'validation_error' });
+        errors.push({ filename: name, error: e.message, errorType: e.errorType });
       } else {
         throw e;
       }

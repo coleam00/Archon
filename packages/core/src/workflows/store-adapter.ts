@@ -5,7 +5,7 @@
 import { createSqlStateDocumentStore } from '../db/state-documents';
 import { getDatabase } from '../db/connection';
 import { providerRegistry } from '@archon/providers';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { StoredCredentialKind } from '@archon/provider-contract';
 import {
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -69,13 +69,13 @@ function sqlCursorOrder(cursor: WorkflowEventCursor): string {
 async function requiredCredentialRows(
   userId: string,
   vendors: readonly string[]
-): Promise<{ vendor: string; provider: string }[]> {
+): Promise<{ vendor: string; provider: string; kind: StoredCredentialKind }[]> {
   const rows = await listUserProviderKeys(userId);
   return vendors.flatMap(vendor => {
     const row =
       rows.find(r => r.provider === vendor) ??
       rows.find(r => normalizeCredentialVendor(r.provider) === vendor);
-    return row ? [{ vendor, provider: row.provider }] : [];
+    return row ? [{ vendor, provider: row.provider, kind: row.kind }] : [];
   });
 }
 
@@ -290,11 +290,11 @@ export function createWorkflowDeps(
           // beside that bag only so the workflow subprocess boundary can scrub echoed
           // file-delivered credentials without knowing provider-specific file shapes.
           isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-          getUserProviderCredentialStatus: async (userId, vendor): Promise<CredentialStatus> => {
+          getUserProviderCredentialStatus: async (userId, vendor) => {
             const [row] = await requiredCredentialRows(userId, [vendor]);
             return row
-              ? getStoredCredentialStatus(userId, row.provider)
-              : { state: 'not_connected', source: 'archon' };
+              ? { kind: row.kind, status: await getStoredCredentialStatus(userId, row.provider) }
+              : undefined;
           },
           getUserProviderEnv: async (
             userId: string,
@@ -335,7 +335,7 @@ export function createWorkflowDeps(
                 collectOAuthCredentialValues(cred.rawCreds, protectedValues);
               }
             }
-            // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+            // Aggregate Pi auth.json (the keys + subscriptions Pi consumes) so a `pi` node
             // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
             // a real artifactsDir (file delivery); the chat path is env-only.
             if (artifactsDir) {

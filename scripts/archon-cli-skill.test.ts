@@ -122,16 +122,31 @@ ${indent(loopGroup)}
     });
   });
 
-  test('approval decisions and explicit rework branch satisfy the loader', () => {
-    const approval = yamlFenceAfter('### approval —');
+  test('attention forms and an explicit reject branch satisfy the loader', () => {
+    const ask = yamlFenceAfter('`attention` asks a question');
     expectWorkflowToLoad(`
-name: approval-example
-description: Validate the documented structured approval decision
-interactive: true
+name: attention-select-example
+description: Validate the documented select attention form
 nodes:
   - id: plan
     prompt: plan
-${indent(approval)}
+    output_format:
+      type: object
+      properties:
+        question: {type: string}
+        topic: {type: string}
+      required: [question]
+${indent(ask)}
+`);
+
+    const review = yamlFenceAfter('branch on `$ask.output.decision`');
+    expectWorkflowToLoad(`
+name: attention-approval-example
+description: Validate the documented approval form with a reject branch
+nodes:
+  - id: plan
+    prompt: plan
+${indent(review)}
 `);
   });
 

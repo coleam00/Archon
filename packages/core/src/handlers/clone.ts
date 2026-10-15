@@ -43,9 +43,9 @@ import {
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
-import { loadGitHubAppConfig, resolveGitHubTokenFromEnv } from '../github-auth/config';
-import { createGitHubAppAuthProvider } from '../github-auth/auth';
-import { AppNotInstalledError } from '../github-auth/errors';
+import { resolveGitHubTokenFromEnv } from '../github-auth/config';
+import type { IGitHubAppAuthProvider } from '../github-auth/types';
+import { installCredentialHelper } from '../github-auth/credential-helper-install';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -83,6 +83,11 @@ interface ForgeAuthEntry {
 /** Known exact-hostname → credential source + clone credential mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
   {
+    hostPattern: 'github.com',
+    resolveToken: resolveGitHubTokenFromEnv,
+    buildCredentials: githubTokenCredentials,
+  },
+  {
     hostPattern: 'gitlab.com',
     resolveToken: () => process.env.GITLAB_TOKEN,
     buildCredentials: tokenAsOAuth2Password,
@@ -95,48 +100,17 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
 ];
 
 /** Resolve forge-specific credentials without adding them to the repository URL. */
-export async function resolveForgeAuth(url: string): Promise<CloneCredentials | undefined> {
-  const validated = validateCloneUrl(url);
-  if (!validated.ok) throw new ProjectRegistrationError(validated.error);
-  if (!validated.httpUrl) return undefined;
-  const parsed = validated.httpUrl;
-  const hostname = parsed.hostname.toLowerCase();
-  const authority = parsed.host.toLowerCase();
-
-  if (hostname === 'github.com') {
-    const config = loadGitHubAppConfig();
-    let token: string | undefined;
-    if (config) {
-      // Rejecting rather than returning no credentials keeps git from falling
-      // back to another credential source over cleartext HTTP.
-      if (parsed.protocol !== 'https:')
-        throw new ProjectRegistrationError(
-          'GitHub App authentication requires an HTTPS repository URL.'
-        );
-      const path = parsed.pathname;
-      const repository = parseOwnerRepo(
-        path
-          .replace(/^\//, '')
-          .replace(/\.git\/?$/, '')
-          .replace(/\/$/, '')
-      );
-      if (!repository)
-        throw new ProjectRegistrationError('GitHub URL must identify an owner/repository.');
-      try {
-        token = await createGitHubAppAuthProvider(config).getInstallationToken(
-          repository.owner,
-          repository.repo
-        );
-      } catch (error) {
-        // A repository outside every installation may still be public, so it
-        // clones anonymously as it did before App mode minted clone tokens.
-        if (!(error instanceof AppNotInstalledError)) throw error;
-      }
-    } else {
-      token = resolveGitHubTokenFromEnv();
-    }
-    return token ? githubTokenCredentials(token) : undefined;
+export function resolveForgeAuth(url: string): CloneCredentials | undefined {
+  // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
+  let hostname: string;
+  const parsed = safeParseUrl(url);
+  if (parsed) {
+    hostname = parsed.hostname.toLowerCase();
+  } else {
+    // Bare host/path form: take everything before the first slash
+    hostname = url.split('/')[0].toLowerCase();
   }
+  const authority = parsed?.host.toLowerCase() ?? hostname;
 
   // 1. Exact known-host match
   for (const entry of FORGE_AUTH) {
@@ -198,6 +172,50 @@ export interface RegistrationOptions {
   baseBranch?: string;
 }
 
+export interface CloneOptions extends RegistrationOptions {
+  githubAppAuth?: Pick<IGitHubAppAuthProvider, 'getInstallationToken'>;
+}
+
+function appRepository(url: string, options: CloneOptions): { owner: string; repo: string } | null {
+  if (!options.githubAppAuth) return null;
+  const parsed = safeParseUrl(url);
+  if (!parsed || parsed.hostname !== 'github.com') return null;
+  if (parsed.protocol === 'http:')
+    throw new ProjectRegistrationError('GitHub App URLs require HTTPS.');
+  if (parsed.protocol !== 'https:') return null;
+  const identity = parseOwnerRepo(
+    parsed.pathname
+      .replace(/\/+$/, '')
+      .replace(/\.git$/, '')
+      .slice(1)
+  );
+  if (!identity)
+    throw new ProjectRegistrationError('GitHub App URLs must identify an owner/repository.');
+  return identity;
+}
+
+async function repositoryCredentials(
+  url: string,
+  options: CloneOptions
+): Promise<CloneCredentials | undefined> {
+  const repository = appRepository(url, options);
+  return repository && options.githubAppAuth
+    ? githubTokenCredentials(
+        await options.githubAppAuth.getInstallationToken(repository.owner, repository.repo)
+      )
+    : resolveForgeAuth(url);
+}
+
+async function setupAppRepository(path: string): Promise<void> {
+  const result = await installCredentialHelper(path);
+  if (result.kind === 'failed') {
+    throw new Error(
+      `GitHub App repository setup requires the credential helper: ${result.error.message}`,
+      { cause: result.error }
+    );
+  }
+}
+
 export class ProjectRegistrationError extends Error {
   constructor(message: string) {
     super(message);
@@ -247,7 +265,8 @@ async function validateRegistrationChoice(
 export type { ProjectBaseBranchInspection } from '../schemas/codebase';
 
 export async function inspectProjectBaseBranch(
-  source: CodebaseSource
+  source: CodebaseSource,
+  options: CloneOptions = {}
 ): Promise<ProjectBaseBranchInspection> {
   source = codebaseSourceSchema.parse(source);
   let result;
@@ -263,7 +282,7 @@ export async function inspectProjectBaseBranch(
     result = await inspectRemoteBranches({
       kind: 'url',
       url: validated.url,
-      credentials: await resolveForgeAuth(validated.url),
+      credentials: await repositoryCredentials(validated.url, options),
     });
   } else {
     const path = await canonicalizeProjectPath(source.path);
@@ -422,7 +441,7 @@ function deriveRepoCloneTarget(validatedUrl: string): {
 export async function cloneRepository(
   codebases: IWorkflowHostStore['codebases'],
   repoUrl: string,
-  options: RegistrationOptions = {}
+  options: CloneOptions = {}
 ): Promise<RegisterResult> {
   const validatedUrl = validateCloneUrl(repoUrl);
   if (!validatedUrl.ok) {
@@ -436,6 +455,7 @@ export async function cloneRepository(
     return registerRepository(codebases, resolvedPath, options);
   }
 
+  const appSource = appRepository(repoUrl, options);
   const { workingUrl, ownerName, repoName, targetPath } = deriveRepoCloneTarget(repoUrl);
 
   // Check if source directory already has a git repo
@@ -458,6 +478,7 @@ export async function cloneRepository(
 
     if (existingCodebase) {
       rejectExistingChoice(options);
+      if (appSource) await setupAppRepository(existingCodebase.default_cwd);
       return {
         codebaseId: existingCodebase.id,
         name: existingCodebase.name,
@@ -487,11 +508,10 @@ export async function cloneRepository(
     }
   }
 
+  const credentials = await repositoryCredentials(workingUrl, options);
+
   // Create project structure (source/, worktrees/, artifacts/, logs/)
   await ensureProjectStructure(ownerName, repoName);
-
-  // Resolve authentication without putting it into the repository URL.
-  const credentials = await resolveForgeAuth(workingUrl);
 
   const cloneResult = await cloneGitRepository(
     workingUrl,
@@ -521,6 +541,7 @@ export async function cloneRepository(
   }
 
   try {
+    if (appSource) await setupAppRepository(targetPath);
     await validateRegistrationChoice(targetPath, options);
   } catch (error) {
     // Any failure here leaves a clone with no registration, which would block a retry.

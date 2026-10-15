@@ -5,7 +5,8 @@
  * a reason, so this node counts rounds itself and declares the run done at ROUND_CAP.
  * Everything else is read from the round's own typed outputs; nothing here judges.
  * It also says whether the next round's review is light: after a CI fix, the
- * general code reviewer alone on the delta; otherwise the same lenses on the delta.
+ * general code reviewer alone on the delta; otherwise the previous round's lenses,
+ * plus any the delta needs, on the delta.
  *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
