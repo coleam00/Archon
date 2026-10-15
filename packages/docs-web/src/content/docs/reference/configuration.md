@@ -130,13 +130,10 @@ concurrency:
   # providers:
   #   pi: 1
 
-# Live tool attention is enabled by default; quota continuation is opt-in.
+# Live tool attention and the usage-limit wait are both on by default.
 workflows:
   toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
-  autoResumeOnQuotaReset: false
-  # quotaFallbackDelayMs: 3600000
-  quotaMaxAttempts: 1
-  quotaDeadlineMs: 86400000
+  autoResumeOnQuotaReset: true  # false fails a run on a provider usage limit instead
 
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
@@ -185,7 +182,7 @@ assistant: pi
 tiers:
   large: { provider: pi, model: minimax/MiniMax-M3 }
 workflows:
-  quotaMaxAttempts: 3
+  toolCallAttentionMs: 600000
 env:
   BENCH_MODE: "1"
 ```
@@ -861,10 +858,8 @@ DISCORD_STREAMING_MODE=batch
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
-| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
-| `quotaFallbackDelayMs` | unset | Explicit delay to use when the provider's quota failure reports no reset time, or a reset time that has already passed, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
-| `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
-| `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
+| `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets. `false` fails the run, as before |
+| `quotaFallbackDelayMs`, `quotaMaxAttempts`, `quotaDeadlineMs` | — | Deprecated and have no effect. They still parse, so an older config or a persisted run config stays readable, and loading one logs a deprecation warning |
 
 Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
 
@@ -872,9 +867,13 @@ The threshold follows the same global, repository, and run-scoped `workflows` la
 
 Attention stores only ids, timestamps, and bounded display fields. It never copies raw tool inputs, outputs, assistant messages, or reasoning from provider transcripts. Commands are redacted against known credentials from the effective environment and protected credential values, including file-delivered credentials. Arbitrary secrets unknown to Archon cannot be discovered by that redaction.
 
-This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
+This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. No other provider reports a structured quota signal, so their quota errors never schedule a continuation. A quota failure without a reset time, or with one that has already passed, resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead; it waits for the latest of those resets. Any other failure, a limit without a reset time, or a reset that has already passed fails the run as before. Archon never guesses a reset time. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+
+Only a provider's typed failure starts the wait; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. Pi does not: its SDK passes Archon only the error text, with no limit signal or reset time, so a Pi run that hits a usage limit fails, and you resume it once the limit reopens. No other provider reports a structured quota signal.
+
+A run that an older Archon version scheduled under the earlier `quotaMaxAttempts` settings is still `failed` with a scheduled resume, and still wakes at its scheduled time.
 
 ## Concurrency Settings
 

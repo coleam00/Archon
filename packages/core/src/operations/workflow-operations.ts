@@ -666,6 +666,11 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
       throw new Error(
         `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
       );
+    case 'usage_limit':
+      throw new Error(
+        `Run ${run.id} is waiting for a provider usage limit to reset at ${attention.resumeAt}, ` +
+          'not at a gate. It continues by itself; cancel or abandon it to stop it.'
+      );
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
     case 'stalled_tool_calls':

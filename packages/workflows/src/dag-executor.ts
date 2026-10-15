@@ -120,7 +120,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
-  ScheduledWorkflowResume,
+  WorkflowUsageLimitWaitContext,
   NodeMcp,
 } from './schemas';
 import {
@@ -138,7 +138,6 @@ import {
   loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
-  isScheduledWorkflowResume,
   isHaltNode,
   isIncludeDirective,
   isOutputFormatEnforced,
@@ -11884,74 +11883,81 @@ export async function executeDagWorkflow(
       });
   };
 
-  const scheduleQuotaResume = async (): Promise<ScheduledWorkflowResume | undefined> => {
-    const policy = config.workflows;
-    if (policy?.autoResumeOnQuotaReset !== true) return undefined;
+  /**
+   * The wait a failed pass takes instead of failing, when every failed node hit a provider
+   * usage limit whose reset the provider reported and that is still ahead. The run then
+   * cannot progress before the last of those resets, so it waits for it. Any other failure,
+   * a limit without a reported reset, or a container run (the continuation host does not
+   * continue one) leaves the run to fail. Only the typed class says a limit is spent; the
+   * error text never does.
+   */
+  const usageLimitWait = async (): Promise<WorkflowUsageLimitWaitContext | undefined> => {
+    if (config.workflows?.autoResumeOnQuotaReset === false) return undefined;
+    let latest: { nodeId: string; resetAt: number } | undefined;
+    for (const [nodeId, output] of runCtx.nodeOutputs) {
+      if (output.state !== 'failed') continue;
+      if (output.providerFailure?.class !== 'quota_exhausted') return undefined;
+      const resetAt = output.providerFailure.resetAt;
+      if (resetAt === undefined) {
+        await deps.store.createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'quota_resume_skipped',
+          step_name: nodeId,
+          data: { reason: 'reset_unavailable' },
+        });
+        return undefined;
+      }
+      if (latest === undefined || Date.parse(resetAt) > latest.resetAt)
+        latest = { nodeId, resetAt: Date.parse(resetAt) };
+    }
+    const now = Date.now();
+    if (latest === undefined || latest.resetAt <= now) return undefined;
     if (execContext.kind === 'container') {
       await deps.store.createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'quota_resume_skipped',
+        step_name: latest.nodeId,
         data: { reason: 'container_unsupported' },
       });
       return undefined;
     }
-    const prior = isScheduledWorkflowResume(workflowRun.metadata?.scheduled_resume)
-      ? workflowRun.metadata.scheduled_resume
-      : undefined;
-    // Only a provider's typed class says a quota window is spent; the error text never does.
-    const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      (
-        output
-      ): output is Extract<NodeOutput, { state: 'failed' }> & {
-        providerFailure: ProviderFailure;
-      } => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
-    );
-    if (quotaFailure === undefined) return undefined;
-    const quotaResetAt = quotaFailure.providerFailure.resetAt;
-    const now = new Date();
-    const maxAttempts = policy.quotaMaxAttempts;
-    const attempt = (prior?.attempt ?? 0) + 1;
-    const deadlineMs = policy.quotaDeadlineMs;
-    const deadlineAt = prior?.deadlineAt ?? new Date(now.getTime() + deadlineMs).toISOString();
-    if (attempt > maxAttempts) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { attempt, max_attempts: maxAttempts },
-      });
-      return undefined;
-    }
-
-    let resumeAt: Date | null = quotaResetAt !== undefined ? new Date(quotaResetAt) : null;
-    if (resumeAt === null || resumeAt.getTime() <= now.getTime()) {
-      const fallback = policy.quotaFallbackDelayMs;
-      resumeAt = fallback !== undefined ? new Date(now.getTime() + fallback) : null;
-    }
-    if (resumeAt === null) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_skipped',
-        data: { reason: 'reset_unavailable' },
-      });
-      return undefined;
-    }
-    if (resumeAt.getTime() > Date.parse(deadlineAt)) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { reason: 'deadline', deadline_at: deadlineAt },
-      });
-      return undefined;
-    }
-
-    const scheduled: ScheduledWorkflowResume = {
-      reason: 'quota',
-      resumeAt: resumeAt.toISOString(),
-      deadlineAt,
-      attempt,
-      maxAttempts,
+    return {
+      owner: 'node',
+      nodeId: latest.nodeId,
+      kind: 'quota',
+      waitingSince: new Date(now).toISOString(),
+      resumeAt: new Date(latest.resetAt).toISOString(),
     };
-    return scheduled;
+  };
+
+  /** Pause the run on a usage-limit wait. False when the pass must fail instead. */
+  const pauseForUsageLimit = async (): Promise<boolean> => {
+    const wait = await usageLimitWait();
+    if (wait === undefined) return false;
+    try {
+      await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
+        kind: 'started',
+        stepName: wait.nodeId,
+      });
+    } catch (pauseError) {
+      // A run cancelled or paused meanwhile keeps that status, exactly as the failure
+      // branches below leave it.
+      if ((await deps.store.getWorkflowRunStatus(workflowRun.id)) === 'running') throw pauseError;
+      getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
+      return true;
+    }
+    getLog().info(
+      { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt },
+      'dag.usage_limit_wait_started'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
+        `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
+      { workflowId: workflowRun.id }
+    );
+    return true;
   };
 
   /**
@@ -12122,6 +12128,7 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (anyFailed && (await pauseForUsageLimit())) return;
     const failedNodes: string[] = [];
     for (const [nodeId, o] of nodeOutputs) {
       if (o.state === 'failed') failedNodes.push(nodeId);
@@ -12135,10 +12142,6 @@ export async function executeDagWorkflow(
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe. (Usage IS
     // stored: persistRunUsage wrote it at the run tail, before this branch — #2469.)
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12164,7 +12167,6 @@ export async function executeDagWorkflow(
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
         // A first-node failure completes nothing, but it is still a node failure.
         exitReason: anyFailed ? 'node_error' : 'no_nodes_completed',
       }),
@@ -12178,15 +12180,12 @@ export async function executeDagWorkflow(
 
   if (anyFailed) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (await pauseForUsageLimit()) return;
     const failedNodes = [...nodeOutputs.entries()]
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
     const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12211,10 +12210,7 @@ export async function executeDagWorkflow(
     // or the user's notification. Terminal telemetry is reported by the run store
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
-        exitReason: 'node_error',
-      }),
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
       { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
     );
     // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the

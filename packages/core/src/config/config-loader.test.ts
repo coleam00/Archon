@@ -299,7 +299,7 @@ workflows:
       expect(mockLogger.error).toHaveBeenCalled();
     });
 
-    test('accepts quota continuation delays at the persisted timestamp bound', async () => {
+    test('parses deprecated quota settings at the persisted timestamp bound, with a warning', async () => {
       mockFsReadFile.mockResolvedValue(`
 workflows:
   quotaFallbackDelayMs: 31536000000000
@@ -312,6 +312,14 @@ workflows:
         quotaFallbackDelayMs: 31_536_000_000_000,
         quotaDeadlineMs: 31_536_000_000_000,
       });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          warning: expect.stringContaining(
+            'workflows.quotaFallbackDelayMs, workflows.quotaDeadlineMs are deprecated and have no effect'
+          ),
+        }),
+        'config.workflows_quota_keys_deprecated'
+      );
     });
 
     test('keeps ordinary config forward-compatible with unknown workflow settings', async () => {
@@ -591,13 +599,11 @@ defaults:
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 1800000,
-        autoResumeOnQuotaReset: false,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 86_400_000,
+        autoResumeOnQuotaReset: true,
       });
     });
 
-    test('merges global and repo quota continuation policy per field', async () => {
+    test('merges global and repo workflow policy per field, without deprecated quota keys', async () => {
       mockFsReadFile.mockResolvedValueOnce(`
 workflows:
   toolCallAttentionMs: 60000
@@ -616,9 +622,6 @@ workflows:
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 0,
         autoResumeOnQuotaReset: true,
-        quotaFallbackDelayMs: 3_600_000,
-        quotaMaxAttempts: 3,
-        quotaDeadlineMs: 43_200_000,
       });
     });
 

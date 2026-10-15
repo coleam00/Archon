@@ -22,11 +22,7 @@ function baseConfig(): WorkflowConfig {
     defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
     docsPath: 'docs',
     envVars: { LOWER: 'kept', SHARED: 'lower' },
-    workflows: {
-      autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
-    },
+    workflows: { autoResumeOnQuotaReset: true },
   };
 }
 
@@ -36,7 +32,7 @@ describe('applyWorkflowRunConfigLayer', () => {
     const resolved = applyWorkflowRunConfigLayer(base, {
       assistants: { claude: { model: 'opus' } },
       envVars: { SHARED: 'run' },
-      workflows: { quotaMaxAttempts: 4 },
+      workflows: { autoResumeOnQuotaReset: false },
     });
 
     expect(resolved).toMatchObject({
@@ -50,14 +46,17 @@ describe('applyWorkflowRunConfigLayer', () => {
         medium: { provider: 'claude', model: 'sonnet' },
       },
       envVars: { LOWER: 'kept', SHARED: 'run' },
-      workflows: {
-        autoResumeOnQuotaReset: false,
-        quotaMaxAttempts: 4,
-        quotaDeadlineMs: 86_400_000,
-      },
+      workflows: { autoResumeOnQuotaReset: false },
     });
     expect(base.assistants.claude.model).toBe('sonnet');
     expect(base.tiers?.large).toBeUndefined();
+  });
+
+  it('drops the deprecated quota keys a persisted run config still carries', () => {
+    const resolved = applyWorkflowRunConfigLayer(baseConfig(), {
+      workflows: { quotaFallbackDelayMs: 60_000, quotaMaxAttempts: 4, quotaDeadlineMs: 1 },
+    });
+    expect(resolved.workflows).toEqual({ autoResumeOnQuotaReset: true });
   });
 
   it('rejects a partial quota layer when the lower config omitted required defaults', () => {

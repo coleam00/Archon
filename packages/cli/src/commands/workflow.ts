@@ -3706,8 +3706,8 @@ async function runWorkflowWithOwnedSource(
 
     // Check result and exit appropriately
     if (result.success && 'paused' in result && result.paused) {
-      // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
-      // `attention` pause has no deadline and stays with whoever resolves it.
+      // A durable wait with a deadline (time, event or usage limit) is this process's own
+      // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
       const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
       const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
       if (pausedRun !== null && wait !== undefined) {
@@ -3785,7 +3785,7 @@ export interface PendingWaitContinuation {
 /**
  * Read the wait this process owns off a run row, if any.
  *
- * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * `undefined` means the run is not paused on a time, event or usage-limit wait — a terminal
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
@@ -4394,6 +4394,8 @@ export async function workflowStatusCommand(
     console.log(`  Status: ${run.status}`);
     const attention = runAttention(run);
     if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
+    if (attention?.kind === 'usage_limit')
+      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
     console.log(`  Age:    ${age}`);
     if (run.active_nodes.length > 0) {
@@ -4412,6 +4414,10 @@ export async function workflowStatusCommand(
 
     console.log('');
   }
+}
+
+function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
+  return `  Wait:   provider usage limit at '${nodeId}' — continues after it resets at ${resumeAt}`;
 }
 
 function formatToolAttention(
@@ -4475,6 +4481,11 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
     case 'blocked_on_children':
       // Unreachable through the waiter, which resolves every child before returning.
       return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
+    case 'usage_limit':
+      return (
+        `Run ${watchedRunId} is waiting for a provider usage limit to reset at ` +
+        `${attention.resumeAt}, then continues by itself.`
+      );
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -4663,6 +4674,12 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       lines.push(
         `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
+      );
+      break;
+    case 'usage_limit':
+      lines.push(
+        `    ${item.node}: provider usage limit reached; continues by itself after it resets at ${item.resetAt}`,
+        `    Stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
       );
       break;
     case 'unreadable':
@@ -5509,7 +5526,9 @@ export async function workflowGetCommand(
       console.log(
         waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
-          : `  Wait:   until ${waitMeta.resumeAt}`
+          : waitMeta.kind === 'quota'
+            ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
+            : `  Wait:   until ${waitMeta.resumeAt}`
       );
     }
   }

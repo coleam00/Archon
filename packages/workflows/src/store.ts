@@ -50,7 +50,6 @@ import type {
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   WorkflowWaitResult,
-  ScheduledWorkflowResume,
   WorkflowNodeSession,
   WorkflowRunNodeSession,
 } from './schemas';
@@ -843,11 +842,7 @@ export interface IWorkflowStore
   failWorkflowRun(
     id: string,
     error: string,
-    options?: {
-      scheduledResume?: ScheduledWorkflowResume;
-      exitReason?: RunExitReason;
-      signal?: RunStopSignal;
-    }
+    options?: { exitReason?: RunExitReason; signal?: RunStopSignal }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

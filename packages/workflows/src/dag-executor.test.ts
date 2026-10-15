@@ -15397,8 +15397,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       ...minimalConfig,
       workflows: {
         autoResumeOnQuotaReset: false,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 1000,
         toolCallAttentionMs: thresholdMs,
       },
     };
@@ -15559,8 +15557,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
             ...minimalConfig,
             workflows: {
               autoResumeOnQuotaReset: false,
-              quotaMaxAttempts: 1,
-              quotaDeadlineMs: 1000,
               toolCallAttentionMs: 20,
             },
           },
@@ -17264,6 +17260,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
             ],
           },
           workflowRun: makeWorkflowRun('typed-credit-failure-run'),
+          config: quotaConfig(false),
         })
       );
 
@@ -17286,28 +17283,33 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     }
   );
 
-  function quotaConfig(
-    workflows: Partial<NonNullable<WorkflowConfig['workflows']>>
-  ): WorkflowConfig {
-    return {
-      ...minimalConfig,
-      workflows: {
-        autoResumeOnQuotaReset: true,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 3_600_000,
-        ...workflows,
-      },
-    };
+  function quotaConfig(autoResumeOnQuotaReset = true): WorkflowConfig {
+    return { ...minimalConfig, workflows: { autoResumeOnQuotaReset } };
   }
 
-  it('schedules the resume at the reset instant a typed quota failure reports', async () => {
-    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const investigateWorkflow = {
+    name: 'credit-wait-test',
+    nodes: [
+      {
+        id: 'investigate',
+        kind: 'agent' as const,
+        source: { kind: 'inline' as const, prompt: 'Investigate the issue' },
+      },
+    ],
+  };
+
+  function useQuery(sendQuery: ReturnType<typeof quotaExhaustedQuery>): void {
     mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: quotaExhaustedQuery(resetAt),
+      sendQuery,
       checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
+  }
+
+  it('waits until the reset instant a typed quota failure reports, instead of failing', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17315,26 +17317,24 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: quotaConfig({}),
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-wait-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-run',
+      {
+        owner: 'node',
+        nodeId: 'investigate',
+        kind: 'quota',
+        waitingSince: expect.any(String),
+        resumeAt: resetAt,
+      },
+      { kind: 'started', stepName: 'investigate' }
+    );
     // The typed failure is recorded on the node, unchanged.
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.provider_failure).toEqual({
@@ -17344,14 +17344,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     });
   });
 
-  it('schedules the resume when the quota failure comes from a loop-group body node', async () => {
+  it('waits when the quota failure comes from a loop-group body node', async () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: quotaExhaustedQuery(resetAt),
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+    useQuery(quotaExhaustedQuery(resetAt));
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17360,7 +17355,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         conversationId: 'conv-credit',
         cwd: testDir,
         workflow: {
-          name: 'credit-resume-group',
+          name: 'credit-wait-group',
           nodes: [
             {
               id: 'refine',
@@ -17373,25 +17368,25 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
             },
           ] as DagNode[],
         },
-        workflowRun: makeWorkflowRun('credit-resume-group-run'),
-        config: quotaConfig({}),
+        workflowRun: makeWorkflowRun('credit-wait-group-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-group-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'refine', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'refine' }
+    );
   });
 
-  it('never schedules a resume from error text that only reads like a quota limit', async () => {
-    // Untyped provider errors: the words say "usage limit reached" with a reset
-    // epoch inside the deadline, but no provider classified the failure, so nothing
-    // is scheduled.
+  it('never waits on error text that only reads like a quota limit', async () => {
+    // Untyped provider errors: the words say "usage limit reached" with a reset epoch,
+    // but no provider classified the failure, so the run fails.
     const resetEpoch = Math.floor(Date.now() / 1000) + 600;
-    const proseOnlyQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-      async function* () {
+    useQuery(
+      mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* () {
         yield {
           type: 'result',
           isError: true,
@@ -17399,14 +17394,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
           errors: [`Claude AI usage limit reached|${String(resetEpoch)}`],
           sessionId: 'dag-session-credit',
         };
-      }
+      })
     );
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: proseOnlyQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17414,34 +17403,18 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: quotaConfig({ quotaFallbackDelayMs: 60_000 }),
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-prose-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
   });
 
-  it('uses the bounded fallback when a typed quota failure reports no reset', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+  it('fails as before when a typed quota failure reports no reset', async () => {
+    useQuery(quotaExhaustedQuery());
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17449,99 +17422,76 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaFallbackDelayMs: 60_000,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-no-reset-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      attempt: 1,
-      maxAttempts: 1,
-    });
-    expect(
-      store.createWorkflowEvent.mock.calls.some(
-        call => call[0].event_type === 'quota_resume_scheduled'
-      )
-    ).toBe(false);
-  });
-
-  it('records that quota continuation is unavailable when no reset is reported and no fallback is set', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
-    const store = createMockStore();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-credit',
-        cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
-      })
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'credit-no-reset-run',
+      expect.stringContaining('investigate'),
+      { exitReason: 'node_error' }
     );
-
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
     expect(store.createWorkflowEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'quota_resume_skipped',
+        step_name: 'investigate',
         data: { reason: 'reset_unavailable' },
       })
     );
   });
 
-  it('does not promise automatic quota continuation for a container run', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+  it.each([
+    ['the operator turned the wait off', false, 10 * 60_000],
+    ['the reported reset has already passed', true, -60_000],
+  ])('fails when %s', async (_case, autoResume, resetOffsetMs) => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + resetOffsetMs).toISOString()));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-fail-run'),
+        config: quotaConfig(autoResume),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails when another node failed for a reason the reset does not clear', async () => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-mixed-test',
+          nodes: [
+            ...investigateWorkflow.nodes,
+            { id: 'broken', kind: 'exec', runtime: 'sh', script: 'exit 3' },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-mixed-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait for a container run, which the continuation host cannot continue', async () => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
     const store = createMockStore();
     const execSpy = stubMissingContainer();
 
@@ -17551,26 +17501,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
           deps: createMockDeps(store),
           conversationId: 'conv-credit',
           cwd: testDir,
-          workflow: {
-            name: 'container-credit-resume-test',
-            nodes: [
-              {
-                id: 'investigate',
-                kind: 'agent',
-                source: { kind: 'inline', prompt: 'Investigate the issue' },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun('container-credit-resume-run'),
-          config: {
-            ...minimalConfig,
-            workflows: {
-              autoResumeOnQuotaReset: true,
-              quotaFallbackDelayMs: 60_000,
-              quotaMaxAttempts: 1,
-              quotaDeadlineMs: 3_600_000,
-            },
-          },
+          workflow: investigateWorkflow,
+          workflowRun: makeWorkflowRun('container-credit-run'),
+          config: quotaConfig(),
           execContext: { kind: 'container', containerId: 'container-1' },
         })
       );
@@ -17578,15 +17511,14 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       execSpy.mockRestore();
     }
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
-    expect(
-      store.createWorkflowEvent.mock.calls.some(
-        call =>
-          call[0].event_type === 'quota_resume_skipped' &&
-          call[0].data?.reason === 'container_unsupported'
-      )
-    ).toBe(true);
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'quota_resume_skipped',
+        data: { reason: 'container_unsupported' },
+      })
+    );
   });
 });
 
@@ -39765,7 +39697,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
   });
 
-  it('schedules the quota resume when a composed instance node reports quota_exhausted', async () => {
+  it('waits on the quota reset when a composed instance node reports quota_exhausted', async () => {
     await writeBlock(
       [
         'name: compose-blk',
@@ -39806,22 +39738,16 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
           ],
         },
         workflowRun: makeWorkflowRun('compose-quota-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
+        config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'compose-quota-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'fan' }
+    );
   });
 
   it('refuses runtime composed fan-out resolution after the capture changes', async () => {

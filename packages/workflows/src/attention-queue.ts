@@ -26,6 +26,7 @@ import {
   attentionLabels,
   attentionRevision,
   pausedAttentionWait,
+  pausedUsageLimitWait,
   queuedRunAttention,
   runAttentionUnreadableReasonSchema,
   SUBRUN_METADATA_KEYS,
@@ -84,8 +85,10 @@ const itemBase = {
 /**
  * One queue item. `kind` is the run-attention kind it was built from: `attention` is a
  * `wait: attention` pause, answered with `answer`; `awaiting_response` is a gate,
- * answered with `approve`, `reject` or `respond`; `unreadable` is a paused run nothing
- * can describe, which someone has to look at and resume or abandon.
+ * answered with `approve`, `reject` or `respond`; `usage_limit` is a run waiting for a
+ * provider usage limit to reset at `resetAt`, which continues by itself and needs no
+ * answer; `unreadable` is a paused run nothing can describe, which someone has to look at
+ * and resume or abandon.
  */
 export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -103,6 +106,12 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     node: z.string(),
     occurrence: z.string(),
     message: z.string(),
+  }),
+  z.object({
+    kind: z.literal('usage_limit'),
+    ...itemBase,
+    node: z.string(),
+    resetAt: z.string().datetime(),
   }),
   z.object({
     kind: z.literal('unreadable'),
@@ -184,7 +193,7 @@ export function toAttentionQueueItem(
     fanOut: fanOutPosition(run),
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
-    pausedAt: wait?.waitingSince ?? null,
+    pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
     context: {
       artifactsDir: root === null ? null : getRunArtifactsDirForRoot(root, run.id),
       transcript: root === null ? null : getRunLogPathForRoot(root, run.id),
@@ -211,6 +220,8 @@ export function toAttentionQueueItem(
         occurrence: attention.occurrence,
         message: attention.message,
       };
+    case 'usage_limit':
+      return { kind: 'usage_limit', ...base, node: attention.nodeId, resetAt: attention.resumeAt };
     case 'unreadable':
       return { kind: 'unreadable', ...base, reason: attention.reason, detail: attention.detail };
   }

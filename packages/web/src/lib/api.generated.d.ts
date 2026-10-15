@@ -4396,6 +4396,14 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          nodeId: string;
+          /** Format: date-time */
+          resumeAt: string;
+        }
+      | {
+          /** @enum {string} */
           kind: 'blocked_on_child';
           runId: string;
           childRunId: string;
@@ -5766,6 +5774,17 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          owner: 'node';
+          nodeId: string;
+          /** @enum {string} */
+          kind: 'quota';
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          resumeAt: string;
+        }
+      | {
+          /** @enum {string} */
           owner: 'loop_group';
           nodeId: string;
           bodyWaitId: string;
@@ -5967,6 +5986,37 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          node: string;
+          /** Format: date-time */
+          resetAt: string;
+        }
+      | {
+          /** @enum {string} */
           kind: 'unreadable';
           runId: string;
           workflow: string;
@@ -6096,6 +6146,37 @@ export interface components {
             node: string;
             occurrence: string;
             message: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'usage_limit';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            /** Format: date-time */
+            resetAt: string;
           }
         | {
             /** @enum {string} */
