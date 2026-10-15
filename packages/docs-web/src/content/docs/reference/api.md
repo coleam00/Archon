@@ -84,8 +84,11 @@ curl http://localhost:3090/api/conversations
 ```
 
 Query parameters:
-- `codebase_id` (optional) -- Filter by codebase
-- `include_deleted` (optional) -- Include soft-deleted conversations
+- `codebaseId` (optional) -- Filter by codebase
+- `platform` (optional) -- Filter by platform type
+- `mine` (optional) -- `true` narrows to the caller's own conversations on every platform when an identity resolves. Where conversations are private the list already holds only the caller's own web and CLI conversations, and `mine=true` also drops chat and forge conversations attributed to anyone else.
+
+Where web auth is enabled or `ARCHON_WEB_AUTH_HEADER` is set, web and CLI conversations are private to their owner; see [Security](/reference/security/#adapter-authorization) for the rules and status codes.
 
 ### Create a Conversation
 
@@ -225,7 +228,7 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes` |
+| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
 

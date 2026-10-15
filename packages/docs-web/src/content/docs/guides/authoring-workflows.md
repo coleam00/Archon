@@ -1216,7 +1216,7 @@ A node with `context: fresh` skips persistence (and in-run threading). The expli
 | CLI | `archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes]` |
 | REST | `DELETE /api/workflows/{name}/node-sessions?scope=<key>&node=<id>` |
 
-Cross-scope resets are guarded so a dropped scope can't silently wipe every conversation's memory: the CLI requires `--yes` when `--scope` is omitted, and REST requires `?confirm=all-scopes`. Chat always scopes automatically to the current conversation.
+Cross-scope resets are guarded so a dropped scope can't silently wipe every conversation's memory: the CLI requires `--yes` when `--scope` is omitted, and REST requires `?confirm=all-scopes`. When conversations are private to their owner (web auth enabled, or `ARCHON_WEB_AUTH_HEADER` set), REST refuses the cross-scope reset with `403`, and `scope` must name an existing conversation: a web or CLI conversation must be one you own, while a chat or forge conversation (Slack, Discord, Telegram, GitHub, GitLab, Gitea) keeps its platform's own access model and needs no ownership. Chat always scopes automatically to the current conversation.
 
 ### Cost caveat
 
