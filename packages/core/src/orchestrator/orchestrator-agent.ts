@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -1222,7 +1223,18 @@ async function dispatchOrchestratorWorkflowOwned(
     let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
     if (willContinueExistingRun && resumableRun?.working_path) {
       cwd = resumableRun.working_path;
+      const env = await sqlIsolation.findLatestByCodebaseAndWorkingPath(
+        codebase.id,
+        cwd,
+        new Date()
+      );
+      if (env?.status === 'active') await recordWorktreeAdoption(sqlIsolation, env);
     } else if (adoptionLane?.kind === 'reuse-worktree') {
+      if (adoptionLane.envId) {
+        const env = await sqlIsolation.getById(adoptionLane.envId);
+        if (!env) throw new Error(`Isolation environment ${adoptionLane.envId} not found`);
+        await recordWorktreeAdoption(sqlIsolation, env);
+      }
       // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
       // instead of cutting a fresh one (same shape as the background dispatch in
       // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this

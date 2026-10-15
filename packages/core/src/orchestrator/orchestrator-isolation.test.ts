@@ -98,8 +98,12 @@ mock.module('../db/codebases', () => ({
   createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
 }));
 
+const mockAdoptionMetadata = mock(async (_id: string, _metadata: Record<string, unknown>) => {});
+const mockAdoptedEnv = mock(async () => makeEnvRow());
 const mockUpdateIsolationStatus = mock(() => Promise.resolve());
 mock.module('../db/isolation-environments', () => ({
+  getById: mockAdoptedEnv,
+  updateMetadata: mockAdoptionMetadata,
   createIsolationStore: mock(() => ({
     updateStatus: mockUpdateIsolationStatus,
   })),
@@ -1019,6 +1023,24 @@ describe('dispatchBackgroundWorkflow', () => {
 
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]).not.toHaveProperty('cutFromCommit');
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toBeUndefined();
+  });
+
+  test('surviving-worktree adoption warns and records the background handover once', async () => {
+    mockAdoptionMetadata.mockClear();
+    mockLogger.warn.mockClear();
+    const env = makeEnvRow();
+    mockAdoptedEnv.mockResolvedValueOnce(env);
+    await dispatchBackgroundWorkflow(
+      makeRoutingCtx({
+        adoptionLane: { kind: 'reuse-worktree', workingPath: env.working_path, envId: env.id },
+      }),
+      makeWorkflow()
+    );
+    expect(mockAdoptionMetadata.mock.calls).toEqual([[env.id, { adopted: true }]]);
+    expect(
+      mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+    ).toHaveLength(1);
+    expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe(env.working_path);
   });
 
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {

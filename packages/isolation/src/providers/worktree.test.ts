@@ -1711,6 +1711,7 @@ describe('WorktreeProvider', () => {
           throw new Error('DB constraint violation');
         },
         updateStatus: async () => undefined,
+        updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,
       };
       const resolver = new IsolationResolver({ store, provider: losingProvider });

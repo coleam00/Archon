@@ -121,6 +121,9 @@ const isolationStore: IIsolationStore = {
   updateStatus: () => {
     throw new Error('Unexpected isolation update');
   },
+  updateMetadata: () => {
+    throw new Error('unused');
+  },
   countActiveByCodebase: () => {
     throw new Error('Unexpected isolation count');
   },

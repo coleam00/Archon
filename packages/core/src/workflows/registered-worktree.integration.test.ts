@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
-import { configureIsolation } from '@archon/isolation';
+import { configureIsolation, getIsolationProvider, IsolationResolver } from '@archon/isolation';
 import { getLogLevel, setLogLevel, setLogSink } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -185,3 +185,43 @@ test('child reuse has one registration and one provider adoption warning', async
   expectAdoptionWarning(reused.branchName, reused.cwd, create.mock.calls[0][0].workflow_id);
   expect(events.filter(event => event.msg === 'workflow.child_worktree_adopted')).toHaveLength(0);
 });
+
+for (const reuse of ['existing', 'workflow', 'linked'] as const) {
+  test(`registered resolver ${reuse} reuse warns and persists adoption`, async () => {
+    const resolver = new IsolationResolver({
+      store: isolation.createIsolationStore(),
+      provider: getIsolationProvider(),
+    });
+    const request = {
+      existingEnvId: null,
+      codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+      hints: { workflowType: 'issue' as const, workflowId: '42' },
+      platformType: 'cli',
+    };
+    const first = await resolver.resolve(request);
+    if (first.status !== 'resolved') throw new Error('Expected creation');
+    const originalRow = await isolation.getById(first.env.id);
+    events.length = 0;
+    const reused = await resolver.resolve({
+      ...request,
+      ...(reuse === 'existing' ? { existingEnvId: first.env.id } : {}),
+      ...(reuse === 'linked'
+        ? { hints: { workflowType: 'pr', workflowId: '99', linkedIssues: [42] } }
+        : {}),
+    });
+    if (reused.status !== 'resolved') throw new Error('Expected reuse');
+    const row = await isolation.getById(first.env.id);
+    expect({
+      cwd: reused.cwd,
+      adopted: row?.metadata.adopted,
+      warnings: events.filter(e => e.msg === 'worktree_adopted' && e.level === 40).length,
+    }).toEqual({ cwd: first.cwd, adopted: true, warnings: 1 });
+    expect(reused.env.metadata.adopted).toBe(true);
+    expect(row?.created_at).toEqual(originalRow?.created_at);
+    expect(row?.metadata.worktree_creation_id).toBe(originalRow?.metadata.worktree_creation_id);
+    expect(await isolation.countActiveByCodebase(codebaseId)).toBe(1);
+    events.length = 0;
+    await resolver.resolve({ ...request, existingEnvId: first.env.id });
+    expect(events.filter(e => e.msg === 'worktree_adopted' && e.level === 40)).toHaveLength(1);
+  });
+}

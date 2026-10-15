@@ -33,7 +33,7 @@ import type {
   ResolveRequest,
 } from './types';
 import { worktreeRegistrationMetadata } from './types';
-import type { IIsolationStore } from './store';
+import { recordWorktreeAdoption, type IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
 
@@ -277,7 +277,7 @@ export class IsolationResolver {
       const warnings = await this.collectBaseBranchWarnings(env, baseBranch, { envId });
       return {
         status: 'resolved',
-        env,
+        env: await recordWorktreeAdoption(this.store, env),
         cwd: env.working_path,
         method: { type: 'existing' },
         ...(warnings.length > 0 ? { warnings } : {}),
@@ -349,7 +349,7 @@ export class IsolationResolver {
         workflowType,
         workflowId,
       });
-      return { env: existing, warnings };
+      return { env: await recordWorktreeAdoption(this.store, existing), warnings };
     }
 
     await this.markDestroyedBestEffort(existing.id);
@@ -391,7 +391,7 @@ export class IsolationResolver {
         getLog().debug({ issueNum, codebaseId }, 'isolation_share_linked_issue');
         return {
           status: 'resolved',
-          env: linkedEnv,
+          env: await recordWorktreeAdoption(this.store, linkedEnv),
           cwd: linkedEnv.working_path,
           method: { type: 'linked_issue_reuse', issueNumber: issueNum },
         };
@@ -439,7 +439,10 @@ export class IsolationResolver {
         branch_name: prBranch,
         created_by_platform: platformType,
         created_by_user_id: userId,
-        metadata: { adopted: true, adopted_from: 'skill' },
+        metadata: {
+          ...worktreeRegistrationMetadata({ provenance: 'adopted', adopted: true }),
+          adopted_from: 'skill',
+        },
       });
       return {
         status: 'resolved',

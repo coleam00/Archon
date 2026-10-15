@@ -61,6 +61,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         branch_name: env.branch_name,
       }),
     updateStatus: async () => undefined,
+    updateMetadata: async () => undefined,
     countActiveByCodebase: async () => 0,
     ...overrides,
   };
@@ -99,6 +100,31 @@ function makeMockProvider() {
 const defaultCodebase = { id: 'cb-1', defaultCwd: '/repos/myrepo', name: 'my-repo' };
 
 describe('IsolationResolver', () => {
+  test('a failed adoption write refuses reuse and emits no success warning', async () => {
+    const exists = spyOn(git, 'worktreeExists').mockResolvedValue(true);
+    const create = mock(async () => makeEnvRow());
+    const resolver = createResolver({
+      store: makeMockStore({
+        getById: async () => makeEnvRow(),
+        updateMetadata: async () => {
+          throw new Error('adoption write failed');
+        },
+        create,
+      }),
+    });
+    try {
+      await expect(
+        resolver.resolve({ existingEnvId: 'env-1', codebase: defaultCodebase, platformType: 'cli' })
+      ).rejects.toThrow('adoption write failed');
+      expect(create).not.toHaveBeenCalled();
+      expect(mockWarn.mock.calls.filter(([, event]) => event === 'worktree_adopted')).toHaveLength(
+        0
+      );
+    } finally {
+      exists.mockRestore();
+    }
+  });
+
   let worktreeExistsSpy: ReturnType<typeof spyOn>;
   let getCanonicalSpy: ReturnType<typeof spyOn>;
   let findWorktreeByBranchSpy: ReturnType<typeof spyOn>;
@@ -356,7 +382,12 @@ describe('IsolationResolver', () => {
     });
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][0].metadata).toEqual({ adopted: true, adopted_from: 'skill' });
+    expect(create.mock.calls[0][0].metadata).toEqual({
+      adopted: true,
+      adopted_from: 'skill',
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+    });
     expect(
       mockWarn.mock.calls.filter(([, event]) => event === 'isolation_worktree_adopted')
     ).toEqual([

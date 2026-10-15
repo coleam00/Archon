@@ -730,11 +730,14 @@ Reuse is the default. The provider adopts existing worktrees before creating new
 
 Every successful provider adoption emits one `worktree_adopted` WARN with the branch and
 worktree path. The registration writers persist `metadata.adopted` on the isolation-environment
-row: `true` for adoption, `false` for creation. Adoption clears the creation proof; the flag
-does not grant cleanup ownership. Older rows without the flag have unknown adoption history.
+row: `true` marks reuse of a checkout or a new checkout of an existing task branch;
+`false` marks a newly created checkout with a creation proof. New adoption registrations
+have no creation proof. Registered checkout handovers update the flag and preserve the original
+row's creation proof and timestamps; the flag does not grant cleanup ownership. Older rows
+without the flag have unknown adoption history.
 Child runs use the same warning and registration mechanism. A provider used without a store
 still warns and returns adoption provenance, but does not write a row itself. The resolver's
-direct PR-branch adoption also warns and persists `adopted: true`.
+direct PR-branch adoption and registered checkout handovers also warn and persist `adopted: true`.
 
 Only a worktree whose setup finished can be adopted. `create()` adds every worktree already
 locked (`git worktree add --lock --reason <attempt reason>`) and releases the lock once setup

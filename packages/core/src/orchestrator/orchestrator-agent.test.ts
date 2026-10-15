@@ -619,6 +619,16 @@ const mockAddMessage = mock<typeof MessageDb.addMessage>((conversationId, role, 
 const mockGetRecentWorkflowResultMessages = mock<typeof MessageDb.getRecentWorkflowResultMessages>(
   () => Promise.resolve([])
 );
+const mockAdoptionMetadata = mock(async (_id: string, _metadata: Record<string, unknown>) => {});
+const mockResumedEnvironment = mock(
+  async (): Promise<ReturnType<typeof makeIsolationEnvironment> | null> => null
+);
+mock.module('../db/isolation-environments', () => ({
+  getById: mock(async () => makeIsolationEnvironment()),
+  findLatestByCodebaseAndWorkingPath: mockResumedEnvironment,
+  updateMetadata: mockAdoptionMetadata,
+}));
+
 mock.module('../db/messages', () => ({
   addMessage: mockAddMessage,
   listMessages: mock(() => Promise.resolve([])),
@@ -2518,6 +2528,7 @@ describe('workflow dispatch routing', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockAdoptionMetadata).toHaveBeenCalledWith('env-1', { adopted: true });
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     expect(callArgs[3]).toBe('/wt/adopted');
     const opts = callArgs[callArgs.length - 1] as {
@@ -3027,6 +3038,8 @@ describe('workflow dispatch routing', () => {
   });
 
   test('resume request hydrates the requested run without latest-run lookup', async () => {
+    mockAdoptionMetadata.mockClear();
+    mockResumedEnvironment.mockResolvedValueOnce(makeIsolationEnvironment());
     const requestedRun = makeResumableRun({
       id: 'old-run',
       user_message: 'requested prompt',
@@ -3041,6 +3054,7 @@ describe('workflow dispatch routing', () => {
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume old-run', { actor: operator });
 
+    expect(mockAdoptionMetadata.mock.calls).toEqual([['env-1', { adopted: true }]]);
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),

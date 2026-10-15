@@ -221,6 +221,14 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
             },
           };
         }),
+      updateMetadata: (id, metadata) =>
+        commit(root, [], async () => {
+          const rows = await environments();
+          const row = rows.find(row => row.id === id);
+          if (!row) throw new Error(`Isolation environment ${id} not found`);
+          row.metadata = { ...row.metadata, ...metadata };
+          return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
+        }),
       updateStatus: (id, status) =>
         commit(root, [], async () => {
           const rows = await environments();

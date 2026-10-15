@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -2792,6 +2793,11 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
+        if (lane.envId) {
+          const env = await host.records.isolation.getById(lane.envId);
+          if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
+          await recordWorktreeAdoption(host.records.isolation, env);
+        }
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;
         adoptLaneRunsIsolatedCheckout = true;
@@ -2880,6 +2886,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3160,7 +3167,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        await recordWorktreeAdoption(host.records.isolation, existingEnv);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {

@@ -1,6 +1,6 @@
 import { afterEach, expect, expectTypeOf, test } from 'bun:test';
 import type { z } from 'zod';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { recordWorktreeAdoption, type IsolationEnvironmentRow } from '@archon/isolation';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -92,6 +92,7 @@ test('file host records persist across hosts and released worktrees fence pendin
     working_path: join(home, 'checkout'),
     branch_name: toBranchName('feature'),
     created_by_user_id: 'first',
+    metadata: { worktree_creation_id: 'proof', worktree_branch_created: true, adopted: false },
   });
   const upsert = await host.records.isolation.create({
     ...env,
@@ -101,6 +102,7 @@ test('file host records persist across hosts and released worktrees fence pendin
   });
   expect(upsert.id).toBe(env.id);
   expect(upsert.created_by_user_id).toBe('first');
+  await recordWorktreeAdoption(host.records.isolation, upsert);
   const reopened = await createFileWorkflowHost(root);
   expect(await reopened.records.users.getUserById(user!.id)).toEqual(user);
   expect(await reopened.deps.store.getCodebaseEnvVars(codebase.id)).toEqual({
@@ -112,7 +114,8 @@ test('file host records persist across hosts and released worktrees fence pendin
   expect(await reopened.records.isolation.getById(env.id)).toMatchObject({
     id: env.id,
     branch_name: 'other',
-    created_at: expect.any(Date),
+    created_at: upsert.created_at,
+    metadata: { worktree_creation_id: 'proof', worktree_branch_created: true, adopted: true },
   });
   expect(await reopened.records.isolation.countActiveByCodebase(codebase.id)).toBe(1);
   await reopened.records.isolation.updateStatus(env.id, 'destroyed');

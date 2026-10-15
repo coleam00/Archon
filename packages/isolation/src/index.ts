@@ -62,6 +62,7 @@ export type { DockerRunner, DockerExecOptions, DockerExecResult } from './contai
 
 // --- Store ---
 export type { IIsolationStore } from './store';
+export { recordWorktreeAdoption } from './store';
 
 // --- Errors ---
 export {

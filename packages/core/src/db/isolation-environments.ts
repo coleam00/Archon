@@ -470,6 +470,7 @@ export function createIsolationStore(): IIsolationStore {
     findActiveByWorkflow,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
+    updateMetadata,
     countActiveByCodebase,
   };
 }
