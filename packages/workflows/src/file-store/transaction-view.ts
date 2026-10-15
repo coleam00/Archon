@@ -1,5 +1,7 @@
 import {
+  CAPACITY_WAIT_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
+  readCapacityWait,
   toolCallAttentionArraySchema,
 } from '../schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +10,7 @@ import {
   WorkflowRunPauseConflictError,
   type IWorkflowStore,
   type WorkflowEventInput,
+  type WorkflowResumeCursor,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
@@ -24,6 +27,7 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  workflowWaitDue,
   isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
@@ -47,7 +51,17 @@ export type TransactionView = Omit<
   | 'upsertWorkflowRunNodeSession'
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
->;
+  | 'releasePausedRunSlot'
+> & {
+  /**
+   * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
+   * otherwise. Lets a store decide slot admission before the resume changes anything.
+   */
+  resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
+  /** Record a paused run's first capacity refusal; false when there is nothing to record. */
+  recordCapacityWait(id: string): boolean;
+  clearCapacityWait(id: string): void;
+};
 
 /** Events that end a run; a commit that adds one reports the run's terminal telemetry. */
 export const TERMINAL_RUN_EVENT_TYPES = [
@@ -89,6 +103,12 @@ export function createTransactionView(
     run.status === 'failed' ||
     (run.status === 'running' &&
       (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
+  const resumableRun = (id: string, cursor?: WorkflowResumeCursor): WorkflowRun => {
+    const run = row(id);
+    if (!resumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+      throw new WorkflowNotResumableError(id, run.status);
+    return run;
+  };
   // An answered gate has no time of its own; it sorts after every timed continuation.
   const continuationTime = (run: WorkflowRun): number => {
     const retry = run.metadata.continuation_retry_at;
@@ -197,11 +217,7 @@ export function createTransactionView(
             const retry = run.metadata.continuation_retry_at;
             if (typeof retry === 'string' && Date.parse(retry) > now.getTime()) return false;
             const wait = pendingWorkflowWaitDeadline(run);
-            if (wait)
-              return (
-                Date.parse(wait.resumeAt) <= now.getTime() ||
-                (wait.kind === 'event' && wait.signaledAt !== undefined)
-              );
+            if (wait) return workflowWaitDue(wait, now.getTime());
             if (answeredPauseContinuation(run)) return true;
             const scheduled = run.metadata.scheduled_resume;
             return (
@@ -382,11 +398,19 @@ export function createTransactionView(
       for (const event of gateEvents) record({ ...event, workflow_run_id: id });
       return { resolved: true };
     },
-    resumeWorkflowRun: async (id, cursor) => {
+    resumableRun: (id, cursor) => structuredClone(resumableRun(id, cursor)),
+    recordCapacityWait: id => {
       const run = row(id);
+      if (run.status !== 'paused' || readCapacityWait(run.metadata) !== undefined) return false;
+      run.metadata[CAPACITY_WAIT_METADATA_KEY] = { since: new Date().toISOString() };
+      return true;
+    },
+    clearCapacityWait: id => {
+      Reflect.deleteProperty(row(id).metadata, CAPACITY_WAIT_METADATA_KEY);
+    },
+    resumeWorkflowRun: async (id, cursor) => {
+      const run = resumableRun(id, cursor);
       const scheduled = run.metadata.scheduled_resume;
-      const matches = cursor === undefined || resumeCursorMatches(run, cursor);
-      if (!resumable(run) || !matches) throw new WorkflowNotResumableError(id, run.status);
       if (typeof run.metadata.error === 'string' && run.metadata.error !== '')
         record({
           workflow_run_id: id,
@@ -409,6 +433,7 @@ export function createTransactionView(
       delete run.metadata.stop_reason;
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       delete run.metadata.continuation_retry_at;
+      Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
       run.status = 'running';
       run.completed_at = null;
       run.started_at = new Date();

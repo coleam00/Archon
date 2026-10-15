@@ -1860,6 +1860,7 @@ describe('workflows database', () => {
           error: null,
           stop_reason: null,
           continuation_retry_at: null,
+          capacity_wait: null,
         }),
       ]);
       // Third call: SELECT
@@ -1912,6 +1913,7 @@ describe('workflows database', () => {
           error: null,
           stop_reason: null,
           continuation_retry_at: null,
+          capacity_wait: null,
         }),
       ]);
     });

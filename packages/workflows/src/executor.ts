@@ -92,7 +92,11 @@ import {
 } from './workflow-source';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
-import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
+import {
+  continuablePauseCursor,
+  type PersistedNodeOutput,
+  type WorkflowResumeCursor,
+} from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
@@ -1961,6 +1965,26 @@ async function continueBlockedRun(
   }
 }
 
+/**
+ * A run that stopped executing while paused where the continuation host continues it gives
+ * back its resource slot (`releasePausedRunSlot`); its continuation takes one again. Called
+ * only once every node of this execution has settled, so nothing of the run still runs.
+ */
+async function releaseContinuablePauseSlot(deps: WorkflowDeps, run: WorkflowRun): Promise<void> {
+  const cursor = continuablePauseCursor(run);
+  if (!cursor) return;
+  try {
+    await deps.store.releasePausedRunSlot(run.id, cursor);
+  } catch (err) {
+    // Holding the slot is the safe direction: the run stays paused and correct, and its
+    // resume takes the slot it still holds.
+    getLog().warn(
+      { err: err as Error, workflowRunId: run.id },
+      'workflow.paused_slot_release_failed'
+    );
+  }
+}
+
 /** Spell a workflow action the way the surface rendering the message accepts it. */
 function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
   return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
@@ -3501,6 +3525,7 @@ export async function executeWorkflow(
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
     } else if (finalStatus?.status === 'paused') {
+      await releaseContinuablePauseSlot(deps, finalStatus);
       return { success: true, paused: true, workflowRunId: workflowRun.id };
     } else {
       return {

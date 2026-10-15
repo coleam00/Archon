@@ -2259,6 +2259,28 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(cwd).toBe('/tmp/worktrees/run-uuid-4');
   });
 
+  test('returns 409 with the refusal when the run resource is busy', async () => {
+    const { WorkflowResourceBusyError } = await import('@archon/workflows/store');
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_FAILED_RUN,
+      origin: null,
+      conversation_id: null,
+      parent_conversation_id: null,
+      working_path: '/tmp/worktrees/run-busy',
+    });
+    mockHydrateResumableRun.mockRejectedValueOnce(
+      new WorkflowResourceBusyError('run-busy', { kind: 'run', id: 'holder' })
+    );
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-busy/resume', { method: 'POST' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe(
+      "Workflow run 'run-busy' cannot resume while resource owner 'holder' has priority."
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('resumes an origin-free run without looking up a conversation', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,

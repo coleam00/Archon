@@ -1179,6 +1179,7 @@ const resumeWorkflowRunRoute = createRoute({
     400: jsonError('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('Resource busy; the run keeps its state'),
     500: jsonError('Server error'),
   },
 });
@@ -4036,12 +4037,14 @@ export function registerApiRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        const headlessResumed = await resumeWorkflowRunFromServer(
+        const headless = await resumeWorkflowRunFromServer(
           createSqlWorkflowHost(),
           run,
           actor.kind === 'user' ? actor.userId : undefined
         );
-        if (!headlessResumed) {
+        if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
+          return apiError(c, 409, headless.message);
+        if (headless.kind === 'not_resumed') {
           return apiError(
             c,
             400,
