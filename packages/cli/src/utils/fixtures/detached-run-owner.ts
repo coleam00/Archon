@@ -32,7 +32,10 @@ leakWriter.on('error', error => {
   throw error;
 });
 
-await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+await startRunLiveOwner(runId, {
+  detachedProcessPid: process.pid,
+  beforeTerminate: async () => undefined,
+});
 // Written aside and renamed into place: the spec reads the file as soon as it exists,
 // and a direct write can be observed empty.
 writeFileSync(

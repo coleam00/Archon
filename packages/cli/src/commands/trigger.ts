@@ -264,7 +264,7 @@ export async function triggerCommand(
         }),
       ...(detachedProcessOwner
         ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
-        : {}),
+        : { detachedProcessPid: undefined }),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
     return;

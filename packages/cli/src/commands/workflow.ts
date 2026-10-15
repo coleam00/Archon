@@ -3177,11 +3177,9 @@ async function runWorkflowWithOwnedSource(
             throw new Error('Worktree setup requires a captured workflow source');
           runLiveOwner = await startRunLiveOwner(
             detachedPreCreatedRun?.id ?? preparedSource.runId,
-            {
-              ...(detachedProcessOwner
-                ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
-                : {}),
-            }
+            detachedProcessOwner
+              ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
+              : {}
           );
           const setupRun =
             detachedPreCreatedRun ??
@@ -3415,11 +3413,12 @@ async function runWorkflowWithOwnedSource(
           );
         }
       }
-      runLiveOwner ??= await startRunLiveOwner(ownedRunId, {
-        ...(detachedProcessOwner
+      runLiveOwner ??= await startRunLiveOwner(
+        ownedRunId,
+        detachedProcessOwner
           ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
-          : {}),
-      });
+          : {}
+      );
       // Container run context for the engine (Phase C): the write-back backend port +
       // env id + policy. The executor drives suspend-on-pause and the write-back gate
       // through this. Absent for host/in-place runs.

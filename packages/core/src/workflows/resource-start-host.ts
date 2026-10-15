@@ -408,7 +408,7 @@ async function worktreeLane(
   };
 }
 
-export interface StartAdmittedResourceStartInput {
+export type StartAdmittedResourceStartInput = RunLiveOwnerOptions & {
   requestId: string;
   hostId: string;
   host: WorkflowHost;
@@ -425,14 +425,7 @@ export interface StartAdmittedResourceStartInput {
    * hosts many runs and must not install process-wide handlers per run.
    */
   guardOwnedRun?: (owned: { runId: string; liveOwner: RunLiveOwner }) => () => void;
-  /**
-   * The PID of a detached process that executes only this run and leads its own process
-   * group. Registering it lets `archon workflow cancel` terminate that tree. The server
-   * omits it: its process hosts many runs and must never be the target of a stop.
-   */
-  detachedProcessPid?: number;
-  beforeTerminate?: RunLiveOwnerOptions['beforeTerminate'];
-}
+};
 
 /**
  * Start one admitted pending run through the engine port. The engine's pending claim
@@ -466,10 +459,7 @@ export async function startAdmittedResourceStart(
     origin: run.origin,
   });
   const sealed = readWorkflowRunConfigMetadata(run.metadata);
-  const liveOwner = await startRunLiveOwner(run.id, {
-    detachedProcessPid: input.detachedProcessPid,
-    beforeTerminate: input.beforeTerminate,
-  });
+  const liveOwner = await startRunLiveOwner(run.id, input);
   let releaseGuard: (() => void) | undefined;
   try {
     releaseGuard = input.guardOwnedRun?.({ runId: run.id, liveOwner });

@@ -25,12 +25,14 @@ const OWNER_CLOSE_WAIT_MS = 10_000;
 const STARTUP_RECHECK_MS = 50;
 const MAX_MESSAGE_BYTES = 256;
 
-export interface RunLiveOwnerOptions {
-  /** Enables the detached CLI's active-stop lease. Other owners only publish liveness. */
-  detachedProcessPid?: number;
-  /** End separately grouped node bodies before acknowledging owner termination. */
-  beforeTerminate?: () => Promise<void>;
-}
+export type RunLiveOwnerOptions =
+  | { detachedProcessPid?: undefined; beforeTerminate?: never }
+  | {
+      /** PID of an owner executing only this run and leading its own process group. */
+      detachedProcessPid: number;
+      /** End separately grouped node bodies before acknowledging owner termination. */
+      beforeTerminate: () => Promise<void>;
+    };
 
 export interface RunLiveOwner {
   /** Ring attached waiters, close the endpoint, and release its exact-run lock. */
@@ -330,12 +332,16 @@ export async function startRunLiveOwner(
           stopSockets.add(socket);
           socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => socket.destroy());
           socket.write(stopResponseFrame({ kind: 'detached', pid: options.detachedProcessPid }));
-        } else if (phase === 'lease' && frame === TERMINATE_REQUEST) {
+        } else if (
+          phase === 'lease' &&
+          frame === TERMINATE_REQUEST &&
+          options.detachedProcessPid !== undefined
+        ) {
           phase = 'terminating';
           socket.setTimeout(0);
           for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
           void (async () => {
-            terminationPreparation ??= Promise.resolve().then(() => options.beforeTerminate?.());
+            terminationPreparation ??= Promise.resolve().then(options.beforeTerminate);
             await terminationPreparation;
             socket.write(TERMINATE_READY);
           })().catch((error: unknown) => {

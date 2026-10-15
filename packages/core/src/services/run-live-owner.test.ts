@@ -227,7 +227,10 @@ describe('run live owner', () => {
 
   test('detached stop commit announces the controller handoff before close', async () => {
     const runId = `detached-${crypto.randomUUID()}`;
-    const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+    const owner = await startRunLiveOwner(runId, {
+      detachedProcessPid: process.pid,
+      beforeTerminate: async () => undefined,
+    });
     const events: RunLiveOwnerWatchEvent[] = [];
     const watch = await watchRunLiveOwner(runId, event => events.push(event));
     expect(watch.kind).toBe('attached');
@@ -254,7 +257,10 @@ describe('run live owner', () => {
       // either end used to close the lease during that listing, and the stop then refused
       // a live owner. Idle past that window, then prove both ends still hold the lease.
       const runId = `slow-stop-${crypto.randomUUID()}`;
-      const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+      const owner = await startRunLiveOwner(runId, {
+        detachedProcessPid: process.pid,
+        beforeTerminate: async () => undefined,
+      });
       const lease = await requestRunLiveOwnerStop(runId);
       try {
         await lease.commit();
@@ -272,7 +278,10 @@ describe('run live owner', () => {
   test('bounds close while a controller retains an uncommitted stop lease', async () => {
     const runId = `retained-${crypto.randomUUID()}`;
     const path = runLiveOwnerPath(runId);
-    const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+    const owner = await startRunLiveOwner(runId, {
+      detachedProcessPid: process.pid,
+      beforeTerminate: async () => undefined,
+    });
     const client = new Socket();
     await new Promise<void>((resolve, reject) => {
       client.once('connect', resolve);

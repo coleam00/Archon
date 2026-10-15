@@ -4,7 +4,10 @@ import { createRunWorktreeSetupExecutor } from '@archon/core/workflows/worktree-
 const [runId, root, background] = process.argv.slice(2);
 if (!runId || !root) throw new Error('Usage: setup-run-owner.ts <run-id> <root> <background>');
 
-await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+await startRunLiveOwner(runId, {
+  detachedProcessPid: process.pid,
+  beforeTerminate: async () => undefined,
+});
 const descendant = `echo $$ > descendant.pid; touch ready; while [ ! -f go ]; do sleep 0.01; done; touch leaked`;
 const command =
   background === 'true' ? `bash -c '${descendant}' & wait` : `true; bash -c '${descendant}'; true`;
