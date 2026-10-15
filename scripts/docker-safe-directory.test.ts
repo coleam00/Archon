@@ -7,22 +7,22 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const trackTempRoot = trackTempRoots();
 
-test.skipIf(process.platform === 'win32')(
-  'Docker startup collapses duplicate safe directories and preserves unrelated entries',
-  async () => {
+test.skipIf(process.platform === 'win32').each([false, true])(
+  'Docker startup preserves exact effective trust (newline path: %s)',
+  async newlinePath => {
     const home = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-safe-')));
     const bin = join(home, 'bin');
     await mkdir(bin);
     const scripts = {
       id: 'echo 1001',
       mkdir: 'exit 0',
-      find: 'printf "%s/.git\\n" "$ARCHON_TEST_REPO"',
+      find: 'printf "%s/.git\\0" "$ARCHON_TEST_REPO"',
       bun: 'exit 0',
     };
     for (const [name, body] of Object.entries(scripts)) {
       await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     }
-    const repo = join(home, 'repo[1]');
+    const repo = join(home, newlinePath ? 'repo[1]\ncheckout\n' : 'repo[1]');
     const env = {
       ...process.env,
       HOME: home,
@@ -41,19 +41,34 @@ test.skipIf(process.platform === 'win32')(
       execFileSync('git', args, { env, encoding: 'utf8' }).trim();
     git('config', '--global', '--add', 'safe.directory', '/workspace/other');
     git('config', '--global', '--add', 'safe.directory', repo);
-    git('config', '--global', '--add', 'safe.directory', repo);
+    git('config', '--global', '--add', 'safe.directory', '');
 
     // Only container setup and server launch are stubbed; Git edits the scratch config.
     for (let boot = 0; boot < 2; boot++) {
       execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
     }
-    expect(git('config', '--global', '--get-all', 'safe.directory').split('\n')).toEqual([
-      '/workspace/other',
-      repo,
-    ]);
+    expect(
+      execFileSync('git', ['config', '--global', '--null', '--get-all', 'safe.directory'], {
+        env,
+        encoding: 'utf8',
+      })
+        .split('\0')
+        .slice(0, -1)
+    ).toEqual(['/workspace/other', '', repo]);
     await writeFile(join(home, '.gitconfig.lock'), '');
     execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
     await unlink(join(home, '.gitconfig.lock'));
+    await writeFile(
+      join(bin, 'find'),
+      '#!/bin/sh\nprintf "%s/.git\\0" "$ARCHON_TEST_REPO"\necho scan-failed >&2\nexit 7\n',
+      { mode: 0o755 }
+    );
+    const scan = Bun.spawnSync(['bash', resolve(import.meta.dir, '../docker-entrypoint.sh')], {
+      env,
+    });
+    expect(scan.exitCode).toBe(7);
+    expect(scan.stderr.toString()).toContain('scan-failed');
+    await writeFile(join(bin, 'find'), `#!/bin/sh\n${scripts.find}\n`, { mode: 0o755 });
     git('config', '--global', '--add', 'safe.directory', repo);
     await writeFile(join(home, '.gitconfig.lock'), '');
     expect(() =>

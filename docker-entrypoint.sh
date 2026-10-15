@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -e -o pipefail
 
 # Ensure required subdirectories exist.
 # Named volumes inherit these from the image layer on first run; bind mounts do not,
@@ -72,17 +72,34 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
-find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-  repo_dir="$(dirname "$git_dir")"
-  entries=$($RUNNER git config --global --fixed-value --get-all safe.directory "$repo_dir") || {
-    status=$?
-    if [ "$status" -ne 1 ]; then
-      exit "$status"
+find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
+  repo_dir="${git_dir%/.git}"
+  {
+    $RUNNER git config --global --null --get-all safe.directory || {
+      status=$?
+      if [ "$status" -ne 1 ]; then exit "$status"; fi
+    }
+  } | {
+    count=0
+    effective=0
+    while IFS= read -r -d '' entry; do
+      if [ -z "$entry" ]; then effective=0; fi
+      if [ "$entry" = "$repo_dir" ]; then
+        count=$((count + 1))
+        effective=$((effective + 1))
+      fi
+    done
+    if [ "$count" -ne 1 ] || [ "$effective" -ne 1 ]; then
+      # Replace-all keeps the first match's position, including before a reset.
+      if [ "$count" -ne "$effective" ]; then
+        $RUNNER git config --global --fixed-value --unset-all safe.directory "$repo_dir" || {
+          status=$?
+          if [ "$status" -ne 5 ]; then exit "$status"; fi
+        }
+      fi
+      $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
     fi
   }
-  if [ "$entries" != "$repo_dir" ]; then
-    $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
-  fi
 done
 
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper

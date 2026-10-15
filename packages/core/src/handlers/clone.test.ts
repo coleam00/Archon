@@ -508,52 +508,74 @@ describe('cloneRepository', () => {
       expect(result.name).toBe('owner/repo');
     });
 
-    test('re-cloning the same path writes one safe.directory value in a scratch HOME', async () => {
-      const home = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-safe-'));
-      const env = {
-        HOME: home,
-        XDG_CONFIG_HOME: home,
-        GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_COUNT: '0',
-      };
-      const previousEnv = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
-      try {
-        Object.assign(process.env, env);
-        spyExecFileAsync.mockImplementation(realExecFileAsync);
-        spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
-        await realExecFileAsync('git', [
-          'config',
-          '--global',
-          '--add',
-          'safe.directory',
-          '/workspace/other',
-        ]);
-        mockCreateCodebase.mockResolvedValue(makeCodebase());
+    test.each([false, true])(
+      'repeated clone retains one trust grant after setup (rejected: %s)',
+      async rejected => {
+        const home = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-safe-'));
+        const env = {
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+          GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_COUNT: '0',
+        };
+        const previousEnv = Object.fromEntries(
+          Object.keys(env).map(key => [key, process.env[key]])
+        );
+        try {
+          Object.assign(process.env, env);
+          spyExecFileAsync.mockImplementation(realExecFileAsync);
+          spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
+          await realExecFileAsync('git', [
+            'config',
+            '--global',
+            '--add',
+            'safe.directory',
+            '/workspace/other',
+          ]);
+          mockCreateCodebase.mockResolvedValue(makeCodebase());
 
-        // The filesystem mock models a removed clone, so each invocation sets up the same path.
-        await cloneRepository('https://github.com/owner/repo');
-        await cloneRepository('https://github.com/owner/repo');
+          // The filesystem mock models a removed clone, so each invocation sets up the same path.
+          if (rejected) {
+            const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+            const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
+              new Error('registration failed')
+            );
+            try {
+              await expect(
+                cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
+              ).rejects.toThrow('registration failed');
+              const target = getGitCloneCall()?.[1];
+              expect(spyFsRm.mock.calls.some(call => call[0] === target)).toBe(true);
+            } finally {
+              syntax.mockRestore();
+              remote.mockRestore();
+            }
+          } else {
+            await cloneRepository('https://github.com/owner/repo');
+            await cloneRepository('https://github.com/owner/repo');
+          }
 
-        const target = getGitCloneCall()?.[1];
-        if (!target) throw new Error('Clone destination missing');
-        expect(spyCloneGitRepository).toHaveBeenCalledTimes(2);
-        const { stdout } = await realExecFileAsync('git', [
-          'config',
-          '--global',
-          '--get-all',
-          'safe.directory',
-        ]);
-        expect(stdout.trim().split('\n')).toEqual(['/workspace/other', target]);
-      } finally {
-        for (const [key, value] of Object.entries(previousEnv)) {
-          if (value === undefined) delete process.env[key];
-          else process.env[key] = value;
+          const target = getGitCloneCall()?.[1];
+          if (!target) throw new Error('Clone destination missing');
+          expect(spyCloneGitRepository).toHaveBeenCalledTimes(rejected ? 1 : 2);
+          const { stdout } = await realExecFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim().split('\n')).toEqual(['/workspace/other', target]);
+        } finally {
+          for (const [key, value] of Object.entries(previousEnv)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+          spyFsRm.mockRestore();
+          await removeTempTree(home);
         }
-        spyFsRm.mockRestore();
-        await removeTempTree(home);
       }
-    });
+    );
 
     test('trusts the destination before clone can execute checkout hooks', async () => {
       mockCreateCodebase.mockResolvedValue(makeCodebase());

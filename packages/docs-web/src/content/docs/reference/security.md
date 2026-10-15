@@ -55,7 +55,9 @@ Because `bypassPermissions` grants full file and shell access, only run Archon i
 
 ## Git directory trust
 
-Archon adds clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Repeated setup keeps one exact entry per path; a required config-write failure stops setup.
+Archon's core clone handler and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Repeated setup keeps one exact entry per path; a required config-write failure stops setup.
+
+GitHub, Gitea, and GitLab webhook clones add trust after cloning; their checkout hooks do not have this pre-clone trust guarantee.
 
 These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
 

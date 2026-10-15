@@ -607,6 +607,32 @@ export async function syncRepository(
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
   try {
+    let values: string[];
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['config', '--global', '--null', '--get-all', 'safe.directory'],
+        { timeout: 10000 }
+      );
+      values = stdout.split('\0').slice(0, -1);
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
+      values = [];
+    }
+    const firstGrant = values.indexOf(path);
+    // Git's empty value resets prior grants; replace-all retains their position.
+    if (firstGrant !== -1 && firstGrant < values.lastIndexOf('')) {
+      try {
+        await execFileAsync(
+          'git',
+          ['config', '--global', '--fixed-value', '--unset-all', 'safe.directory', path],
+          { timeout: 10000 }
+        );
+      } catch (error) {
+        // Another setup may already have removed the ineffective entry.
+        if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
+      }
+    }
     await execFileAsync(
       'git',
       ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],

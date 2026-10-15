@@ -246,6 +246,9 @@ describe('WorktreeProvider against real git', () => {
       repoPath,
       repoPath,
     ]);
+    await git(root, 'config', '--global', '--add', 'safe.directory', worktreePath);
+    await git(root, 'config', '--global', '--add', 'safe.directory', '');
+    await git(root, 'config', '--global', '--add', 'safe.directory', repoPath);
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),
       '#!/bin/sh\ngit status --porcelain >/dev/null\n',
@@ -265,7 +268,7 @@ describe('WorktreeProvider against real git', () => {
         '--get-all',
         'safe.directory',
       ]);
-      expect(stdout.trim().split('\n')).toEqual([repoPath, worktreePath]);
+      expect(stdout.trim().split('\n')).toEqual([repoPath, '', repoPath, worktreePath]);
     } finally {
       if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
       else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
@@ -934,7 +937,8 @@ describe('WorktreeProvider against real git', () => {
     expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
   });
 
-  test('marker write failure rolls back the locked setup', async () => {
+  test('marker write failure rolls back the locked setup and retains trust', async () => {
+    await git(root, 'config', '--global', '--add', 'safe.directory', '/workspace/other');
     await git(repoPath, 'remote', 'add', 'origin', repoPath);
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),
@@ -954,6 +958,9 @@ describe('WorktreeProvider against real git', () => {
     await expect(provider.create(freshRequest)).rejects.toThrow();
     expect(existsSync(path)).toBe(false);
     expect(await registeredWorktrees()).not.toContain(resolve(path));
+    expect(
+      (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
+    ).toEqual(['/workspace/other', path]);
   });
 
   describe('a new-branch request naming a branch that already exists', () => {
