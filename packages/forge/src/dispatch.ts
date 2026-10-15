@@ -494,17 +494,17 @@ export async function dispatchForge(
           : github
             ? ['GH_TOKEN', 'GITHUB_TOKEN']
             : plugin.metadata.token_env;
-        const credential = await selectCredential(
-          names,
-          github,
-          selectedHost,
-          options.credentialEnv ?? env,
-          env
-        );
-        if (
-          credential.kind === 'failed' ||
-          (credential.kind === 'missing' && request.op !== 'resolve')
-        ) {
+        const credential =
+          request.op === 'resolve'
+            ? { kind: 'none' as const }
+            : await selectCredential(
+                names,
+                github,
+                selectedHost,
+                options.credentialEnv ?? env,
+                env
+              );
+        if (credential.kind === 'failed' || credential.kind === 'missing') {
           response = errorResponse(request, {
             kind: credential.kind === 'failed' ? 'process_failed' : 'no_credential',
             message: credential.message,

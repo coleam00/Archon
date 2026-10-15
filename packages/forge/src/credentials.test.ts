@@ -137,3 +137,47 @@ test('redacts a CLI token echoed by the plugin from responses and audit', async 
   });
   expect(JSON.stringify(result)).not.toContain('cli-secret');
 });
+
+test('App-owned installation credentials refresh through the run gh shim on every operation', async () => {
+  const env = {
+    GH_TOKEN: 'ghs_expired',
+    GITHUB_TOKEN: 'ghs_expired',
+    ARCHON_GITHUB_APP_REPO: 'coleam00/Archon',
+    ARCHON_PORT: '3090',
+  };
+  for (let operation = 0; operation < 2; operation++) {
+    const result = await read(env, 'cli-secret', 'app');
+    expect(result.response.ok).toBe(true);
+    expect(result.credentialSource).toBe('gh auth token');
+    expect(readFileSync(join(root, 'calls'), 'utf8')).toContain('auth');
+  }
+});
+
+test('personal tokens and credential scrubs never use App refresh or the host login', async () => {
+  const app = { ARCHON_GITHUB_APP_REPO: 'coleam00/Archon', ARCHON_PORT: '3090' };
+  const personal = await read({ ...app, GH_TOKEN: 'ghp_personal' }, 'ghp_personal', 'app');
+  expect(personal.response.ok).toBe(true);
+  expect(personal.credentialSource).toBe('GH_TOKEN');
+  expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
+  const scrubbed = await read({ ...app, GH_TOKEN: '', GITHUB_TOKEN: '' }, 'unused', 'app');
+  expect(scrubbed.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+  expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
+});
+
+test('resolve never consults a logged-out gh login', async () => {
+  writeFileSync(join(root, 'mode'), 'error');
+  writeFileSync(join(root, 'calls'), '');
+  const result = await dispatchForge(
+    { operationId: 'resolve', op: 'resolve', remote: 'https://github.com/coleam00/Archon.git' },
+    {
+      config: { plugins: [{ plugin: 'github', command: executable }], scanPath: false },
+      env: { PATH: root, HOME: root, GH_CONFIG_DIR: root },
+      credentialEnv: {},
+    }
+  );
+  expect(result.response).toMatchObject({
+    ok: true,
+    result: { op: 'resolve', value: { kind: 'resolved' } },
+  });
+  expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
+});

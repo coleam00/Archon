@@ -15,13 +15,20 @@ export async function selectCredential(
   credentialEnv: NodeJS.ProcessEnv,
   hostEnv: NodeJS.ProcessEnv
 ): Promise<ResolvedForgeCredential> {
+  // The App-owned PATH shim refreshes installation tokens per operation. Preserve
+  // its dispatch token so the shim recognizes App mode; personal tokens bypass it.
+  const refreshApp =
+    github &&
+    host === 'github.com' &&
+    Boolean(credentialEnv.ARCHON_GITHUB_APP_REPO && credentialEnv.ARCHON_PORT) &&
+    credentialEnv.GH_TOKEN?.startsWith('ghs_') === true;
   for (const name of names) {
     const token = credentialEnv[name];
-    if (token) return { kind: 'selected', token, source: name };
+    if (token && !refreshApp) return { kind: 'selected', token, source: name };
   }
   // Empty values are also the engine's per-user credential scrub. Never borrow
   // the host login when a run was explicitly denied a credential.
-  if (names.some(name => credentialEnv[name] !== undefined)) {
+  if (!refreshApp && names.some(name => credentialEnv[name] !== undefined)) {
     return { kind: 'missing', message: `credential environment ${names.join(' or ')} is empty` };
   }
   if (github) {
@@ -30,8 +37,8 @@ export async function selectCredential(
         env: {
           ...hostEnv,
           PATH: hostEnv.PATH ?? '',
-          GH_TOKEN: '',
-          GITHUB_TOKEN: '',
+          GH_TOKEN: refreshApp ? credentialEnv.GH_TOKEN : '',
+          GITHUB_TOKEN: refreshApp ? credentialEnv.GITHUB_TOKEN : '',
           GH_ENTERPRISE_TOKEN: '',
           GITHUB_ENTERPRISE_TOKEN: '',
         },
@@ -46,7 +53,12 @@ export async function selectCredential(
         : { kind: 'failed', message: `gh auth token --hostname ${host} returned an empty token` };
     } catch (error) {
       // gh's stdout, stderr and error message may contain credentials.
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+      if (
+        refreshApp ||
+        !(error instanceof Error) ||
+        !('code' in error) ||
+        error.code !== 'ENOENT'
+      ) {
         return {
           kind: 'failed',
           message: `gh auth token --hostname ${host} failed; repair the gh login`,

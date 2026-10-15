@@ -11,6 +11,8 @@ if (args[0] === 'auth') {
     console.error('secret-from-failing-gh');
     process.exit(4);
   }
+  if (mode === 'app' && process.env.GH_TOKEN !== 'ghs_expired')
+    throw new Error('App shim did not receive its installation token');
   if (mode === 'empty') process.exit(0);
   console.log('cli-secret');
 } else if (args[0] === 'metadata') {
@@ -21,13 +23,31 @@ if (args[0] === 'auth') {
       version: '0.11.1',
       forge: 'github',
       hosts: ['github.com'],
-      capabilities: ['pr.view'],
+      capabilities: ['pr.view', 'resolve'],
       token_env: ['GITHUB_TOKEN', 'GH_TOKEN'],
     })
   );
 } else {
   const expected = readFileSync(join(root, 'expected'), 'utf8');
   const request = await Bun.stdin.json();
+  if (request.op === 'resolve') {
+    console.log(
+      JSON.stringify({
+        operationId: request.operationId,
+        ok: true,
+        result: {
+          op: 'resolve',
+          value: {
+            kind: 'resolved',
+            forge: 'github',
+            repo: { host: 'github.com', path: 'coleam00/Archon' },
+            plugin: { name: 'github', version: '0.11.1' },
+          },
+        },
+      })
+    );
+    process.exit(0);
+  }
   if (expected === 'leak') {
     console.error(process.env.ARCHON_FORGE_TOKEN);
     process.exit(7);
