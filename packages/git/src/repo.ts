@@ -632,10 +632,12 @@ async function relocateSafeDirectory(path: RepoPath): Promise<void> {
   // their accepted trust even if a repair fails after removing the old entry.
   const lock = await open(lockPath, 'wx', 0o600);
   let published = false;
+  let closed = false;
   try {
     await lock.chmod((await stat(config)).mode);
     await lock.writeFile(await readFile(config));
     await lock.close();
+    closed = true;
     try {
       await execFileAsync(
         'git',
@@ -662,8 +664,20 @@ async function relocateSafeDirectory(path: RepoPath): Promise<void> {
     await rename(lockPath, config);
     published = true;
   } finally {
-    await lock.close();
-    if (!published) await unlink(lockPath);
+    if (!closed) {
+      try {
+        await lock.close();
+      } catch (err) {
+        getLog().error({ err, lockPath }, 'safe_directory_lock_close_failed');
+      }
+    }
+    if (!published) {
+      try {
+        await unlink(lockPath);
+      } catch (err) {
+        getLog().error({ err, lockPath }, 'safe_directory_lock_cleanup_failed');
+      }
+    }
   }
 }
 

@@ -1,5 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm, chmod, stat } from 'fs/promises';
+import {
+  writeFile,
+  mkdir as realMkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  chmod,
+  stat,
+  realpath,
+} from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
@@ -3335,6 +3344,43 @@ branch refs/heads/feature/auth
         }
       }
     );
+
+    test('preserves the config failure when lock cleanup also fails', async () => {
+      execSpy.mockRestore();
+      const realExec = git.execFileAsync;
+      const root = trackTempRoot(
+        await realpath(await mkdtemp(join(tmpdir(), 'git-safe-cleanup-')))
+      );
+      const config = join(root, 'gitconfig');
+      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = config;
+      try {
+        await writeFile(config, '[safe]\n\tdirectory = /workspace/repo\n\tdirectory = \n');
+        execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
+          if (args?.includes('--unset-all')) {
+            await rm(`${config}.lock`);
+            throw new Error('injected configuration failure');
+          }
+          return realExec(file, args, options);
+        });
+        mockLogger.error.mockClear();
+
+        await expect(git.addSafeDirectory(repo('/workspace/repo'))).rejects.toThrow(
+          'injected configuration failure'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          { err: expect.objectContaining({ code: 'ENOENT' }), lockPath: `${config}.lock` },
+          'safe_directory_lock_cleanup_failed'
+        );
+        expect(await readFile(config, 'utf8')).toBe(
+          '[safe]\n\tdirectory = /workspace/repo\n\tdirectory = \n'
+        );
+      } finally {
+        execSpy.mockRestore();
+        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+      }
+    });
 
     test('repeated setup keeps one exact safe-directory entry and preserves other paths', async () => {
       execSpy.mockRestore();
