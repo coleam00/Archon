@@ -2433,6 +2433,36 @@ describe('CommandHandler', () => {
       });
     });
 
+    describe('/workflow get', () => {
+      test('shows the one run named by the id, whatever its status', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-failed',
+            workflow_name: 'implement',
+            status: 'failed',
+            metadata: { error: 'node exploded' },
+          })
+        );
+
+        const result = await handleCommand(baseConversation, '/workflow get run-failed', operator);
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('implement');
+        expect(result.message).toContain('run-failed');
+        expect(result.message).toContain('failed');
+        expect(result.message).toContain('node exploded');
+      });
+
+      test('reports a missing run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+        const result = await handleCommand(baseConversation, '/workflow get nope', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
+      });
+    });
+
     describe('/workflow status', () => {
       test('should show all running workflows', async () => {
         const startedAt = new Date(Date.now() - 2 * 60 * 1000);

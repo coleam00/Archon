@@ -1045,8 +1045,7 @@ async function main(): Promise<number> {
             if (!abandonRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow abandon <run-id>');
             }
-            await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
-            break;
+            return await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
           }
 
           case 'cancel': {
@@ -1054,8 +1053,7 @@ async function main(): Promise<number> {
             if (!cancelRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow cancel <run-id>');
             }
-            await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
-            break;
+            return await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
           }
 
           case 'approve': {

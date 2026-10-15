@@ -894,6 +894,31 @@ async function handleWorkflowCommand(
       }
     }
 
+    case 'get': {
+      const arg = args[1];
+      if (!arg) {
+        return { success: false, message: `Usage: ${cmd('get <id>')}` };
+      }
+      try {
+        const runId = await resolveChatRunId(arg, conversation);
+        const run = await workflowDb.getWorkflowRun(runId);
+        if (!run) return { success: false, message: `Workflow run not found: ${arg}` };
+        let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
+        if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
+        msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
+        if (run.completed_at !== null)
+          msg += `  Finished: ${new Date(run.completed_at).toISOString()}\n`;
+        const error = run.metadata.error;
+        if (typeof error === 'string' && error.length > 0)
+          msg += `  Error: ${error.slice(0, 300)}\n`;
+        return { success: true, message: msg.trim() };
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId: arg }, 'cmd.workflow_get_failed');
+        return { success: false, message: `Failed to look up workflow run: ${err.message}` };
+      }
+    }
+
     case 'status': {
       try {
         const { runs: activeRuns } = await operations.getWorkflowStatus();
@@ -1192,6 +1217,7 @@ async function handleWorkflowCommand(
           `  ${cmd('list')} - Show available workflows`,
           `  ${cmd('reload')} - Reload workflow definitions`,
           `  ${cmd('status')} - Show all active workflows`,
+          `  ${cmd('get <id>')} - Show one run, whatever its status`,
           `  ${cmd('cancel [id]')} - Cancel a running workflow (default: the one in this conversation)`,
           `  ${cmd('resume <id>')} - Resume a failed or paused run`,
           `  ${cmd('abandon <id>')} - Abandon a running, failed, or paused run`,
@@ -1233,6 +1259,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`${cmd('list')}\` — List available workflows
 - \`${cmd('run <name> [message]')}\` — Run a workflow explicitly
 - \`${cmd('status')}\` — Show all active workflows
+- \`${cmd('get <id>')}\` — Show one run, whatever its status
 - \`${cmd('cancel [id]')}\` — Cancel a running workflow (default: the one in this conversation)
 - \`${cmd('resume <id>')}\` — Resume a failed or paused run
 - \`${cmd('abandon <id>')}\` — Abandon a running, failed, or paused run

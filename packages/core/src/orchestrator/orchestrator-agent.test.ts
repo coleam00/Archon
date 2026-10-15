@@ -4779,7 +4779,7 @@ describe('paused approval gate routing', () => {
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('missing or malformed');
-    expect(prompt).toContain('/workflow status run-1');
+    expect(prompt).toContain('/workflow get run-1');
     expect(prompt).not.toContain('/workflow approve run-1');
     expect(prompt).toContain('/workflow reject run-1 <reason>');
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
@@ -5046,7 +5046,7 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       'Which project should this workflow run on?\n\n- test-repo\n\n' +
-        'Reply with the project name, or use: /workflow run assist --project <name> "test prompt"'
+        'Reply with the project name, or choose one with `/setproject <name>` and then use: /workflow run assist "test prompt"'
     );
   });
 
@@ -5069,7 +5069,7 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
-      'Choose a project for this conversation, then retry `/workflow resume paused-run`.\n\n- test-repo'
+      'Choose a project for this conversation with `/setproject <name>`, then retry `/workflow resume paused-run`.\n\n- test-repo'
     );
   });
 });
@@ -7585,7 +7585,7 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
         makeSlackPlatform(),
         new TerminalStatusWriteError(new Error('db is gone'))
       );
-      expect(messages.some(m => m.includes('`/archon-workflow status run-gated`'))).toBe(true);
+      expect(messages.some(m => m.includes('`/archon-workflow get run-gated`'))).toBe(true);
       expectSlackSpelling(messages);
     });
 

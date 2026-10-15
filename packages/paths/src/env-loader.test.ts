@@ -3,6 +3,7 @@ import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
+import { getLogLevel, rootLogger } from './logger';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -305,6 +306,35 @@ describe('loadArchonEnv', () => {
 
     const anyLoaded = stderrWrites.find(s => s.includes('[archon] loaded'));
     expect(anyLoaded).toBeUndefined();
+  });
+});
+
+describe('LOG_LEVEL from an Archon env file', () => {
+  let levelBefore: string;
+  beforeEach(() => {
+    levelBefore = rootLogger.level;
+  });
+  afterEach(() => {
+    rootLogger.level = levelBefore;
+  });
+
+  it('applies the user-scope value to the root logger', () => {
+    rootLogger.level = 'info';
+    writeFileSync(join(archonHomeDir, '.env'), 'LOG_LEVEL=debug\n');
+
+    loadArchonEnv(repoDir);
+
+    expect(getLogLevel()).toBe('debug');
+  });
+
+  it('lets the repo-scope value win over the user scope', () => {
+    rootLogger.level = 'info';
+    writeFileSync(join(archonHomeDir, '.env'), 'LOG_LEVEL=debug\n');
+    writeFileSync(join(repoDir, '.archon', '.env'), 'LOG_LEVEL=error\n');
+
+    loadArchonEnv(repoDir);
+
+    expect(getLogLevel()).toBe('error');
   });
 });
 

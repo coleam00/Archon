@@ -641,7 +641,7 @@ async function signalGateResolved(
     log.warn({ err, runId: run.id, action }, 'manage_run.gate_continuation_prepare_failed');
     return (
       ` The decision is recorded, but continuation could not be requested: ${err.message}. ` +
-      `Check \`${cmd(`status ${run.id}`)}\` before retrying \`${cmd(`resume ${run.id}`)}\`.`
+      `Check \`${cmd(`get ${run.id}`)}\` before retrying \`${cmd(`resume ${run.id}`)}\`.`
     );
   }
   if (!ctx.onGateResolved(continuationRun, action)) {

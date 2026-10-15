@@ -92,6 +92,16 @@ export async function spawnAdmitted(
   }
 }
 
+/**
+ * The messages behind a drain failure. The store keeps only the failed stage, so this is
+ * the one place the operator learns why a binding was refused. Flattens the nested
+ * `AggregateError`s the drain builds, which carry no reason of their own.
+ */
+function drainFailureReasons(error: unknown): string[] {
+  if (error instanceof AggregateError) return error.errors.flatMap(drainFailureReasons);
+  return [error instanceof Error ? error.message : String(error)];
+}
+
 function drainHost(
   host: WorkflowHost,
   hostId: string,
@@ -208,7 +218,7 @@ export async function triggerCommand(
       for (const hostId of new Set(hostIds)) await drainHost(host, hostId, dispatch);
     } catch (error) {
       throw new Error(
-        `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
+        `Receipt ${receipt.receiptId} is retained, but its host drain failed: ${drainFailureReasons(error).join('; ')}. Inspect that receipt before recovery.`,
         { cause: error }
       );
     }

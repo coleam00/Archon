@@ -8481,8 +8481,9 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    await workflowAbandonCommand(createTestWorkflowHost(), 'missing', true);
+    const exitCode = await workflowAbandonCommand(createTestWorkflowHost(), 'missing', true);
 
+    expect(exitCode).toBe(1);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       ok: boolean;
       error: string;
@@ -8568,8 +8569,9 @@ describe('write command --json output', () => {
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
-    await workflowResumeCommand(createTestWorkflowHost(), 'run-rs', true);
+    const exitCode = await workflowResumeCommand(createTestWorkflowHost(), 'run-rs', true);
 
+    expect(exitCode).toBe(0);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
     expect(parsed).toMatchObject({
       ok: true,
@@ -8579,6 +8581,19 @@ describe('write command --json output', () => {
       status: 'failed',
     });
     expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('resume --json exits nonzero with {ok:false} on a not-found run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const exitCode = await workflowResumeCommand(createTestWorkflowHost(), 'missing', true);
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      action: 'resume',
+    });
   });
 });
 
@@ -11498,8 +11513,9 @@ describe('workflowCancelCommand', () => {
       new Error('No live detached owner; run unchanged')
     );
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+    const exitCode = await workflowCancelCommand(createTestWorkflowHost(), runId, true);
 
+    expect(exitCode).toBe(1);
     expect(mockDetachedTargetStop).not.toHaveBeenCalled();
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
@@ -11519,7 +11535,9 @@ describe('workflowCancelCommand', () => {
     });
     mockDetachedTargetStop.mockRejectedValue(new Error('process still exists'));
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+    const exitCode = await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+
+    expect(exitCode).toBe(1);
 
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({

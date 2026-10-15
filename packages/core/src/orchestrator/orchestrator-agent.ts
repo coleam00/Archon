@@ -1850,7 +1850,7 @@ export async function continueResolvedGateRun(
         );
         await notify(
           `${decision}, and **${run.workflow_name}** ran, but its final status could not be saved ` +
-            `(${err.message}). The decision is recorded — check \`${spellWorkflowCommand(platform, `status ${run.id}`)}\` ` +
+            `(${err.message}). The decision is recorded — check \`${spellWorkflowCommand(platform, `get ${run.id}`)}\` ` +
             'before starting another run on this project.'
         );
         return;
@@ -3857,8 +3857,8 @@ async function handleWorkflowRunCommand(
   await platform.sendMessage(
     conversationId,
     request.kind === 'resume'
-      ? `Choose a project for this conversation, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
-      : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: ${spellWorkflowCommand(platform, `run ${request.definition.name} --project <name> "${request.args}"`)}`
+      ? `Choose a project for this conversation with \`/setproject <name>\`, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
+      : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or choose one with \`/setproject <name>\` and then use: ${spellWorkflowCommand(platform, `run ${request.definition.name} "${request.args}"`)}`
   );
 }
 

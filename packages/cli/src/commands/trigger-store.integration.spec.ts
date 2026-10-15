@@ -498,6 +498,69 @@ test('preparation passes event-mapped inputs to a workflow that declares them', 
   expect(prepared?.launch.run.metadata).toMatchObject({ inputs: { order_id: 'from-the-event' } });
 });
 
+test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
+  const project = join(await realpath(root), 'project');
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(join(project, '.archon/workflows/portable.yaml'), undeclaredWorkflow);
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  const host = hostForTest();
+  await registerFolder(host.records.codebases, project, 'portable');
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
+  const configPath = join(root, 'timer.json');
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'timer',
+      binding: {
+        bindingId: 'refused',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: user.id,
+        resource: 'portable',
+        capacity: 1,
+        overlap: 'queue',
+        launch: {
+          cwd: project,
+          workflowName: 'portable',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+      schedule: { intervalSeconds: 60, runAtLoad: false },
+    })
+  );
+  const inputsPath = join(root, 'inputs.json');
+  await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
+  try {
+    const failure = await triggerCommand(host, 'fire', [], {
+      config: configPath,
+      inputs: inputsPath,
+    }).then(
+      () => undefined,
+      (error: unknown) => error as Error
+    );
+    expect(failure?.message).toContain(
+      "Workflow 'portable' declares no inputs; a trigger cannot pass event-mapped input 'order_id'"
+    );
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.bindings[0]).toMatchObject({
+      status: 'rejected',
+      error: 'launch_preparation_failed',
+    });
+    expect(JSON.stringify(stored)).not.toContain('declares no inputs');
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
 test('preparation preserves both failures when rejection cannot be persisted', async () => {
   const host = hostForTest();
   const statusError = new Error('status write unavailable');

@@ -19,6 +19,7 @@ mock.module('./logger', () => ({
     realRootLogger.level = normalized;
   },
   getLogLevel: () => realRootLogger.level,
+  applyEnvLogLevel: () => {},
 }));
 
 const { createLogger, setLogLevel, getLogLevel, rootLogger } = await import('./logger');
