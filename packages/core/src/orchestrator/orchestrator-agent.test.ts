@@ -6485,6 +6485,37 @@ describe('chat turn telemetry', () => {
     );
   });
 
+  test.each(['batch', 'stream'] as const)(
+    'sums cost and tokens over every result of a %s turn',
+    async mode => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ codebase_id: null }))
+      );
+      mockSendQuery.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'answer' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 100, output: 10 } };
+        yield { type: 'result', cost: 0.2, tokens: { input: 200, output: 20 } };
+      });
+      const platform = {
+        ...makePlatform(),
+        getStreamingMode: mock<IPlatformAdapter['getStreamingMode']>(() => mode),
+        sendResultFooter: mock<NonNullable<IPlatformAdapter['sendResultFooter']>>(() =>
+          Promise.resolve()
+        ),
+      };
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+
+      const footer = platform.sendResultFooter.mock.calls[0]?.[1];
+      expect(footer?.cost).toBeCloseTo(0.3);
+      expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
+      expect(mockCaptureChatTurn.mock.calls[0]?.[0]).toMatchObject({
+        tokensIn: 300,
+        tokensOut: 30,
+      });
+      expect(mockCaptureChatTurn.mock.calls[0]?.[0]?.costUsd).toBeCloseTo(0.3);
+    }
+  );
+
   test('omits usage on the chat turn capture when the provider reports none', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ codebase_id: null }))

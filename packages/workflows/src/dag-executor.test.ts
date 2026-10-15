@@ -17803,7 +17803,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
       workflow_run_id: 'attention-delivery-failed',
       event_type: 'pause_notice_undelivered',
       step_name: 'rerun-ci',
-      data: { nodeId: 'rerun-ci', platform: 'test' },
+      data: { nodeId: 'rerun-ci', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'node_failed' })
@@ -18319,7 +18319,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'review',
-      data: { nodeId: 'review', platform: 'test' },
+      data: { nodeId: 'review', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'approval_requested', step_name: 'review' })
@@ -18386,7 +18386,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'refine',
-      data: { nodeId: 'refine', platform: 'test' },
+      data: { nodeId: 'refine', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.getState().status).toBe('paused');
     expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
