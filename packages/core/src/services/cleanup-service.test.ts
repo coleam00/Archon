@@ -400,6 +400,17 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
     expect(report.removed).toEqual(['env-1']);
   });
 
+  test('reports a failed destroy instead of claiming removal', async () => {
+    mockListActiveContainerEnvironments.mockResolvedValueOnce([oldRow]);
+    mockContainerDestroy.mockRejectedValueOnce(new Error('status write failed'));
+
+    expect(await cleanupContainerEnvironments(7)).toEqual({
+      removed: [],
+      skipped: [],
+      errors: [{ id: oldRow.id, error: 'status write failed' }],
+    });
+  });
+
   test('keeps an old container whose registered platform retains workspaces', async () => {
     setPlatformPolicies([...ageBasedPolicies, { id: 'matrix-chat', workspaceRetention: 'retain' }]);
     mockListActiveContainerEnvironments.mockResolvedValueOnce([
