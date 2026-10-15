@@ -4342,11 +4342,10 @@ export function registerApiRoutes(
           );
         }
       }
-      const reason = body.reason ?? 'Rejected';
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const result = await rejectWorkflow(runId, reason, actor, { via: 'api' });
+      const result = await rejectWorkflow(runId, body.reason, actor, { via: 'api' });
 
       if (result.cancelled) {
         return c.json({
@@ -4413,12 +4412,7 @@ export function registerApiRoutes(
       const respondRefusal = answerRefusal(run, decision);
       if (respondRefusal !== null) return apiError(c, 400, respondRefusal);
 
-      // Mirrors the dedicated /reject route's default: an empty/omitted text becomes
-      // 'Rejected' rather than reaching a new-mode gate's structured output as ''.
-      // Only for decision === 'reject' — every other decision (including 'approve',
-      // which stays optional/undefined) is unaffected.
-      const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text, actor, origin);
+      const result = await respondToWorkflow(runId, decision, body.text, actor, origin);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({

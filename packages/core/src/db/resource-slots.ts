@@ -30,7 +30,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType } from './connection';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import {
   isOwnerProvablyGone,
@@ -230,7 +230,7 @@ export async function resourceStartOccupancy(
   const queued = await query<{ id: string; host_id: string; launch: unknown }>(
     `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position${getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''}`,
+      ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
   );
   const liveRuns = live.rows.map(row => ({

@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
-import { getIsolationProvider, worktreeRegistrationMetadata } from '@archon/isolation';
+import { getIsolationProvider } from '@archon/isolation';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -64,6 +64,7 @@ import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
+import { createRegisteredWorktree } from './registered-worktree';
 
 const log = createLogger('resource-start-host');
 
@@ -370,8 +371,8 @@ async function worktreeLane(
   }
   const workflowId = lane.branch ?? identifier;
   const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
-  const env = await provider.create(
-    {
+  const created = await createRegisteredWorktree(host.records.isolation, {
+    request: {
       workflowType: 'task',
       identifier: workflowId,
       taskBranch:
@@ -391,28 +392,15 @@ async function worktreeLane(
       canonicalRepoPath: toRepoPath(codebase.default_cwd),
       description: `Resource start: ${identifier}`,
     },
-    setupExecutor
-  );
-  const record = await host.records.isolation.create({
-    codebase_id: codebase.id,
-    workflow_type: 'task',
-    workflow_id: workflowId,
-    provider: 'worktree',
-    working_path: env.workingPath,
-    branch_name: env.branchName,
-    created_by_platform: platformType,
-    ...(userId ? { created_by_user_id: userId } : {}),
-    metadata: { ...worktreeRegistrationMetadata(env.metadata) },
+    setupExecutor,
+    createdByPlatform: platformType,
+    ...(userId ? { createdByUserId: userId } : {}),
   });
   return {
-    cwd: env.workingPath,
-    envId: record.id,
-    ...(env.metadata.provenance === 'created'
-      ? { ownedWorktree: { envId: record.id, creationId: env.metadata.creationId } }
-      : {}),
-    ...(!env.metadata.adopted && env.metadata.cutFromCommit !== undefined
-      ? { cutFromCommit: env.metadata.cutFromCommit }
-      : {}),
+    cwd: created.env.workingPath,
+    envId: created.envId,
+    ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
+    ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
   };
 }
 

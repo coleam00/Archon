@@ -95,7 +95,7 @@ const mockRejectWorkflow = mock<WorkflowOperations['rejectWorkflow']>(async () =
 const mockRespondToWorkflow = mock<WorkflowOperations['respondToWorkflow']>(
   async (runId, decision, text, actor, origin) => {
     if (decision === 'approve') return mockApproveWorkflow(runId, text, actor, origin);
-    if (decision === 'reject') return mockRejectWorkflow(runId, text ?? 'Rejected', actor, origin);
+    if (decision === 'reject') return mockRejectWorkflow(runId, text, actor, origin);
     return approvalResult('approval_gate');
   }
 );
@@ -727,12 +727,11 @@ describe('SlackWorkflowBridge', () => {
     });
 
     expect(mockRejectWorkflow).toHaveBeenCalledTimes(1);
-    // The reject button has no text-entry affordance, so it can never supply a
-    // reason — the bridge must default it to 'Rejected' itself (#2740),
-    // otherwise a new-mode gate's structured output.text records ''.
+    // The reject button has no text-entry affordance; rejectWorkflow supplies
+    // the default reason.
     expect(mockRejectWorkflow).toHaveBeenCalledWith(
       'r1',
-      'Rejected',
+      undefined,
       { kind: 'user', userId: 'archon-U999' },
       { via: 'slack', expectedGate: 'review' }
     );

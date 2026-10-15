@@ -2,17 +2,18 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { MessageRow } from './messages';
+import type { SqlDialect } from './adapters/types';
+import { sqliteDialect } from './adapters/sqlite';
 
 const mockQuery = createMockQuery();
-const mockGetDatabaseType = mock<() => 'postgresql' | 'sqlite'>(() => 'postgresql');
+const mockGetDialect = mock<() => SqlDialect>(() => mockPostgresDialect);
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
-  getDialect: () => mockPostgresDialect,
-  getDatabaseType: mockGetDatabaseType,
+  getDialect: mockGetDialect,
 }));
 
 // Mock @archon/paths to avoid lazy logger initialization issues in tests
@@ -156,11 +157,11 @@ describe('messages', () => {
 
   describe('getRecentWorkflowResultMessages', () => {
     beforeEach(() => {
-      mockGetDatabaseType.mockClear();
+      mockGetDialect.mockClear();
     });
 
-    test('uses PostgreSQL JSON extraction syntax when dbType is postgresql', async () => {
-      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+    test('uses PostgreSQL JSON extraction syntax on PostgreSQL', async () => {
+      mockGetDialect.mockReturnValueOnce(mockPostgresDialect);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getRecentWorkflowResultMessages('conv-1');
@@ -170,8 +171,8 @@ describe('messages', () => {
       expect(sql).not.toContain('json_extract');
     });
 
-    test('uses SQLite JSON extraction syntax when dbType is sqlite', async () => {
-      mockGetDatabaseType.mockReturnValueOnce('sqlite');
+    test('uses SQLite JSON extraction syntax on SQLite', async () => {
+      mockGetDialect.mockReturnValueOnce(sqliteDialect);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getRecentWorkflowResultMessages('conv-1');
@@ -182,7 +183,7 @@ describe('messages', () => {
     });
 
     test('passes correct parameters: conversationId and limit', async () => {
-      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockGetDialect.mockReturnValueOnce(mockPostgresDialect);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getRecentWorkflowResultMessages('conv-42', 5);
@@ -191,7 +192,7 @@ describe('messages', () => {
     });
 
     test('default limit is 3', async () => {
-      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockGetDialect.mockReturnValueOnce(mockPostgresDialect);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getRecentWorkflowResultMessages('conv-1');
@@ -200,7 +201,7 @@ describe('messages', () => {
     });
 
     test('returns empty array on query error (non-throwing contract)', async () => {
-      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockGetDialect.mockReturnValueOnce(mockPostgresDialect);
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
       const result = await getRecentWorkflowResultMessages('conv-1');
@@ -218,7 +219,7 @@ describe('messages', () => {
         user_id: null,
         created_at: '2026-01-01T00:00:00Z',
       };
-      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockGetDialect.mockReturnValueOnce(mockPostgresDialect);
       mockQuery.mockResolvedValueOnce(createQueryResult([row]));
 
       const result = await getRecentWorkflowResultMessages('conv-1');
