@@ -62,7 +62,7 @@ async function pausedAtAsk(
   return { runId, wait };
 }
 
-const gate = (): ApprovalContext => ({
+const gate = (): ApprovalContext & { pauseId: string } => ({
   nodeId: 'review',
   message: 'Ship it?',
   type: 'approval',
