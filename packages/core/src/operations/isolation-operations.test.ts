@@ -21,14 +21,10 @@ const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>
   Promise.resolve([])
 );
 const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
-const mockGetLiveRunOwningEnv = mock<typeof IsolationDb.getLiveRunOwningEnv>(() =>
-  Promise.resolve(null)
-);
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
   updateStatus: mockUpdateStatus,
-  getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
 }));
 
 const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
@@ -38,9 +34,13 @@ const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
   Promise.resolve({ removed: [], skipped: [], baseRef: MERGED_BASE_REF })
 );
+const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+  Promise.resolve(null)
+);
 mock.module('../services/cleanup-service', () => ({
   cleanupStaleWorktrees: mockCleanupStale,
   cleanupMergedWorktrees: mockCleanupMerged,
+  getLiveRunBlocker: mockGetLiveRunBlocker,
 }));
 
 const mockLogger = {
@@ -106,8 +106,8 @@ describe('listEnvironments', () => {
     mockLstat.mockClear();
     mockLstat.mockImplementation(() => Promise.resolve());
     mockUpdateStatus.mockClear();
-    mockGetLiveRunOwningEnv.mockClear();
-    mockGetLiveRunOwningEnv.mockImplementation(() => Promise.resolve(null));
+    mockGetLiveRunBlocker.mockClear();
+    mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
   });
@@ -162,8 +162,13 @@ describe('listEnvironments', () => {
     const env = makeEnvWithAge({ id: 'env-owned', working_path: '/worktrees/gone' });
     mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
     mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockGetLiveRunOwningEnv.mockImplementation(() =>
-      Promise.resolve({ id: 'run-abcdef12', status: 'failed' })
+    mockGetLiveRunBlocker.mockImplementation(() =>
+      Promise.resolve({
+        reason: 'live_run',
+        display: 'run run-abcd is failed',
+        runId: 'run-abcdef12',
+        runStatus: 'failed',
+      })
     );
 
     const result = await listEnvironments();

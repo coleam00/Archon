@@ -24,16 +24,32 @@
  * cannot read the report it continues from would review nothing and say it
  * reviewed everything.
  *
+ * The part assignment passes through unchanged: the node's `output_format` owns
+ * its shape, so the engine refuses a malformed one before any agent reads it.
+ *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
  * - INPUTS_LIGHT: "true" when this continuation follows a CI correction.
+ * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+
+/**
+ * The bound part assignment. The refusal drops the parser's message, which quotes
+ * a token of the operator's text.
+ */
+function partAssignment(value: string | undefined): unknown {
+  try {
+    return nullableJson(value);
+  } catch {
+    throw new Error('the part input is not JSON');
+  }
+}
 
 /** Where publish-review records the commit a published report reviewed. */
 const REVIEWED_HEAD = 'reviewed-head';
@@ -75,13 +91,14 @@ function descends(head: string, cursor: string): boolean {
 }
 
 try {
+  const part = partAssignment(process.env.INPUTS_PART);
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
   // The engine's identity for this node, which synthesis uses to count only this
   // round's lens artifacts.
   const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -100,7 +117,7 @@ try {
       trimmed(process.env.INPUTS_LIGHT) === 'true'
         ? { ...NO_LENSES, code: true }
         : recordedLenses(join(dirname(prior), REVIEWED_LENSES));
-    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses });
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

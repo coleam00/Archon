@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
+import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
@@ -27,6 +28,22 @@ function scopedHelpOptions(argv: string[]): string {
   const end = body.indexOf('\n\n');
   return end === -1 ? body : body.slice(0, end);
 }
+
+it('keeps run source and isolation flags consistent with the parser', () => {
+  const options = scopedHelpOptions(['workflow', 'run']).split('\n');
+  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+    const parserOption = cliArgOptions[name];
+    expect(parserOption).toBeDefined();
+    const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
+    expect(lines).toHaveLength(1);
+    const spec = lines[0]?.trimStart().split(/ {2,}/)[0];
+    if (parserOption?.type === 'string') {
+      expect(spec).toMatch(new RegExp(`^--${name} <[^>]+>$`));
+    } else {
+      expect(spec).toBe(`--${name}`);
+    }
+  }
+});
 
 describe('CLI help output', () => {
   const help = renderHelp();
@@ -121,6 +138,11 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--workflow-source');
   });
 
+  it('documents --container in workflow run options', () => {
+    expect(scopedHelpOptions(['workflow', 'run'])).toContain('--container');
+    expect(scopedHelpOptions(['workflow', 'answer'])).not.toContain('--container');
+  });
+
   it('scopes workflow logs --help to its own flags and excludes run-only flags', () => {
     // Proves the partition is not a one-off for workflow run: another
     // subcommand gets only its own flags, while a run-only flag drops out.
@@ -206,6 +228,10 @@ Commands:
   workflow get <run-id>      Show detail for a single run (any status)
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
+  workflow attention [<run-id>] List the attention queue, count it, or read the item one run stands for
+                             (defaults to the current project)
+  workflow attention label <run-id> --occurrence <id>
+                             Set or remove labels on the attention wait a run is paused at
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake one exact event wait occurrence
@@ -268,6 +294,7 @@ Options:
                              instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
@@ -284,10 +311,11 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
-  --occurrence <id>          For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at
-                             this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)
+  --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
+                             paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
+                             and attention label)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)

@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
 import { resolvedAiProfileSchema, resolvedRunModelOverridesSchema } from './model-binding';
 

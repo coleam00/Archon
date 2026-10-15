@@ -139,7 +139,7 @@ export interface ProviderRegistration {
   /** Instantiate a provider */
   factory: () => IAgentProvider;
 
-  /** Static capability declaration — used for dag-executor warnings */
+  /** Static capability declaration — owns engine capability decisions */
   capabilities: ProviderCapabilities;
 
   /** Whether this is a built-in (maintained by core team) or community provider */
@@ -169,6 +169,31 @@ export interface ProviderRegistration {
 
   /** Accepts vendor/model refs without an agent prefix; at most one registry entry owns them. */
   ownsUnprefixedModelRefs?: true;
+}
+
+export function hasValidProviderCapabilities(capabilities: ProviderCapabilities): boolean {
+  return capabilities.sessionFork !== true || capabilities.sessionResume;
+}
+
+function assertValidCapabilities(entry: ProviderRegistration): void {
+  if (!hasValidProviderCapabilities(entry.capabilities)) {
+    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
+  }
+}
+
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
+    throw new Error(`Provider '${entry.id}' is already registered`);
+  }
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
+  if (entry.ownsUnprefixedModelRefs && owner) {
+    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
+  }
+  assertValidCapabilities(entry);
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   type BashSpawnContext,
   type BashSpawnHook,
 } from '@earendil-works/pi-coding-agent';
+import { delimiter } from 'node:path';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
@@ -91,15 +92,26 @@ export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 /**
  * Build a Pi `spawnHook` that merges managed env vars into every bash
  * subprocess. Matches Claude/Codex precedence: caller-provided env keys
- * override Pi's inherited baseline. Returns undefined when `env` is empty
- * so bash spawns without an unnecessary hook allocation.
+ * override Pi's inherited baseline. A caller PATH (the run's `gh` shim) goes
+ * first, but Pi's baseline entries stay after it: Pi prepends its own bin dir,
+ * and replacing PATH outright would hide the tools Pi installed there.
+ * Returns undefined when `env` is empty so bash spawns without an unnecessary
+ * hook allocation.
  */
 function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnHook | undefined {
   if (!env || Object.keys(env).length === 0) return undefined;
-  return (context: BashSpawnContext): BashSpawnContext => ({
-    ...context,
-    env: { ...context.env, ...env },
-  });
+  return (context: BashSpawnContext): BashSpawnContext => {
+    const merged = { ...context.env, ...env };
+    const basePath = context.env.PATH;
+    if (env.PATH !== undefined && basePath) {
+      const callerEntries = env.PATH.split(delimiter);
+      merged.PATH = [
+        ...callerEntries,
+        ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
+      ].join(delimiter);
+    }
+    return { ...context, env: merged };
+  };
 }
 
 /** Map a normalized (lowercase) Pi tool name to its Pi-internal factory. */

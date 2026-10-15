@@ -52,6 +52,7 @@ export type TemplateSlotName =
   | 'wait.event'
   | 'wait.attention'
   | 'wait.options'
+  | 'wait.labels.*'
   | 'workflow.input'
   | 'workflow.with.*'
   | 'workflow.fan_out.items'
@@ -99,6 +100,7 @@ export const SLOT_SPEC = {
   'wait.event': { surface: 'value', outputReference: true },
   'wait.attention': { surface: 'prompt', outputReference: true },
   'wait.options': { surface: 'value', outputReference: true },
+  'wait.labels.*': { surface: 'value', outputReference: true },
   'workflow.input': { surface: 'value', outputReference: true },
   'workflow.with.*': { surface: 'value', outputReference: true, valuePosition: 'workflow_with' },
   'workflow.fan_out.items': { surface: 'value', outputReference: true },
@@ -316,6 +318,12 @@ function walk(
       slot('wait.options', 'wait.options', node.wait.options, value => {
         const wait = node.wait;
         if (wait.attention !== undefined) node.wait = { ...wait, options: value };
+      });
+    for (const [key, label] of Object.entries(node.wait.labels ?? {}))
+      slot('wait.labels.*', `wait.labels.${key}`, label, value => {
+        const wait = node.wait;
+        if (wait.attention !== undefined)
+          node.wait = { ...wait, labels: { ...wait.labels, [key]: value } };
       });
   } else if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
     if (isWorkflowNode(node) && node.input !== undefined)

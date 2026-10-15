@@ -10,7 +10,7 @@
  * z.union() is NOT used here — YAML nodes lack an explicit `type` discriminant,
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
@@ -767,6 +767,18 @@ export const attentionOptionsSchema = z
     }
   });
 
+/**
+ * A label key on an attention wait. It is one CLI token with no `=`, so `--label k=v`
+ * and `--set k=v` split unambiguously at the first `=`. The engine gives keys no meaning.
+ */
+export const attentionLabelKeySchema = z
+  .string()
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
+
+/** An attention wait's labels: a flat map of plain strings the engine never interprets. */
+export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());
+export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
+
 /** The answers an `approval` attention wait accepts. */
 export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
   { id: 'approve' },
@@ -845,6 +857,8 @@ const waitConfigVariantSchemas = [
             ),
         ])
         .optional(),
+      /** Values may hold runtime references, resolved when the wait pauses. */
+      labels: attentionLabelsSchema.optional(),
     })
     .superRefine((value, ctx) => {
       const form = value.form ?? 'message';
@@ -889,6 +903,7 @@ export type WaitCondition =
       form: AttentionForm;
       /** Literal options, or the whole `$node.output.<field>` reference resolved at pause time. */
       options?: AttentionOption[] | string;
+      labels?: AttentionLabels;
     };
 
 export function waitCondition(config: WaitConfig): WaitCondition {
@@ -906,6 +921,7 @@ export function waitCondition(config: WaitConfig): WaitCondition {
     message: config.attention,
     form: config.form ?? 'message',
     ...(config.options !== undefined ? { options: config.options } : {}),
+    ...(config.labels !== undefined ? { labels: config.labels } : {}),
   };
 }
 
@@ -1026,8 +1042,8 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
- * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
- * budget ceiling is deferred to #1961. `join` reduces the
+ * leave some children uncancelled when the parent is abandoned. The workflow `budget:`
+ * does not cover fan-out yet (a budgeted workflow rejects it at load; #2815). `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
  *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
  *      cancelled entries are represented as `{ archon_failed: true, error, status }`
@@ -2132,7 +2148,7 @@ export const dagNodeSchema = z
       ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
     } satisfies LoopNode;
   })
-  .openapi('DagNode');
+  .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
 // Type guards (preserved from original types.ts)
