@@ -657,6 +657,7 @@ mock.module('../utils/workflow-source-root', () => ({
 }));
 
 mock.module('@archon/git', () => ({
+  verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
   // /register-project probes git-ness via findRepoRoot; a non-null root marks

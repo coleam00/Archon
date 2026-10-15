@@ -1,3 +1,4 @@
+import { toRepoPath, toWorktreePath, verifyWorktreeOwnership } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type {
   IsolationEnvironmentRow,
@@ -21,9 +22,11 @@ export interface IIsolationStore {
 /** Reuse must not revoke the creation proof used by the run that created the checkout. */
 export async function recordWorktreeAdoption(
   store: Pick<IIsolationStore, 'updateMetadata'>,
-  env: IsolationEnvironmentRow
+  env: IsolationEnvironmentRow,
+  repoPath: string
 ): Promise<IsolationEnvironmentRow> {
   if (env.provider !== 'worktree') return env;
+  await verifyWorktreeOwnership(toWorktreePath(env.working_path), toRepoPath(repoPath));
   await store.updateMetadata(env.id, { adopted: true });
   createLogger('isolation.store').warn(
     {

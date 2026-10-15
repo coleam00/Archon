@@ -19,6 +19,9 @@ import type {
   ResolvedIsolation,
 } from '@archon/isolation';
 import { toBranchName, toRepoPath } from '@archon/git';
+mock.module('@archon/git', () => ({
+  verifyWorktreeOwnership: mock(async () => {}),
+}));
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
 // (or the workflow engine) before the mock.module() calls below take effect.
 import type { WorkflowRoutingContext } from './orchestrator';

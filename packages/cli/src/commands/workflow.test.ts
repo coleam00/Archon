@@ -598,6 +598,7 @@ class MockCanonicalRepoPathUnavailableError extends Error {
 }
 
 mock.module('@archon/git', () => ({
+  verifyWorktreeOwnership: mock(async () => {}),
   findRepoRoot: mock(() => Promise.resolve(null)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
   getGitCheckoutIdentity: mock((path: string) =>

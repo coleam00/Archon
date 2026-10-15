@@ -1391,8 +1391,10 @@ behavior.
 
 Ordinary removal requires a stored creation proof matching
 Archon's marker and Git registration in the expected repository. Replacement
-repositories, adopted checkouts, and older records without proof are retained for
-operator inspection. If Git removal leaves a directory behind, cleanup reports it
+repositories and checkouts without matching stored proof, including newly registered
+adoptions and older records, are retained for operator inspection. Reusing a registered
+checkout sets `adopted: true` while preserving its creation proof, so that checkout
+can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
 Cleanup deletes an environment's local branch only when Archon created that branch.

@@ -559,7 +559,7 @@ async function dispatchBackgroundWorkflowOwned(
         if (ctx.adoptionLane.envId) {
           const env = await sqlIsolation.getById(ctx.adoptionLane.envId);
           if (!env) throw new Error(`Isolation environment ${ctx.adoptionLane.envId} not found`);
-          await recordWorktreeAdoption(sqlIsolation, env);
+          await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
         }
         // Adoption lane 2: the adopted run's worktree survives — inherit it dirty-as-is
         // instead of cutting a fresh one from base. Linking the env keeps standard

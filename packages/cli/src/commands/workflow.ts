@@ -2796,7 +2796,7 @@ async function runWorkflowWithOwnedSource(
         if (lane.envId) {
           const env = await host.records.isolation.getById(lane.envId);
           if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
-          await recordWorktreeAdoption(host.records.isolation, env);
+          await recordWorktreeAdoption(host.records.isolation, env, codebase.default_cwd);
         }
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;
@@ -2886,7 +2886,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
-      await recordWorktreeAdoption(host.records.isolation, matchingEnv);
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3167,7 +3167,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        await recordWorktreeAdoption(host.records.isolation, existingEnv);
+        await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {

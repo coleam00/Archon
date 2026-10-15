@@ -225,3 +225,36 @@ for (const reuse of ['existing', 'workflow', 'linked'] as const) {
     expect(events.filter(e => e.msg === 'worktree_adopted' && e.level === 40)).toHaveLength(1);
   });
 }
+
+for (const reuse of ['existing', 'workflow', 'linked'] as const) {
+  test(`registered resolver ${reuse} refuses a foreign clone without recording adoption`, async () => {
+    const resolver = new IsolationResolver({
+      store: isolation.createIsolationStore(),
+      provider: getIsolationProvider(),
+    });
+    const request = {
+      existingEnvId: null,
+      codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+      hints: { workflowType: 'issue' as const, workflowId: '42' },
+      platformType: 'cli',
+    };
+    const first = await resolver.resolve(request);
+    if (first.status !== 'resolved') throw new Error('Expected creation');
+    const original = await isolation.getById(first.env.id);
+    const otherClone = join(root, 'other-clone');
+    git('clone', '-q', repo, otherClone);
+    events.length = 0;
+    await expect(
+      resolver.resolve({
+        ...request,
+        codebase: { ...request.codebase, defaultCwd: otherClone },
+        ...(reuse === 'existing' ? { existingEnvId: first.env.id } : {}),
+        ...(reuse === 'linked'
+          ? { hints: { workflowType: 'pr', workflowId: '99', linkedIssues: [42] } }
+          : {}),
+      })
+    ).rejects.toThrow('belongs to a different clone');
+    expect(await isolation.getById(first.env.id)).toEqual(original);
+    expect(events.filter(e => e.msg === 'worktree_adopted')).toHaveLength(0);
+  });
+}

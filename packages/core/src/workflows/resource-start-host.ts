@@ -366,7 +366,7 @@ async function worktreeLane(
       lane.branch
     );
     if (existing && (await provider.healthCheck(existing.working_path))) {
-      await recordWorktreeAdoption(host.records.isolation, existing);
+      await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
       return { cwd: existing.working_path, envId: existing.id };
     }
   }
