@@ -11897,35 +11897,32 @@ export async function executeDagWorkflow(
    * error text never does.
    */
   const usageLimitWait = async (): Promise<WorkflowUsageLimitWaitContext | undefined> => {
-    if (config.workflows?.autoResumeOnQuotaReset === false) return undefined;
+    const skip = async (
+      nodeId: string,
+      reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'
+    ): Promise<undefined> => {
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'quota_resume_skipped',
+        step_name: nodeId,
+        data: { reason },
+      });
+      return undefined;
+    };
     let latest: { nodeId: string; resetAt: number } | undefined;
     for (const [nodeId, output] of runCtx.nodeOutputs) {
       if (output.state !== 'failed') continue;
       if (output.providerFailure?.class !== 'quota_exhausted') return undefined;
       const resetAt = output.providerFailure.resetAt;
-      if (resetAt === undefined) {
-        await deps.store.createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'quota_resume_skipped',
-          step_name: nodeId,
-          data: { reason: 'reset_unavailable' },
-        });
-        return undefined;
-      }
+      if (resetAt === undefined) return skip(nodeId, 'reset_unavailable');
       if (latest === undefined || Date.parse(resetAt) > latest.resetAt)
         latest = { nodeId, resetAt: Date.parse(resetAt) };
     }
+    if (latest === undefined) return undefined;
+    if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
     const now = Date.now();
-    if (latest === undefined || latest.resetAt <= now) return undefined;
-    if (execContext.kind === 'container') {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_skipped',
-        step_name: latest.nodeId,
-        data: { reason: 'container_unsupported' },
-      });
-      return undefined;
-    }
+    if (latest.resetAt <= now) return skip(latest.nodeId, 'reset_passed');
+    if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
     return {
       owner: 'node',
       nodeId: latest.nodeId,

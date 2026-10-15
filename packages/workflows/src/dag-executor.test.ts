@@ -17492,9 +17492,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
   });
 
   it.each([
-    ['the operator turned the wait off', false, 10 * 60_000],
-    ['the reported reset has already passed', true, -60_000],
-  ])('fails when %s', async (_case, autoResume, resetOffsetMs) => {
+    ['the operator turned the wait off', false, 10 * 60_000, 'disabled'],
+    ['the reported reset has already passed', true, -60_000, 'reset_passed'],
+  ])('fails when %s', async (_case, autoResume, resetOffsetMs, reason) => {
     useQuery(quotaExhaustedQuery(new Date(Date.now() + resetOffsetMs).toISOString()));
     const store = createMockStore();
 
@@ -17511,6 +17511,13 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
 
     expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'quota_resume_skipped',
+        step_name: 'investigate',
+        data: { reason },
+      })
+    );
   });
 
   it('fails when another node failed for a reason the reset does not clear', async () => {
