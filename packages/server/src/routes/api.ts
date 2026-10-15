@@ -2065,14 +2065,9 @@ async function requireConversationVisibility(
 }
 
 /**
- * How a route names its conversation. `platformId` matches a row of any platform,
- * which is right where the handler then acts on the row it was given. Dispatch
- * instead acts through the web adapter, which keys everything by platform id on
- * the `web` platform, so it must authorize that same row (`webPlatformId`): a
- * public Slack row sharing the id would otherwise admit a caller into someone's
- * private web chat. The SSE stream (`webFirstPlatformId`) carries web chats and
- * the transcripts of runs dispatched from any platform, so a `web` row at the id
- * wins and any other platform's row is the fallback.
+ * Bare platform IDs must resolve uniquely across platforms. Dispatch always uses
+ * the web adapter's row. SSE prefers web chats but also carries run transcripts
+ * from other platforms, so an unambiguous non-web row can be the fallback.
  */
 type ConversationKey =
   | { platformId: string }
@@ -2107,14 +2102,16 @@ async function authorizeConversation(
   c: Context,
   key: ConversationKey,
   access: 'read' | 'write'
-): Promise<{ conversation: Conversation } | { error: Response }> {
+): Promise<
+  { conversation: Conversation; visibility: ConversationVisibility } | { error: Response }
+> {
   const visibility = await requireConversationVisibility(c);
   if ('error' in visibility) return visibility;
   const conversation = await loadConversation(key);
   if (!conversation) return { error: apiError(c, 404, 'Conversation not found') };
-  if (isConversationVisible(conversation, visibility)) return { conversation };
+  if (isConversationVisible(conversation, visibility)) return { conversation, visibility };
   if (access === 'read' && (await workflowDb.isRunTranscriptConversation(conversation.id))) {
-    return { conversation };
+    return { conversation, visibility };
   }
   getLog().warn(
     {
@@ -2129,28 +2126,29 @@ async function authorizeConversation(
 }
 
 /**
- * The conversation a send or workflow run persists into. Under enforcement the
- * caller must own an existing row: dispatch would otherwise materialize a
- * conversation at a caller-chosen id. A solo install keeps dispatching to any id,
- * and a failed lookup there still degrades to "no row".
+ * Dispatch uses the web adapter's identity and the same caller that authorized
+ * the row. Solo installs may dispatch to an absent row, but never through a
+ * failed lookup.
  */
 async function authorizeDispatchConversation(
   c: Context,
   platformId: string
-): Promise<{ conversation: Conversation | null } | { error: Response }> {
-  if (isConversationOwnershipEnforced()) {
-    try {
-      return await authorizeConversation(c, { webPlatformId: platformId }, 'write');
-    } catch (err: unknown) {
-      getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
-      return { error: apiError(c, 500, 'Failed to load conversation') };
-    }
-  }
+): Promise<{ conversation: Conversation | null; actor: RunActor } | { error: Response }> {
   try {
-    return { conversation: await conversationDb.findConversationByPlatformId(platformId) };
+    if (isConversationOwnershipEnforced()) {
+      const access = await authorizeConversation(c, { webPlatformId: platformId }, 'write');
+      if ('error' in access) return access;
+      const actor: RunActor =
+        access.visibility.kind === 'owner'
+          ? { kind: 'user', userId: access.visibility.userId }
+          : await resolveRunActor(c);
+      return { conversation: access.conversation, actor };
+    }
+    const conversation = await conversationDb.getConversationByPlatformId('web', platformId);
+    return { conversation, actor: await resolveRunActor(c) };
   } catch (err: unknown) {
     getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
-    return { conversation: null };
+    return { error: apiError(c, 500, 'Failed to load conversation') };
   }
 }
 
@@ -3198,8 +3196,6 @@ export function registerApiRoutes(
   // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
   registerOpenApiRoute(sendMessageRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
-    const actor = await resolveRunActor(c);
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     // Reject conversation IDs that could be used for path traversal when building
     // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
@@ -3212,6 +3208,8 @@ export function registerApiRoutes(
     const access = await authorizeDispatchConversation(c, conversationId);
     if ('error' in access) return access.error;
     const conv = access.conversation;
+    const actor = access.actor;
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     let message: string;
     let savedFiles: AttachedFile[] = [];
@@ -3784,8 +3782,6 @@ export function registerApiRoutes(
   // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
-    const actor = await resolveRunActor(c);
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
@@ -3970,6 +3966,8 @@ export function registerApiRoutes(
     const access = await authorizeDispatchConversation(c, conversationId);
     if ('error' in access) return access.error;
     const conv = access.conversation;
+    const actor = access.actor;
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
