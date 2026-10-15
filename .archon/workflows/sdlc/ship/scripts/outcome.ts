@@ -1,5 +1,6 @@
 /**
- * One return for every legitimate terminal result of the routed fix chain.
+ * The result of every legitimate ending of the routed fix chain, which the `report`
+ * node relays as the workflow's return.
  *
  * Delivery is accepted when the deliver branch ran and reported its pull request
  * ready; a delivery that ended not ready reports deliver's own reason. Every other
@@ -20,9 +21,9 @@
  *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
  *   branch was skipped.
  *
- * A failed delivery cannot reach this node: the failure cascades an
- * `upstream_failed` skip that blocks this join, and the run's terminal record names
- * the node that actually failed.
+ * A failed delivery arrives as deliver's `ready: false, reason: failed` report and is
+ * relayed like any other not-ready delivery. A failure before delivery skips this
+ * node; the workflow's `report` node answers then.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';

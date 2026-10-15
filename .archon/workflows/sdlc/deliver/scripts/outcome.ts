@@ -1,5 +1,6 @@
 /**
- * The delivery tail's terminal report: ready, or not ready and why.
+ * The delivery tail's result when the rounds ran to an ending: ready, or not ready
+ * and why. The `report` node relays it as the workflow's return.
  *
  * The last round's typed ending is the result: ready when its review converged and
  * the CI agent saw green and marked the pull request ready, otherwise the reason the

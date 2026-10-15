@@ -601,6 +601,9 @@ async function handleWorktreeCommand(
           for (const branch of result.removed) {
             msg += `  • ${branch}\n`;
           }
+          for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+            msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
+          }
         } else {
           msg += `No ${cleanupType} worktrees to clean up.\n`;
         }
