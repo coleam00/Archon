@@ -842,10 +842,25 @@ export interface SampleLine extends Omit<JudgedSample, 'item'> {
 
 export function readSamples(outDir: string): SampleLine[] {
   const number = (value: unknown): number | null => (typeof value === 'number' ? value : null);
-  return readLines(join(outDir, SAMPLES_FILE)).flatMap(line => {
+  const file = join(outDir, SAMPLES_FILE);
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8').split('\n').flatMap((text, index) => {
+    if (text.trim() === '') return [];
+    const invalid = (reason: string): never => {
+      throw new Error(`${file}:${index + 1}: ${reason}`);
+    };
+    let line: unknown;
+    try {
+      line = JSON.parse(text);
+    } catch {
+      return invalid('invalid JSON');
+    }
+    if (!isObject(line)) return invalid('sample is not an object');
     const { case: caseId, variant, sample, run_id: runId, version, checks } = line;
-    if (typeof caseId !== 'string' || typeof variant !== 'string' || typeof sample !== 'number' || typeof runId !== 'string') return [];
-    if (!isObject(version) || typeof version.label !== 'string') return [];
+    if (typeof caseId !== 'string' || typeof variant !== 'string' || typeof sample !== 'number' || !Number.isInteger(sample) || sample < 1 || typeof runId !== 'string') return invalid('expected case, variant, positive integer sample and run_id');
+    if (!isObject(version) || typeof version.label !== 'string') return invalid('expected version.label');
+    if (typeof line.passed !== 'boolean') return invalid('expected passed boolean');
+    if (line.passed && typeof line.item !== 'string') return invalid('passed sample has no item path');
     const problems = typeof line.error === 'string' ? [line.error] : [];
     for (const [name, result] of Object.entries(isObject(checks) ? checks : {})) {
       if (isObject(result) && textList(result.problems)) problems.push(...result.problems.map(problem => `${name}: ${problem}`));
@@ -869,9 +884,9 @@ export function readSamples(outDir: string): SampleLine[] {
 }
 
 /** The latest judgement by one judge of each sample, keyed by the sample's run id. */
-function latestJudgements(outDir: string, spec: string): Map<string, Record<string, unknown>> {
+function latestJudgements(outDir: string, judge: Judge): Map<string, Record<string, unknown>> {
   return latestLines(join(outDir, JUDGEMENTS_FILE), line =>
-    isObject(line.judge) && line.judge.spec === spec && typeof line.run_id === 'string' ? line.run_id : undefined
+    isObject(line.judge) && line.judge.spec === judge.spec && line.judge.prompt_sha === judge.prompt_sha && typeof line.run_id === 'string' ? line.run_id : undefined
   );
 }
 
@@ -883,8 +898,8 @@ interface BatchSample {
   readonly judgement: Judgement | null;
 }
 
-function batchSamples(outDir: string, caseId: string, spec: string): BatchSample[] {
-  const judgements = latestJudgements(outDir, spec);
+function batchSamples(outDir: string, caseId: string, judge: Judge): BatchSample[] {
+  const judgements = latestJudgements(outDir, judge);
   return readSamples(outDir)
     .filter(line => line.case === caseId)
     .map(line => {
@@ -958,7 +973,7 @@ function defectRows(id: string): [string, (sample: BatchSample) => string][] {
 }
 
 /** The operator's page for one batch: per variant and defect, every sample side by side. */
-export function renderPage(caseId: string, judge: string, samples: readonly BatchSample[]): string {
+export function renderPage(caseId: string, judge: Judge, samples: readonly BatchSample[]): string {
   const failed = samples.filter(sample => !sample.line.passed);
   const out: string[] = [];
   if (failed.length > 0) {
@@ -969,7 +984,7 @@ export function renderPage(caseId: string, judge: string, samples: readonly Batc
       ''
     );
   }
-  out.push(`# Review-lens batch \`${caseId}\``, '', `Judge \`${judge}\`. Mark each entry in \`marks.yaml\` beside this page.`);
+  out.push(`# Review-lens batch \`${caseId}\``, '', `Judge \`${judge.spec}\` (rubric \`${judge.prompt_sha}\`). Mark each entry in \`marks.yaml\` beside this page.`);
   const variants = [...new Set(samples.map(sample => sample.line.variant))].sort((a, b) =>
     a === CLEAN ? 1 : b === CLEAN ? -1 : a.localeCompare(b)
   );
@@ -1010,6 +1025,7 @@ export function renderPage(caseId: string, judge: string, samples: readonly Batc
 }
 
 interface DefectEntry {
+  readonly judged_by: Judge;
   readonly run_id: string;
   readonly version: string;
   readonly variant: string;
@@ -1021,6 +1037,7 @@ interface DefectEntry {
 }
 
 interface FindingEntry {
+  readonly judged_by: Judge;
   readonly run_id: string;
   readonly version: string;
   readonly variant: string;
@@ -1033,11 +1050,11 @@ interface FindingEntry {
 }
 
 /** Every entry the batch's valid judgements call for, each unmarked. */
-export function markEntries(samples: readonly BatchSample[]): (DefectEntry | FindingEntry)[] {
+export function markEntries(samples: readonly BatchSample[], judgedBy: Judge): (DefectEntry | FindingEntry)[] {
   return samples.flatMap(sample => {
     if (sample.judgement?.valid !== true) return [];
     const { run_id, label: version, variant, sample: number } = sample.line;
-    const at = { run_id, version, variant, sample: number };
+    const at = { run_id, version, variant, sample: number, judged_by: judgedBy };
     const defects = sample.judgement.defects.map(
       (defect): DefectEntry => ({ ...at, defect: defect.id, judge: { caught_by: defect.caught_by, finding: defect.finding }, mark: null, note: null })
     );
@@ -1050,13 +1067,17 @@ export function markEntries(samples: readonly BatchSample[]): (DefectEntry | Fin
 }
 
 const MARKS_HEADER = `# One entry per judged defect and, on clean samples, per finding no defect accounts for.
+# judged_by identifies the model and rubric being marked; older identities are retained separately.
 # A defect's mark is ${MARKS.defect.join(', ')} (the judge's verdict); add caught_by with
 # the lenses that did catch it when the judge was wrong. A finding's mark is
 # ${MARKS.finding.join(' or ')}. The bench rewrites this file but keeps every entry with a mark or note.
 `;
 
-const entryKey = (entry: Record<string, unknown>): string =>
-  `${String(entry.run_id)} ${entry.defect === undefined ? `finding ${String(entry.finding)}` : `defect ${String(entry.defect)}`}`;
+const entryKey = (entry: Record<string, unknown>): string => JSON.stringify([
+  isObject(entry.judged_by) ? [entry.judged_by.spec, entry.judged_by.prompt_sha] : null,
+  entry.run_id,
+  entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect],
+]);
 
 /**
  * Merge freshly generated entries into the operator's `marks.yaml`. An entry the
@@ -1078,12 +1099,12 @@ export function mergeMarks(file: string, generated: readonly (DefectEntry | Find
 }
 
 /** Write `batches/<case>/page.md` and `marks.yaml` from every recorded sample and judgement. */
-export function writeBatch(outDir: string, caseId: string, judge: string): void {
+export function writeBatch(outDir: string, caseId: string, judge: Judge): void {
   const dir = join(outDir, 'batches', caseId);
   mkdirSync(dir, { recursive: true });
   const samples = batchSamples(outDir, caseId, judge);
   const marks = join(dir, 'marks.yaml');
-  const merged = mergeMarks(marks, markEntries(samples));
+  const merged = mergeMarks(marks, markEntries(samples, judge));
   writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
   writeFileSync(marks, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
@@ -1127,7 +1148,14 @@ async function main(argv: readonly string[]): Promise<void> {
     const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
     if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
     await Promise.all(judged.map(line => judgeSample(line, { outDir, repoRoot, judge })));
-    for (const caseId of new Set(judged.map(line => line.case))) writeBatch(outDir, caseId, judge.spec);
+    for (const caseId of new Set(judged.map(line => line.case))) {
+      try {
+        writeBatch(outDir, caseId, judge);
+      } catch (error) {
+        console.error(`bench: batch ${caseId}: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      }
+    }
     return;
   }
 
@@ -1173,7 +1201,7 @@ async function main(argv: readonly string[]): Promise<void> {
     }
   }
   await Promise.all(judging);
-  writeBatch(outDir, bench.id, judge.spec);
+  writeBatch(outDir, bench.id, judge);
 }
 
 if (import.meta.main) {
