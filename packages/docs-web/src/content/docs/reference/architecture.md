@@ -1199,7 +1199,7 @@ remote_agent_user_identities
 - `getSessionChain(sessionId)` - Walk session chain back to root
 - `updateSession(id, sessionId)` - Update `assistant_session_id`
 - `updateSessionMetadata(id, metadata)` - Update metadata JSONB
-- `deactivateSession(id)` - Mark session inactive
+- `deactivateSession(id, reason)` - Mark session inactive
 
 **Error Handling:**
 
@@ -1232,7 +1232,7 @@ await updateConversation(id, { codebase_id: '...' });
    -> Resume with assistant_session_id
 
 5. User sends /reset
-   -> deactivateSession(session.id) // Sets ended_at timestamp
+   -> deactivateSession(session.id, 'reset-requested')
    -> Next message creates new session via transitionSession()
 ```
 
