@@ -1,4 +1,5 @@
 import { requestJson, HttpError } from '../lib/http';
+import type { TierName } from '../lib/tiers';
 
 /**
  * Start a run: hides the legacy conversation coupling from the console UI.
@@ -28,7 +29,7 @@ export interface StartRunArgs {
    * the server before any worktree, clone, or AI cost.
    */
   inputs?: Record<string, string>;
-  tiers?: Partial<Record<'small' | 'medium' | 'large', string>>;
+  tiers?: Partial<Record<TierName, string>>;
   aliases?: Record<string, string>;
 }
 

@@ -57,7 +57,8 @@ conversation that started it. The pause is durable: it waits in the attention
 queue until it is answered, whether the run started in the foreground, with
 `--detach`, from the web console, or from a trigger. If the notice cannot be
 delivered, the run still waits; the failed delivery is logged and recorded on
-the run as a `pause_notice_undelivered` event.
+the run as a `pause_notice_undelivered` event. When web push is configured, the
+owner of a run on a chat platform is then notified by push instead, once per pause.
 
 `reject` is an answer like any other and never cancels the run by itself. The
 `stop` node is what ends it; leave it out when a rejection should continue

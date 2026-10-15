@@ -26,6 +26,7 @@ import {
   expectedApprovalGateSchema,
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
+  workflowRunStatusSchema as engineWorkflowRunStatusSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -135,10 +136,10 @@ export const commandListResponseSchema = z
 // Workflow run schemas
 // =========================================================================
 
-/** Workflow run status values. */
-export const workflowRunStatusSchema = z
-  .enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'paused'])
-  .openapi('WorkflowRunStatus');
+/** Workflow run status values, owned by the engine. */
+export const workflowRunStatusSchema = engineWorkflowRunStatusSchema.meta({
+  id: 'WorkflowRunStatus',
+});
 
 /** Workflow-authored verdict, independent from lifecycle status. */
 export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema

@@ -121,7 +121,7 @@ export interface PausedGateContext {
  * This is the ONLY thing that tells the chat agent a gate is open. It states the
  * facts of the gate and the decision policy; it does NOT name a tool, because the
  * verbs reach different providers by different routes (the `manage_run` native
- * tool on Claude/Pi, the `archon workflow approve|reject` CLI section on the
+ * tool on Claude/Codex/Pi, the `archon workflow approve|reject` CLI section on the
  * others). Both routes are described elsewhere in the same prompt.
  *
  * Returns '' when there is nothing for the agent to decide — an already-resolved
@@ -534,9 +534,9 @@ ${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodeb
  * the `archon` CLI over bash — the delivery of the `manage-run` skill for
  * providers WITHOUT the in-process `manage_run` tool. Direct chat is the one path
  * where the `skills:` option is NOT consumed (it is workflow-node-only), so the
- * system prompt is the only channel that reaches Codex/OpenCode/Copilot. The
+ * system prompt is the only channel that reaches OpenCode/Copilot. The
  * orchestrator (orchestrator-agent.ts) appends this ONLY for project-scoped chats
- * on non-nativeTools providers — Claude/Pi use the native tool instead, and the
+ * on non-nativeTools providers — Claude/Codex/Pi use the native tool instead, and the
  * CLI commands require a git-repo cwd that unscoped chats don't have. Invocation
  * inherits the same `archon`-on-PATH convention the `archon` skill already assumes.
  */

@@ -1663,6 +1663,8 @@ describe('SqliteAdapter fresh schema', () => {
         '-e',
         `const { Database } = require('bun:sqlite');
 const db = new Database(${JSON.stringify(path)});
+// COMMIT needs the opener's read lock gone; without a timeout it can fail SQLITE_BUSY.
+db.run('PRAGMA busy_timeout = 30000');
 db.run('CREATE TABLE IF NOT EXISTS held (a)');
 db.run('BEGIN IMMEDIATE');
 db.run('INSERT INTO held VALUES (1)');

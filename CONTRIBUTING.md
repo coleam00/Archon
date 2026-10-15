@@ -190,7 +190,7 @@ with the documented product direction will be closed.
 
 ## Architecture
 
-See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
+See [`.archon/architecture.md`](./.archon/architecture.md) for the package map, main flows, extension points and enforced boundaries.
 
 ## Sharing workflows
 

@@ -328,7 +328,7 @@ Full documentation is available at **[archon.diy/docs](https://archon.diy/docs/)
 | [Configuration](https://archon.diy/reference/configuration/) | All config options, env vars, YAML settings |
 | [AI Assistants](https://archon.diy/getting-started/ai-assistants/) | Claude, Codex, and Pi setup details |
 | [Deployment](https://archon.diy/deployment/) | Docker, VPS, production setup |
-| [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
+| [Architecture](https://archon.diy/reference/architecture/) | Package overview and the maintained architecture map |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
 
 **For AI tools:** Point your LLM at [`/llms.txt`](https://archon.diy/llms.txt) for an index of all documentation, [`/llms-full.txt`](https://archon.diy/llms-full.txt) for the complete docs in a single file, or [`/llms-small.txt`](https://archon.diy/llms-small.txt) for a condensed version.

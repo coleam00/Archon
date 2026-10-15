@@ -26,6 +26,8 @@ mock.module('../db/connection', () => ({
 }));
 const isolation = await import('../db/isolation-environments');
 const { createRegisteredWorktree } = await import('./registered-worktree');
+const { resolveRegisteredWorktree, adoptRegisteredWorktree } =
+  await import('../operations/workflow-adoption');
 const { createCodebaseChildResolver } = await import('./child-isolation-resolver');
 const originalEnv = {
   ARCHON_HOME: process.env.ARCHON_HOME,
@@ -363,3 +365,38 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
   });
   expectAdoptionWarning(observed.branch_name, observed.working_path, 'legacy-merge');
 });
+
+for (const handoff of ['resolve', 'adopt'] as const) {
+  for (const branch of ['unchanged', 'switched', 'detached'] as const) {
+    test(`${handoff} handoff validates a ${branch} branch after selection`, async () => {
+      const path = join(root, 'handoff');
+      git('worktree', 'add', '-qb', 'selected', path);
+      const environment = await isolation.create({
+        codebase_id: codebaseId,
+        workflow_type: 'task',
+        workflow_id: 'handoff',
+        working_path: path,
+        branch_name: toBranchName('selected'),
+      });
+      const lane = { kind: 'reuse-worktree' as const, environment };
+      await resolveRegisteredWorktree(isolation, lane);
+      if (branch === 'switched') git('-C', path, 'checkout', '-qb', 'other');
+      if (branch === 'detached') git('-C', path, 'checkout', '-q', '--detach');
+      events.length = 0;
+      const result =
+        handoff === 'resolve'
+          ? resolveRegisteredWorktree(isolation, lane)
+          : adoptRegisteredWorktree(isolation, lane, repo);
+      if (branch === 'unchanged') {
+        expect((await result).branch_name).toBe('selected');
+        expect((await isolation.getById(environment.id))?.metadata.adopted).toBe(
+          handoff === 'adopt' ? true : undefined
+        );
+      } else {
+        await expect(result).rejects.toThrow('branch');
+        expect(await isolation.getById(environment.id)).toEqual(environment);
+        expect(events.filter(event => event.msg === 'worktree_adopted')).toHaveLength(0);
+      }
+    });
+  }
+}

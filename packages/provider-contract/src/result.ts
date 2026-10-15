@@ -132,3 +132,46 @@ export function mergeTokenUsage(usages: readonly TokenUsage[]): TokenUsage | und
   }
   return merged;
 }
+
+/** Usage summed across the `result` chunks of one turn. */
+export interface ResultUsageTotal {
+  cost?: number;
+  tokens?: TokenUsage;
+  /** Some result reported `tokensUnknown`; `tokens` then stays undefined for the whole turn. */
+  tokensUnknown?: true;
+}
+
+/**
+ * Add one `result` chunk to a turn's running total. A turn can stream several results
+ * (Claude sends another when background agents finish), and each carries only its own
+ * usage. Unknown tokens stay unknown, as the `tokensUnknown` contract requires, and a
+ * non-finite cost or token count contributes nothing. Pure, so callers own logging.
+ */
+export function addResultUsage(
+  total: ResultUsageTotal,
+  result: Pick<ProviderResult, 'cost' | 'tokens' | 'tokensUnknown'>
+): ResultUsageTotal {
+  const next: ResultUsageTotal = {};
+  if (total.tokensUnknown === true || result.tokensUnknown === true) {
+    next.tokensUnknown = true;
+  } else {
+    const incoming =
+      result.tokens !== undefined &&
+      Number.isFinite(result.tokens.input) &&
+      Number.isFinite(result.tokens.output)
+        ? result.tokens
+        : undefined;
+    // The first result passes through untouched; merging is only for the second onward.
+    const tokens =
+      total.tokens === undefined || incoming === undefined
+        ? (total.tokens ?? incoming)
+        : mergeTokenUsage([total.tokens, incoming]);
+    if (tokens) next.tokens = tokens;
+  }
+  const cost =
+    result.cost !== undefined && Number.isFinite(result.cost)
+      ? (total.cost ?? 0) + result.cost
+      : total.cost;
+  if (cost !== undefined) next.cost = cost;
+  return next;
+}

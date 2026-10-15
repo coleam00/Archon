@@ -30,6 +30,6 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   fallbackModel: false,
   sandbox: false,
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)
-  nativeTools: false,
+  nativeTools: true,
   containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
 };

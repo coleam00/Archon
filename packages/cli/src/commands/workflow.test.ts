@@ -599,7 +599,9 @@ class MockCanonicalRepoPathUnavailableError extends Error {
   }
 }
 
+const mockGetCurrentBranchStrict = mock(async (): Promise<string | null> => 'feature/adopted');
 mock.module('@archon/git', () => ({
+  getCurrentBranchStrict: mockGetCurrentBranchStrict,
   verifyWorktreeOwnership: mock(async () => {}),
   findRepoRoot: mock(() => Promise.resolve(null)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
@@ -14297,23 +14299,24 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
-  it.each(['missing', 'mismatched', 'replaced'] as const)(
+  it.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
       setupAdoptMocks();
       const isolationDb = await import('@archon/core/db/isolation-environments');
       const getById = isolationDb.getById as ReturnType<typeof mock>;
       getById.mockReset();
+      if (reason === 'switched' || reason === 'detached') {
+        mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
+      }
       getById.mockResolvedValueOnce(
         reason === 'missing'
           ? null
           : reason === 'replaced'
             ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
             : {
-                id: 'env-9',
-                provider: 'worktree',
-                working_path: '/foreign/worktree',
-                metadata: {},
+                ...adoptedEnvironment(),
+                working_path: reason === 'mismatched' ? '/foreign/worktree' : '/wt/adopted',
               }
       );
       (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
@@ -14328,7 +14331,9 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           ? 'Isolation environment env-9 not found'
           : reason === 'replaced'
             ? 'changed during adoption'
-            : 'does not match'
+            : reason === 'switched' || reason === 'detached'
+              ? 'expected branch'
+              : 'does not match'
       );
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(isolationDb.updateMetadata).not.toHaveBeenCalled();

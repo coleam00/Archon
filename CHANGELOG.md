@@ -39,7 +39,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Changed
 
-- Chat on Claude and Pi launches workflows and registers projects through typed `invoke_workflow` and `register_project` tools instead of writing `/invoke-workflow` and `/register-project` lines into the reply. A launch runs after the reply ends, through the same dispatch as before, so the console and forges behave as they did. `manage_run` no longer has a `start` action; `invoke_workflow` replaces it and applies the dispatch checks `start` skipped. Codex, OpenCode and Copilot still use the command lines. (#1886)
+- Chat on Claude, Codex and Pi launches workflows and registers projects through typed `invoke_workflow` and `register_project` tools instead of writing `/invoke-workflow` and `/register-project` lines into the reply. A launch runs after the reply ends, through the same dispatch as before, so the console and forges behave as they did. `manage_run` no longer has a `start` action; `invoke_workflow` replaces it and applies the dispatch checks `start` skipped. OpenCode and Copilot still use the command lines. (#1886)
 
 - A workflow that can pause now starts with `archon workflow run --detach`, from the web console's background dispatch, from `manage_run`, and from a trigger. Before, a workflow with an approval gate, an interactive loop gate, or a gate composed through `include:` was refused at all four. Its pause waits durably in the attention queue until someone answers, then the run continues. Workflow-level `interactive:` is deprecated and has no effect: a workflow that declares it loads with a warning, and the web console no longer runs it in the foreground. (#4041)
 

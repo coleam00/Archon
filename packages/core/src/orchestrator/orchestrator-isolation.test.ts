@@ -26,7 +26,9 @@ import type {
 import { toBranchName, toRepoPath } from '@archon/git';
 const realVerifyWorktreeOwnership = (await import('@archon/git')).verifyWorktreeOwnership;
 const mockVerifyWorktreeOwnership = mock<typeof realVerifyWorktreeOwnership>(async () => {});
+const mockGetCurrentBranchStrict = mock(async (): Promise<string | null> => 'issue-42');
 mock.module('@archon/git', () => ({
+  getCurrentBranchStrict: mockGetCurrentBranchStrict,
   verifyWorktreeOwnership: mockVerifyWorktreeOwnership,
 }));
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
@@ -1056,6 +1058,27 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe(env.working_path);
   });
 
+  test.each(['other', null])(
+    'background adoption refuses branch %s before capture',
+    async branch => {
+      const env = makeEnvRow();
+      mockAdoptedEnv.mockResolvedValueOnce(env);
+      mockGetCurrentBranchStrict.mockResolvedValueOnce(branch);
+      mockAdoptionMetadata.mockClear();
+      mockPrepareWorkflowSource.mockClear();
+      await expect(
+        dispatchBackgroundWorkflow(
+          makeRoutingCtx({ adoptionLane: { kind: 'reuse-worktree', environment: env } }),
+          makeWorkflow()
+        )
+      ).rejects.toThrow('expected branch');
+      expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   test('surviving-worktree adoption refuses a missing environment before submission', async () => {
     mockAdoptedEnv.mockResolvedValueOnce(null);
     mockAdoptionMetadata.mockClear();
@@ -1173,6 +1196,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const original = structuredClone(env);
     mockGetCodebase.mockResolvedValueOnce(codebase);
     mockAdoptedEnv.mockResolvedValueOnce(env);
+    mockGetCurrentBranchStrict.mockResolvedValueOnce('adopted');
     mockVerifyWorktreeOwnership.mockImplementationOnce(realVerifyWorktreeOwnership);
     mockAdoptionMetadata.mockClear();
     mockLogger.warn.mockClear();

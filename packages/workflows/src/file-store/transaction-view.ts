@@ -28,7 +28,6 @@ import {
 } from '../store';
 import {
   answeredPauseContinuation,
-  isApprovalContext,
   isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
@@ -136,12 +135,18 @@ export function createTransactionView(
     expected: Parameters<IWorkflowStore['resolveApprovalGate']>[3]
   ): boolean => {
     if (!run) return false;
-    const gate = run.metadata.approval;
-    if (run.status !== 'paused' || !isApprovalContext(gate) || gate.resolved != null) return false;
+    // Same rule as the SQL `unresolvedGateClause`: a paused run is open unless its recorded
+    // gate is resolved, so a run with no readable gate can still be rejected. Only an
+    // `expected` gate needs a gate to compare against.
+    if (run.status !== 'paused') return false;
+    const gate: unknown = run.metadata.approval;
+    const record: Record<string, unknown> =
+      typeof gate === 'object' && gate !== null ? Object.fromEntries(Object.entries(gate)) : {};
+    if (record.resolved != null) return false;
     if (expected === undefined) return true;
     return (
-      gate.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
-      (gate.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
+      record.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
+      (record.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
     );
   };
   interface TerminalChange {
