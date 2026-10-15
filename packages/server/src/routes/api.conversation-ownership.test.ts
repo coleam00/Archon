@@ -263,8 +263,12 @@ interface Ingress {
   /** OpenAPI method + path, for the route inventory. */
   operation: string;
   access: 'read' | 'write';
-  /** Acts through the web adapter, which knows only `web` rows by platform id. */
-  web?: true;
+  /**
+   * How the id resolves. `only`: dispatch acts through the web adapter, which knows
+   * only `web` rows by platform id. `first`: the stream prefers a `web` row but also
+   * serves a run dispatched from a chat or forge platform, whose worker row is not `web`.
+   */
+  web?: 'only' | 'first';
   call: (app: OpenAPIHono, user?: string) => Response | Promise<Response>;
   /** Side effects a refused caller must never cause. */
   effects: () => readonly { mock: { calls: unknown[] } }[];
@@ -291,7 +295,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'stream',
     operation: 'get /api/stream/{conversationId}',
     access: 'read',
-    web: true,
+    web: 'first',
     call: async (app, user) => {
       const res = await app.request(`/api/stream/${PLATFORM_ID}`, { headers: headersFor(user) });
       // Only an opened stream needs closing; a refusal is a plain JSON body.
@@ -329,7 +333,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'send',
     operation: 'post /api/conversations/{id}/message',
     access: 'write',
-    web: true,
+    web: 'only',
     call: (app, user) =>
       app.request(`/api/conversations/${PLATFORM_ID}/message`, {
         method: 'POST',
@@ -344,7 +348,7 @@ const INGRESSES: readonly Ingress[] = [
     name: 'workflow run',
     operation: 'post /api/workflows/{name}/run',
     access: 'write',
-    web: true,
+    web: 'only',
     call: (app, user) =>
       app.request('/api/workflows/demo/run', {
         method: 'POST',
@@ -461,7 +465,9 @@ describe('every conversation ingress enforces ownership', () => {
           expectNoEffects(ingress);
           expect((await ingress.call(makeApp(), 'alice')).status).toBe(200);
         });
+      }
 
+      if (ingress.web === 'only') {
         test('a chat-platform row alone is not a web chat to act on', async () => {
           ownershipEnforced = true;
           rows = [conversation({ platform_type: 'slack', user_id: 'user-someone' })];

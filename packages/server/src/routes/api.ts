@@ -2058,18 +2058,30 @@ async function requireConversationVisibility(
 
 /**
  * How a route names its conversation. `platformId` matches a row of any platform,
- * which is right where the handler then acts on the row it was given. Dispatch and the
- * SSE stream instead act through the web adapter, which keys everything by
- * platform id on the `web` platform, so they must authorize that same row
- * (`webPlatformId`): a public Slack row sharing the id would otherwise admit a
- * caller into someone's private web chat.
+ * which is right where the handler then acts on the row it was given. Dispatch
+ * instead acts through the web adapter, which keys everything by platform id on
+ * the `web` platform, so it must authorize that same row (`webPlatformId`): a
+ * public Slack row sharing the id would otherwise admit a caller into someone's
+ * private web chat. The SSE stream (`webFirstPlatformId`) carries web chats and
+ * the transcripts of runs dispatched from any platform, so a `web` row at the id
+ * wins and any other platform's row is the fallback.
  */
-type ConversationKey = { platformId: string } | { webPlatformId: string } | { id: string };
+type ConversationKey =
+  | { platformId: string }
+  | { webPlatformId: string }
+  | { webFirstPlatformId: string }
+  | { id: string };
 
-function loadConversation(key: ConversationKey): Promise<Conversation | null> {
+async function loadConversation(key: ConversationKey): Promise<Conversation | null> {
   if ('platformId' in key) return conversationDb.findConversationByPlatformId(key.platformId);
   if ('webPlatformId' in key) {
     return conversationDb.getConversationByPlatformId('web', key.webPlatformId);
+  }
+  if ('webFirstPlatformId' in key) {
+    return (
+      (await conversationDb.getConversationByPlatformId('web', key.webFirstPlatformId)) ??
+      (await conversationDb.findConversationByPlatformId(key.webFirstPlatformId))
+    );
   }
   return conversationDb.getConversationById(key.id);
 }
@@ -3343,7 +3355,11 @@ export function registerApiRoutes(
     // streaming ids whose row has not been written yet.
     if (isConversationOwnershipEnforced()) {
       try {
-        const access = await authorizeConversation(c, { webPlatformId: conversationId }, 'read');
+        const access = await authorizeConversation(
+          c,
+          { webFirstPlatformId: conversationId },
+          'read'
+        );
         if ('error' in access) return access.error;
       } catch (err: unknown) {
         getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');
