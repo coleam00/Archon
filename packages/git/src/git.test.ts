@@ -194,6 +194,30 @@ describe('git utilities', () => {
   });
 
   describe('readWorktreeRegistration', () => {
+    test('propagates permission errors resolving a path listed by Git', async () => {
+      const targetPath = join(testDir, 'checkout');
+      await realMkdir(targetPath);
+      const resolvedTarget = await realpath(targetPath);
+      const error = Object.assign(new Error('cannot resolve listed path'), { code: 'EACCES' });
+      const fsPromises = await import('fs/promises');
+      const realpathSpy = spyOn(fsPromises, 'realpath')
+        .mockResolvedValueOnce(resolvedTarget)
+        .mockRejectedValueOnce(error);
+      const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+        stdout: `worktree ${targetPath}\0HEAD abc123\0branch refs/heads/main\0\0`,
+        stderr: '',
+      });
+      try {
+        await expect(git.readWorktreeRegistration(testDir, targetPath)).rejects.toBe(error);
+        expect(realpathSpy).toHaveBeenCalledTimes(2);
+        expect(realpathSpy).toHaveBeenNthCalledWith(1, targetPath);
+        expect(realpathSpy).toHaveBeenNthCalledWith(2, targetPath);
+      } finally {
+        realpathSpy.mockRestore();
+        execSpy.mockRestore();
+      }
+    });
+
     for (const code of ['EACCES', 'EIO', 'ELOOP']) {
       test(`propagates ancestor resolution errors: ${code}`, async () => {
         const error = Object.assign(new Error('cannot resolve path'), { code });
