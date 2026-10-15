@@ -1305,15 +1305,23 @@ export function expandWorkflowIncludes(
       // fires when the name was reached as an unresolvable include TARGET.
       // An unreadable declaration has no known workflow name. Until every declaration
       // is readable, a missing include cannot be distinguished from that read failure.
-      const error =
-        loadErrors.find(error => error.workflowName === name) ??
+      const named = loadErrors.find(error => error.workflowName === name);
+      const unreadable =
+        named ??
         loadErrors.find(
-          error => error.workflowName === undefined && error.errorType === 'read_error'
+          error =>
+            error.workflowName === undefined &&
+            error.errorType === 'read_error' &&
+            error.cause !== undefined
         );
+      const missing = `include target '${name}' not found`;
       throw new IncludeExpansionError(
-        error?.error ?? `include target '${name}' not found`,
-        error?.errorType,
-        { cause: error?.cause }
+        named?.error ??
+          (unreadable === undefined
+            ? missing
+            : `${missing}; it may be declared in an unreadable source (${unreadable.filename}: ${unreadable.error})`),
+        unreadable?.errorType,
+        { cause: unreadable?.cause }
       );
     }
 
