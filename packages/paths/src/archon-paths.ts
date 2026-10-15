@@ -461,7 +461,7 @@ async function getReachableRealPath(
 async function findMarkdownFilesRecursiveImpl(
   rootPath: string,
   relativePath: string,
-  options: { maxDepth?: number; onMissing?: (path: string, error: unknown) => void } | undefined,
+  options: Parameters<typeof findMarkdownFilesRecursive>[2],
   visitedRealPaths: Set<string>
 ): Promise<{ commandName: string; relativePath: string }[]> {
   const maxDepth = options?.maxDepth ?? Infinity;

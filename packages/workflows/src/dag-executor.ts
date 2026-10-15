@@ -11681,7 +11681,7 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
  */
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
-): Promise<string | undefined> {
+): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
   const {
     deps,
     platform,
@@ -12209,7 +12209,9 @@ export async function executeDagWorkflow(
    * sibling gate that already moved the row wins. It runs after the layer settled, so
    * nothing of this run still executes here when another host may claim it.
    */
-  const releaseRunForUnreadableSource = async (error: RunSourceUnreadableError): Promise<void> => {
+  const releaseRunForUnreadableSource = async (
+    error: RunSourceUnreadableError
+  ): Promise<boolean> => {
     getLog().warn(
       { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
       'dag.run_released_source_unreadable'
@@ -12222,7 +12224,7 @@ export async function executeDagWorkflow(
     });
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
-      return;
+      return false;
     }
     await safeSendMessage(
       platform,
@@ -12238,6 +12240,7 @@ export async function executeDagWorkflow(
         `Abandon: \`${spellWorkflowCommand(platform, `abandon ${workflowRun.id}`)}\``,
       { workflowId: workflowRun.id, nodeName: error.nodeId }
     );
+    return true;
   };
 
   await persistAuthoredOutcome();
@@ -12297,7 +12300,8 @@ export async function executeDagWorkflow(
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
-  if (sourceUnreadable !== undefined) await releaseRunForUnreadableSource(sourceUnreadable);
+  const sourceReleased =
+    sourceUnreadable !== undefined && (await releaseRunForUnreadableSource(sourceUnreadable));
   // Pull the mutated accumulators back into local scope for the terminal tally below.
   const totalCostUsd = runCtx.totalCostUsd;
   const totalTokens = runCtx.totalTokens;
@@ -12320,11 +12324,13 @@ export async function executeDagWorkflow(
         execContext,
         workflowRun.id
       );
-      return;
+      return sourceUnreadable !== undefined
+        ? { kind: 'source_release', released: sourceReleased }
+        : undefined;
     }
   }
 
-  if (sourceUnreadable !== undefined) return;
+  if (sourceUnreadable !== undefined) return { kind: 'source_release', released: sourceReleased };
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

@@ -3133,6 +3133,7 @@ export async function executeWorkflow(
   // The finally-block backstop reads it: a second write over a channel that just
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
+  let sourceExecutionStopped = false;
   try {
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
@@ -3469,6 +3470,18 @@ export async function executeWorkflow(
       })
     );
 
+    if (typeof dagSummary === 'object') {
+      // After release another executor may own even a running row; the backstop has no authority.
+      sourceExecutionStopped = true;
+      return dagSummary.released
+        ? { success: true, paused: true, workflowRunId: workflowRun.id }
+        : {
+            success: false,
+            workflowRunId: workflowRun.id,
+            error: 'Workflow did not complete successfully',
+          };
+    }
+
     // executeDagWorkflow throws on fatal errors; check DB status for result
     const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
     // Sub-run re-entry (#2121 Phase 2): if this run is a `workflow:` child that just
@@ -3633,7 +3646,7 @@ export async function executeWorkflow(
     // calling failWorkflowRun (e.g. a generator cleanup that exits without
     // throwing). Only fires when the process stays alive long enough to run
     // this finally — see #1561 for the originating zombie-state incident.
-    if (workflowRun && !terminalStatusWriteFailed) {
+    if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
       const runId = workflowRun.id;
       const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
       if (backstopStatus === 'running') {

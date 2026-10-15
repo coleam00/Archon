@@ -4975,6 +4975,34 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it.each([true, false])(
+    'source release exits without checking or failing a newly resumed owner (released=%s)',
+    async released => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released });
+      const store = makeStore({
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+        getWorkflowRun: mock(async () => {
+          throw new Error('old owner must not read after release');
+        }),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        {
+          conversationId: 'db-conv-1',
+        }
+      );
+      expect(result.success).toBe(released);
+      expect('paused' in result ? result.paused : undefined).toBe(released ? true : undefined);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   it('calls failWorkflowRun when run is still running at finally', async () => {
     const failSpy = mock(async () => {});
     const store = makeStore({

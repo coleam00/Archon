@@ -7157,6 +7157,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
       (call: unknown[]) => call[0] as PersistedEvent
     );
+    if (typeof result === 'object') throw new Error('Unexpected source release');
     return { prompt, result, events };
   }
 
@@ -11087,7 +11088,8 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // false, false, true -> exactly three iterations.
       expect(calls).toBe(3);
       // The node's output is the validated payload, not prose.
-      expect(JSON.parse(result ?? '{}')).toMatchObject({ done: true, note: 'pass 3' });
+      if (typeof result !== 'string') throw new Error('Expected the loop output');
+      expect(JSON.parse(result)).toMatchObject({ done: true, note: 'pass 3' });
     });
 
     it('requests output_format from the provider for a loop node', async () => {
@@ -21303,7 +21305,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             return { released: true };
           });
           try {
-            await executeDagWorkflow(
+            const result = await executeDagWorkflow(
               dagOptions({
                 deps,
                 cwd: testDir,
@@ -21323,6 +21325,7 @@ describe('executeDagWorkflow -- script nodes', () => {
                 },
               })
             );
+            expect(result).toEqual({ kind: 'source_release', released: true });
           } finally {
             await capture.restore();
           }
@@ -22543,7 +22546,7 @@ describe('executeDagWorkflow -- script nodes', () => {
         const platform = createMockPlatform();
         const capture = await unreadableCapture(join(testDir, 'ran'));
         try {
-          await executeDagWorkflow(
+          const result = await executeDagWorkflow(
             dagOptions({
               deps: mockDeps,
               platform,
@@ -22553,6 +22556,7 @@ describe('executeDagWorkflow -- script nodes', () => {
               workflowSourceRoots: capture.roots,
             })
           );
+          expect(result).toEqual({ kind: 'source_release', released: false });
         } finally {
           await capture.restore();
         }
@@ -33546,6 +33550,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
         priorCompletedNodes,
       })
     );
+    if (typeof output === 'object') throw new Error('Unexpected source release');
     return { events: eventList(mockDeps), output };
   }
 
