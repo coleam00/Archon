@@ -46,7 +46,7 @@ import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
-import { FORGE_GITHUB_PLUGIN, checkProviderDiagnostics, type CheckResult } from './doctor';
+import { checkProviderDiagnostics, type CheckResult } from './doctor';
 import {
   CODEX_SETUP_ENV,
   migrateCodexSetupEnv,
@@ -185,8 +185,6 @@ interface SetupConfig {
   github?: GitHubConfig;
   telegram?: TelegramConfig;
   slack?: SlackConfig;
-  /** `GH_TOKEN` for the forge plugin the SDLC workflows read and write through. */
-  forgeToken?: string;
   botDisplayName: string;
 }
 
@@ -219,8 +217,6 @@ interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
   hasPi: boolean;
-  /** `GH_TOKEN`, the forge credential setup writes, whether or not the webhook adapter is set up. */
-  forgeToken: boolean;
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -384,7 +380,6 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // the configured default assistant, so Claude users who share the same key
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
-    forgeToken: hasEnvValue(content, 'GH_TOKEN'),
     platforms: {
       // A lone GH_TOKEN is the forge plugin's credential; the webhook adapter needs its secret too.
       github:
@@ -1280,45 +1275,6 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 }
 
 /**
- * Offer the SDLC workflows' forge credential. Only `GH_TOKEN` is written: `GITHUB_TOKEN`
- * beside a `WEBHOOK_SECRET` switches the server's GitHub adapter into token mode.
- */
-async function collectForgeToken(): Promise<string | undefined> {
-  note(
-    'The SDLC workflows (archon-ship, archon-deliver, archon-upkeep, archon-pr)\n' +
-      'use gh by default. ARCHON_SDLC_FORGE=forge opts into a compatible plugin.\n' +
-      'For the forge opt-in, configure:\n\n' +
-      `1. The plugin: archon plugin add ${FORGE_GITHUB_PLUGIN}\n` +
-      '2. A credential: GH_TOKEN, then GITHUB_TOKEN, then the gh CLI login.\n' +
-      '   Set GH_TOKEN in this env file, use gh auth login, or configure GitHub App mode.\n\n' +
-      'Create a classic token at github.com/settings/tokens with the repo scope\n' +
-      '(and workflow, only if runs may change .github/workflows/ files).\n' +
-      'The released GitHub plugin v0.11.1 lacks required pack operations; keep gh until a compatible release is tested.',
-    'GitHub Forge Plugin'
-  );
-
-  const wanted = await confirm({
-    message: 'Set GH_TOKEN for the SDLC workflows now?',
-    initialValue: false,
-  });
-  if (isCancel(wanted)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  if (!wanted) return undefined;
-
-  const token = await password({
-    message: 'Enter your GitHub token:',
-    validate: value => (!value || value.length < 10 ? 'Please enter a valid token' : undefined),
-  });
-  if (isCancel(token)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  return token;
-}
-
-/**
  * Collect Telegram credentials
  */
 async function collectTelegramConfig(): Promise<TelegramConfig> {
@@ -1570,12 +1526,6 @@ export function generateEnvContent(config: SetupConfig): string {
     if (config.github.botMention) {
       lines.push(`GITHUB_BOT_MENTION=${config.github.botMention}`);
     }
-    lines.push('');
-  }
-
-  if (config.forgeToken) {
-    lines.push('# GitHub forge plugin (SDLC workflows)');
-    lines.push(`GH_TOKEN=${config.forgeToken}`);
     lines.push('');
   }
 
@@ -2081,7 +2031,6 @@ async function runSetup(options: SetupOptions): Promise<void> {
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
       `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
-      `GH_TOKEN (forge plugin): ${existing.forgeToken ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 
@@ -2172,12 +2121,6 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
     // Collect bot display name
     config.botDisplayName = await collectBotDisplayName();
-  }
-
-  // The webhook platform's token already serves the forge plugin, and an existing
-  // token is preserved by the merge unless --force replaces the file.
-  if (!config.github && (force || !existing?.forgeToken)) {
-    config.forgeToken = await collectForgeToken();
   }
 
   // Generate and write configuration. Wrap in try/catch so any fs exception

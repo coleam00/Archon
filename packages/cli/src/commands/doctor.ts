@@ -42,10 +42,7 @@ import {
   checkForgeAccess,
   type ForgeProbe,
 } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
-import {
-  GITHUB_FORGE_PLUGIN,
-  forgeResult,
-} from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
+import { forgeResult } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -232,8 +229,6 @@ export async function checkGitHubApp(env: NodeJS.ProcessEnv): Promise<CheckResul
   }
   return { label: 'GitHub App', status: 'skip', message: 'App mode not configured' };
 }
-
-export const FORGE_GITHUB_PLUGIN = GITHUB_FORGE_PLUGIN;
 
 async function runForgeCommand(
   op: string,

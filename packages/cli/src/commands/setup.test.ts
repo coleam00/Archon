@@ -138,13 +138,11 @@ ARCHON_CODEX_ACCOUNT_ID=account1
 
       writeFileSync(envPath, 'GH_TOKEN=ghp_forge\n');
       expect(checkExistingConfig(envPath)).toMatchObject({
-        forgeToken: true,
         platforms: { github: false },
       });
 
       writeFileSync(envPath, 'GH_TOKEN=ghp_x\nGITHUB_TOKEN=ghp_x\nWEBHOOK_SECRET=secret\n');
       expect(checkExistingConfig(envPath)).toMatchObject({
-        forgeToken: true,
         platforms: { github: true },
       });
     });
@@ -166,18 +164,6 @@ ARCHON_CODEX_ACCOUNT_ID=account1
   });
 
   describe('generateEnvContent', () => {
-    it('writes the forge token as GH_TOKEN alone, never the webhook adapter keys', () => {
-      const content = generateEnvContent({
-        ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
-        platforms: { github: false, telegram: false, slack: false },
-        forgeToken: 'ghp_forge',
-        botDisplayName: 'Archon',
-      });
-      expect(content).toContain('GH_TOKEN=ghp_forge');
-      expect(content).not.toContain('GITHUB_TOKEN=');
-      expect(content).not.toContain('WEBHOOK_SECRET=');
-    });
-
     it('does not write a default when no assistant was selected', () => {
       const content = generateEnvContent({
         ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
@@ -1098,6 +1084,7 @@ describe('setup provider selection', () => {
     async mode => {
       const root = mkdtempSync(join(tmpdir(), 'archon-setup-providers-'));
       const savedEnv = { ...process.env };
+      delete process.env.DEFAULT_AI_ASSISTANT;
       process.env.HOME = root;
       process.env.USERPROFILE = root;
       process.env.ARCHON_HOME = join(root, 'archon');
@@ -1120,11 +1107,8 @@ describe('setup provider selection', () => {
       });
       const input = spyOn(prompts, 'text').mockResolvedValue('');
       const confirm = spyOn(prompts, 'confirm').mockImplementation(
-        async options =>
-          options.message === 'Set GH_TOKEN for the SDLC workflows now?' ||
-          options.message === 'Run `archon doctor` now to verify your setup?'
+        async options => options.message === 'Run `archon doctor` now to verify your setup?'
       );
-      const password = spyOn(prompts, 'password').mockResolvedValue('setup-private-github-token');
       const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
       const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
       const install = mock(async (_ids: readonly string[]) => undefined);
@@ -1139,12 +1123,8 @@ describe('setup provider selection', () => {
       const doctor = spyOn(doctorModule, 'doctorCommand').mockResolvedValue(0);
       try {
         expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
-        expect(readFileSync(join(root, 'archon', '.env'), 'utf8')).toContain(
-          'GH_TOKEN=setup-private-github-token'
-        );
         expect(doctor).toHaveBeenCalledWith();
-        expect(process.env.GH_TOKEN).toBe('setup-private-github-token');
-        expect(password).toHaveBeenCalledTimes(1);
+        expect(process.env).toMatchObject({ DEFAULT_AI_ASSISTANT: 'codex' });
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);
         expect(diagnose.mock.calls).toEqual([['claude'], ['codex']]);
         expect(info.mock.calls.flat().join('')).toContain('provider-owned check');
@@ -1156,17 +1136,7 @@ describe('setup provider selection', () => {
           );
         }
       } finally {
-        for (const spy of [
-          selection,
-          input,
-          confirm,
-          password,
-          detect,
-          info,
-          collect,
-          platforms,
-          doctor,
-        ])
+        for (const spy of [selection, input, confirm, detect, info, collect, platforms, doctor])
           spy.mockRestore();
         process.env = savedEnv;
         await removeTempTree(root);
