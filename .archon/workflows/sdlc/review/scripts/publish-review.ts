@@ -91,7 +91,6 @@ try {
   }
   // Continuations carry coverage forward only for this certified target.
   writeFileSync(join(dirname(reportPath), REVIEWED_TARGET), JSON.stringify(target));
-  writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
   writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);
 } catch (error) {

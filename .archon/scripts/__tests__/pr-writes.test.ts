@@ -5,6 +5,7 @@
  * actually write, which source they wrote through, and whether a write that did
  * not read back is reported as a failure rather than a delivery.
  */
+import { REVIEWED_TARGET, parseReviewTarget } from '../../workflows/sdlc/.shared/review-target';
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -630,7 +631,8 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
   it("records the reviewed commit beside the report as the next round's cursor", () => {
     const result = publishReview({ inputs: report });
     expect(result.code).toBe(0);
-    expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
+    expect(parseReviewTarget(readFileSync(join(result.artifacts, REVIEWED_TARGET), 'utf8')).head).toBe(REVIEWED);
+    expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
   });
 
   it('refuses a round that reviewed a commit the pull request no longer carries', () => {
@@ -645,7 +647,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-    expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
+    expect(existsSync(join(result.artifacts, REVIEWED_TARGET))).toBe(false);
   });
 
   it('records the lenses this round ran beside the report for the next round to rerun', () => {

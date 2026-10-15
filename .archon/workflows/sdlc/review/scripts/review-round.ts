@@ -38,6 +38,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { parseReviewTarget, REVIEWED_TARGET } from '../../.shared/review-target.ts';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
@@ -54,8 +55,6 @@ function partAssignment(value: string | undefined): unknown {
   }
 }
 
-/** Where publish-review records the commit a published report reviewed. */
-const REVIEWED_HEAD = 'reviewed-head';
 /** Where publish-review records the lenses that round ran. */
 const REVIEWED_LENSES = 'reviewed-lenses.json';
 type Lenses = Record<ReviewLens, boolean>;
@@ -104,13 +103,9 @@ try {
     emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
-    const recorded = join(dirname(prior), REVIEWED_HEAD);
-    if (!existsSync(recorded)) {
-      throw new Error(
-        `the previous review report records no reviewed commit (${recorded} is missing)`
-      );
-    }
-    const cursor = readFileSync(recorded, 'utf8').trim();
+    const cursor = parseReviewTarget(
+      readFileSync(join(dirname(prior), REVIEWED_TARGET), 'utf8')
+    ).head;
     if (!descends(head, cursor)) {
       throw new Error(
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`

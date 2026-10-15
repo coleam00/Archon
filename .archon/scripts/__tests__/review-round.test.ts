@@ -5,6 +5,7 @@
  * the previous round reviewed: its delta would run backwards and reopen findings
  * the newer commits fixed.
  */
+import { REVIEWED_TARGET } from '../../workflows/sdlc/.shared/review-target';
 import { FULL_REVIEW_RISKS } from '../../workflows/sdlc/.shared/review-policy';
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -78,7 +79,7 @@ function round(
         ? {}
         : {
             'review/report.md': 'Round 1',
-            'review/reviewed-head': `${cursor}\n`,
+            [`review/${REVIEWED_TARGET}`]: JSON.stringify({ pr: null, base: null, head: cursor, merge_base: null }),
             ...(extra.lenses ? { 'review/reviewed-lenses.json': JSON.stringify(extra.lenses) } : {}),
           },
   });
@@ -166,7 +167,7 @@ describe('review-round', () => {
     expect(run.stderr).toContain(`at ${older}, which does not descend from ${newer}`);
   });
 
-  it('refuses a continuation whose report records no reviewed commit', () => {
+  it('refuses a continuation whose report has no certified target', () => {
     const { cwd, newer } = history();
     const run = runPackScript('review/scripts/review-round', {
       cwd,
@@ -179,6 +180,6 @@ describe('review-round', () => {
       artifacts: { 'review/report.md': 'Round 1' },
     });
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('records no reviewed commit');
+    expect(run.stderr).toContain(REVIEWED_TARGET);
   });
 });
