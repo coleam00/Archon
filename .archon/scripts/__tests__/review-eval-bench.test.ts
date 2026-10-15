@@ -28,6 +28,7 @@ import {
   type RunNode,
   EFFORTS,
   type FindingMark,
+  MARKS,
   TIERS,
   type TierBinding,
   agentBinding,
@@ -52,7 +53,8 @@ import {
   validateJudgement,
   writeBatch,
 } from '../../workflows/sdlc/review-eval/scripts/bench';
-import type { Finding, ItemRecord } from '../../workflows/sdlc/.shared/review-item';
+import { type Finding, type ItemRecord, readFindings, writeItem } from '../../workflows/sdlc/.shared/review-item';
+import { MARKS as INTAKE_MARKS } from '../../workflows/sdlc/intake/scripts/bench/score';
 
 const track = trackTempRoots();
 
@@ -489,6 +491,80 @@ describe('collectItem', () => {
   });
 });
 
+describe('saved review evidence', () => {
+  it('uses the same operator judgement vocabulary as intake', () => {
+    expect(INTAKE_MARKS).toBe(MARKS.defect);
+  });
+
+  it('rejects a finding without its first review round', () => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'archon-finding-')));
+    const finding = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open' };
+    for (const round of [undefined, '1', 0, -1, 1.5]) {
+      write(dir, 'review/findings.json', JSON.stringify([{ ...finding, round }]));
+      expect(() => readFindings(dir)).toThrow('is not a list of findings');
+    }
+    write(dir, 'review/findings.json', JSON.stringify([{ ...finding, round: 2 }]));
+    expect(readFindings(dir)).toEqual([{ ...finding, round: 2 }]);
+  });
+
+  it('conforms to the synthesizer’s persisted finding contract', () => {
+    const finding: Finding = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open', round: 1 };
+    const prompt = readFileSync(join(import.meta.dir, '../../workflows/sdlc/review/commands/review-synthesize.md'), 'utf8');
+    expect(prompt).toContain(`A JSON array of \`{${Object.keys(finding).join(', ')}}\``);
+    const dir = track(mkdtempSync(join(tmpdir(), 'archon-finding-contract-')));
+    write(dir, 'review/findings.json', JSON.stringify([finding]));
+    expect(readFindings(dir)).toEqual([finding]);
+    for (const key of Object.keys(finding)) {
+      write(dir, 'review/findings.json', JSON.stringify([Object.fromEntries(Object.entries(finding).filter(([field]) => field !== key))]));
+      expect(() => readFindings(dir)).toThrow('is not a list of findings');
+    }
+  });
+
+  function savedItem() {
+    const dir = track(mkdtempSync(join(tmpdir(), 'archon-reader-')));
+    const item: ItemRecord = {
+      case: 'counting', variant: 'v1',
+      defects: [{ id: 'D1', class: 'wrong_behaviour', owner: 'code', claim: 'Counts down.', location: 'a.ts:2' }],
+      known_defects: [{ id: 'K1', claim: 'Never stops.' }],
+      lenses: { code: 'review/code.md', simplify: 'shape.md' },
+    };
+    writeItem(dir, item);
+    write(dir, 'review/code.md', 'The counter decrements at a.ts:2.');
+    write(dir, 'shape.md', 'Use the existing counter primitive.');
+    write(dir, 'review/findings.json', '[{"id":"R1","severity":"blocking","sources":["code"],"claim":"Counts down.","status":"open","round":1}]');
+    return { dir, item };
+  }
+
+  function read(dir: string) {
+    return spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review-eval-judge/scripts/read-item.ts')], {
+      encoding: 'utf8', env: { ...process.env, INPUTS_ITEM: dir },
+    });
+  }
+
+  it('reader supplies the actual named lens, defect, finding and report evidence', () => {
+    const { dir, item } = savedItem();
+    write(dir, 'review/report.md', 'The review concludes the count is wrong.');
+    const result = read(dir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`<defects>\n${JSON.stringify(item.defects, null, 2)}\n</defects>`);
+    expect(result.stdout).toContain(`<known_defects>\n${JSON.stringify(item.known_defects, null, 2)}\n</known_defects>`);
+    expect(result.stdout).toContain('<lens name="code" file="review/code.md">\nThe counter decrements at a.ts:2.\n</lens>');
+    expect(result.stdout).toContain('<lens name="simplify" file="shape.md">\nUse the existing counter primitive.\n</lens>');
+    expect(result.stdout).toContain(`<findings file="review/findings.json">\n${readFileSync(join(dir, 'review/findings.json'), 'utf8')}\n</findings>`);
+    expect(result.stdout).toContain('<report file="review/report.md">\nThe review concludes the count is wrong.\n</report>');
+  });
+
+  it('reader refuses a missing declared lens but permits an absent optional report', () => {
+    const { dir, item } = savedItem();
+    expect(read(dir).stdout).toContain('<report file="review/report.md">\n(absent)\n</report>');
+    writeItem(dir, { ...item, lenses: { errors: 'review/errors.md' } });
+    const result = read(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(join(dir, 'review/errors.md'));
+    expect(result.stdout).toBe('');
+  });
+});
+
 describe('latestLines', () => {
   it('keeps the newest line per key and skips lines with none', () => {
     const file = join(track(mkdtempSync(join(tmpdir(), 'archon-bench-lines-'))), 'lines.jsonl');
@@ -509,6 +585,28 @@ describe('the batch page and marks', () => {
     appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 2, run_id: 'run-2', cost_usd: 2, cost_partial: false });
     writeBatch(out, 'counting', 'opus');
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Cost | at least $1.50 | $2.00 |');
+  });
+
+  it('excludes a known defect’s accounted finding from clean false-positive candidates', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-clean-page-')));
+    const dir = join(out, 'items', 'run-1');
+    mkdirSync(dir, { recursive: true });
+    writeItem(dir, { case: 'counting', variant: 'clean', defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } });
+    write(dir, 'review/findings.json', JSON.stringify([
+      { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Never stops.', status: 'open', round: 1 },
+      { id: 'R2', severity: 'note', sources: ['code'], claim: 'Unlinked problem.', status: 'open', round: 1 },
+    ]));
+    appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'clean', sample: 1, run_id: 'run-1', version: { label: 'v' }, passed: true, item: join('items', 'run-1') });
+    appendLine(join(out, 'judgements.jsonl'), { run_id: 'run-1', judge: { spec: 'opus' }, valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', excerpt: null, evidence: 'States the mechanism.' }], shape_unmatched: 0 });
+    writeBatch(out, 'counting', 'opus');
+    const batch = join(out, 'batches', 'counting');
+    const page = readFileSync(join(batch, 'page.md'), 'utf8');
+    expect(page).toContain('### Known `K1`');
+    const candidates = page.split('### Findings no defect accounts for')[1];
+    expect(candidates).toContain('R2 (code, open): Unlinked problem.');
+    expect(candidates).not.toContain('R1');
+    const marks = Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8')) as Record<string, unknown>[];
+    expect(marks.map(entry => entry.defect ?? entry.finding)).toEqual(['K1', 'R2']);
   });
 
   it('keeps a marked or annotated entry a re-judge no longer calls for, and drops an unmarked one', () => {
@@ -532,7 +630,7 @@ describe('judgement validation', () => {
     known_defects: [{ id: 'K1', claim: 'It never stops.' }],
     lenses: { code: 'review/code.md', simplify: 'shape.md' },
   };
-  const findings: Finding[] = [{ id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open' }];
+  const findings: Finding[] = [{ id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open', round: 1 }];
   const entry = (id: string, caughtBy: string[] = [], finding: string | null = null) => ({
     id,
     caught_by: caughtBy,
@@ -636,7 +734,7 @@ describe('bench run', () => {
   const passing = (root: string) => {
     const artifacts = getRunArtifactsDirForRoot(root, 'run-1');
     write(artifacts, 'review/code.md', 'x');
-    write(artifacts, 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', sources: ['code'], claim: 'Unrelated.', status: 'open' }]));
+    write(artifacts, 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', sources: ['code'], claim: 'Unrelated.', status: 'open', round: 1 }]));
     write(artifacts, 'shape.md', 'x');
     return {
       id: 'run-1',
@@ -851,6 +949,24 @@ describe('bench run', () => {
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
   });
 
+  it('renders a damaged saved item as invalid and refreshes the other batches', () => {
+    const { out, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
+    for (const [caseId, runId] of [['damaged', 'bad-run'], ['healthy', 'good-run']]) {
+      const dir = join(out, 'items', runId);
+      write(dir, 'item.json', caseId === 'damaged' ? '{' : JSON.stringify({ case: caseId, variant: 'clean', defects: [], known_defects: [], lenses: {} }));
+      write(dir, 'review/findings.json', '[]');
+      appendLine(join(out, 'samples.jsonl'), { case: caseId, variant: 'clean', sample: 1, run_id: runId, version: { label: 'v' }, passed: true, item: join('items', runId) });
+    }
+    judgeReturns('run-1', { defects: [], shape_unmatched: 0 });
+    const result = judge();
+    expect(result.status).toBe(1);
+    expect(readLines(join(out, 'judgements.jsonl'))).toContainEqual(expect.objectContaining({ run_id: 'bad-run', valid: false }));
+    expect(readFileSync(join(out, 'batches', 'damaged', 'page.md'), 'utf8')).toContain('| Judgement | invalid:');
+    expect(Bun.YAML.parse(readFileSync(join(out, 'batches', 'damaged', 'marks.yaml'), 'utf8'))).toEqual([]);
+    expect(readFileSync(join(out, 'batches', 'healthy', 'page.md'), 'utf8')).toContain('| Judgement | valid |');
+    expect(existsSync(join(out, 'batches', 'healthy', 'marks.yaml'))).toBe(true);
+  });
+
   it('heads the page FAILED and judges nothing when a sample fails a hard check', () => {
     const unreadable = (root: string) => {
       const detail = passing(root);
@@ -858,7 +974,7 @@ describe('bench run', () => {
       return detail;
     };
     const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, unreadable);
-    run('--variant', 'v1');
+    expect(run('--variant', 'v1').status).toBe(1);
     expect(existsSync(join(cli, 'argv-2.json'))).toBe(false);
 
     const batch = join(out, 'batches', 'counting');

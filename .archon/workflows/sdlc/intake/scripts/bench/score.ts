@@ -12,13 +12,13 @@
  */
 
 import { join } from 'node:path';
-import { SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
+import { MARKS as OPERATOR_MARKS, SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
 import type { WorkType } from '../../../.shared/labels.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { type BatchChecks, CHECKS_FILE, type CheckName, type Line } from './runner.ts';
 import { type BenchSet, GROUP_OPEN, type Group, type Row } from './set.ts';
 
-export const MARKS = ['right', 'wrong', 'partly'] as const;
+export const MARKS = OPERATOR_MARKS.defect;
 export type MarkValue = (typeof MARKS)[number];
 export const MARKS_FILE = 'marks.jsonl';
 

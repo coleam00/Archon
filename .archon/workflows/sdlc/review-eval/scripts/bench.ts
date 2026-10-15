@@ -692,6 +692,8 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion, judgin
         if (passed) {
           const judged = { case: bench.id, variant, sample, run_id: runId, label: version.label, item: relative(outDir, itemDir) };
           judging.push(judgeSample(judged, options));
+        } else {
+          process.exitCode = 1;
         }
       } catch (error) {
         console.error(`${name}: not recorded: ${fail(error, fetched)}`);
@@ -887,18 +889,23 @@ function batchSamples(outDir: string, caseId: string, spec: string): BatchSample
     .filter(line => line.case === caseId)
     .map(line => {
       const itemDir = line.item === null ? null : join(outDir, line.item);
-      const item = itemDir !== null && existsSync(join(itemDir, ITEM_FILE)) ? readItem(itemDir) : null;
-      // Only a passed sample is judged, and passing proved its findings read.
-      const findings = itemDir !== null && line.passed ? readFindings(itemDir) : [];
       const recorded = judgements.get(line.run_id);
-      // A recorded valid judgement is checked again against the item it judged.
-      const judgement =
-        recorded === undefined
-          ? null
-          : recorded.valid === true && item !== null
-            ? validateJudgement(recorded, item, findings)
-            : { valid: false as const, reason: typeof recorded.reason === 'string' ? recorded.reason : 'its item is missing' };
-      return { line, item, findings, judgement };
+      try {
+        const item = itemDir !== null && existsSync(join(itemDir, ITEM_FILE)) ? readItem(itemDir) : null;
+        const findings = itemDir !== null && line.passed ? readFindings(itemDir) : [];
+        const judgement =
+          recorded === undefined
+            ? null
+            : recorded.valid === true && item !== null
+              ? validateJudgement(recorded, item, findings)
+              : { valid: false as const, reason: typeof recorded.reason === 'string' ? recorded.reason : 'its item is missing' };
+        return { line, item, findings, judgement };
+      } catch (error) {
+        return {
+          line, item: null, findings: [],
+          judgement: { valid: false as const, reason: error instanceof Error ? error.message : String(error) },
+        };
+      }
     });
 }
 

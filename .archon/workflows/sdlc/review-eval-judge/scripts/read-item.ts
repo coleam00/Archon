@@ -12,8 +12,7 @@ import { FINDINGS_FILE, REPORT_FILE, readItem } from '../../.shared/review-item.
 const dir = trimmed(process.env.INPUTS_ITEM);
 
 function file(path: string): string {
-  const full = join(dir, path);
-  return existsSync(full) ? readFileSync(full, 'utf8').trimEnd() : '(absent)';
+  return readFileSync(join(dir, path), 'utf8').trimEnd();
 }
 
 try {
@@ -24,7 +23,7 @@ try {
     `<known_defects>\n${JSON.stringify(item.known_defects, null, 2)}\n</known_defects>`,
     ...Object.entries(item.lenses).map(([lens, path]) => `<lens name="${lens}" file="${path}">\n${file(path)}\n</lens>`),
     `<findings file="${FINDINGS_FILE}">\n${file(FINDINGS_FILE)}\n</findings>`,
-    `<report file="${REPORT_FILE}">\n${file(REPORT_FILE)}\n</report>`,
+    `<report file="${REPORT_FILE}">\n${existsSync(join(dir, REPORT_FILE)) ? file(REPORT_FILE) : '(absent)'}\n</report>`,
   ];
   report(`Lenses that left output: ${Object.keys(item.lenses).join(', ') || 'none'}.\n\n${sections.join('\n\n')}`);
 } catch (error) {

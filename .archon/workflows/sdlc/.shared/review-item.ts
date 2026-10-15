@@ -44,6 +44,7 @@ export interface Finding {
   readonly sources: readonly string[];
   readonly claim: string;
   readonly status: string;
+  readonly round: number;
 }
 
 export function writeItem(dir: string, item: ItemRecord): void {
@@ -80,6 +81,9 @@ export function readFindings(dir: string): Finding[] {
   const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
   const isFinding = (record: unknown): record is Finding =>
     texts(record, 'id', 'severity', 'claim', 'status') &&
+    typeof record.round === 'number' &&
+    Number.isInteger(record.round) &&
+    record.round >= 1 &&
     Array.isArray(record.sources) &&
     record.sources.every(source => typeof source === 'string');
   if (!Array.isArray(raw) || !raw.every(isFinding)) throw new Error(`${file} is not a list of findings`);
