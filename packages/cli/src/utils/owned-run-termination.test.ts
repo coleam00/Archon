@@ -41,7 +41,7 @@ async function waitUntil(label: string, check: () => boolean): Promise<void> {
  * Register the handler, start a node whose background job outlives a root-only kill,
  * deliver SIGTERM, and report what the handler did by the time it exits.
  */
-async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<{
+async function interruptWithNodeInFlight(): Promise<{
   descendant: number;
   descendantAliveAtFail: boolean;
   failedWith: unknown;
@@ -70,7 +70,6 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
     runId: 'run-1',
     logModule: 'owned-run-termination.test',
     liveOwner: { close: async () => undefined, isStopRequested: () => false },
-    endNodeProcessTrees,
   });
   try {
     const node = runSubprocess(
@@ -98,18 +97,9 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
 }
 
 posixOnly('an interrupt fails the run first, then ends the in-flight node tree', async () => {
-  const result = await interruptWithNodeInFlight(true);
+  const result = await interruptWithNodeInFlight();
 
   expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
   expect(result.descendantAliveAtFail).toBe(true);
   await waitUntil('the descendant to exit', () => !processExists(result.descendant));
-});
-
-posixOnly('a detached owner leaves its node trees to the cancel controller', async () => {
-  const result = await interruptWithNodeInFlight(false);
-
-  expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
-  // A group kill returns once SIGKILL is sent; give it time to land before asserting.
-  await new Promise<void>(resolve => setTimeout(resolve, 300));
-  expect(processExists(result.descendant)).toBe(true);
 });

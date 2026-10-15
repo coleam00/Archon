@@ -193,6 +193,38 @@ describe('run live owner', () => {
     }
   });
 
+  test('detached termination acknowledgement waits for node cleanup', async () => {
+    const runId = `prepare-${crypto.randomUUID()}`;
+    let complete!: () => void;
+    const cleanup = new Promise<void>(resolve => {
+      complete = resolve;
+    });
+    let started = false;
+    const owner = await startRunLiveOwner(runId, {
+      detachedProcessPid: process.pid,
+      beforeTerminate: () => {
+        started = true;
+        return cleanup;
+      },
+    });
+    const lease = await requestRunLiveOwnerStop(runId);
+    let acknowledged = false;
+    const commit = lease.commit().then(() => {
+      acknowledged = true;
+    });
+    try {
+      await waitForOwnerEvent(() => started);
+      expect(acknowledged).toBe(false);
+      complete();
+      await commit;
+      expect(acknowledged).toBe(true);
+    } finally {
+      complete();
+      lease.release();
+      await owner.close();
+    }
+  });
+
   test('detached stop commit announces the controller handoff before close', async () => {
     const runId = `detached-${crypto.randomUUID()}`;
     const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });

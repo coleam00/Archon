@@ -42,6 +42,18 @@ async function waitUntil(label: string, check: () => boolean): Promise<void> {
   }
 }
 
+posixOnly('host-only recording preserves legacy subprocess execution', async () => {
+  const trees = recordNodeProcessTrees(false);
+  const spawnSpy = spyOn(childProcess, 'spawn');
+  try {
+    expect(await runHostBash('echo legacy')).toMatchObject({ stdout: 'legacy\n' });
+    expect(spawnSpy).not.toHaveBeenCalled();
+  } finally {
+    trees.release();
+    spawnSpy.mockRestore();
+  }
+});
+
 posixOnly('ending recorded node trees ends the in-flight node and its descendants', async () => {
   const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
   const trees = recordNodeProcessTrees();

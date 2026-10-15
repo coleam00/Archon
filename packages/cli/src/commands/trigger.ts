@@ -1,3 +1,4 @@
+import { endRecordedNodeProcessTrees } from '@archon/workflows/subprocess';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
@@ -259,9 +260,11 @@ export async function triggerCommand(
           store: deps.store,
           ...owned,
           logModule: 'cli.trigger',
-          endNodeProcessTrees: !detachedProcessOwner,
+          ...(detachedProcessOwner ? { recordLegacyNodes: false as const } : {}),
         }),
-      ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+      ...(detachedProcessOwner
+        ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
+        : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
     return;

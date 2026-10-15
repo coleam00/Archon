@@ -11,6 +11,9 @@ export const TERMINATION_GRACE_MS = 5_000;
 /** POSIX: how long the group has to disappear after SIGKILL. */
 export const TERMINATION_CONFIRM_MS = 1_000;
 
+/** Includes node cleanup (TERM grace plus confirmation) and IPC scheduling slack. */
+export const DETACHED_RUN_PREPARE_MAX_MS = 10_000;
+
 /**
  * The longest a committed stop spends terminating the owner's process tree before it
  * returns or throws, from the terminator's own bounds. The controller and every waiter
@@ -18,9 +21,10 @@ export const TERMINATION_CONFIRM_MS = 1_000;
  * controller's.
  */
 export const DETACHED_RUN_TERMINATION_MAX_MS =
-  process.platform === 'win32'
+  DETACHED_RUN_PREPARE_MAX_MS +
+  (process.platform === 'win32'
     ? WINDOWS_PROCESS_TREE_STOP_MAX_MS
-    : TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS;
+    : TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS);
 
 /** Time for the controller to record `cancelled` once the tree is gone. */
 const TERMINATION_RECORD_SLACK_MS = 4_000;

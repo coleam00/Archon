@@ -62,7 +62,11 @@ import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
-import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
+import {
+  startRunLiveOwner,
+  type RunLiveOwner,
+  type RunLiveOwnerOptions,
+} from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { createRegisteredWorktree } from './registered-worktree';
 
@@ -427,6 +431,7 @@ export interface StartAdmittedResourceStartInput {
    * omits it: its process hosts many runs and must never be the target of a stop.
    */
   detachedProcessPid?: number;
+  beforeTerminate?: RunLiveOwnerOptions['beforeTerminate'];
 }
 
 /**
@@ -463,6 +468,7 @@ export async function startAdmittedResourceStart(
   const sealed = readWorkflowRunConfigMetadata(run.metadata);
   const liveOwner = await startRunLiveOwner(run.id, {
     detachedProcessPid: input.detachedProcessPid,
+    beforeTerminate: input.beforeTerminate,
   });
   let releaseGuard: (() => void) | undefined;
   try {

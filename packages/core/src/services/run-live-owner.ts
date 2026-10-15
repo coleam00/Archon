@@ -1,3 +1,4 @@
+import { DETACHED_RUN_PREPARE_MAX_MS } from './run-stop-bounds';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server, Socket } from 'node:net';
@@ -27,6 +28,8 @@ const MAX_MESSAGE_BYTES = 256;
 export interface RunLiveOwnerOptions {
   /** Enables the detached CLI's active-stop lease. Other owners only publish liveness. */
   detachedProcessPid?: number;
+  /** End separately grouped node bodies before acknowledging owner termination. */
+  beforeTerminate?: () => Promise<void>;
 }
 
 export interface RunLiveOwner {
@@ -293,6 +296,7 @@ export async function startRunLiveOwner(
   const watcherSockets = new Set<Socket>();
   const stopSockets = new Set<Socket>();
   const stopReleaseWaiters = new Set<() => void>();
+  let terminationPreparation: Promise<void> | undefined;
 
   const server = createServer(socket => {
     sockets.add(socket);
@@ -330,7 +334,14 @@ export async function startRunLiveOwner(
           phase = 'terminating';
           socket.setTimeout(0);
           for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
-          socket.write(TERMINATE_READY);
+          void (async () => {
+            terminationPreparation ??= Promise.resolve().then(() => options.beforeTerminate?.());
+            await terminationPreparation;
+            socket.write(TERMINATE_READY);
+          })().catch((error: unknown) => {
+            console.error('Could not prepare detached owner termination:', error);
+            socket.destroy();
+          });
         } else {
           socket.destroy();
           return;
@@ -662,7 +673,7 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
               socket.once('end', onLeaseEnd);
               socket.once('close', onLeaseClose);
               socket.once('timeout', onTimeout);
-              socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS);
+              socket.setTimeout(DETACHED_RUN_PREPARE_MAX_MS);
               socket.write(TERMINATE_REQUEST, error => {
                 if (error) failReady(error);
               });

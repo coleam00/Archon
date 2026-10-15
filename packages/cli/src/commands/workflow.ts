@@ -1,3 +1,4 @@
+import { endRecordedNodeProcessTrees } from '@archon/workflows/subprocess';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -3177,7 +3178,9 @@ async function runWorkflowWithOwnedSource(
           runLiveOwner = await startRunLiveOwner(
             detachedPreCreatedRun?.id ?? preparedSource.runId,
             {
-              ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+              ...(detachedProcessOwner
+                ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
+                : {}),
             }
           );
           const setupRun =
@@ -3324,11 +3327,11 @@ async function runWorkflowWithOwnedSource(
       store: host.deps.store,
       runId: ownedRunId,
       logModule: 'cli.workflow',
+      ...(detachedProcessOwner ? { recordLegacyNodes: false as const } : {}),
       liveOwner: {
         isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
         close: closeRunLiveOwner,
       },
-      endNodeProcessTrees: !detachedProcessOwner,
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
@@ -3413,7 +3416,9 @@ async function runWorkflowWithOwnedSource(
         }
       }
       runLiveOwner ??= await startRunLiveOwner(ownedRunId, {
-        ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+        ...(detachedProcessOwner
+          ? { detachedProcessPid: process.pid, beforeTerminate: endRecordedNodeProcessTrees }
+          : {}),
       });
       // Container run context for the engine (Phase C): the write-back backend port +
       // env id + policy. The executor drives suspend-on-pause and the write-back gate

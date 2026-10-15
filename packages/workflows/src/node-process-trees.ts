@@ -4,6 +4,8 @@ export interface NodeProcessRecorder {
   /** In-flight roots and their termination/owner-watcher responsibilities. */
   roots: Map<number, { end(): Promise<void>; disarm(): void }>;
   ended: boolean;
+  recordLegacyNodes: boolean;
+  end(): Promise<void>;
 }
 let nodeProcessRecorder: NodeProcessRecorder | undefined;
 
@@ -12,18 +14,22 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * owner's interrupt can end those trees before it exits (#3552). Each root leads its
  * own process group on POSIX; `taskkill /T` walks the tree from the PID on Windows.
  *
- * Process-scoped on purpose: only a foreground CLI owner, which drives exactly one run
+ * Process-scoped on purpose: only a CLI owner, which drives exactly one run
  * and holds the process-wide signal handlers for it, turns this on.
  * `archon serve` never records. Host node bodies have no owner-death watcher: a
  * stored group ID cannot safely identify a group after its leader exits.
  *
- * `end()` refuses every later node subprocess, so a sibling or retry the executor
+ * `end()` refuses every later recorded node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
  */
-export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
-  const recorder: NodeProcessRecorder = { roots: new Map(), ended: false };
-  nodeProcessRecorder = recorder;
-  return {
+export function recordNodeProcessTrees(recordLegacyNodes = true): {
+  end(): Promise<void>;
+  release(): void;
+} {
+  const recorder: NodeProcessRecorder = {
+    roots: new Map(),
+    ended: false,
+    recordLegacyNodes,
     end: async () => {
       recorder.ended = true;
       const failed: string[] = [];
@@ -40,10 +46,19 @@ export function recordNodeProcessTrees(): { end(): Promise<void>; release(): voi
         throw new Error(`could not end node process trees: ${failed.join(', ')}`);
       }
     },
+  };
+  nodeProcessRecorder = recorder;
+  return {
+    end: recorder.end,
     release: () => {
       if (nodeProcessRecorder === recorder) nodeProcessRecorder = undefined;
     },
   };
+}
+
+/** Prepare a detached owner's nodes before acknowledging its termination lease. */
+export async function endRecordedNodeProcessTrees(): Promise<void> {
+  await nodeProcessRecorder?.end();
 }
 
 // A node runs in its own session, so terminal hangup or a second Ctrl-C kills the owner

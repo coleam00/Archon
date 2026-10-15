@@ -1105,7 +1105,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 - **Web UI**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it after verifying the owner is gone.
 - **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
-- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to terminate the exact run's host process tree before marking it `cancelled`.
+- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to ask the exact owner to end its recorded host node trees before terminating the owner and marking the run `cancelled`. If node cleanup fails or cannot be proved, cancellation fails. Abrupt owner death can leave host nodes running; verify they have stopped before resuming or abandoning the run.
 
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 

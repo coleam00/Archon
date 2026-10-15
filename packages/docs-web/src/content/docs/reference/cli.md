@@ -677,18 +677,21 @@ categorical `reason` and the `signal` that arrived. Resuming the run clears it, 
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.
 
-After recording why the run stopped, the owner ends the process tree of every `bash:` or
-`script:` node still running, including an `until_bash` check, so a resume does not overlap the
-interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
-`trigger execute`. A node counts as running until its output closes, so a background job that
-still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
-their own session during a foreground run, so they have no controlling terminal, and a small
-watcher process ends the node's process group if the owner dies before its teardown does (a
-terminal hangup, a second Ctrl-C, `kill -9`); a run whose stop was never recorded stays
-`running`. A process that starts its own session or process group (`setsid`, a daemon)
-escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
-root already exited is not reached, and an owner killed before its teardown leaves the tree
-running.
+After recording why the run stopped, the owner ends the process tree of every host
+`bash:` or `script:` node still running. Foreground owners also clean up legacy
+`until_bash` checks. This applies to
+foreground `workflow run`, `workflow resume` and `trigger execute`, and to graceful
+signals sent to detached owners. On macOS and Linux, host node bodies lead separate
+process groups. Cleanup sends SIGTERM, waits up to five seconds, and sends SIGKILL only
+while the original leader remains alive. If a descendant survives its leader, cleanup
+cannot safely signal that group again and reports failure. A process that starts its own
+session or process group (`setsid`, a daemon) escapes this cleanup. On Windows, cleanup
+uses the node root to end its tree; descendants whose root already exited may be unreachable.
+
+Host `bash:` and `script:` bodies have no owner-death watcher. Abrupt owner death
+(terminal hangup, a second Ctrl-C, or `kill -9`) can leave those bodies running; stop them
+before resuming or replacing the run. A run whose stop was never recorded stays `running`.
+The legacy `until_bash` path has separate interruption behavior.
 
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
@@ -1071,8 +1074,9 @@ who owns the run:
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
-  contacts that process, terminates its host process tree, confirms termination, and
-  only then records the run as `cancelled`.
+  contacts that process, asks it to end its recorded host node trees, then terminates
+  the owner tree and confirms termination before recording `cancelled`. If node cleanup
+  fails or cannot be proved, cancellation fails instead of reporting a successful stop.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run
@@ -1120,7 +1124,8 @@ worktree lock and resource slot, so abandon first asks the run's live-owner endp
 this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
-  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+  (proves the owner, ends its recorded host node trees, terminates the owner tree, waits),
+  then records `cancelled`. Unproved node cleanup prevents a successful stop.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:

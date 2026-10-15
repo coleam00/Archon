@@ -6,7 +6,7 @@ import {
 } from './node-process-trees';
 import { hostNodeSubprocess, type ExitEvidence } from './host-node-subprocess';
 export { hostNodeSubprocess } from './host-node-subprocess';
-export { recordNodeProcessTrees } from './node-process-trees';
+export { recordNodeProcessTrees, endRecordedNodeProcessTrees } from './node-process-trees';
 import { spawn } from 'node:child_process';
 import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
@@ -212,7 +212,7 @@ export async function runSubprocess(
                 timeout: options.timeout,
                 env: subprocessEnv,
               })
-            : nodeProcessRecorder
+            : nodeProcessRecorder?.recordLegacyNodes
               ? await execOwnedProcessGroup(cmd, args, {
                   cwd: options.cwd,
                   timeout: options.timeout,
