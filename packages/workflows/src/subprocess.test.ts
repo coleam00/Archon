@@ -839,61 +839,68 @@ for (const denied of [false, true]) {
 }
 
 for (const trigger of ['timeout', 'recorder', 'buffer'] as const) {
-  test(`Windows ${trigger} refuses cleanup with an unseen intermediate parent`, async () => {
-    const platform = process.platform;
-    const child = new childProcess.ChildProcess();
-    const root = 123456;
-    const stdout = new PassThrough();
-    Object.defineProperties(child, {
-      pid: { value: root },
-      stdin: { value: null },
-      stdout: { value: stdout },
-      stderr: { value: null },
-      unref: { value: () => child },
-    });
-    let killed = false;
-    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
-    const commands = spyOn(windowsTree.windowsProcessCommands, 'execFile').mockImplementation(
-      async command => {
-        if (command === 'taskkill') {
-          killed = true;
-          child.emit('exit', 1, null);
-          return { stdout: 'SUCCESS', stderr: '' };
+  test.each([false, true])(
+    `Windows ${trigger} refuses cleanup with an unseen intermediate parent (initial=%s)`,
+    async initial => {
+      const platform = process.platform;
+      const child = new childProcess.ChildProcess();
+      const root = 123456;
+      const stdout = new PassThrough();
+      Object.defineProperties(child, {
+        pid: { value: root },
+        stdin: { value: null },
+        stdout: { value: stdout },
+        stderr: { value: null },
+        unref: { value: () => child },
+      });
+      let killed = false;
+      const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+      const commands = spyOn(windowsTree.windowsProcessCommands, 'execFile').mockImplementation(
+        async command => {
+          if (command === 'taskkill') {
+            killed = true;
+            child.emit('exit', 1, null);
+            return { stdout: 'SUCCESS', stderr: '' };
+          }
+          return {
+            stdout: JSON.stringify({
+              takenAt: killed ? '200' : '100',
+              rows: killed
+                ? [{ pid: root + 2, parentPid: root + 1, created: '150' }]
+                : [
+                    { pid: root, parentPid: 1, created: '10' },
+                    ...(initial ? [{ pid: root + 2, parentPid: root + 1, created: '50' }] : []),
+                  ],
+            }),
+            stderr: '',
+          };
         }
-        return {
-          stdout: JSON.stringify({
-            takenAt: killed ? '200' : '100',
-            rows: killed
-              ? [{ pid: root + 2, parentPid: root + 1, created: '150' }]
-              : [{ pid: root, parentPid: 1, created: '10' }],
-          }),
-          stderr: '',
-        };
-      }
-    );
-    const kill = spyOn(process, 'kill').mockReturnValue(true);
-    const trees = trigger === 'recorder' ? recordNodeProcessTrees(false) : undefined;
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    try {
-      const outcome = runNode('unused', trigger === 'timeout' ? 1 : 60000).catch(
-        (error: unknown) => error as RawSubprocessRejection
       );
-      if (trigger === 'recorder') {
-        await expect(trees?.end()).rejects.toThrow('unproved ancestry');
-      } else if (trigger === 'buffer') {
-        stdout.emit('data', Buffer.alloc(1024 * 1024 + 1));
+      const kill = spyOn(process, 'kill').mockReturnValue(true);
+      const trees = trigger === 'recorder' ? recordNodeProcessTrees(false) : undefined;
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      try {
+        const outcome = runNode('unused', trigger === 'timeout' ? 1 : 60000).catch(
+          (error: unknown) => error as RawSubprocessRejection
+        );
+        if (trigger === 'recorder') {
+          await expect(trees?.end()).rejects.toThrow('unproved ancestry');
+        } else if (trigger === 'buffer') {
+          stdout.emit('data', Buffer.alloc(1024 * 1024 + 1));
+        }
+        const error = (await outcome) as RawSubprocessRejection;
+        expect(error.cleanupError?.message).toContain('unproved ancestry');
+        expect(killed).toBe(true);
+        expect(kill).not.toHaveBeenCalled();
+        if (trigger === 'timeout') expect(error.timedOut).toBe(true);
+        if (trigger === 'buffer') expect(error.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      } finally {
+        Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+        trees?.release();
+        spawn.mockRestore();
+        commands.mockRestore();
+        kill.mockRestore();
       }
-      const error = (await outcome) as RawSubprocessRejection;
-      expect(error.cleanupError?.message).toContain('unproved ancestry');
-      expect(kill).not.toHaveBeenCalled();
-      if (trigger === 'timeout') expect(error.timedOut).toBe(true);
-      if (trigger === 'buffer') expect(error.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
-    } finally {
-      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
-      trees?.release();
-      spawn.mockRestore();
-      commands.mockRestore();
-      kill.mockRestore();
     }
-  });
+  );
 }

@@ -202,31 +202,30 @@ export async function terminateWindowsProcessTree(
   assertRootOwned: () => void
 ): Promise<void> {
   const before = await listWindowsProcesses();
-  const tree = WindowsProcessTree.fromRoot(pid, before);
+  let killFailure: string | undefined;
+  if (before.rows.some(row => row.pid === pid)) {
+    // The listing can take seconds. A live child handle or owner lease must still
+    // pin the root identity. Kill it before ancestry validation can reject cleanup.
+    assertRootOwned();
 
+    // taskkill's exit code cannot prove cleanup: a member can exit during its walk
+    // or spawn a surviving child. Retain a kill failure if confirmation also fails.
+    try {
+      await windowsProcessCommands.execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        timeout: COMMAND_TIMEOUT_MS,
+        windowsHide: true,
+      });
+    } catch (error) {
+      killFailure = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const tree = WindowsProcessTree.fromRoot(pid, before);
   if (!tree) {
     throw new Error(
       `Could not confirm process tree ${String(pid)} exited: its root was already gone, ` +
         'so descendant ancestry cannot be proved'
     );
-  }
-
-  // The initial listing can take seconds. The caller's live child handle or owner
-  // lease must still pin the root identity before taskkill targets its PID.
-  assertRootOwned();
-
-  // `taskkill /T` does most of the work in one call. Its exit code is not the proof:
-  // it is non-zero whenever a member exited during the walk, and zero even when a
-  // member spawned during the walk survived it. Listings check membership and
-  // ambiguous ancestry; a kill failure is retained as evidence if confirmation fails.
-  let killFailure: string | undefined;
-  try {
-    await windowsProcessCommands.execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
-      timeout: COMMAND_TIMEOUT_MS,
-      windowsHide: true,
-    });
-  } catch (error) {
-    killFailure = error instanceof Error ? error.message : String(error);
   }
 
   let survivors: number[] = [];

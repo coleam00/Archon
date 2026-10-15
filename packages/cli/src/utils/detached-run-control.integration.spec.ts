@@ -186,44 +186,53 @@ describe('detached run control integration', () => {
     if (process.platform === 'win32') await windowsProcessesNaming(crypto.randomUUID());
   }, WMI_WARM_UP_TIMEOUT_MS);
 
-  it('rejects detached-owner cleanup when an intermediate parent was never listed', async () => {
-    const runId = `unseen-parent-${crypto.randomUUID()}`;
-    const path = runLiveOwnerPath(runId);
-    const root = 123456;
-    const server = stubOwner(root);
-    await listen(server, path);
-    const platform = process.platform;
-    let killed = false;
-    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
-      if (command === 'taskkill') {
-        killed = true;
-        return { stdout: 'SUCCESS', stderr: '' };
+  it.each([false, true])(
+    'rejects detached-owner cleanup when an intermediate parent was never listed (initial=%s)',
+    async initial => {
+      const runId = `unseen-parent-${crypto.randomUUID()}`;
+      const path = runLiveOwnerPath(runId);
+      const root = 123456;
+      const server = stubOwner(root);
+      await listen(server, path);
+      const platform = process.platform;
+      let killed = false;
+      const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(
+        async command => {
+          if (command === 'taskkill') {
+            killed = true;
+            return { stdout: 'SUCCESS', stderr: '' };
+          }
+          return {
+            stdout: JSON.stringify({
+              takenAt: killed ? '200' : '100',
+              rows: killed
+                ? [{ pid: root + 2, parentPid: root + 1, created: '150' }]
+                : [
+                    { pid: root, parentPid: 1, created: '10' },
+                    ...(initial ? [{ pid: root + 2, parentPid: root + 1, created: '50' }] : []),
+                  ],
+            }),
+            stderr: '',
+          };
+        }
+      );
+      const kill = spyOn(process, 'kill').mockReturnValue(true);
+      try {
+        const target = await requestDetachedRunStop(runId);
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        const error = await rejectedError(() => target.stop());
+        expect(error.message).toContain('unproved ancestry');
+        expect(killed).toBe(true);
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+        commands.mockRestore();
+        kill.mockRestore();
+        await close(server);
+        if (platform !== 'win32') rmSync(path, { force: true });
       }
-      return {
-        stdout: JSON.stringify({
-          takenAt: killed ? '200' : '100',
-          rows: killed
-            ? [{ pid: root + 2, parentPid: root + 1, created: '150' }]
-            : [{ pid: root, parentPid: 1, created: '10' }],
-        }),
-        stderr: '',
-      };
-    });
-    const kill = spyOn(process, 'kill').mockReturnValue(true);
-    try {
-      const target = await requestDetachedRunStop(runId);
-      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-      const error = await rejectedError(() => target.stop());
-      expect(error.message).toContain('unproved ancestry');
-      expect(kill).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
-      commands.mockRestore();
-      kill.mockRestore();
-      await close(server);
-      if (platform !== 'win32') rmSync(path, { force: true });
     }
-  });
+  );
 
   for (const closedLauncher of [false, true]) {
     it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {

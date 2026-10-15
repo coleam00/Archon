@@ -173,3 +173,57 @@ it('cannot confirm an absent root even when the listing is empty', async () => {
     commands.mockRestore();
   }
 });
+
+it.each([false, true])(
+  'attempts the owned root kill before rejecting initial ambiguity (kill fails=%s)',
+  async fails => {
+    let ownershipChecked = false;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') {
+        expect(ownershipChecked).toBe(true);
+        if (fails) throw new Error('taskkill denied');
+        return { stdout: 'SUCCESS', stderr: '' };
+      }
+      return {
+        stdout:
+          '{"takenAt":"100","rows":[{"pid":10,"parentPid":1,"created":"10"},{"pid":12,"parentPid":11,"created":"50"}]}',
+        stderr: '',
+      };
+    });
+    const kill = spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      await expect(
+        terminateWindowsProcessTree(10, () => {
+          ownershipChecked = true;
+        })
+      ).rejects.toThrow('processes 12 have unproved ancestry');
+      expect(commands.mock.calls.map(([command]) => command)).toEqual([
+        'powershell.exe',
+        'taskkill',
+      ]);
+      expect(commands.mock.calls[1]?.[1]).toEqual(['/PID', '10', '/T', '/F']);
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      commands.mockRestore();
+      kill.mockRestore();
+    }
+  }
+);
+
+it('does not kill an initially ambiguous tree after root ownership is lost', async () => {
+  const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({
+    stdout:
+      '{"takenAt":"100","rows":[{"pid":10,"parentPid":1,"created":"10"},{"pid":12,"parentPid":11,"created":"50"}]}',
+    stderr: '',
+  });
+  try {
+    await expect(
+      terminateWindowsProcessTree(10, () => {
+        throw new Error('root ownership lost');
+      })
+    ).rejects.toThrow('root ownership lost');
+    expect(commands).toHaveBeenCalledTimes(1);
+  } finally {
+    commands.mockRestore();
+  }
+});
