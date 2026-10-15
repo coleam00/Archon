@@ -28,7 +28,6 @@ if (args[0] === 'auth') {
     })
   );
 } else {
-  const expected = readFileSync(join(root, 'expected'), 'utf8');
   const request = await Bun.stdin.json();
   if (request.op === 'resolve') {
     console.log(
@@ -48,6 +47,7 @@ if (args[0] === 'auth') {
     );
     process.exit(0);
   }
+  const expected = readFileSync(join(root, 'expected'), 'utf8');
   if (expected === 'leak') {
     console.error(process.env.ARCHON_FORGE_TOKEN);
     process.exit(7);
