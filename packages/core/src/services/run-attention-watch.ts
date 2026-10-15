@@ -17,6 +17,7 @@ import {
   type RunAttentionReadStore,
   type RunResolution,
 } from '@archon/workflows/run-attention-resolution';
+import type { RunOwnerLossWatch } from '@archon/workflows/attention-watch';
 
 import {
   watchRunLiveOwner,
@@ -283,4 +284,17 @@ export async function waitForRunAttention(
     discardOwnerWatch();
     unsubscribeDoorbell?.();
   }
+}
+
+/**
+ * The attention watch's owner liveness, by the rule `workflow wait` uses: `owner_lost`
+ * reports the observed status, and any other end of the wait means the run no longer
+ * needs watching. Polls only; one notification listener per running run would hold one
+ * database connection each.
+ */
+export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWatch {
+  return async (runId, signal) => {
+    const result = await waitForRunAttention(store, runId, { signal });
+    return result.kind === 'owner_lost' ? { observedStatus: result.observedStatus } : null;
+  };
 }

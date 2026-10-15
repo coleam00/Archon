@@ -6,7 +6,11 @@ import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './file-store';
 import type { WorkflowRunDelivery } from './engine-port';
-import { subscribeToRunTree, type RunSubscriptionStore } from './run-subscription';
+import {
+  followWorkflowEventFeed,
+  subscribeToRunTree,
+  type RunSubscriptionStore,
+} from './run-subscription';
 import type { IWorkflowStore, WorkflowEventCursor } from './store';
 
 const roots = trackTempRoots();
@@ -288,5 +292,37 @@ describe('subscribeToRunTree', () => {
 
     expect(seen.deliveries).toHaveLength(6);
     expect(ancestry.mock.calls.map(([id]) => id).sort()).toEqual([child, unrelated].sort());
+  });
+});
+
+describe('followWorkflowEventFeed', () => {
+  it('a doorbell ring reads before the next poll, and close detaches it', async () => {
+    const store = await makeStore();
+    const root = await createRun(store);
+    let ring: (() => void) | undefined;
+    let detached = false;
+    const seen = recorder();
+    const follower = await followWorkflowEventFeed(
+      store,
+      await store.getWorkflowEventHead(),
+      async delivery => seen.listener(delivery),
+      {
+        ...PARKED,
+        doorbell: async onEvent => {
+          ring = onEvent;
+          return () => {
+            detached = true;
+          };
+        },
+        logFields: {},
+      }
+    );
+    await write(store, root, 'rung');
+    ring?.();
+    for (let waited = 0; seen.deliveries.length === 0 && waited < 2000; waited += 5)
+      await new Promise(resolve => setTimeout(resolve, 5));
+    expect(seen.tags()).toEqual(['rung']);
+    await follower.close();
+    expect(detached).toBe(true);
   });
 });

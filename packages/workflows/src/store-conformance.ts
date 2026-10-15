@@ -50,6 +50,7 @@ import {
   type AttentionQueueSource,
   type ProjectRef,
 } from './attention-queue';
+import { watchAttentionQueue, type AttentionStreamLine } from './attention-watch';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
@@ -1063,6 +1064,44 @@ export function describeWorkflowStoreConformance(
       const abandoned = await running(store);
       await store.pauseWorkflowRun(abandoned.id, approval, undefined, suspended(abandoned.id));
       await commits(abandoned.id, () => store.cancelWorkflowRun(abandoned.id));
+    });
+    test('the attention watch follows a run from the store feed alone', async () => {
+      const lines: AttentionStreamLine[] = [];
+      const watch = await watchAttentionQueue(
+        store,
+        { branchOf: async () => null },
+        line => void lines.push(line),
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      );
+      const next = async (type: AttentionStreamLine['type']): Promise<AttentionStreamLine> => {
+        for (let waited = 0; waited < 5000; waited += 5) {
+          const line = lines.find(candidate => candidate.type === type);
+          if (line) return line;
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        throw new Error(`no ${type} line in ${JSON.stringify(lines)}`);
+      };
+      try {
+        const run = await running(store);
+        await store.pauseWorkflowRunForWait(run.id, attentionWait, {
+          kind: 'started',
+          stepName: 'ask',
+        });
+        expect(await next('attention')).toMatchObject({
+          item: { runId: run.id, occurrence: 'ask-1' },
+        });
+        await store.answerAttentionWait(run.id, attentionAnswer('use-main'));
+        expect(await next('resolved')).toMatchObject({
+          runId: run.id,
+          reason: 'answered',
+          answeredVia: 'cli',
+        });
+        await store.resumeWorkflowRun(run.id);
+        await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        expect(await next('terminal')).toMatchObject({ runId: run.id, status: 'completed' });
+      } finally {
+        await watch.close();
+      }
     });
     test('continuation scans honor exact-cursor deferral and an event signal has one winner', async () => {
       const due = async (now: Date): Promise<string[]> =>

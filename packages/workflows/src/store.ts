@@ -551,6 +551,14 @@ declare const workflowEventCursorBrand: unique symbol;
 /** A durable commit position. Only the issuing store interprets its contents. */
 export type WorkflowEventCursor = string & { readonly [workflowEventCursorBrand]: true };
 
+/**
+ * A cursor a host received as text, such as `--after`. Branding decides nothing: only the
+ * issuing store judges it, on read, with `WorkflowEventCursorError`.
+ */
+export function workflowEventCursor(text: string): WorkflowEventCursor {
+  return text as WorkflowEventCursor;
+}
+
 export class WorkflowEventCursorError extends Error {
   constructor() {
     super('Invalid or foreign workflow event cursor');

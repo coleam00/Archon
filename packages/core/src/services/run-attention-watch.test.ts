@@ -48,7 +48,7 @@ mock.module('./run-live-owner', () => ({
   watchRunLiveOwner: mockWatchRunLiveOwner,
 }));
 
-const { waitForRunAttention } = await import('./run-attention-watch');
+const { runOwnerLossWatch, waitForRunAttention } = await import('./run-attention-watch');
 const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } =
   await import('./run-stop-bounds');
 
@@ -917,5 +917,19 @@ describe('waitForRunAttention', () => {
       expect(await pending).toEqual({ kind: 'aborted', runId: 'r1' });
       expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('runOwnerLossWatch', () => {
+  test('reports a lost owner with its observed status, and any other end as null', async () => {
+    putRun('orphan', { status: 'running' });
+    putRun('asking', { status: 'paused', metadata: { ...localOwner, ...gate() } });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('orphan', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('asking', signal)).toBeNull();
+    expect(rows.get('orphan')?.status).toBe('running');
   });
 });
