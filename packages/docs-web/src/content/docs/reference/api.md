@@ -84,8 +84,11 @@ curl http://localhost:3090/api/conversations
 ```
 
 Query parameters:
-- `codebase_id` (optional) -- Filter by codebase
-- `include_deleted` (optional) -- Include soft-deleted conversations
+- `codebaseId` (optional) -- Filter by codebase
+- `platform` (optional) -- Filter by platform type
+- `mine` (optional) -- `true` narrows to the caller's conversations when an identity resolves. Where conversations are private it changes nothing: the list is always the caller's own.
+
+Where web auth is enabled or `ARCHON_WEB_AUTH_HEADER` is set, web and CLI conversations are private to their owner; see [Security](/reference/security/#adapter-authorization) for the rules and status codes.
 
 ### Create a Conversation
 
