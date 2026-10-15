@@ -2047,7 +2047,7 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
       }
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('No stale environments found.');
+    expect(result.stdout).toContain('No stale worktree environments found.');
     expect(existsSync(worktree)).toBe(true);
     const verify = new Database(join(home, 'archon.db'), { readonly: true });
     try {
@@ -2249,7 +2249,7 @@ describe('receipt policies in the CLI host', () => {
         );
         const registered = run();
         expect(registered.status).toBe(0);
-        expect(registered.stdout).toContain('No stale environments found.');
+        expect(registered.stdout).toContain('No stale worktree environments found.');
         expect(registered.stdout).not.toContain('not registered');
         expect(registered.stdout).not.toContain('Reconciled');
         expect(existsSync(marker)).toBe(false);
@@ -2261,7 +2261,7 @@ describe('receipt policies in the CLI host', () => {
         );
         const installed = run();
         expect(installed.status).toBe(0);
-        expect(installed.stdout).toContain('No stale environments found.');
+        expect(installed.stdout).toContain('No stale worktree environments found.');
         expect(installed.stdout).not.toContain('not registered');
         await import('node:fs/promises').then(fs => fs.unlink(file));
         await removeTempTree(workspace);

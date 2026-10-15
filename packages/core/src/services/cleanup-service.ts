@@ -380,6 +380,9 @@ export interface RemoveEnvironmentOptions {
   deleteRemoteBranch?: boolean;
 }
 
+const NON_WORKTREE_CLEANUP_REASON =
+  'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
+
 /**
  * Result from removeEnvironment indicating what actually happened
  */
@@ -395,7 +398,7 @@ export interface RemoveEnvironmentResult {
   skippedReason?:
     | 'environment not found'
     | 'already destroyed'
-    | 'not a worktree environment; use archon isolation cleanup 0'
+    | typeof NON_WORKTREE_CLEANUP_REASON
     | 'has uncommitted changes'
     | 'filesystem removal incomplete; environment remains active'
     | UnknownPlatformReason;
@@ -430,7 +433,7 @@ export async function removeEnvironment(
   if (env.provider !== 'worktree') {
     return {
       ...noopResult,
-      skippedReason: 'not a worktree environment; use archon isolation cleanup 0',
+      skippedReason: NON_WORKTREE_CLEANUP_REASON,
     };
   }
 
