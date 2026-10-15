@@ -2,7 +2,18 @@
  * Zod schemas for session row types.
  */
 import { z } from '@hono/zod-openapi';
-import type { TransitionTrigger } from '../state/session-transitions';
+export const SESSION_TRANSITION_REASONS = [
+  'first-message',
+  'plan-to-execute',
+  'isolation-changed',
+  'project-changed',
+  'reset-requested',
+  'worktree-removed',
+  'conversation-closed',
+  'cwd-changed',
+] as const;
+
+export type TransitionTrigger = (typeof SESSION_TRANSITION_REASONS)[number];
 
 // ---------------------------------------------------------------------------
 // SessionMetadata
@@ -31,11 +42,8 @@ export const sessionRowSchema = z.object({
   started_at: z.date(),
   ended_at: z.date().nullable(),
   parent_session_id: z.string().nullable(),
-  // TODO(#1787-followup): TransitionTrigger is a type-only union.
-  // z.custom() provides no runtime validation. When DB parsing is enabled,
-  // replace with a refinement or const array exported from session-transitions.ts.
-  transition_reason: z.custom<TransitionTrigger>().nullable(),
-  ended_reason: z.custom<TransitionTrigger>().nullable(),
+  transition_reason: z.enum(SESSION_TRANSITION_REASONS).nullable(),
+  ended_reason: z.enum(SESSION_TRANSITION_REASONS).nullable(),
 });
 
 export type Session = z.infer<typeof sessionRowSchema>;

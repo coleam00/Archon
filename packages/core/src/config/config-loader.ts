@@ -14,11 +14,7 @@ import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-co
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
-import {
-  getArchonConfigPath,
-  getArchonWorkspacesPath,
-  getArchonWorktreesPath,
-} from '@archon/paths';
+import { getArchonConfigPath } from '@archon/paths';
 
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
@@ -566,10 +562,6 @@ function getDefaults(): MergedConfig {
     assistants: registeredAssistants,
     streaming,
     attentionNotices: [],
-    paths: {
-      workspaces: getArchonWorkspacesPath(),
-      worktrees: getArchonWorktreesPath(),
-    },
     concurrency: {
       maxConversations: 10,
     },
@@ -584,7 +576,6 @@ function getDefaults(): MergedConfig {
       autoLoad: true,
     },
     defaults: {
-      copyDefaults: true,
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
@@ -636,9 +627,6 @@ function applyEnvOverrides(
     if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
 
-  // Path overrides (these come from archon-paths.ts which already checks env vars)
-  // No need to re-apply here since getDefaults() uses those functions
-
   // Concurrency override
   const maxConcurrent = process.env.MAX_CONCURRENT_CONVERSATIONS;
   if (maxConcurrent) {
@@ -686,12 +674,6 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   }
 
   if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
-
-  // Path preferences
-  if (global.paths) {
-    if (global.paths.workspaces) result.paths.workspaces = global.paths.workspaces;
-    if (global.paths.worktrees) result.paths.worktrees = global.paths.worktrees;
-  }
 
   // Concurrency preferences
   if (global.concurrency?.maxConversations) {
@@ -752,7 +734,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   if (repo.defaults) {
     result.defaults = {
       ...result.defaults,
-      copyDefaults: repo.defaults.copyDefaults ?? result.defaults.copyDefaults,
       loadDefaultCommands: repo.defaults.loadDefaultCommands ?? result.defaults.loadDefaultCommands,
       loadDefaultWorkflows:
         repo.defaults.loadDefaultWorkflows ?? result.defaults.loadDefaultWorkflows,
@@ -1035,7 +1016,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     streaming: { ...config.streaming },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {
-      copyDefaults: config.defaults.copyDefaults,
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },

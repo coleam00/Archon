@@ -117,11 +117,6 @@ streaming:
 #   - platform: slack
 #     destination: C0123456789
 
-# Custom paths (usually not needed)
-paths:
-  workspaces: ~/.archon/workspaces
-  worktrees: ~/.archon/worktrees
-
 # Server-wide conversation admission
 # Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
 # Repository config cannot change this limit.

@@ -86,7 +86,6 @@ describe('workflow run config', () => {
       'container',
       'botName',
       'streaming',
-      'paths',
       'concurrency',
       'recommendedWorkflows',
     ]) {

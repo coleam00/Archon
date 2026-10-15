@@ -1189,7 +1189,7 @@ describe('POST /api/workflows/:name/run', () => {
     const invalidConfigs = [
       [{ configPath: '/etc/passwd' }, 'configPath is not supported'],
       [{ config: null }, "Invalid run config at 'document'"],
-      [{ config: { paths: { worktrees: '/tmp/other' } } }, "Run config key 'paths' cannot apply"],
+      [{ config: { paths: { worktrees: '/tmp/other' } } }, "Unknown run config key 'paths'"],
       [{ config: { unknown: true } }, "Unknown run config key 'unknown'"],
     ] as const;
     for (const [payload, expectedError] of invalidConfigs) {

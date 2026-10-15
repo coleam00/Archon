@@ -184,23 +184,6 @@ export interface GlobalConfig {
   attentionNotices?: AttentionNoticeRoute[];
 
   /**
-   * Directory preferences (usually not needed - defaults work well)
-   */
-  paths?: {
-    /**
-     * Override workspaces directory
-     * @default '~/.archon/workspaces'
-     */
-    workspaces?: string;
-
-    /**
-     * Override worktrees directory
-     * @default '~/.archon/worktrees'
-     */
-    worktrees?: string;
-  };
-
-  /**
    * Concurrency limits
    */
   concurrency?: {
@@ -316,14 +299,6 @@ export interface RepoConfig {
    */
   defaults?: {
     /**
-     * Copy bundled default commands and workflows on clone
-     * Set to false to skip copying defaults
-     * @default true
-     * @deprecated Use loadDefaultCommands/loadDefaultWorkflows instead
-     */
-    copyDefaults?: boolean;
-
-    /**
      * Load app's bundled default commands at runtime
      * Set to false to only use repo-specific commands
      * @default true
@@ -359,10 +334,6 @@ export interface MergedConfig {
   tiers?: RawTiersConfig;
   streaming: PlatformStreaming;
   attentionNotices: AttentionNoticeRoute[];
-  paths: {
-    workspaces: string;
-    worktrees: string;
-  };
   concurrency: {
     maxConversations: number;
   };
@@ -376,7 +347,6 @@ export interface MergedConfig {
     autoLoad: boolean;
   };
   defaults: {
-    copyDefaults: boolean;
     loadDefaultCommands: boolean;
     loadDefaultWorkflows: boolean;
   };
@@ -424,11 +394,7 @@ export interface SafeConfig {
   concurrency: {
     maxConversations: number;
   };
-  defaults: {
-    copyDefaults: boolean;
-    loadDefaultCommands: boolean;
-    loadDefaultWorkflows: boolean;
-  };
+  defaults: MergedConfig['defaults'];
   /** Configured small/medium/large tier presets (merged repo > global). */
   tiers?: RawTiersConfig;
   /**

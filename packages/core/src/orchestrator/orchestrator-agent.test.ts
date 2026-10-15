@@ -1495,7 +1495,6 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
     attentionNotices: [],
-    paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
@@ -1503,7 +1502,7 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
       quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
-    defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+    defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
     envVars: {},
     ...overrides,
   };
