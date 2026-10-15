@@ -17,6 +17,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   PR,
   gitCheckout,
+  reviewFixture,
   packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
@@ -150,7 +151,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const review = (report: string, ready: boolean): void => {
       through('review/scripts/publish-review', {
         inputs: {
-          INPUTS_TARGET: JSON.stringify({ pr: PR, base: 'dev' }),
+          INPUTS_TARGET: JSON.stringify(reviewFixture(CHECKOUT, HEAD_SHA).target),
           INPUTS_REPORT: '{ARTIFACTS}/report.md',
           INPUTS_HEAD: HEAD_SHA,
           ARCHON_NODE_EXECUTION: JSON.stringify({

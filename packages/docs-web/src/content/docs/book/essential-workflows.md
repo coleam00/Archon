@@ -181,7 +181,7 @@ archon workflow run archon-review --branch <PR-head-branch> --input scope=87
 
 Use the PR's head branch for a same-repository PR. The review checks the live PR head before any lens runs. If the checkout differs, it stops and prints retry commands. For a fork, use the displayed fetch command and pinned `--from` retry to review its head in a fresh worktree. Retain any other non-default review inputs when retrying.
 
-**What it produces**: A synthesized review report. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Leave `scope` empty to look up the current branch's open PR, or review the working diff when none exists. `scope` accepts a positive PR number, full PR URL, or exact branch name. When remotes name several repositories, use a full PR URL to select the repository explicitly.
+**What it produces**: A synthesized review report. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Leave `scope` empty to look up the current branch's open PR, or review the working diff when no PR is found. Forge queries that cannot be answered (for example, offline or without authentication) can also cause this fallback; use a full PR URL to require an explicit PR target. `scope` accepts a positive PR number, full PR URL, or exact branch name. When remotes name several repositories, use a full PR URL to select the repository explicitly.
 
 ---
 

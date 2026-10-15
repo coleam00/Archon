@@ -138,6 +138,25 @@ nodes:
         # is empty, the target the trigger message names. head-check resolves the PR
         # from it.
         selector: { type: string }
+        target: &review_target
+          type: object
+          properties:
+            pr:
+              type: [object, 'null']
+              properties:
+                repo:
+                  type: object
+                  properties:
+                    host: { type: string, pattern: '\S' }
+                    path: { type: string, pattern: '\S' }
+                  required: [host, path]
+                number: { type: integer, minimum: 1 }
+              required: [repo, number]
+            base: { type: [string, 'null'], pattern: '\S' }
+            head: { type: string, minLength: 1 }
+            merge_base: { type: [string, 'null'], pattern: '^(?:[a-f0-9]{40}|[a-f0-9]{64})$' }
+          required: [pr, base, head, merge_base]
+
         # The engine refuses this node when scope.md is missing or empty, so no
         # verdict is ever judged without its scope.
         report:
@@ -147,12 +166,9 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [selector, report]
+      required: [selector, target, report]
 
-  # Resolves the review target deterministically and refuses a PR whose head is not
-  # the commit under review, before any lens runs. Its output is the PR this round
-  # reviews and its base branch, both null for a working diff; publish writes to
-  # that PR and nothing else.
+  # Certifies the scope's target before review work and again at publication.
   - id: head-check
     script: check-review-head
     runtime: bun
@@ -160,23 +176,9 @@ nodes:
     with:
       scope: "$INPUTS.scope"
       selector: "$scope.output.selector"
+      target: { from: "$scope.output.target" }
       head: "$mode.output.head"
-    output_format:
-      type: object
-      properties:
-        pr:
-          type: [object, 'null']
-          properties:
-            repo:
-              type: object
-              properties:
-                host: { type: string, pattern: '\S' }
-                path: { type: string, pattern: '\S' }
-              required: [host, path]
-            number: { type: integer, minimum: 1 }
-          required: [repo, number]
-        base: { type: [string, 'null'], pattern: '\S' }
-      required: [pr, base]
+    output_format: *review_target
 
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. Every round
@@ -257,7 +259,7 @@ nodes:
   # agent can then tolerate specialist failures without also tolerating a failed
   # head check: synthesize separately requires head-check to have succeeded.
   - id: review-complete
-    bash: "true"
+    bash: 'true'
     depends_on: [head-check, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
 

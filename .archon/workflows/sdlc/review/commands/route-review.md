@@ -4,8 +4,7 @@ Decide which reviewers this round runs. This is a quick decision: read only what
 named here, run nothing (no tests, builds or checks), and do not modify any file. No
 one watches this run; your structured answer is all the next nodes read.
 
-- The diff summary against the change's base: `git diff --stat` and the hunks you
-  need. The requested scope (empty means the current branch's pull request or the
+- The certified target's diff summary (see below) and the hunks you need. The requested scope (empty means the current branch's pull request or the
   working diff): $INPUTS.scope
 - The work order (may be empty for a standalone review): $INPUTS.work_order. When it
   names a file such as `$ARTIFACTS_DIR/plan.md`, read that file's summary and steps,
@@ -43,3 +42,5 @@ Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`) and
 `reason`: one or two sentences citing what in the diff decided it. If you cannot read
 the diff, select every lens and say so in `reason`; never answer that no lens runs
 because a command failed.
+
+The certified reviewed target is `$head-check.output`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.

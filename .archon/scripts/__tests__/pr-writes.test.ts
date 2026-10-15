@@ -13,6 +13,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   PR,
   PR_URL,
+  reviewFixture,
   forgeOperation,
   forgeFailure,
   forgePrRecord,
@@ -315,8 +316,11 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
   return runPackScript('review/scripts/publish-review', {
     ...options,
     cwd,
+    preload: reviewFixture(cwd).preload + (options.preload ?? ''),
     inputs: {
       INPUTS_TARGET: JSON.stringify({
+        head: inputs.INPUTS_HEAD ?? REVIEWED,
+        merge_base: targetPr === 'null' ? null : reviewFixture(cwd).target.merge_base,
         pr: targetPr === undefined ? PR : JSON.parse(targetPr),
         base: targetBase === undefined ? 'dev' : JSON.parse(targetBase),
       }),
@@ -417,7 +421,11 @@ describe('publish-review keeps one canonical comment per pull request', () => {
           kind: 'fake',
           response: forgeOperation('pr.view', {
             pr: forgePrRecord(
-              change === 'retargeted' ? { base: 'main' } : change === 'identity' ? { number: 99 } : {}
+              change === 'retargeted'
+                ? { base: 'main' }
+                : change === 'identity'
+                  ? { number: 99 }
+                  : {}
             ),
           }),
         },
@@ -425,7 +433,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       expect(result.code).toBe(1);
       expect(result.forge).toHaveLength(1);
       expect(result.stderr).toContain(
-        change === 'identity' ? 'does not match' : 'retargeted from dev to main'
+        change === 'identity' ? 'does not match' : 'could not fetch PR base'
       );
       expect(result.gh).toEqual([]);
     });
@@ -436,7 +444,9 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       const cwd = gitCheckout({}, trackTempRoot);
       const preflight = runPackScript('review/scripts/check-review-head', {
         cwd,
+        preload: reviewFixture(cwd).preload,
         inputs: {
+          INPUTS_TARGET: JSON.stringify(reviewFixture(cwd).target),
           INPUTS_SCOPE: PR_URL,
           INPUTS_HEAD: REVIEWED,
           ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
@@ -452,7 +462,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain(
-        moved === 'head' ? 'pushed-after-preflight' : 'retargeted from dev to main'
+        moved === 'head' ? 'pushed-after-preflight' : 'could not fetch PR base'
       );
       expect(result.gh.some(call => call.includes('--method'))).toBe(false);
     });
@@ -462,7 +472,9 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     const cwd = gitCheckout({}, trackTempRoot);
     const preflight = runPackScript('review/scripts/check-review-head', {
       cwd,
+      preload: reviewFixture(cwd).preload,
       inputs: {
+        INPUTS_TARGET: JSON.stringify(reviewFixture(cwd).target),
         INPUTS_SCOPE: PR_URL,
         INPUTS_HEAD: REVIEWED,
         ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
@@ -472,7 +484,9 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     const git = (...args: string[]) =>
       spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout.trim();
     const unrelated = git('commit-tree', 'dev^{tree}', '-p', 'dev', '-m', 'unrelated base work');
-    expect(spawnSync('git', ['push', '-q', 'upstream', `${unrelated}:refs/heads/dev`], { cwd }).status).toBe(0);
+    expect(
+      spawnSync('git', ['push', '-q', 'upstream', `${unrelated}:refs/heads/dev`], { cwd }).status
+    ).toBe(0);
     const result = publishReview({ inputs: { ...report, INPUTS_TARGET: preflight.stdout }, cwd });
     expect(result.code).toBe(0);
     expect(result.gh.some(call => call.includes('--method POST'))).toBe(true);

@@ -85,7 +85,9 @@ test("archon-review's head-check pr schema admits exactly what parseQualifiedPr 
     { repo: { ...repo, path: '\t' }, number: 1 },
   ];
   const base = 'dev';
-  expect(validateStructuredOutput({ pr: null, base: null }, schema).valid).toBe(true);
+  expect(
+    validateStructuredOutput({ pr: null, base: null, head: 'head', merge_base: null }, schema).valid
+  ).toBe(true);
   const verdicts = candidates.map(pr => {
     let parserAccepts = true;
     try {
@@ -96,7 +98,10 @@ test("archon-review's head-check pr schema admits exactly what parseQualifiedPr 
     return {
       pr,
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ pr, base }, schema).valid,
+      schemaAccepts: validateStructuredOutput(
+        { pr, base, head: 'head', merge_base: 'a'.repeat(40) },
+        schema
+      ).valid,
     };
   });
 

@@ -7,17 +7,11 @@
  * nothing. The verdict passes through unchanged either way: publication is not
  * what makes a review true.
  *
- * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. Its base branch must also still be the one head-check recorded:
- * a retarget changes the diff. Any mismatch refuses, so a verdict about one commit
- * can never stand as the verdict on another. This node stamps that commit on the comment
- * itself rather than trusting the report's text to name it. Once published, the
- * commit is recorded beside the report as the next round's cursor.
+ * Publication rechecks the scoped PR identity, head and effective merge-base.
+ * A base may advance without changing the diff; only a changed diff refuses.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_TARGET: head-check's output: the PR this round reviewed and its base
- *   branch, both null for a working diff. The PR is the only write target.
+ * - INPUTS_TARGET: the scoped target certified by head-check; the only write target.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -33,9 +27,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import { forgeSource, parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import { reviewHead } from '../../.shared/review-target.ts';
+import { parseReviewTarget, reviewHead, reviewMergeBase } from '../../.shared/review-target.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
@@ -63,10 +57,10 @@ try {
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
     contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
-  const target = record(JSON.parse(text(process.env.INPUTS_TARGET)));
-  if (!target) throw new Error('missing review target');
-  const pr = target.pr === null ? undefined : parseQualifiedPr(JSON.stringify(target.pr));
+  const target = parseReviewTarget(text(process.env.INPUTS_TARGET));
+  const pr = target.pr;
   const head = text(process.env.INPUTS_HEAD).trim();
+  if (target.head !== head) throw new Error("review target does not match this round's head");
   const reportPath = text(process.env.INPUTS_REPORT);
   const report = readFileSync(reportPath, 'utf8');
   if (report.trim() === '') throw new Error('the review report is empty');
@@ -84,10 +78,8 @@ try {
         `this round reviewed ${head}, but ${label(pr)} is at ${remote}: the commits under review were not pushed`
       );
     }
-    if (live.base !== target.base) {
-      throw new Error(
-        `${label(pr)} was retargeted from ${String(target.base)} to ${live.base} after head-check; review the new diff`
-      );
+    if (reviewMergeBase(live, head) !== target.merge_base) {
+      throw new Error(`${label(pr)} effective PR diff changed after scope; review the new diff`);
     }
     const comment = upsertComment(
       { kind: 'pr', ref: pr },

@@ -48,6 +48,8 @@ export interface GhFake {
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
   readonly pr?: GhPr;
+  /** Qualified repository -> listed PRs; omitted repositories answer with no matches. */
+  readonly listedPrs?: Readonly<Record<string, readonly GhPr[]>>;
   /** No pull request matches `gh pr list --head` until one is created. */
   readonly noOpenPr?: boolean;
   /** stderr for a refused `gh pr list`, as when gh cannot query the remote's host. */
@@ -134,7 +136,11 @@ export interface ScriptRun {
   /** Every comment the fake gh wrote, with the issue or pull request it is on. */
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
   /** Every issue state change the fake gh received. */
-  readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
+  readonly closes: readonly {
+    readonly number: number;
+    readonly state: string;
+    readonly state_reason: string;
+  }[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
@@ -171,13 +177,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   const path = selector.split('/').slice(1).join('/');
   const owner = path.split('/')[0];
   const name = path.split('/')[1];
-  const project = () => {
+  const project = (candidate = pr) => {
     const fields = argv[argv.indexOf('--json') + 1].split(',');
     const row = {
       url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
       headRepository: { name },
       headRepositoryOwner: { login: owner },
       ...pr,
+      ...candidate,
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
@@ -241,6 +248,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr list')) {
     if (fake.listFail !== undefined) return result(1, '', fake.listFail);
+    if (fake.listedPrs !== undefined) {
+      const rows = (fake.listedPrs[selector] ?? []).filter(row => row.state === 'OPEN' && row.headRefName === argv[argv.indexOf('--head') + 1]);
+      return result(0, JSON.stringify(rows.map(project)));
+    }
     // gh applies the head and state filters server side.
     const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
     if (!listed) return result(0, '[]');
@@ -464,7 +475,9 @@ else {
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
     createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
-    comments: lines(`${ghLog}.comments`).map(line => JSON.parse(line) as ScriptRun['comments'][number]),
+    comments: lines(`${ghLog}.comments`).map(
+      line => JSON.parse(line) as ScriptRun['comments'][number]
+    ),
     closes: lines(`${ghLog}.closes`).map(line => JSON.parse(line) as ScriptRun['closes'][number]),
     artifacts,
   };
@@ -550,4 +563,22 @@ export function forgeFailure(
     error: { kind: 'forge_error', message },
     mutation: { op, target: PR, outcome, ...extra },
   });
+}
+
+/** Synthetic forge revisions stand in for HEAD in tests of the head comparison. */
+export const reviewGitPreload = `
+const spawnReview = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  if (argv[0] === 'git' && argv[1] === 'merge-base') {
+    argv = argv.map(arg => arg === 'deadbeef' ? 'HEAD' : arg);
+  }
+  return spawnReview(argv, settings);
+} });
+`;
+
+export function reviewFixture(cwd: string, head = 'deadbeef') {
+  return {
+    target: { pr: PR, base: 'dev', head, merge_base: git(cwd, 'merge-base', 'dev', 'HEAD') },
+    preload: reviewGitPreload,
+  };
 }

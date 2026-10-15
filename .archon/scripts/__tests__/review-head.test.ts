@@ -11,6 +11,8 @@ import {
   packScriptRunner,
   PR,
   PR_URL,
+  reviewFixture,
+  reviewGitPreload,
   type ScriptOptions,
 } from './deliver-checks-harness';
 
@@ -25,7 +27,11 @@ function check(options: ScriptOptions = {}) {
   return runPackScript('review/scripts/check-review-head', {
     ...options,
     cwd,
+    preload: reviewGitPreload + (options.preload ?? ''),
     inputs: {
+      INPUTS_TARGET:
+        options.inputs?.INPUTS_TARGET ??
+        JSON.stringify(reviewFixture(cwd, options.inputs?.INPUTS_HEAD ?? HEAD).target),
       INPUTS_SCOPE: PR_URL,
       INPUTS_SELECTOR: PR_URL,
       INPUTS_HEAD: HEAD,
@@ -35,8 +41,7 @@ function check(options: ScriptOptions = {}) {
   });
 }
 
-/** The PR and base branch a passing check hands to publication. */
-const PR_TARGET = { pr: PR, base: 'dev' };
+const PR_TARGET = { pr: PR, base: 'dev', head: HEAD };
 
 function view(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,7 +56,7 @@ describe('review head boundary', () => {
       const cwd = gitCheckout({}, track);
       const run = check({ cwd, source, forge: view() });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
+      expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
     });
     it(`refuses a different live head through ${source} before lenses, with retry commands`, () => {
       const cwd = gitCheckout({}, track);
@@ -81,6 +86,7 @@ describe('review head boundary', () => {
         it(`retains the mismatch and pinned retry for ${source}, ${fork ? 'fork' : 'same-repository'} head, and ${failure} remotes`, () => {
           const cwd = gitCheckout({}, track);
           const headRepo = fork ? { ...PR.repo, path: 'contributor/repo' } : PR.repo;
+          const scoped = reviewFixture(cwd).target;
           if (failure === 'ambiguous') {
             git(cwd, 'remote', 'add', 'alias', `https://${PR.repo.host}/${PR.repo.path}.git`);
           } else {
@@ -89,6 +95,7 @@ describe('review head boundary', () => {
           const run = check({
             cwd,
             source,
+            inputs: { INPUTS_TARGET: JSON.stringify(scoped) },
             gh: {
               pr: {
                 headRefOid: 'newhead',
@@ -146,10 +153,19 @@ describe('review head boundary', () => {
       const run = check({
         cwd,
         gh: { noOpenPr: true },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+        inputs: {
+          INPUTS_SCOPE: '',
+          INPUTS_SELECTOR: '',
+          INPUTS_TARGET: JSON.stringify({ pr: null, base: null, head: HEAD, merge_base: null }),
+        },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
+      expect(JSON.parse(run.stdout)).toEqual({
+        pr: null,
+        base: null,
+        head: HEAD,
+        merge_base: null,
+      });
       expect(run.stderr).toContain('working diff');
     });
   }
@@ -160,10 +176,19 @@ describe('review head boundary', () => {
         source,
         gh: { listFail: 'none of the git remotes configured point to a known GitHub host' },
         forge: { kind: 'fake' },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+        inputs: {
+          INPUTS_SCOPE: '',
+          INPUTS_SELECTOR: '',
+          INPUTS_TARGET: JSON.stringify({ pr: null, base: null, head: HEAD, merge_base: null }),
+        },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
+      expect(JSON.parse(run.stdout)).toEqual({
+        pr: null,
+        base: null,
+        head: HEAD,
+        merge_base: null,
+      });
       expect(run.stderr).toContain(
         `Open-PR discovery could not query ${PR.repo.host}/${PR.repo.path}: `
       );
@@ -188,16 +213,11 @@ describe('review head boundary', () => {
       inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
       forge: {
         kind: 'fake',
-        response: [
-          forgeOperation('pr.view', { pr: forgePrRecord() }),
-          failed,
-          failed,
-          failed,
-        ],
+        response: [forgeOperation('pr.view', { pr: forgePrRecord() }), failed, failed, failed],
       },
     });
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
+    expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
     expect(run.stderr).toContain('Open-PR discovery could not query');
   });
 
@@ -227,6 +247,32 @@ describe('review head boundary', () => {
       headRepo: fork,
       head: 'feature',
     });
+  });
+
+  it('discovers a GitHub fork PR only listed in the upstream repository', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'remote', 'add', 'fork', `https://${PR.repo.host}/contributor/repo.git`);
+    const run = check({
+      cwd,
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+      gh: {
+        listedPrs: {
+          [`${PR.repo.host}/${PR.repo.path}`]: [
+            {
+              number: 42,
+              headRefName: 'feature',
+              headRefOid: HEAD,
+              baseRefName: 'dev',
+              state: 'OPEN',
+              headRepository: { name: 'repo' },
+              headRepositoryOwner: { login: 'contributor' },
+            },
+          ],
+        },
+      },
+    });
+    expect(run.code, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual(reviewFixture(cwd).target);
   });
 
   it('requires an explicit selector when empty-scope discovery finds several PRs', () => {
@@ -336,7 +382,7 @@ describe('review head boundary', () => {
             inputs: { INPUTS_SCOPE: scope, INPUTS_SELECTOR: scope },
           });
           expect(run.code).toBe(matching ? 0 : 1);
-          if (matching) expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
+          if (matching) expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
           else {
             expect(run.stderr).toContain(`the checkout is at ${HEAD}, but`);
             expect(run.stderr).toContain(
@@ -370,10 +416,19 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+        inputs: {
+          INPUTS_SCOPE: '',
+          INPUTS_SELECTOR: '',
+          INPUTS_TARGET: JSON.stringify({ pr: null, base: null, head: HEAD, merge_base: null }),
+        },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
+      expect(JSON.parse(run.stdout)).toEqual({
+        pr: null,
+        base: null,
+        head: HEAD,
+        merge_base: null,
+      });
     });
   }
 
@@ -692,9 +747,10 @@ console.log(response);
             errors: false,
             docs: continuation,
           };
-          // The scope agent declares no PR; head-check resolves it from the inputs.
+          // The scope pins the diff before the live preflight runs.
           stubs.scope = {
             selector: scenario === 'erased-selector' ? '' : selector,
+            target: { ...reviewFixture(cwd, head).target, pr: target },
             report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
           };
           const result = await dryRunWorkflow({
@@ -806,6 +862,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
         };
         stubs['rereview__scope'] = {
           selector: PR_URL,
+          target: reviewFixture(cwd, head).target,
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
         };
         const result = await dryRunWorkflow({

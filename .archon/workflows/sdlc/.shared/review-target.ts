@@ -181,3 +181,54 @@ export function reviewHead(pr: PrRecord): string {
     );
   }
 }
+
+export type ReviewTarget =
+  | { pr: QualifiedPr; base: string; head: string; merge_base: string }
+  | { pr: null; base: null; head: string; merge_base: null };
+
+export function parseReviewTarget(value: string): ReviewTarget {
+  const target = record(JSON.parse(value));
+  if (!target || typeof target.head !== 'string' || !target.head.trim()) {
+    throw new Error('missing reviewed target head');
+  }
+  if (target.pr === null && target.base === null && target.merge_base === null) {
+    return { pr: null, base: null, head: target.head, merge_base: null };
+  }
+  if (
+    typeof target.base !== 'string' ||
+    !target.base.trim() ||
+    typeof target.merge_base !== 'string' ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(target.merge_base)
+  ) {
+    throw new Error('missing reviewed PR base or merge-base');
+  }
+  return {
+    pr: parseQualifiedPr(JSON.stringify(target.pr)),
+    base: target.base,
+    head: target.head,
+    merge_base: target.merge_base,
+  };
+}
+
+/** Fetch the live base; a stale local branch cannot establish the current PR diff. */
+export function reviewMergeBase(pr: PrRecord, head: string): string {
+  const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
+  const fetched = git('fetch', '--no-tags', '--', remote, `refs/heads/${pr.base}`);
+  if (fetched.code !== 0) {
+    throw new Error(
+      `could not fetch PR base ${pr.repo.host}/${pr.repo.path}:${pr.base}: ${fetched.stderr}`
+    );
+  }
+  const merged = git('merge-base', '--all', 'FETCH_HEAD', head);
+  const revisions = merged.stdout.split('\n');
+  if (
+    merged.code !== 0 ||
+    revisions.length !== 1 ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revisions[0] ?? '')
+  ) {
+    throw new Error(
+      'could not establish one effective PR merge-base; review requires an unambiguous diff'
+    );
+  }
+  return revisions[0];
+}

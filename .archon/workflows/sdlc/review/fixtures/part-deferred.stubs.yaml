@@ -7,7 +7,14 @@ head-check:
   base: null
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
+  head: fixturehead
+  merge_base: null
 scope:
+  target:
+    base: null
+    pr: null
+    head: fixturehead
+    merge_base: null
   selector: ""
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 docs: "0 findings"

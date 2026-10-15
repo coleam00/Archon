@@ -5,7 +5,14 @@ review__route: { seams: true, code: true, tests: true, errors: true, docs: true,
 review__head-check:
   base: null
   pr: null
+  head: fixturehead
+  merge_base: null
 review__scope:
+  target:
+    base: null
+    pr: null
+    head: fixturehead
+    merge_base: null
   selector: ""
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"

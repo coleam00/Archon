@@ -33,7 +33,7 @@ trigger message and returns a selector, `head-check` resolves the PR from the
 explicit nonempty `scope` input, using the agent's selector only when that input
 is empty. It never reads the agent's opinion of whether a PR is in scope. It
 compares the live PR head with the commit fixed by `mode`, before routing or
-lenses, and outputs the PR with its base branch. When the
+lenses, and certifies the scope's qualified PR, head and effective merge-base. When the
 forge omits the head revision, the check reads the retained PR ref from the base
 repository. If that lookup fails or the ref is absent, it stops with the missing
 prerequisite and no retry command. A resolved mismatch stops with a retained-ref
@@ -42,10 +42,9 @@ open same-repository PR with a forge-provided revision also gets a branch retry.
 The check never changes the checkout. Keep other non-default review inputs when retrying.
 Publication writes only to the PR `head-check` output and checks again before its
 write, using the same retained-ref lookup for an absent forge revision, because
-the PR can move while the lenses run. It also refuses when the PR was retargeted
-to another base branch after `head-check`, so the new diff needs a new review. New
-commits on the same base branch do not refuse: the review's diff starts at the
-merge-base, which they do not move. With an empty `scope` and selector, a forge
+the PR can move while the lenses run. It fetches the live base and refuses if the effective merge-base differs from
+the scoped target, including after a retarget or same-branch base advance. Base
+changes that preserve the merge-base preserve the diff and can still publish. With an empty `scope` and selector, a forge
 that cannot answer for a remote (another host, no auth, offline) leaves the
 working diff, with a note naming the remote. Working-diff reviews need no forge
 head comparison.

@@ -14,7 +14,14 @@ review__route: { seams: true, code: true, tests: true, errors: false, docs: fals
 review__head-check:
   base: dev
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  head: fixturehead
+  merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 review__scope:
+  target:
+    base: dev
+    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+    head: fixturehead
+    merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   selector: "https://github.com/example/repo/pull/1"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
@@ -47,7 +54,21 @@ rereview__mode: '{"continuation":true,"light":true,"head":"fixturehead2","cursor
 rereview__head-check:
   base: dev
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  head: fixturehead
+  merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  head: fixturehead
+  merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 rereview__scope:
+  target:
+    base: dev
+    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+    head: fixturehead
+    merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  target:
+    base: dev
+    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+    head: fixturehead
+    merge_base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   selector: "https://github.com/example/repo/pull/1"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 rereview__code: "0 findings in the reshape delta"
