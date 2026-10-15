@@ -5,8 +5,8 @@ import * as sqlIsolation from '@archon/core/db/isolation-environments';
  *
  * The identifier becomes the child's branch name and its
  * `isolation_environments.workflow_id`. `WorktreeProvider.create()` ADOPTS an
- * existing worktree at the computed path with an INFO log and no error, so a
- * collision does not fail — it silently hands two children one checkout. These
+ * existing worktree at the computed path with a WARN log and no error, so a
+ * collision does not fail — it hands two children one checkout. These
  * tests pin the key at the granularity of the thing it names.
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
@@ -342,10 +342,6 @@ describe('child worktree resolver', () => {
   });
 
   test('a re-used worktree is recorded without a creation proof on the environment row', async () => {
-    // Adoption is legitimate here — it is how a parent's resume recovers a worktree
-    // whose child row never got written — but it must never pass unremarked, because
-    // silence is exactly what made the identifier collision invisible. The row's null
-    // creation id is the durable half of that signal (a WARN is emitted alongside it).
     nextCreateAdopts = true;
 
     const result = await resolver.resolve({
@@ -355,7 +351,14 @@ describe('child worktree resolver', () => {
       codebaseId: 'cb-1',
     });
 
-    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.worktree_creation_id).toBeNull();
+    expect(mockIsolationDbCreate).toHaveBeenCalledTimes(1);
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata).toMatchObject({
+      adopted: true,
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+      parent_run_id: PARENT_RUN_ID,
+      child_index: 0,
+    });
     expect(result.ownedWorktree).toBeUndefined();
   });
 

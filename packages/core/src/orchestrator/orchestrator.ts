@@ -29,7 +29,7 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 import { IPlatformAdapter, Conversation, Codebase, ConversationNotFoundError } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
-import type { AdoptionLane } from '../operations/workflow-adoption';
+import { adoptRegisteredWorktree, type AdoptionLane } from '../operations/workflow-adoption';
 import { IsolationBlockedError, IsolationResolver, getIsolationProvider } from '@archon/isolation';
 import * as db from '../db/conversations';
 import { createIsolationStore } from '../db/isolation-environments';
@@ -337,6 +337,24 @@ async function dispatchBackgroundWorkflowOwned(
 ): Promise<void> {
   const workflowDeps = createWorkflowDeps();
   const engine = new InProcessWorkflowEngine(workflowDeps);
+  const codebase = ctx.codebaseId ? await getCodebase(ctx.codebaseId) : null;
+  if (ctx.codebaseId && !codebase) {
+    throw new Error(
+      `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
+    );
+  }
+  if (
+    ctx.adoptionLane?.kind === 'reuse-worktree' &&
+    (!codebase || workflow.worktree?.enabled === false)
+  ) {
+    throw new Error(
+      'Cannot adopt a worktree without a registered project and worktree-enabled workflow'
+    );
+  }
+  const adoptedEnvironment =
+    ctx.adoptionLane?.kind === 'reuse-worktree' && codebase
+      ? await adoptRegisteredWorktree(sqlIsolation, ctx.adoptionLane, codebase.default_cwd)
+      : undefined;
   const prepare = async (
     preflightCwd: string
   ): Promise<
@@ -402,8 +420,7 @@ async function dispatchBackgroundWorkflowOwned(
     // Adoption stays on its declared estate.
     const launchConfigCwd = ctx.adoptionLane
       ? preflightCwd
-      : ((ctx.codebaseId ? (await getCodebase(ctx.codebaseId))?.default_cwd : undefined) ??
-        preflightCwd);
+      : (codebase?.default_cwd ?? preflightCwd);
     const preparedAiConfiguration = await prepareRunAiConfiguration(
       workflowDeps,
       workflow,
@@ -424,8 +441,7 @@ async function dispatchBackgroundWorkflowOwned(
 
     return { workflow, preparedSource, preparedAiConfiguration };
   };
-  const preflightCwd =
-    ctx.adoptionLane?.kind === 'reuse-worktree' ? ctx.adoptionLane.workingPath : ctx.cwd;
+  const preflightCwd = adoptedEnvironment?.working_path ?? ctx.cwd;
   const prepared =
     ctx.adoptionLane?.kind === 'checkout-branch'
       ? await withBranchLaunchSource(ctx.cwd, ctx.adoptionLane.taskBranch.branch, prepare)
@@ -525,13 +541,7 @@ async function dispatchBackgroundWorkflowOwned(
     let workerOwnedWorktree: OwnedWorktree | undefined;
     let codebaseBaseBranch: string | undefined;
     let resolveChildIsolation: ReturnType<typeof createCodebaseChildResolver>;
-    if (ctx.codebaseId) {
-      const codebase = await getCodebase(ctx.codebaseId);
-      if (!codebase) {
-        throw new Error(
-          `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
-        );
-      }
+    if (codebase) {
       codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
       resolveChildIsolation = createCodebaseChildResolver(
         sqlIsolation.createIsolationStore(),
@@ -543,7 +553,7 @@ async function dispatchBackgroundWorkflowOwned(
         },
         workflowDeps
       );
-      if (workflow.worktree?.enabled === false) {
+      if (workflow.worktree?.enabled === false && !adoptedEnvironment) {
         // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
         getLog().info(
           {
@@ -554,15 +564,15 @@ async function dispatchBackgroundWorkflowOwned(
           'workflow.worktree_disabled_by_policy'
         );
         workerCwd = ctx.cwd;
-      } else if (ctx.adoptionLane?.kind === 'reuse-worktree') {
+      } else if (adoptedEnvironment) {
         // Adoption lane 2: the adopted run's worktree survives — inherit it dirty-as-is
         // instead of cutting a fresh one from base. Linking the env keeps standard
         // isolation hygiene (list/cleanup/complete) pointed at this checkout.
-        workerCwd = ctx.adoptionLane.workingPath;
+        workerCwd = adoptedEnvironment.working_path;
         await db
           .updateConversation(workerConv.id, {
             cwd: workerCwd,
-            ...(ctx.adoptionLane.envId ? { isolation_env_id: ctx.adoptionLane.envId } : {}),
+            isolation_env_id: adoptedEnvironment.id,
           })
           .catch((e: unknown) => {
             getLog().warn(

@@ -1,3 +1,5 @@
+import type { AdoptionLane } from '@archon/core/operations/workflow-adoption';
+import { toBranchName } from '@archon/git';
 import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
 import { PROVIDER_EVENT_ROW_TYPES, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
@@ -598,6 +600,7 @@ class MockCanonicalRepoPathUnavailableError extends Error {
 }
 
 mock.module('@archon/git', () => ({
+  verifyWorktreeOwnership: mock(async () => {}),
   findRepoRoot: mock(() => Promise.resolve(null)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
   getGitCheckoutIdentity: mock((path: string) =>
@@ -641,6 +644,7 @@ mock.module('@archon/core/db/codebases', () => ({
 
 mock.module('@archon/core/db/isolation-environments', () => ({
   createIsolationStore: mock(() => ({})),
+  updateMetadata: mock(async () => {}),
   getById: mock((): Promise<null> => Promise.resolve(null)),
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
@@ -4171,6 +4175,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4188,6 +4193,15 @@ describe('workflowRunCommand', () => {
         branchName: 'my-feature',
       });
       expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
+      expect(isolationDb.updateMetadata).toHaveBeenCalledWith(
+        'env-1',
+        { adopted: true },
+        expect.objectContaining({ id: 'env-1' })
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ envId: 'env-1' }),
+        'worktree_adopted'
+      );
     } finally {
       consoleWarnSpy.mockRestore();
     }
@@ -4215,6 +4229,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4270,6 +4285,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4322,6 +4338,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-valid',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4380,6 +4397,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -8661,7 +8679,10 @@ describe('workflowRunCommand — detach', () => {
     ]);
     (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/test/worktree' },
-      lane: { kind: 'reuse-worktree', workingPath: '/test/worktree' },
+      lane: {
+        kind: 'reuse-worktree',
+        environment: { id: 'env-detached', working_path: '/test/worktree' },
+      },
     });
 
     const child = createDetachedChildFixture();
@@ -14019,17 +14040,27 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     consoleSpy.mockRestore();
   });
 
+  function adoptedEnvironment(): import('@archon/isolation').IsolationEnvironmentRow {
+    return {
+      id: 'env-9',
+      codebase_id: 'cb-adopt',
+      workflow_type: 'task',
+      workflow_id: 'adopt',
+      provider: 'worktree',
+      working_path: '/wt/adopted',
+      branch_name: 'feature/adopted',
+      status: 'active',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      created_by_platform: 'cli',
+      created_by_user_id: null,
+    };
+  }
+
   function setupAdoptMocks(
-    lane:
-      | {
-          kind: 'reuse-worktree';
-          workingPath: string;
-          envId?: string;
-        }
-      | { kind: 'checkout-branch'; taskBranch: { kind: 'existing'; branch: string } } = {
+    lane: Exclude<AdoptionLane, { kind: 'in-place' }> = {
       kind: 'reuse-worktree',
-      workingPath: '/wt/adopted',
-      envId: 'env-9',
+      environment: adoptedEnvironment(),
     }
   ): void {
     const discoverMock = require('@archon/workflows/workflow-discovery')
@@ -14069,6 +14100,13 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       kind: 'repo',
     });
 
+    if (lane.kind === 'reuse-worktree') {
+      (
+        require('@archon/core/db/isolation-environments').getById as ReturnType<typeof mock>
+      ).mockResolvedValueOnce({
+        ...lane.environment,
+      });
+    }
     const adoption = require('@archon/core/operations/workflow-adoption');
     (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: 'run-old' },
@@ -14195,8 +14233,52 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
+  it.each(['missing', 'mismatched', 'replaced'] as const)(
+    'refuses a %s adoption environment before lane capture or execution',
+    async reason => {
+      setupAdoptMocks();
+      const isolationDb = await import('@archon/core/db/isolation-environments');
+      const getById = isolationDb.getById as ReturnType<typeof mock>;
+      getById.mockReset();
+      getById.mockResolvedValueOnce(
+        reason === 'missing'
+          ? null
+          : reason === 'replaced'
+            ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
+            : {
+                id: 'env-9',
+                provider: 'worktree',
+                working_path: '/foreign/worktree',
+                metadata: {},
+              }
+      );
+      (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
+      const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockClear();
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+          adoptRunId: 'run-old',
+        })
+      ).rejects.toThrow(
+        reason === 'missing'
+          ? 'Isolation environment env-9 not found'
+          : reason === 'replaced'
+            ? 'changed during adoption'
+            : 'does not match'
+      );
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
+      const captures = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls;
+      expect(
+        captures.every(call => (call[1] as { sourceRoot: string }).sourceRoot === '/test/path')
+      ).toBe(true);
+    }
+  );
+
   it('re-freezes workflow source from the inherited worktree on the reuse-worktree lane', async () => {
     setupAdoptMocks();
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
     const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
@@ -14211,12 +14293,15 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     const executed = (executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1) as unknown[];
     expect((executed[4] as { description: string }).description).toBe('Branch vintage');
     expect(executed[3]).toBe('/wt/adopted');
+    expect((isolationDb.updateMetadata as ReturnType<typeof mock>).mock.calls).toEqual([
+      ['env-9', { adopted: true }, expect.objectContaining({ id: 'env-9' })],
+    ]);
   });
 
   it('checks out the exact adopted branch when the prior worktree is gone', async () => {
     setupAdoptMocks({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+      taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
     });
     const isolation = await import('@archon/isolation');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -14243,7 +14328,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowType: 'task',
-        taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+        taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
       }),
       expect.any(Function)
     );
@@ -14256,7 +14341,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   it('preserves an explicit source when adoption recreates the prior branch checkout', async () => {
     setupAdoptMocks({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+      taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
     });
     const isolation = await import('@archon/isolation');
     const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');

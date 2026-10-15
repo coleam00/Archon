@@ -2,6 +2,10 @@ import { WorktreeUncommittedChangesError } from '../errors';
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { basename, join, resolve } from 'node:path';
 
+const mockWarn = mock<(...args: unknown[]) => void>(() => undefined);
+const adoptionWarnings = () =>
+  mockWarn.mock.calls.filter(([, event]) => event === 'worktree_adopted');
+
 // Fixed test home — path assertions use this constant; no duplication of production isDocker() logic.
 const TEST_ARCHON_HOME = '/test/.archon';
 
@@ -14,7 +18,7 @@ mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
     error: () => undefined,
-    warn: () => undefined,
+    warn: mockWarn,
     info: () => undefined,
     debug: () => undefined,
     trace: () => undefined,
@@ -118,6 +122,7 @@ describe('WorktreeProvider', () => {
   let readWorktreeRegistrationSpy: Mock<typeof git.readWorktreeRegistration>;
 
   beforeEach(() => {
+    mockWarn.mockClear();
     mockConfigLoader = async (): Promise<{ baseBranch: git.BranchName }> => ({
       baseBranch: git.toBranchName('main'),
     });
@@ -380,6 +385,7 @@ describe('WorktreeProvider', () => {
       const env = await provider.create(baseRequest);
 
       expect(env.metadata).toMatchObject({ adopted: false, cutFromCommit: cutFrom });
+      expect(adoptionWarnings()).toHaveLength(0);
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         ['-C', env.workingPath, 'rev-parse', '--verify', 'HEAD^{commit}'],
@@ -526,6 +532,7 @@ describe('WorktreeProvider', () => {
 
       expect(env.branchName).toBe(git.toBranchName('feature/live-pr'));
       expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      expect(adoptionWarnings()).toHaveLength(1);
       // Adoption continues an existing branch; it never claims a cut-from commit.
       expect(Object.hasOwn(env.metadata, 'cutFromCommit')).toBe(false);
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
@@ -598,6 +605,7 @@ describe('WorktreeProvider', () => {
       );
       expect(env.workingPath).toBe('/external/worktrees/feature-live-pr');
       expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      expect(adoptionWarnings()).toHaveLength(1);
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     });
 
@@ -881,6 +889,14 @@ describe('WorktreeProvider', () => {
       const env = await provider.create(baseRequest);
 
       expect(env.metadata).toHaveProperty('adopted', true);
+      expect(adoptionWarnings()).toHaveLength(1);
+      expect(adoptionWarnings()[0][0]).toMatchObject({
+        worktreePath: env.workingPath,
+        branchName: env.branchName,
+        codebaseId: baseRequest.codebaseId,
+        workflowType: baseRequest.workflowType,
+        identifier: baseRequest.identifier,
+      });
       expect(env.workingPath).toContain('issue-42');
 
       // Verify no git worktree add was called
@@ -904,6 +920,7 @@ describe('WorktreeProvider', () => {
       );
 
       expect((error as Error).message).toMatch(/its setup did not finish/);
+      expect(adoptionWarnings()).toHaveLength(0);
       // The operator is told which checkout and the command that clears it.
       const worktreePath = provider.getWorktreePath(baseRequest, 'archon/issue-42');
       expect(classifyIsolationError(error as Error)).toContain(
@@ -1076,6 +1093,7 @@ describe('WorktreeProvider', () => {
       expect(env.workingPath).toBe('/workspace/worktrees/repo/feature-auth');
       expect(env.metadata).toHaveProperty('adopted', true);
       expect(env.metadata).toHaveProperty('adoptedFrom', 'branch');
+      expect(adoptionWarnings()).toHaveLength(1);
 
       // Verify no git commands for worktree creation
       const addCalls = execSpy.mock.calls.filter((call: unknown[]) => {
@@ -1107,6 +1125,7 @@ describe('WorktreeProvider', () => {
       );
 
       await expect(provider.create(request)).rejects.toThrow(/belongs to a different clone/);
+      expect(adoptionWarnings()).toHaveLength(0);
     });
 
     test('checks out an existing issue branch as it is', async () => {
@@ -1639,6 +1658,7 @@ describe('WorktreeProvider', () => {
       expect(adopted.workingPath).toBe(winningPath);
       expect(adopted.branchName).toBe(git.toBranchName('pr-42-review'));
       expect(adopted.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      expect(adoptionWarnings()).toHaveLength(1);
       expect(worktreeListCount).toBe(3);
       expect(findWorktreeByBranchSpy).not.toHaveBeenCalled();
       expect(worktreeAddCount).toBe(2);
@@ -1692,6 +1712,7 @@ describe('WorktreeProvider', () => {
           throw new Error('DB constraint violation');
         },
         updateStatus: async () => undefined,
+        updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,
       };
       const resolver = new IsolationResolver({ store, provider: losingProvider });
@@ -3026,6 +3047,7 @@ describe('WorktreeProvider', () => {
       expect(result?.provider).toBe('worktree');
       expect(result?.branchName).toBe(git.toBranchName('feature/auth'));
       expect(result?.metadata).toHaveProperty('adopted', true);
+      expect(adoptionWarnings()).toHaveLength(1);
     });
 
     test('public adoption rejects a required trust-write failure', async () => {
