@@ -1,0 +1,187 @@
+// @archon-test-isolated
+import { afterAll, afterEach, beforeEach, expect, mock, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { toBranchName, toRepoPath } from '@archon/git';
+import { configureIsolation } from '@archon/isolation';
+import { getLogLevel, setLogLevel, setLogSink } from '@archon/paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
+
+const db = new SqliteAdapter(':memory:');
+mock.module('../db/connection', () => ({
+  pool: db,
+  getDatabase: () => db,
+  getDialect: () => sqliteDialect,
+  getDatabaseType: () => 'sqlite',
+}));
+const isolation = await import('../db/isolation-environments');
+const { createRegisteredWorktree } = await import('./registered-worktree');
+const { createCodebaseChildResolver } = await import('./child-isolation-resolver');
+const originalEnv = {
+  ARCHON_HOME: process.env.ARCHON_HOME,
+  GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+};
+const originalLevel = getLogLevel();
+const events: Record<string, unknown>[] = [];
+let root: string;
+let repo: string;
+let codebaseId: string;
+
+function git(...args: string[]): string {
+  return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+}
+
+beforeEach(async () => {
+  root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-adoption-'))));
+  process.env.ARCHON_HOME = join(root, 'home');
+  process.env.GIT_CONFIG_GLOBAL = join(root, 'gitconfig');
+  setLogLevel('info');
+  setLogSink(line => events.push(JSON.parse(line)));
+  repo = join(root, 'repo');
+  await mkdir(repo);
+  git('init', '-q', '-b', 'dev');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('commit', '--allow-empty', '-qm', 'seed');
+  const remote = join(root, 'remote.git');
+  git('init', '--bare', '-q', remote);
+  git('remote', 'add', 'origin', remote);
+  git('push', '-q', 'origin', 'dev');
+  await mkdir(join(repo, '.archon'));
+  await writeFile(
+    join(repo, '.archon/config.yaml'),
+    'worktree:\n  path: .worktrees\n  baseBranch: dev\n'
+  );
+  configureIsolation(async () => ({ path: '.worktrees', baseBranch: toBranchName('dev') }));
+  codebaseId = randomUUID();
+  await db.query('INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)', [
+    codebaseId,
+    'test/repo',
+    repo,
+  ]);
+  events.length = 0;
+});
+
+afterEach(() => {
+  setLogSink(undefined);
+  setLogLevel(originalLevel);
+  configureIsolation(async () => null);
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+const track = trackTempRoots();
+afterAll(async () => {
+  await db.close();
+});
+
+function expectAdoptionWarning(branchName: string, worktreePath: string, identifier: string): void {
+  expect(events.filter(event => event.msg === 'worktree_adopted')).toEqual([
+    expect.objectContaining({
+      level: 40,
+      branchName,
+      worktreePath,
+      codebaseId,
+      workflowType: 'task',
+      identifier,
+    }),
+  ]);
+}
+
+test('non-child reuse warns once and persists adoption over caller metadata', async () => {
+  const input = {
+    request: {
+      workflowType: 'task' as const,
+      identifier: 'reuse',
+      codebaseId,
+      codebaseName: 'test/repo',
+      canonicalRepoPath: toRepoPath(repo),
+    },
+    createdByPlatform: 'cli',
+    metadata: { adopted: true },
+  };
+  const first = await createRegisteredWorktree(isolation, input);
+  const firstMetadata = (await isolation.getById(first.envId))?.metadata;
+  expect(first.ownedWorktree).toBeDefined();
+  expect(events.filter(event => event.msg === 'worktree_adopted')).toHaveLength(0);
+  events.length = 0;
+  const reused = await createRegisteredWorktree(isolation, {
+    ...input,
+    metadata: { adopted: false },
+  });
+  expect(reused.env.workingPath).toBe(first.env.workingPath);
+  expect(reused.envId).toBe(first.envId);
+  expect(reused.ownedWorktree).toBeUndefined();
+  expectAdoptionWarning(reused.env.branchName, reused.env.workingPath, 'reuse');
+  expect((await isolation.getById(reused.envId))?.metadata).toMatchObject({
+    adopted: true,
+    worktree_creation_id: null,
+    worktree_branch_created: false,
+  });
+  expect(await isolation.countActiveByCodebase(codebaseId)).toBe(1);
+  expect(firstMetadata).toMatchObject({
+    adopted: false,
+    worktree_creation_id: first.ownedWorktree?.creationId,
+    worktree_branch_created: true,
+  });
+});
+
+test('child reuse has one registration and one provider adoption warning', async () => {
+  const store = isolation.createIsolationStore();
+  const create = mock(store.create);
+  const resolver = createCodebaseChildResolver(
+    { ...store, create },
+    { id: codebaseId, name: 'test/repo', default_cwd: repo, kind: 'repo' },
+    { baseBranch: 'dev', createdByPlatform: 'cli', createdByUserId: undefined },
+    { store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} } }
+  );
+  if (!resolver) throw new Error('Expected repo resolver');
+  const parentRun: WorkflowRun = {
+    id: randomUUID(),
+    workflow_name: 'test',
+    conversation_id: 'conversation',
+    parent_conversation_id: null,
+    codebase_id: codebaseId,
+    status: 'running',
+    outcome: null,
+    user_message: '',
+    metadata: {},
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: repo,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    origin: null,
+  };
+  const request = { parentRun, nodeId: 'build', childIndex: 2, codebaseId, setupEnvironment: {} };
+  const first = await resolver.resolve(request);
+  expect(create).toHaveBeenCalledTimes(1);
+  create.mockClear();
+  events.length = 0;
+  const reused = await resolver.resolve(request);
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(reused.cwd).toBe(first.cwd);
+  expect(reused.envId).toBe(first.envId);
+  expect(reused.ownedWorktree).toBeUndefined();
+  const row = await isolation.getById(reused.envId);
+  expect(row?.metadata).toMatchObject({
+    adopted: true,
+    worktree_creation_id: null,
+    parent_run_id: parentRun.id,
+    child_index: 2,
+  });
+  expect(await isolation.countActiveByCodebase(codebaseId)).toBe(1);
+  expectAdoptionWarning(reused.branchName, reused.cwd, create.mock.calls[0][0].workflow_id);
+  expect(events.filter(event => event.msg === 'workflow.child_worktree_adopted')).toHaveLength(0);
+});

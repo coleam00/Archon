@@ -189,6 +189,7 @@ export type WorktreeCreationEnvironment = WorktreeEnvironment<
  * and whether that creation made the checked-out branch.
  */
 export interface WorktreeRegistrationMetadata {
+  adopted: boolean;
   worktree_creation_id: string | null;
   worktree_branch_created: boolean;
 }
@@ -198,8 +199,12 @@ export function worktreeRegistrationMetadata(
   metadata: WorktreeCreationEnvironment['metadata']
 ): WorktreeRegistrationMetadata {
   return metadata.provenance === 'created'
-    ? { worktree_creation_id: metadata.creationId, worktree_branch_created: metadata.branchCreated }
-    : { worktree_creation_id: null, worktree_branch_created: false };
+    ? {
+        adopted: metadata.adopted,
+        worktree_creation_id: metadata.creationId,
+        worktree_branch_created: metadata.branchCreated,
+      }
+    : { adopted: metadata.adopted, worktree_creation_id: null, worktree_branch_created: false };
 }
 
 /** Read the creation proof that worktreeRegistrationMetadata persisted. */

@@ -707,7 +707,7 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     await this.refuseUnfinishedWorktree(path);
-    getLog().info({ path, branchName: wt.branch }, 'worktree_adopted');
+    getLog().warn({ worktreePath: path, branchName: wt.branch }, 'worktree_adopted');
     return {
       id: path,
       provider: 'worktree',
@@ -895,10 +895,8 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Hand an existing checkout to a run, once it is proven usable.
    *
-   * Every adoption path in `create()` goes through here, and the public
-   * `adopt()` runs the same check, so the setup-completeness check cannot be
-   * reached around: an unfinished worktree is exactly what a run must not be
-   * given (#3448).
+   * An existing checkout may still belong to a setup in progress or a failed
+   * setup attempt. It must pass the same completeness check as public `adopt()`.
    */
   private async adoptWorktree(
     path: string,
@@ -907,7 +905,16 @@ export class WorktreeProvider implements IIsolationProvider {
     adoptedFrom?: 'branch'
   ): Promise<WorktreeCreationEnvironment> {
     await this.refuseUnfinishedWorktree(path);
-    getLog().info({ worktreePath: path, branchName }, 'worktree_adopted');
+    getLog().warn(
+      {
+        worktreePath: path,
+        branchName,
+        codebaseId: request.codebaseId,
+        workflowType: request.workflowType,
+        identifier: request.identifier,
+      },
+      'worktree_adopted'
+    );
     return {
       id: path,
       provider: 'worktree',
@@ -1067,6 +1074,16 @@ export class WorktreeProvider implements IIsolationProvider {
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
     const warnings = lockWarning ? [...setup.warnings, lockWarning] : setup.warnings;
     if (setup.kind === 'adopted') {
+      getLog().warn(
+        {
+          worktreePath,
+          branchName,
+          codebaseId: request.codebaseId,
+          workflowType: request.workflowType,
+          identifier: request.identifier,
+        },
+        'worktree_adopted'
+      );
       return {
         kind: 'adopted',
         environment: {

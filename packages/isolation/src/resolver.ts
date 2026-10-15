@@ -430,7 +430,7 @@ export class IsolationResolver {
         'isolation.branch_adoption_refused_cross_checkout'
       );
 
-      getLog().info({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
+      getLog().warn({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
       const env = await this.store.create({
         codebase_id: codebase.id,
         workflow_type: workflowType,

@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
+const mockWarn = mock<(...args: unknown[]) => void>(() => undefined);
 const mockCleanupError = mock<(...args: unknown[]) => void>(() => undefined);
 const mockCleanupInfo = mock<(...args: unknown[]) => void>(() => undefined);
 
@@ -9,7 +10,7 @@ mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
     error: mockCleanupError,
-    warn: () => undefined,
+    warn: mockWarn,
     info: mockCleanupInfo,
     debug: () => undefined,
     trace: () => undefined,
@@ -105,6 +106,7 @@ describe('IsolationResolver', () => {
   let verifyWorktreeOwnershipSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
+    mockWarn.mockClear();
     worktreeExistsSpy = spyOn(git, 'worktreeExists').mockResolvedValue(true);
     getCanonicalSpy = spyOn(git, 'getCanonicalRepoPath').mockResolvedValue(
       '/repos/myrepo' as git.RepoPath
@@ -339,9 +341,10 @@ describe('IsolationResolver', () => {
       working_path: '/worktrees/feature-branch',
       branch_name: 'feature-branch',
     });
+    const create = mock(async (_input: Parameters<IIsolationStore['create']>[0]) => adoptedEnv);
     const resolver = createResolver({
       store: makeMockStore({
-        create: async () => adoptedEnv,
+        create,
       }),
     });
 
@@ -352,6 +355,16 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].metadata).toEqual({ adopted: true, adopted_from: 'skill' });
+    expect(
+      mockWarn.mock.calls.filter(([, event]) => event === 'isolation_worktree_adopted')
+    ).toEqual([
+      [
+        { adoptedPath: '/worktrees/feature-branch', prBranch: 'feature-branch' },
+        'isolation_worktree_adopted',
+      ],
+    ]);
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
       expect(result.method.type).toBe('branch_adoption');
@@ -450,7 +463,10 @@ describe('IsolationResolver', () => {
 
   test('passes exact existing-branch selection when adopting a task estate', async () => {
     let capturedRequest: unknown;
+    const store = makeMockStore();
+    const create = mock(store.create);
     const resolver = createResolver({
+      store: { ...store, create },
       provider: {
         ...makeMockProvider(),
         create: async request => {
@@ -482,6 +498,12 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].metadata).toMatchObject({
+      adopted: true,
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+    });
     expect(result.status).toBe('resolved');
     if (result.status !== 'resolved') throw new Error('expected resolved adoption');
     expect(result.method).toEqual({ type: 'provider_adoption' });
