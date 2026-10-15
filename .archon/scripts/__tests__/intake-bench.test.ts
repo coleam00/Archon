@@ -259,8 +259,11 @@ describe('bench run', () => {
     });
     expect(new Set(cwds).size).toBe(4);
     // A worktree resolves to the project registered for the operator checkout; a clone would be a second one.
-    const worktrees = ok(repo, 'worktree', 'list', '--porcelain');
-    for (const cwd of cwds) expect(worktrees).toContain(`worktree ${realpathSync(cwd)}`);
+    const worktrees = ok(repo, 'worktree', 'list', '--porcelain')
+      .split('\n')
+      .filter(line => line.startsWith('worktree '))
+      .map(line => realpathSync(line.slice('worktree '.length)));
+    for (const cwd of cwds) expect(worktrees).toContain(realpathSync(cwd));
   });
 
   it('fails the batch when a run is cancelled', () => {
