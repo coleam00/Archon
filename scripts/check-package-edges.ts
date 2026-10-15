@@ -33,8 +33,7 @@ export type Layering = Readonly<
 >;
 
 /**
- * The allowed `@archon/*` edges between workspace packages, mirrored by the package table in
- * `.archon/architecture.md` (pinned by this script's test). `runtime` must equal the declared
+ * The allowed `@archon/*` edges between workspace packages. `runtime` must equal the declared
  * `dependencies`, `peerDependencies` and `optionalDependencies`; `test` lists the extra
  * `devDependencies` only tests may import. Adding an edge means editing this table.
  */
@@ -252,7 +251,7 @@ export function findLayeringViolations(
     if (row === undefined) {
       violations.push({
         file: manifest.path,
-        message: `${name} has no row in PACKAGE_LAYERING (scripts/check-package-edges.ts) or the package table in .archon/architecture.md`,
+        message: `${name} has no row in PACKAGE_LAYERING (scripts/check-package-edges.ts)`,
       });
       continue;
     }

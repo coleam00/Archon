@@ -16,7 +16,7 @@ Archon is a Bun and TypeScript monorepo. A small set of packages carries the eng
 - **Host.** `core` owns the database, conversations, the chat orchestrator and workflow operations. `server` serves the API, webhooks and the console; `cli` is the `archon` command.
 - **Integrations.** `providers` holds the maintained Claude, Codex and Pi providers and the deprecated bundled OpenCode and Copilot providers. `adapters` and `chat-slack` hold the bundled chat and forge integrations. New integrations ship as [plugins](/guides/publishing-plugins/).
 
-The maintained map, with each package's dependencies, the main flows, extension points and the checks that enforce each boundary, is [`.archon/architecture.md`](https://github.com/coleam00/Archon/blob/dev/.archon/architecture.md) in the repository. It is kept beside the code, and CI checks its package table against the declared dependencies.
+The maintained map, with each package's ownership, the main flows, extension points and the checks that enforce each boundary, is [`.archon/architecture.md`](https://github.com/coleam00/Archon/blob/dev/.archon/architecture.md) in the repository. It is kept beside the code, and CI checks declared package dependencies against the linked layering policy.
 
 Existing worktrees are reused by default. Reuse emits a `worktree_adopted` warning and records adoption provenance; it does not grant cleanup ownership. The [worktree provider](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/providers/worktree.ts) and [isolation resolver](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/resolver.ts) own adoption and registration.
 

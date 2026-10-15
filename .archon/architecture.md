@@ -6,26 +6,26 @@ A map of the code as it is, where it is going, and the boundaries that hold whil
 
 ### Packages
 
-| Package | Owns | May import (`@archon/*`) | Tests may also import |
-|---|---|---|---|
-| `paths` | Archon home and workspace paths, env loading, logger, test utilities | none | |
-| `provider-contract` | `IAgentProvider`, provider chunks and failure classes, registration rules, the provider plugin wire | none | |
-| `chat-contract` | `ChatPlugin`, the chat plugin wire | `provider-contract` | |
-| `plugin-manifest` | Plugin manifest schema for the `provider`, `chat`, `forge` and `workflow-pack` kinds, install receipts | `chat-contract`, `paths`, `provider-contract` | |
-| `git` | Git operations | `paths` | |
-| `forge` | Forge seam: discovery, dispatch and conformance for forge plugins | `paths` | |
-| `providers` | Claude and Codex, Pi (maintained, though it sits under `community/`), the bundled community providers OpenCode and Copilot, the provider registry | `paths`, `provider-contract` | |
-| `workflows` | The engine: loading, validation, DAG execution, durable pauses, attention queue, store contract, file store | `git`, `paths`, `plugin-manifest`, `provider-contract` | `providers` |
-| `isolation` | Worktree provider, in-place and container backends, isolation resolver | `git`, `paths`, `provider-contract`, `workflows` | |
-| `core` | Database, conversations, chat orchestrator, workflow operations and hosts, credentials | `chat-contract`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
-| `adapters` | Bundled chat adapters (Slack and Telegram; Discord under `community/`), the GitHub forge adapter (Gitea and GitLab under `community/`), platform policies, the Standard Webhooks source | `core`, `forge`, `git`, `isolation`, `paths`, `providers`, `workflows` | |
-| `chat-slack` | The maintained Slack chat plugin | `chat-contract` | |
-| `server` | HTTP API, the Web adapter, webhooks, SSE, the chat plugin host, serving the console | `adapters`, `chat-contract`, `core`, `git`, `paths`, `provider-contract`, `providers`, `workflows` | |
-| `cli` | The `archon` command and the CLI adapter | `adapters`, `chat-contract`, `core`, `forge`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
-| `web` | The console; reads the API through generated types | none | |
-| `docs-web` | The docs site | `plugin-manifest` | |
+| Package | Owns |
+|---|---|
+| `paths` | Archon home and workspace paths, env loading, logger, test utilities |
+| `provider-contract` | `IAgentProvider`, provider chunks and failure classes, registration rules, the provider plugin wire |
+| `chat-contract` | `ChatPlugin`, the chat plugin wire |
+| `plugin-manifest` | Plugin manifest schema for the `provider`, `chat`, `forge` and `workflow-pack` kinds, install receipts |
+| `git` | Git operations |
+| `forge` | Forge seam: discovery, dispatch and conformance for forge plugins |
+| `providers` | Claude and Codex, Pi (maintained, though it sits under `community/`), the bundled community providers OpenCode and Copilot, the provider registry |
+| `workflows` | The engine: loading, validation, DAG execution, durable pauses, attention queue, store contract, file store |
+| `isolation` | Worktree provider, in-place and container backends, isolation resolver |
+| `core` | Database, conversations, chat orchestrator, workflow operations and hosts, credentials |
+| `adapters` | Bundled chat adapters (Slack and Telegram; Discord under `community/`), the GitHub forge adapter (Gitea and GitLab under `community/`), platform policies, the Standard Webhooks source |
+| `chat-slack` | The maintained Slack chat plugin |
+| `server` | HTTP API, the Web adapter, webhooks, SSE, the chat plugin host, serving the console |
+| `cli` | The `archon` command and the CLI adapter |
+| `web` | The console; reads the API through generated types |
+| `docs-web` | The docs site |
 
-The import columns are each package's declared `@archon/*` dependencies, and `check:package-edges` fails when a `package.json` disagrees with them. The allowed edges live in `PACKAGE_LAYERING` ([`scripts/check-package-edges.ts`](../scripts/check-package-edges.ts)); its test keeps this table equal to it.
+The allowed `@archon/*` edges live in `PACKAGE_LAYERING` ([`scripts/check-package-edges.ts`](../scripts/check-package-edges.ts)). `check:package-edges` requires each package's declared runtime and test-only dependencies to match that policy.
 
 ### Main flows
 
@@ -67,7 +67,7 @@ Rules that hold now and during the move. Each names what enforces it, or says it
 | Rule | Enforced by |
 |---|---|
 | A package imports only `@archon/*` packages it declares | `check:package-edges` ([`scripts/check-package-edges.ts`](../scripts/check-package-edges.ts)) |
-| Which packages may depend on which (the package table above) | `check:package-edges` (`PACKAGE_LAYERING`) |
+| Which packages may depend on which (`PACKAGE_LAYERING`) | `check:package-edges` (`PACKAGE_LAYERING`) |
 | `workflows` never imports `core`, `server`, adapters or provider implementations; it gets them through `WorkflowDeps` | `check:package-edges`: the `workflows` row allows none of them at runtime |
 | Workflow-facing code in `core` and `cli` reaches persistence only through the workflow host contract | `bun run lint` ([`scripts/check-workflow-persistence.ts`](../scripts/check-workflow-persistence.ts)) |
 | Engine schemas use plain `zod`, not `@hono/zod-openapi` | `check:package-edges` |
