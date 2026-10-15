@@ -84,8 +84,11 @@ curl http://localhost:3090/api/conversations
 ```
 
 Query parameters:
-- `codebase_id` (optional) -- Filter by codebase
-- `include_deleted` (optional) -- Include soft-deleted conversations
+- `codebaseId` (optional) -- Filter by codebase
+- `platform` (optional) -- Filter by platform type
+- `mine` (optional) -- `true` narrows to the caller's own conversations on every platform when an identity resolves. Where conversations are private the list already holds only the caller's own web and CLI conversations, and `mine=true` also drops chat and forge conversations attributed to anyone else.
+
+Where web auth is enabled or `ARCHON_WEB_AUTH_HEADER` is set, web and CLI conversations are private to their owner; see [Security](/reference/security/#adapter-authorization) for the rules and status codes.
 
 ### Create a Conversation
 
@@ -225,7 +228,7 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes` |
+| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
 
@@ -389,7 +392,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -F "conversationId=conv-123" \
   -F "message=fix #2482" \
-  -F 'config={"docs":{"path":"handbook"},"workflows":{"quotaMaxAttempts":3}}'
+  -F 'config={"docs":{"path":"handbook"},"workflows":{"toolCallAttentionMs":600000}}'
 ```
 
 Supported inline keys are `assistant` or `defaultAssistant`, `assistants`, `tiers`, `aliases`, `workflows`, `docs.path`, and `env`. Unknown or ineffective keys fail with `400` and name the key. `configPath` is always rejected: HTTP callers cannot ask the server to read a filesystem path. Run metadata stores sealed replay content plus redacted source/key attribution, and resume uses the original layer without accepting replacement content.

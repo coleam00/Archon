@@ -8,7 +8,9 @@ import {
   parseAttentionQueueOrder,
   parseAttentionQueueRequest,
   projectRefForRun,
+  toAttentionQueueItem,
 } from './attention-queue';
+import { queuedRunAttention, type WorkflowRun } from './schemas/workflow-run';
 
 describe('attention queue arguments', () => {
   test('a label pair splits at the first =, and its value may be empty or hold =', () => {
@@ -76,5 +78,54 @@ describe('queue item identity', () => {
     // A 1:1 `workflow:` child records no index.
     expect(fanOutPosition({ ...child, metadata: { parent_node_id: 'each' } })).toBeNull();
     expect(fanOutPosition({ ...child, parent_run_id: null })).toBeNull();
+  });
+});
+
+describe('a usage-limit wait', () => {
+  test('is an item naming its node, reset time and pause time, with nothing to answer', () => {
+    const run: WorkflowRun = {
+      origin: null,
+      id: 'limited',
+      workflow_name: 'deliver',
+      conversation_id: null,
+      parent_conversation_id: null,
+      codebase_id: null,
+      status: 'paused',
+      outcome: null,
+      user_message: '',
+      metadata: {
+        wait: {
+          owner: 'node',
+          nodeId: 'implement',
+          kind: 'quota',
+          pauseId: 'limit-1',
+          waitingSince: '2026-10-15T09:00:00.000Z',
+          resumeAt: '2026-10-15T14:00:00.000Z',
+        },
+      },
+      started_at: new Date('2026-10-15T08:00:00.000Z'),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: null,
+      user_id: null,
+      parent_run_id: null,
+      adopted_from_run_id: null,
+      output_root: null,
+      checkout_baseline: null,
+    };
+    const attention = queuedRunAttention(run);
+    expect(attention).toEqual({
+      kind: 'usage_limit',
+      runId: 'limited',
+      nodeId: 'implement',
+      resumeAt: '2026-10-15T14:00:00.000Z',
+    });
+    if (attention === undefined) return;
+    expect(toAttentionQueueItem(run, attention, { codebase: null, branch: null })).toMatchObject({
+      kind: 'usage_limit',
+      node: 'implement',
+      resetAt: '2026-10-15T14:00:00.000Z',
+      pausedAt: '2026-10-15T09:00:00.000Z',
+    });
   });
 });

@@ -57,7 +57,7 @@ describe('optional workflow origin', () => {
       [run.id]
     );
     expect(physical.rows[0]).toEqual({ conversation_id: WORKFLOW_ORIGIN_ANCHOR_ID, origin: '{}' });
-    expect(await conversations.listConversations()).toEqual([]);
+    expect(await conversations.listConversations({ kind: 'all' })).toEqual([]);
     const listed = await workflows.listDashboardRuns();
     expect(listed.runs[0]?.conversation_id).toBeNull();
     expect(listed.runs[0]?.platform_type).toBeNull();

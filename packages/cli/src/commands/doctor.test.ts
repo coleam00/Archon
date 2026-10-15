@@ -317,7 +317,7 @@ describe('checkAssistantLogin', () => {
     streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
     attentionNotices: [],
     concurrency: { maxConversations: 1 },
-    workflows: { autoResumeOnQuotaReset: false, quotaMaxAttempts: 1, quotaDeadlineMs: 1 },
+    workflows: { autoResumeOnQuotaReset: false },
     commands: { autoLoad: false },
     defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
   };

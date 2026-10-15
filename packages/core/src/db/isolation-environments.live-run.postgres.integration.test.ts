@@ -1,6 +1,7 @@
 // @archon-test-isolated
 /**
- * Integration test: getLiveRunOwningEnv against a REAL Postgres server.
+ * Integration tests: isolation environment reads and conditional adoption writes
+ * against a REAL Postgres server.
  *
  * The unit suite mocks the pg driver, so the Postgres dialect branch of this
  * SQL never executes there — yet it is shaped differently from the SQLite
@@ -14,6 +15,7 @@
  */
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
+import { randomUUID } from 'node:crypto';
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -27,19 +29,20 @@ mock.module('@archon/paths', () => ({
 }));
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
-const SCRATCH_DB = 'archon_pg_parity_test';
+const SCRATCH_DB = `archon_pg_parity_${randomUUID().replaceAll('-', '')}`;
 
-describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () => {
+describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', () => {
   let admin: PgPool;
   let db: import('./adapters/postgres').PostgresAdapter;
   let create: typeof import('./isolation-environments').create;
+  let getById: typeof import('./isolation-environments').getById;
+  let updateMetadata: typeof import('./isolation-environments').updateMetadata;
   let getLiveRunOwningEnv: typeof import('./isolation-environments').getLiveRunOwningEnv;
 
   beforeAll(async () => {
     const { Pool } = await import('pg');
     admin = new Pool({ connectionString: baseUrl });
-    // SCRATCH_DB is a compile-time constant, safe to inline as an identifier.
-    await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
+    // The generated name contains only a fixed prefix and hexadecimal UUID characters.
     await admin.query(`CREATE DATABASE "${SCRATCH_DB}"`);
     const scratchUrl = new URL(baseUrl!);
     scratchUrl.pathname = `/${SCRATCH_DB}`;
@@ -54,10 +57,12 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
       getDatabaseType: () => 'postgresql',
     }));
 
-    ({ create, getLiveRunOwningEnv } = await import('./isolation-environments'));
+    ({ create, getLiveRunOwningEnv, getById, updateMetadata } =
+      await import('./isolation-environments'));
   });
 
   afterAll(async () => {
+    if (db) await db.close();
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();
@@ -79,6 +84,24 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
       branch_name: 'parity-branch' as never,
     });
   }
+
+  test('legacy conditional adoption rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
+    const created = await createEnv('pg-legacy-adoption');
+    await db.query(
+      'UPDATE remote_agent_isolation_environments SET metadata = $1::jsonb WHERE id = $2',
+      [JSON.stringify({ label: 'legacy' }), created.id]
+    );
+    const observed = (await getById(created.id))!;
+    await updateMetadata(created.id, { label: 'replacement' });
+    const replacement = (await getById(created.id))!;
+    await expect(updateMetadata(created.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await getById(created.id)).toEqual(replacement);
+    expect(replacement.metadata.adopted).toBeUndefined();
+    await updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await getById(created.id))?.metadata).toEqual({ label: 'replacement', adopted: true });
+  });
 
   async function seedConversation(id: string, envId: string | null): Promise<void> {
     // One param per column: $1 doubles as a UUID id and a varchar platform id,

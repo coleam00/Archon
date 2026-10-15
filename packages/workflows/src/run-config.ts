@@ -1,5 +1,6 @@
 import type { WorkflowConfig } from './deps';
 import {
+  liveWorkflowPolicy,
   workflowRunConfigMetadataSchema,
   type WorkflowRunConfigLayer,
   type WorkflowRunConfigMetadata,
@@ -30,7 +31,7 @@ export function applyWorkflowRunConfigLayer(
   }
   const workflows =
     layer.workflows !== undefined && base.workflows !== undefined
-      ? { ...base.workflows, ...layer.workflows }
+      ? { ...base.workflows, ...liveWorkflowPolicy(layer.workflows) }
       : undefined;
   return {
     ...base,

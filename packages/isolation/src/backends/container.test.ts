@@ -57,6 +57,11 @@ function fakeStore(): IIsolationStore & {
       rows.set(row.id, row);
       return row;
     },
+    async updateMetadata(id, metadata) {
+      const row = rows.get(id);
+      if (!row) throw new Error('Missing environment');
+      row.metadata = { ...row.metadata, ...metadata };
+    },
     async updateStatus(id, status) {
       const row = rows.get(id);
       if (row) row.status = status;

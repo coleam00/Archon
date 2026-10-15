@@ -38,7 +38,8 @@ through the source this run selected, `$INPUTS.source`:
    the reference becomes `Closes #N`, replacing a `Refs #N`. Anything else gets a non-closing reference (`Refs #N`)
    in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
    variants), and a short "Left open" section listing each item, or saying no
-   review judged coverage. Keep at most one "Left open" section, current, and
+   review judged coverage. An item left open as an operator check names the check
+   the operator runs. Keep at most one "Left open" section, current, and
    remove it on an empty list. Change no other reference, and add none when the
    description links no issue.
 5. When something changed, apply the complete description. On `forge`, write

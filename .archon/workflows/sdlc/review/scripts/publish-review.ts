@@ -26,10 +26,6 @@
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
  *   node forwards.
- * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
- *   light continuation skipped it) and review-round's output, whose lens fields
- *   hold the set a continuation reruns. The lenses this round ran, their union,
- *   are recorded beside the report as the next round's lens set.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -44,7 +40,6 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
 
@@ -68,15 +63,6 @@ function declaredPr(value: string): QualifiedPr | undefined {
     return undefined;
   }
   return parseQualifiedPr(target);
-}
-
-/** The lenses this round ran: the route agent's selection together with review-round's. */
-function lenses(): Record<string, boolean> {
-  const route = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
-  const mode = record(JSON.parse(text(process.env.INPUTS_MODE)));
-  return Object.fromEntries(
-    REVIEW_LENSES.map(lens => [lens, route?.[lens] === true || mode?.[lens] === true])
-  );
 }
 
 function label(pr: QualifiedPr | undefined): string {
@@ -131,9 +117,8 @@ try {
     );
     note(`publish-review: canonical review comment at ${comment.url}`);
   }
-  // review-round reads these as the next round's cursor and lens set.
+  // review-round reads this as the next round's cursor.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
-  writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

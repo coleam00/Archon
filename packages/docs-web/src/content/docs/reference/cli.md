@@ -604,7 +604,8 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
-  `wait: attention` waiting for its answer), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
+  usage limit; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
@@ -893,6 +894,8 @@ the host the run recorded and says when it is not this one.
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.
+- `usage_limit` — node `nodeId` hit a provider usage limit. Nothing needs an answer: the
+  run continues by itself at `resumeAt`. Cancel or abandon it to stop it instead.
 - `unreadable` — the run is parked but cannot describe itself (corrupt gate metadata, a
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
 
@@ -1375,9 +1378,9 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 To explicitly discard a resumable run and remove the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
-of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
-an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
-how to retry.
+of this section. Abandon removes a checkout only when the run holds its matching creation
+proof, even if the checkout has since been adopted. It deletes uncommitted work there and
+keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,
@@ -1401,8 +1404,10 @@ behavior.
 
 Ordinary removal requires a stored creation proof matching
 Archon's marker and Git registration in the expected repository. Replacement
-repositories, adopted checkouts, and older records without proof are retained for
-operator inspection. If Git removal leaves a directory behind, cleanup reports it
+repositories and checkouts without matching stored proof, including newly registered
+adoptions and older records, are retained for operator inspection. Reusing a registered
+checkout sets `adopted: true` while preserving its creation proof, so that checkout
+can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
 Cleanup deletes an environment's local branch only when Archon created that branch.
