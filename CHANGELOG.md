@@ -31,6 +31,8 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Changed
 
+- Chat on Claude and Pi launches workflows and registers projects through typed `invoke_workflow` and `register_project` tools instead of writing `/invoke-workflow` and `/register-project` lines into the reply. A launch runs after the reply ends, through the same dispatch as before, so the console and forges behave as they did. `manage_run` no longer has a `start` action; `invoke_workflow` replaces it and applies the dispatch checks `start` skipped. Codex, OpenCode and Copilot still use the command lines. (#1886)
+
 - A workflow that can pause now starts with `archon workflow run --detach`, from the web console's background dispatch, from `manage_run`, and from a trigger. Before, a workflow with an approval gate, an interactive loop gate, or a gate composed through `include:` was refused at all four. Its pause waits durably in the attention queue until someone answers, then the run continues. Workflow-level `interactive:` is deprecated and has no effect: a workflow that declares it loads with a warning, and the web console no longer runs it in the foreground. (#4041)
 
 - Providers, plugins and skills now use `archon provider add`, `archon plugin add` and `archon skill add`. Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI. The unshipped provider `install` verb is refused; the shipped plugin and skill `install` verbs remain deprecated aliases that print a warning. (#4133)
@@ -97,6 +99,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Fixed
 
+- A chat-launched workflow no longer starts with a truncated task when the agent's `--prompt` contains an escaped quote. `--prompt "Fix the \"login\" bug"` used to launch with the task `Fix the \`. (#1886)
 - On a database shared by several machines, `archon workflow wait` no longer reports `owner_lost` for a run that another machine, or another user on this machine, is executing. It reports on its `waiting` line that the owner's liveness is unknown and keeps waiting on the run's stored state. (#4079)
 - The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)
 - Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
