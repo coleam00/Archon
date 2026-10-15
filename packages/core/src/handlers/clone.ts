@@ -45,6 +45,7 @@ import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { loadGitHubAppConfig, resolveGitHubTokenFromEnv } from '../github-auth/config';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { AppNotInstalledError } from '../github-auth/errors';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -121,10 +122,16 @@ export async function resolveForgeAuth(url: string): Promise<CloneCredentials | 
       );
       if (!repository)
         throw new ProjectRegistrationError('GitHub URL must identify an owner/repository.');
-      token = await createGitHubAppAuthProvider(config).getInstallationToken(
-        repository.owner,
-        repository.repo
-      );
+      try {
+        token = await createGitHubAppAuthProvider(config).getInstallationToken(
+          repository.owner,
+          repository.repo
+        );
+      } catch (error) {
+        // A repository outside every installation may still be public, so it
+        // clones anonymously as it did before App mode minted clone tokens.
+        if (!(error instanceof AppNotInstalledError)) throw error;
+      }
     } else {
       token = resolveGitHubTokenFromEnv();
     }

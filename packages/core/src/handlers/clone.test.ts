@@ -650,6 +650,35 @@ describe('cloneRepository', () => {
       }
     );
 
+    test('clones and inspects anonymously when the App is not installed on the repository', async () => {
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
+      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+        status: 'available',
+        defaultBranch: gitUtils.toBranchName('main'),
+        branches: [gitUtils.toBranchName('main')],
+      });
+      const notInstalled = (): Error => Object.assign(new Error('Not Found'), { status: 404 });
+      appRequest.mockClear();
+      appRequest.mockRejectedValueOnce(notInstalled()).mockRejectedValueOnce(notInstalled());
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
+      try {
+        await cloneRepository('https://github.com/other/public-repo');
+        expect(getGitCloneCall()?.[2]).toBeUndefined();
+        await inspectProjectBaseBranch({ url: 'https://github.com/other/public-repo' });
+        expect(inspection).toHaveBeenCalledWith({
+          kind: 'url',
+          url: 'https://github.com/other/public-repo',
+          credentials: undefined,
+        });
+        expect(appRequest).toHaveBeenCalledTimes(2);
+      } finally {
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+        inspection.mockRestore();
+      }
+    });
+
     test('rejects an HTTP GitHub URL instead of sending it an App installation token', async () => {
       process.env.GITHUB_APP_ID = '123';
       process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
