@@ -1,8 +1,9 @@
 /**
  * The review-lens bench's own invariants, each one whose failure would silently
  * corrupt its numbers: a sample that can read the answer or differs by machine, a
- * mislabelled version, a failed, empty or misbound run counted as a sample, a paid run
- * left unrecorded, a live run's checkout reused, and a stale line.
+ * mislabelled version, a failed, empty or misbound run counted as a sample, spend that
+ * reads as more complete than it was, a paid run left unrecorded, a live run's checkout
+ * reused, and a stale line.
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -11,11 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { EFFORT_LEVELS } from '../../../packages/workflows/src/schemas/effort';
 import { type ModelAliasPreset, TIER_NAMES, modelAliasPresetSchema } from '../../../packages/workflows/src/schemas/model-binding';
 import {
   type ResolvedVersion,
   type RunDetail,
   type RunNode,
+  EFFORTS,
   TIERS,
   type TierBinding,
   appendLine,
@@ -190,11 +193,18 @@ describe('resolveVersion refuses', () => {
     const other = versionFile(out, { label: 'v', pack_sha: sha, tiers: { ...tiers, large: { provider: 'codex', model: 'gpt' } } });
     expect(() => resolveVersion(other, repo, out, subject)).toThrow('label v already names another version');
   });
+
+  it('an effort the engine would refuse', () => {
+    const { repo, sha, out } = packRepository();
+    const file = versionFile(out, { label: 'v', pack_sha: sha, tiers: { ...tiers, large: { ...tiers.large, effort: 'extreme' } } });
+    expect(() => resolveVersion(file, repo, out, subject)).toThrow('tier `large` effort must be one of');
+  });
 });
 
 describe("a version's tiers are the engine's", () => {
-  it('names every tier the engine binds, in a shape its alias preset accepts', () => {
+  it('names every tier and effort the engine binds, in a shape its alias preset accepts', () => {
     expect([...TIERS]).toEqual([...TIER_NAMES]);
+    expect([...EFFORTS]).toEqual([...EFFORT_LEVELS]);
     const binding: TierBinding = { provider: 'claude', model: 'opus', effort: 'high' };
     expect(modelAliasPresetSchema.parse(binding)).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
     const fromEngine = (preset: ModelAliasPreset): TierBinding => preset;
@@ -275,15 +285,7 @@ describe('hard checks decide whether a sample counts', () => {
   const provider = <T>(value: T) => ({ source: 'provider' as const, value });
 
   function agent(nodeId: string, binding: unknown, costUsd: number): RunNode {
-    return {
-      nodeId,
-      state: 'completed',
-      execution: {
-        node: { kind: 'agent' },
-        binding,
-        spend: { costUsd: provider(costUsd), tokens: provider({ input: 10, output: 1 }) },
-      },
-    };
+    return { nodeId, state: 'completed', kind: 'agent', binding, attempts: [{ costUsd: provider(costUsd), tokens: provider({ input: 10, output: 1 }) }] };
   }
 
   function run(overrides: Partial<RunDetail> = {}): RunDetail {
@@ -298,7 +300,7 @@ describe('hard checks decide whether a sample counts', () => {
       nodes: [
         agent('review__code', { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: provider('claude-opus') } }, 1.5),
         agent('simplify__simplify', { provider: 'claude', tier: 'medium', model: { requested: 'sonnet', resolved: provider('claude-sonnet') } }, 0.25),
-        { nodeId: 'review__review-complete', state: 'completed', execution: { node: { kind: 'bash' }, binding: {} } },
+        { nodeId: 'review__review-complete', state: 'completed', kind: 'exec', binding: {}, attempts: [] },
       ],
       ...overrides,
     };
@@ -326,7 +328,7 @@ describe('hard checks decide whether a sample counts', () => {
   });
 
   it('fail a completed run in which a lens failed', () => {
-    const failed: RunNode = { nodeId: 'review__errors', state: 'failed', execution: { node: { kind: 'agent' }, binding: {} } };
+    const failed: RunNode = { nodeId: 'review__errors', state: 'failed', kind: 'agent', binding: {}, attempts: [] };
     const verdict = judge(run({ nodes: [...run().nodes, failed] }));
     expect(verdict.passed).toBe(false);
     expect(verdict.checks.completed.problems).toEqual(['node review__errors failed']);
@@ -341,7 +343,20 @@ describe('hard checks decide whether a sample counts', () => {
   it('fail a completed run that left no review output', () => {
     const verdict = judge(run(), { lenses: [], findings: false });
     expect(verdict.passed).toBe(false);
-    expect(verdict.checks.output.problems).toEqual(['the run left no lens file', 'the run left no review/findings.json']);
+    expect(verdict.checks.output.problems).toEqual([
+      'the run left no lens file',
+      'lens code ran but left no review/code.md',
+      'lens simplify ran but left no shape.md',
+      'the run left no review/findings.json',
+    ]);
+  });
+
+  it('fail a run in which a lens the route selected left no file', () => {
+    const tests = agent('review__tests', { provider: 'claude', tier: 'medium', model: { requested: 'sonnet' } }, 0.5);
+    const skipped: RunNode = { nodeId: 'review__docs', state: 'skipped', kind: 'agent', binding: {}, attempts: [] };
+    const verdict = judge(run({ nodes: [...run().nodes, tests, skipped] }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.checks.output.problems).toEqual(['lens tests ran but left no review/tests.md']);
   });
 
   it('fail a run whose tier resolved to another model', () => {
@@ -360,19 +375,33 @@ describe('hard checks decide whether a sample counts', () => {
     expect(judge(run({ nodes })).checks.version.problems).toEqual(['lens code has no provider binding']);
   });
 
-  it('total cost over agent nodes that ran, and none when any of them reported none', () => {
-    const skipped: RunNode = {
-      nodeId: 'review__docs',
-      state: 'skipped',
-      execution: { node: { kind: 'agent' }, binding: {}, spend: { costUsd: { source: 'unavailable', reason: 'not_applicable' } } },
-    };
-    expect(runCost(run({ nodes: [...run().nodes, skipped] }))).toEqual({ cost_usd: 1.75, tokens: { input: 20, output: 2 } });
-    const unreported: RunNode = {
-      nodeId: 'review__tests',
-      state: 'completed',
-      execution: { node: { kind: 'agent' }, binding: {}, spend: { costUsd: { source: 'unavailable', reason: 'not reported' } } },
-    };
-    expect(runCost(run({ nodes: [...run().nodes, unreported] })).cost_usd).toBeNull();
+  describe('spend', () => {
+    const unavailable = { source: 'unavailable' as const, reason: 'not_reported' };
+    const withAttempts = (attempts: RunNode['attempts']): RunDetail =>
+      run({ nodes: [...run().nodes, { nodeId: 'review__tests', state: 'completed', kind: 'agent', binding: {}, attempts }] });
+
+    it('sums every attempt of every agent node, a retried one included', () => {
+      const retried = withAttempts([
+        { costUsd: provider(1), tokens: provider({ input: 10, output: 1 }) },
+        { costUsd: provider(2), tokens: provider({ input: 20, output: 2 }) },
+      ]);
+      expect(runCost(retried)).toEqual({ cost_usd: 4.75, cost_partial: false, tokens: { input: 50, output: 5 } });
+    });
+
+    it('counts an attempt that made no provider call as zero', () => {
+      const none = { source: 'unavailable' as const, reason: 'not_applicable' };
+      expect(runCost(withAttempts([{ costUsd: none, tokens: none }]))).toEqual({ cost_usd: 1.75, cost_partial: false, tokens: { input: 20, output: 2 } });
+    });
+
+    it('marks a cost that is only a floor as partial', () => {
+      const floor = withAttempts([{ costUsd: { source: 'provider', value: 1, partial: true }, tokens: provider({ input: 1, output: 1 }) }]);
+      expect(runCost(floor)).toMatchObject({ cost_usd: 2.75, cost_partial: true });
+    });
+
+    it('has no cost or tokens when any attempt reported none', () => {
+      expect(runCost(withAttempts([{ costUsd: unavailable, tokens: provider({ input: 1, output: 1 }) }])).cost_usd).toBeNull();
+      expect(runCost(withAttempts([{ costUsd: provider(1), tokens: unavailable }])).tokens).toBeNull();
+    });
   });
 });
 
@@ -445,6 +474,12 @@ describe('bench run', () => {
     const tierOpus = { provider: 'claude', model: 'opus' };
     const binding = { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } } };
     const spend = (costUsd: number) => ({ costUsd: { source: 'provider', value: costUsd }, tokens: { source: 'provider', value: { input: 10, output: 1 } } });
+    // One attempt row per finished attempt; SQLite hands a row's data back as JSON text.
+    const row = (nodeId: string, eventType: string, costUsd: number) => ({
+      step_name: nodeId,
+      event_type: eventType,
+      data: JSON.stringify({ node: { id: nodeId, kind: 'agent' }, binding, spend: spend(costUsd), accounting: 'node' }),
+    });
     const { out, run, argv, packSha } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
       const artifacts = getRunArtifactsDirForRoot(root, 'run-1');
       write(artifacts, 'review/code.md', 'x');
@@ -460,9 +495,16 @@ describe('bench run', () => {
           dispatch: { base_branch: 'dev' },
           model_bindings: { effective: { aliases: { small: tierOpus, medium: tierOpus, large: tierOpus } } },
         },
-        nodes: [
-          { nodeId: 'review__code', state: 'completed', execution: { node: { kind: 'agent' }, binding, spend: spend(1.5) } },
-          { nodeId: 'simplify__simplify', state: 'completed', execution: { node: { kind: 'agent' }, binding, spend: spend(0.25) } },
+        terminal_record: {
+          nodes: [
+            { node_id: 'review__code', state: 'completed' },
+            { node_id: 'simplify__simplify', state: 'completed' },
+          ],
+        },
+        events: [
+          row('review__code', 'node_failed', 0.5),
+          row('review__code', 'node_completed', 1),
+          row('simplify__simplify', 'node_completed', 0.25),
         ],
       };
     });
@@ -492,12 +534,13 @@ describe('bench run', () => {
     const [line] = lines;
     expect([line.case, line.variant, line.sample, line.run_id, line.status, line.passed]).toEqual(['counting', 'v1', 1, 'run-1', 'completed', true]);
     expect(line.version).toMatchObject({ label: 'v', pack_sha: packSha });
-    const lens = { tier: 'large', provider: 'claude', model: 'opus', resolved_model: 'claude-opus', tokens: { input: 10, output: 1 } };
+    const lens = { tier: 'large', provider: 'claude', model: 'opus', resolved_model: 'claude-opus', cost_partial: false };
     expect(line.lenses).toEqual({
-      code: { node: 'review__code', ...lens, cost_usd: 1.5 },
-      simplify: { node: 'simplify__simplify', ...lens, cost_usd: 0.25 },
+      code: { node: 'review__code', ...lens, attempts: 2, cost_usd: 1.5, tokens: { input: 20, output: 2 } },
+      simplify: { node: 'simplify__simplify', ...lens, attempts: 1, cost_usd: 0.25, tokens: { input: 10, output: 1 } },
     });
-    expect([line.cost_usd, line.tokens, line.duration_ms, line.item]).toEqual([1.75, { input: 20, output: 2 }, 600_000, join('items', 'run-1')]);
+    expect([line.cost_usd, line.tokens, line.duration_ms, line.item]).toEqual([1.75, { input: 30, output: 3 }, 600_000, join('items', 'run-1')]);
+    expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting.run'))).toBe(false);
     expect(existsSync(join(out, 'items', 'run-1', 'review', 'code.md'))).toBe(true);
   });
 
@@ -513,16 +556,23 @@ describe('bench run', () => {
       ['v1', 2, 'run-4', false],
       ['v1', 3, 'run-5', false],
     ]);
-    expect(String(lines[0].error)).toContain('the field `output_root` is missing');
+    expect(String(lines[0].error)).toContain('the field `terminal_record.nodes` is missing');
   });
 
-  it('stops the version, keeping the checkout, when a run does not finish', () => {
-    const { out, run } = benchCase({ attention: { kind: 'stalled_tool_calls' } });
+  it('stops the version, and keeps the checkout from any later bench, when a run does not finish', () => {
+    const { out, cli, run } = benchCase({ attention: { kind: 'stalled_tool_calls' } });
     const { status, stderr, lines } = run('--samples', '2');
     expect(status).toBe(1);
     expect(stderr).toContain('run run-1 may still be running');
     expect(lines.map(line => [line.run_id, line.passed])).toEqual([['run-1', false]]);
-    expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting', 'a.txt'))).toBe(true);
+    const checkout = join(out, 'checkouts', 'eval-v', 'counting');
+    writeFileSync(join(checkout, 'work-in-progress'), 'x');
+
+    const again = run('--variant', 'clean');
+    expect(again.status).toBe(1);
+    expect(again.stderr).toContain(`${checkout} is held by run run-1`);
+    expect(existsSync(join(checkout, 'work-in-progress'))).toBe(true);
+    expect(existsSync(join(cli, 'argv-2.json'))).toBe(false);
   });
 
   it('refuses to launch a checkout that can reach another remote', () => {
@@ -534,5 +584,6 @@ describe('bench run', () => {
     expect(stderr).toContain('v counting/v1: not sealed: remotes are origin, upstream, not only origin');
     expect(existsSync(join(cli, 'argv-1.json'))).toBe(false);
     expect(existsSync(join(out, 'samples.jsonl'))).toBe(false);
+    expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting.run'))).toBe(false);
   });
 });

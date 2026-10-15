@@ -22,10 +22,14 @@ import { isObject } from './typed.ts';
 export const TIERS = ['small', 'medium', 'large'] as const;
 export type Tier = (typeof TIERS)[number];
 
+/** The effort levels the engine accepts on a tier; its conformance test holds them equal. */
+export const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 export interface TierBinding {
   readonly provider: string;
   readonly model: string;
-  readonly effort?: string;
+  readonly effort?: Effort;
 }
 
 export interface Version {
@@ -102,8 +106,13 @@ export function resolveVersion(
     if (typeof provider !== 'string' || provider === '' || typeof model !== 'string' || model === '') {
       return refuse(`tier \`${tier}\` needs a provider and a model`);
     }
-    if (effort !== undefined && typeof effort !== 'string') return refuse(`tier \`${tier}\` effort must be text`);
-    pinned[tier] = effort === undefined ? { provider, model } : { provider, model, effort };
+    if (effort === undefined) {
+      pinned[tier] = { provider, model };
+      continue;
+    }
+    const level = EFFORTS.find(name => name === effort);
+    if (level === undefined) return refuse(`tier \`${tier}\` effort must be one of ${EFFORTS.join(', ')}`);
+    pinned[tier] = { provider, model, effort: level };
   }
 
   const commit = git('-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${packRef}^{commit}`);
@@ -250,11 +259,22 @@ export type Observation<T> =
   | { readonly source: 'provider'; readonly value: T }
   | { readonly source: 'unavailable'; readonly reason: string };
 
+/** A reported cost is `partial` when the attempt made provider calls whose cost was not all reported. */
+export type CostObservation =
+  | { readonly source: 'provider'; readonly value: number; readonly partial?: true }
+  | { readonly source: 'unavailable'; readonly reason: string };
+
 export interface TokenUsage {
   readonly input: number;
   readonly output: number;
   readonly cacheRead?: number;
   readonly cacheWrite?: number;
+}
+
+/** What one finished attempt of an agent node reported spending. */
+export interface AttemptSpend {
+  readonly costUsd?: CostObservation;
+  readonly tokens?: Observation<TokenUsage>;
 }
 
 /**
@@ -272,23 +292,21 @@ export interface NodeBinding {
 
 export interface RunNode {
   readonly nodeId: string;
+  /** The node's state in the run's terminal record. */
   readonly state: string;
-  readonly execution?: {
-    readonly node?: { readonly kind: string };
-    readonly binding?: unknown;
-    readonly spend?: {
-      readonly costUsd?: Observation<number>;
-      readonly tokens?: Observation<TokenUsage>;
-    };
-  };
+  /** The node's kind and binding as its latest execution row records them. */
+  readonly kind?: string;
+  readonly binding?: unknown;
+  /** Each finished attempt's own spend, oldest first: a retried node has one per attempt. */
+  readonly attempts: readonly AttemptSpend[];
 }
 
 const textOrNone = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 
 /** The model binding an agent node ran on; any other node has none. */
 export function agentBinding(node: RunNode | undefined): NodeBinding | undefined {
-  if (node?.execution?.node?.kind !== 'agent') return undefined;
-  const { binding } = node.execution;
+  if (node?.kind !== 'agent') return undefined;
+  const { binding } = node;
   if (!isObject(binding)) return {};
   const model = isObject(binding.model) ? binding.model : {};
   const resolved = isObject(model.resolved) && model.resolved.source === 'provider' ? model.resolved.value : undefined;
@@ -300,7 +318,38 @@ export function agentBinding(node: RunNode | undefined): NodeBinding | undefined
   };
 }
 
-/** The part of `archon workflow get --json --verbose` a bench reads. */
+/**
+ * Attempts' spend summed. A cost or token count is null when any attempt's is
+ * unknown; `not_applicable` is an attempt that made no provider call, a known zero.
+ * `cost_partial` marks a cost that is only a floor.
+ */
+export interface Spend {
+  readonly cost_usd: number | null;
+  readonly cost_partial: boolean;
+  readonly tokens: { readonly input: number; readonly output: number } | null;
+}
+
+export function spendOf(attempts: readonly AttemptSpend[]): Spend {
+  let cost: number | null = 0;
+  let partial = false;
+  let tokens: { input: number; output: number } | null = { input: 0, output: 0 };
+  for (const { costUsd, tokens: used } of attempts) {
+    if (costUsd?.source === 'provider' && Number.isFinite(costUsd.value) && costUsd.value >= 0) {
+      if (cost !== null) cost += costUsd.value;
+      partial ||= costUsd.partial === true;
+    } else if (!(costUsd?.source === 'unavailable' && costUsd.reason === 'not_applicable')) {
+      cost = null;
+    }
+    if (used?.source === 'provider') {
+      if (tokens !== null) tokens = { input: tokens.input + used.value.input, output: tokens.output + used.value.output };
+    } else if (!(used?.source === 'unavailable' && used.reason === 'not_applicable')) {
+      tokens = null;
+    }
+  }
+  return { cost_usd: cost, cost_partial: cost !== null && partial, tokens };
+}
+
+/** The part of `archon workflow get --json --verbose --events` a bench reads. */
 export interface RunDetail {
   readonly id: string;
   readonly status: string;
@@ -312,9 +361,18 @@ export interface RunDetail {
   readonly nodes: readonly RunNode[];
 }
 
-/** Read a finished run's detail, refusing by name when a field the bench reads is absent. */
+const EXECUTION_ROWS = new Set(['node_started', 'node_completed', 'node_failed', 'node_skipped']);
+const ATTEMPT_ROWS = new Set(['node_completed', 'node_failed']);
+
+/**
+ * Read a finished run's detail, refusing by name when a field the bench reads is absent.
+ *
+ * Node states come from the run's terminal record. Spend comes from the event rows,
+ * because each attempt writes its own terminal row with only that attempt's usage,
+ * while a node summary keeps only the last attempt's.
+ */
 export async function getRun(runId: string): Promise<RunDetail> {
-  const run = await archonJson(['workflow', 'get', runId, '--json', '--verbose']);
+  const run = await archonJson(['workflow', 'get', runId, '--json', '--verbose', '--events']);
   const missing = (field: string): never => {
     throw new Error(`archon workflow get ${runId}: the field \`${field}\` is missing`);
   };
@@ -328,8 +386,32 @@ export async function getRun(runId: string): Promise<RunDetail> {
     return typeof value === 'string' ? value : missing(path);
   };
   const aliases = field('metadata.model_bindings.effective.aliases');
-  const nodes = field('nodes');
   const completedAt = field('completed_at');
+  const states = field('terminal_record.nodes');
+  const events = field('events');
+  if (!Array.isArray(states) || !states.every(node => isObject(node) && typeof node.node_id === 'string' && typeof node.state === 'string')) {
+    return missing('terminal_record.nodes');
+  }
+  if (!Array.isArray(events)) return missing('events');
+
+  const executions = new Map<string, { kind?: string; binding?: unknown; readonly attempts: AttemptSpend[] }>();
+  for (const event of events) {
+    if (!isObject(event) || typeof event.step_name !== 'string' || !EXECUTION_ROWS.has(String(event.event_type))) continue;
+    // SQLite returns the row's data as JSON text, PostgreSQL as an object.
+    const data: unknown = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    if (!isObject(data) || !isObject(data.node)) continue;
+    const execution = executions.get(event.step_name) ?? { attempts: [] };
+    executions.set(event.step_name, execution);
+    execution.kind = textOrNone(data.node.kind);
+    execution.binding = data.binding;
+    // A roll-up row restates spend its scope's own rows already carry.
+    const ownSpend = data.accounting === undefined || data.accounting === 'node';
+    if (ATTEMPT_ROWS.has(String(event.event_type)) && ownSpend) {
+      const spend = isObject(data.spend) ? data.spend : {};
+      execution.attempts.push({ costUsd: spend.costUsd as CostObservation | undefined, tokens: spend.tokens as Observation<TokenUsage> | undefined });
+    }
+  }
+
   return {
     id: text('id'),
     status: text('status'),
@@ -338,11 +420,11 @@ export async function getRun(runId: string): Promise<RunDetail> {
     completed_at: typeof completedAt === 'string' ? completedAt : null,
     base_branch: text('metadata.dispatch.base_branch'),
     aliases: isObject(aliases) ? aliases : missing('metadata.model_bindings.effective.aliases'),
-    // The engine's node summaries cross a CLI boundary this pack cannot import types
-    // over; each entry's identity is checked, and the bench reads the rest by name.
-    nodes: Array.isArray(nodes) && nodes.every(node => isObject(node) && typeof node.nodeId === 'string')
-      ? (nodes as RunNode[])
-      : missing('nodes'),
+    nodes: states.map(node => {
+      const nodeId = node.node_id as string;
+      const execution = executions.get(nodeId);
+      return { nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
+    }),
   };
 }
 

@@ -14,7 +14,9 @@
  *
  * Versions run in parallel; inside a version, samples run one after another in one
  * checkout path, so Archon registers each (version, case) once as a project named
- * `eval-<label>/<case>` after its origin.
+ * `eval-<label>/<case>` after its origin. A hold file beside the checkout names the
+ * run working in it, so no later sample, retry or second bench replaces a checkout a
+ * run may still be using.
  */
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -26,7 +28,7 @@ import {
   type ResolvedVersion,
   type RunDetail,
   type RunNode,
-  type TokenUsage,
+  type Spend,
   agentBinding,
   appendLine,
   artifactsOf,
@@ -35,6 +37,7 @@ import {
   launch,
   readLines,
   resolveVersion,
+  spendOf,
   waitRun,
 } from '../../.shared/bench.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
@@ -453,9 +456,10 @@ export interface HardChecks {
 }
 
 /**
- * Whether a finished sample counts: the run completed with no failed node, left lens
- * files and the review's `findings.json`, diffed against the case's base branch (the rest of the
- * seal is checked before launch), and every lens ran on the version's tiers.
+ * Whether a finished sample counts: the run completed with no failed node, every lens
+ * the route selected left its file, the review left its `findings.json`, the run diffed
+ * against the case's base branch (the rest of the seal is checked before launch), and
+ * every lens ran on the version's tiers.
  */
 export function hardChecks(
   run: RunDetail,
@@ -465,6 +469,13 @@ export function hardChecks(
 ): HardChecks {
   const output: string[] = [];
   if (item.lenses.length === 0) output.push('the run left no lens file');
+  for (const lens of LENSES) {
+    const node = lensNode(run, lens);
+    // A lens the route did not select is skipped; every other one owes its file.
+    if (node?.kind === 'agent' && node.state !== 'skipped' && !item.lenses.includes(lens)) {
+      output.push(`lens ${lens} ran but left no ${lens === 'simplify' ? 'shape.md' : `review/${lens}.md`}`);
+    }
+  }
   if (!item.findings) output.push('the run left no review/findings.json');
   const checks = {
     completed: check(completedProblems(run)),
@@ -507,9 +518,6 @@ export function collectItem(run: RunDetail, itemDir: string): ReviewItem {
   return { lenses: lenses.sort(), findings: existsSync(join(itemDir, 'review', 'findings.json')) };
 }
 
-const reported = <T>(observation: { source: string; value?: T } | undefined): T | null =>
-  observation?.source === 'provider' && observation.value !== undefined ? observation.value : null;
-
 function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
   const node = lensNode(run, lens);
   const binding = agentBinding(node);
@@ -519,25 +527,14 @@ function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
     provider: binding?.provider ?? null,
     model: binding?.requested ?? null,
     resolved_model: binding?.resolved ?? null,
-    cost_usd: reported(node?.execution?.spend?.costUsd),
-    tokens: reported(node?.execution?.spend?.tokens),
+    attempts: node?.attempts.length ?? 0,
+    ...spendOf(node?.attempts ?? []),
   };
 }
 
-/** The run's total provider cost, or null when any agent node that ran reported none. */
-export function runCost(run: RunDetail): { cost_usd: number | null; tokens: TokenUsage } {
-  let cost: number | null = 0;
-  const tokens = { input: 0, output: 0 };
-  for (const node of run.nodes) {
-    // A lens the route skipped is still an agent node, with no spend to report.
-    if (node.state === 'skipped' || agentBinding(node) === undefined) continue;
-    const nodeCost = reported(node.execution?.spend?.costUsd);
-    cost = cost === null || nodeCost === null ? null : cost + nodeCost;
-    const used = reported(node.execution?.spend?.tokens);
-    tokens.input += used?.input ?? 0;
-    tokens.output += used?.output ?? 0;
-  }
-  return { cost_usd: cost, tokens };
+/** The run's total spend over every attempt of every agent node. */
+export function runCost(run: RunDetail): Spend {
+  return spendOf(run.nodes.flatMap(node => (node.kind === 'agent' ? node.attempts : [])));
 }
 
 /** The neutral trigger: a review of a branch with no pull request, and nothing more. */
@@ -553,12 +550,32 @@ interface RunOptions {
   readonly outDir: string;
 }
 
+/**
+ * Take the checkout for one sample, or refuse while another run may be using it. The
+ * hold is released only once the run it names is known to have finished; until then
+ * only the operator, who can see that run, can release it.
+ */
+function holdCheckout(hold: string, checkout: string): void {
+  mkdirSync(dirname(hold), { recursive: true });
+  try {
+    writeFileSync(hold, '', { flag: 'wx' });
+  } catch (error) {
+    if (!(isObject(error) && error.code === 'EEXIST')) throw error;
+    const owner = readFileSync(hold, 'utf8').trim();
+    throw new Error(
+      `${checkout} is held by ${owner === '' ? 'a bench that has not launched its run' : `run ${owner}`}; ` +
+        `once that is finished (archon workflow get ${owner || '<run-id>'}), delete ${hold} and run again`
+    );
+  }
+}
+
 async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promise<void> {
   const { bench, prepared, outDir } = options;
   const { version } = resolved;
   const samplesFile = join(outDir, SAMPLES_FILE);
   const origin = ensureOrigin(prepared, bench, version.label, outDir);
   const checkout = join(outDir, 'checkouts', `eval-${version.label}`, bench.id);
+  const hold = `${checkout}.run`;
   const workOrder = readFileSync(bench.work_order, 'utf8');
   for (const variant of options.variants) {
     const expected = prepared.variants.get(variant) as string;
@@ -567,17 +584,26 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
       .map(line => (typeof line.sample === 'number' ? line.sample : 0));
     const first = Math.max(0, ...taken) + 1;
     for (let sample = first; sample < first + options.samples; sample++) {
-      cloneSample(prepared, bench, variant, origin, checkout);
-      const sealed = sealedBefore(checkout, origin, expected);
-      if (sealed.length > 0) throw new Error(`${version.label} ${bench.id}/${variant}: not sealed: ${sealed.join('; ')}`);
-      const runId = await launch({
-        workflow: version.workflow,
-        cwd: checkout,
-        source: resolved.source,
-        config: resolved.config,
-        inputs: { ...version.inputs, work_order: workOrder },
-        message: reviewMessage(bench),
-      });
+      holdCheckout(hold, checkout);
+      let runId: string;
+      try {
+        cloneSample(prepared, bench, variant, origin, checkout);
+        const sealed = sealedBefore(checkout, origin, expected);
+        if (sealed.length > 0) throw new Error(`${version.label} ${bench.id}/${variant}: not sealed: ${sealed.join('; ')}`);
+        runId = await launch({
+          workflow: version.workflow,
+          cwd: checkout,
+          source: resolved.source,
+          config: resolved.config,
+          inputs: { ...version.inputs, work_order: workOrder },
+          message: reviewMessage(bench),
+        });
+      } catch (error) {
+        // The launch was refused, so no run holds the checkout.
+        rmSync(hold, { force: true });
+        throw error;
+      }
+      writeFileSync(hold, runId);
       const name = `${version.label} ${bench.id}/${variant} #${sample}`;
       console.log(`${name}: run ${runId}`);
       const identity = { case: bench.id, variant, sample, run_id: runId, version };
@@ -593,6 +619,7 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
       } catch (error) {
         throw new Error(`${name}: run ${runId} may still be running in ${checkout}: ${fail(error)}`);
       }
+      rmSync(hold);
       // The run is paid for: whatever fails from here, its line is written and the batch goes on.
       let fetched: RunDetail | undefined;
       try {
