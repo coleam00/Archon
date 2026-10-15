@@ -5611,31 +5611,46 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     expect((await readFile(attempts, 'utf8')).length).toBe(3);
   });
 
-  it(
-    'bash node that times out is retried as transient',
-    async () => {
+  it.each([false, true])('bash timeout retries stop on cleanup failure: %s', async cleanupFails => {
+    let attempts = 0;
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async () => {
+      attempts++;
+      throw Object.assign(new Error('deadline expired'), {
+        timedOut: true,
+        code: null,
+        killed: true,
+        signal: 'SIGTERM',
+        stdout: '',
+        stderr: '',
+        ...(cleanupFails && attempts === 2
+          ? { cleanupError: new Error('tree termination unproved') }
+          : {}),
+      });
+    });
+    try {
       const { mockDeps } = await runNodes([
         {
           id: 'slow',
           kind: 'exec',
           runtime: 'sh',
-          script: 'sleep 5',
+          script: 'echo slow',
           timeout: 100,
-          retry: { max_attempts: 1, delay_ms: 1 },
+          retry: { max_attempts: 2, delay_ms: 1 },
         },
       ]);
-
-      // Count the engine's per-attempt rows rather than a side-effect file: on a loaded
-      // runner the 100 ms timeout can fire before the shell writes anything.
-      const timedOut = (
+      const failures = (
         mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
-      ).mock.calls.filter(
-        ([event]) => event.event_type === 'node_failed' && event.data?.failure_kind === 'timeout'
+      ).mock.calls
+        .filter(([event]) => event.event_type === 'node_failed')
+        .map(([event]) => event.data?.failure_kind);
+      expect(failures).toEqual(
+        cleanupFails ? ['timeout', 'exec_failed'] : ['timeout', 'timeout', 'timeout']
       );
-      expect(timedOut).toHaveLength(2);
-    },
-    testTimeout(10_000)
-  );
+      expect(attempts).toBe(cleanupFails ? 2 : 3);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
 
   it.each([
     ['forge', false],
