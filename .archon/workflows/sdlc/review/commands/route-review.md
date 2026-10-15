@@ -11,11 +11,20 @@ one watches this run; your structured answer is all the next nodes read.
   names a file such as `$ARTIFACTS_DIR/plan.md`, read that file's summary and steps,
   not the whole repository.
 - The previous round's reviewed commit, `$mode.output.cursor` (empty on a first
-  round), and the commit under review, `$mode.output.head` (a two-dot
-  `git diff --stat <reviewed>..<head>` covers what lies between them). When the
-  reviewed commit is not empty, this round continues an earlier review: judge only
-  that correction delta and the hunks you need. The lenses the previous round ran
-  review the delta whatever you answer; answer for what the delta itself needs.
+  round), and the commit under review, `$mode.output.head`. When the reviewed commit
+  is not empty, this round continues an earlier review: judge only that correction
+  delta and the hunks you need. The delta leaves out code a merge of the base
+  brought in. Take the base from the requested scope's record, or the current
+  branch's pull request, and read the delta with
+  `tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <head>)" <reviewed> | head -1)`
+  then `git diff --stat "$tree" <head>`.
+- On a continuation, the code lens reviews the delta whatever you answer. Select
+  another lens when the previous report leaves a finding it raised open:
+  `findings.json` beside the previous report ($INPUTS.prior_report) lists each
+  finding's `sources` and `status`; without that file, the report's findings say
+  the same. Select one too when the delta itself touches its
+  area. A lens whose findings the previous round closed, or that raised none, does
+  not rerun otherwise.
 
 Lenses:
 
