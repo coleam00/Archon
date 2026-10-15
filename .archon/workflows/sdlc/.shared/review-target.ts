@@ -9,7 +9,7 @@ import {
 } from './forge.ts';
 import { git } from './git.ts';
 import { note } from './io.ts';
-import { findOpenPrByHead, viewPr } from './pr.ts';
+import { findOpenPrByHead, listOpenPrsByHead, viewPr, type PrView } from './pr.ts';
 import { findRemote, urlRepo } from './remote.ts';
 
 const prUrlKinds = new Map([
@@ -82,9 +82,9 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
     const unanswered: string[] = [];
     for (const repo of repos) {
       for (const headRepo of repos) {
-        let pr: PrRecord | undefined;
+        let views: PrView[];
         try {
-          pr = findOpenPrByHead(repo, headRepo, branch.stdout, source)?.pr;
+          views = listOpenPrsByHead(repo, headRepo, branch.stdout, source);
         } catch (error) {
           // Nothing asked for a PR, so a remote the forge cannot answer for (another
           // host, no auth, offline) leaves the working diff; the note keeps it visible.
@@ -93,17 +93,18 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
           );
           continue;
         }
-        if (!pr) continue;
-        if (
-          !sameRepo(pr.repo, repo) ||
-          pr.head_repo === null ||
-          !sameRepo(pr.head_repo, headRepo) ||
-          pr.head !== branch.stdout ||
-          pr.state !== 'open'
-        ) {
-          throw new Error('the forge result does not match the requested head');
+        for (const { pr } of views) {
+          if (
+            !sameRepo(pr.repo, repo) ||
+            pr.head_repo === null ||
+            !sameRepo(pr.head_repo, headRepo) ||
+            pr.head !== branch.stdout ||
+            pr.state !== 'open'
+          ) {
+            throw new Error('the forge result does not match the requested head');
+          }
+          if (!matches.some(other => samePr(other, pr))) matches.push(pr);
         }
-        if (!matches.some(other => samePr(other, pr))) matches.push(pr);
       }
     }
     if (matches.length > 1)

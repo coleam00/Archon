@@ -146,11 +146,27 @@ export function findOpenPrByHead(
   head: string,
   source: ForgeSource
 ): PrView | undefined {
+  const matches = listOpenPrsByHead(repo, headRepo, head, source);
+  if (matches.length > 1) {
+    throw new Error(
+      `more than one open pull request in ${repo.path} has head ${headRepo.path}:${head}`
+    );
+  }
+  return matches[0];
+}
+
+/** Every open pull request the forge reports for `headRepo:head` in `repo`. */
+export function listOpenPrsByHead(
+  repo: QualifiedPr['repo'],
+  headRepo: QualifiedPr['repo'],
+  head: string,
+  source: ForgeSource
+): PrView[] {
   if (source === 'forge') {
     const value = invokeForge('pr.view', {
       selector: { kind: 'head', repo, headRepo, head },
     });
-    return value === null ? undefined : forgePrView(value);
+    return value === null ? [] : [forgePrView(value)];
   }
   const listed = gh(
     'pr',
@@ -168,15 +184,9 @@ export function findOpenPrByHead(
   if (!Array.isArray(rows)) throw new Error('gh pr list returned an unexpected payload');
   // gh matches a head branch by name alone, so the qualified head repository is
   // compared here; the forge selector already carries it.
-  const matches = rows
+  return rows
     .map(row => ghPrView(repo, row))
     .filter(view => view.pr.head_repo !== null && sameRepo(view.pr.head_repo, headRepo));
-  if (matches.length > 1) {
-    throw new Error(
-      `more than one open pull request in ${repo.path} has head ${headRepo.path}:${head}`
-    );
-  }
-  return matches[0];
 }
 
 export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
