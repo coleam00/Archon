@@ -133,23 +133,10 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     return { runId, kind: outcome.kind, reason: outcome.reason, ...deferral };
   if (outcome.kind === 'failed')
     return { runId, kind: outcome.kind, error: errorMessage(outcome.error), ...deferral };
-  if (outcome.kind === 'waiting_for_capacity')
-    return {
-      runId,
-      kind: outcome.kind,
-      blocker: outcome.blocker,
-      message: outcome.message,
-      ...deferral,
-    };
-  if (outcome.kind === 'resource_busy')
-    return {
-      runId,
-      kind: outcome.kind,
-      blocker: outcome.blocker,
-      refusal: outcome.refusal,
-      message: outcome.message,
-      ...deferral,
-    };
+  if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy') {
+    const { deferError: _deferError, ...refusal } = outcome;
+    return { ...refusal, ...deferral };
+  }
   return { runId, kind: outcome.kind, ...deferral };
 }
 

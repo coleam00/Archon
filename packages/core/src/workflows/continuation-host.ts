@@ -221,10 +221,10 @@ export async function wakeDueWorkflowContinuations(
           log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
       }
-      if (outcome.kind === 'waiting_for_capacity')
+      if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy')
         log.info(
-          { runId: run.id, blocker: outcome.blocker },
-          'workflow_continuation_capacity_wait'
+          { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
+          'workflow_continuation_capacity_refused'
         );
       const sourceError =
         outcome.kind === 'unavailable'
