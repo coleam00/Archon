@@ -2,13 +2,12 @@
 # change touches no type, contract, state or boundary, and selects only docs.
 mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
-head-check: "target matches"
+head-check:
+  base: null
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
 scope:
   selector: ""
-  target:
-    base: null
-    # A standalone review of the working diff: no pull request to publish to.
-    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 docs: "0 findings"
 review-complete: "settled"

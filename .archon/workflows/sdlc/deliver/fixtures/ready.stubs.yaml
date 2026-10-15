@@ -11,12 +11,11 @@ pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { 
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
-review__head-check: "target matches"
+review__head-check:
+  base: { branch: dev, revision: cafe }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 review__scope:
   selector: "https://github.com/example/repo/pull/1"
-  target:
-    base: { branch: dev, revision: cafe }
-    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
 review__code: "0 findings"
@@ -45,12 +44,11 @@ reshape__implement:
   summary: "stub: adopted one smaller shape, declined none; pushed"
 reshape__assert-changed: "1 file changed"
 rereview__mode: '{"continuation":true,"light":true,"head":"fixturehead2","cursor":"fixturehead","risks":"fixture-owned-policy","execution":{"path":"rereview__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
-rereview__head-check: "target matches"
+rereview__head-check:
+  base: { branch: dev, revision: cafe }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 rereview__scope:
   selector: "https://github.com/example/repo/pull/1"
-  target:
-    base: { branch: dev, revision: cafe }
-    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 rereview__code: "0 findings in the reshape delta"
 rereview__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"

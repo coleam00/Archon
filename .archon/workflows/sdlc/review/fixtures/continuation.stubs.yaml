@@ -4,13 +4,12 @@
 # no stub, so one that runs anyway fails this fixture.
 mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: false, code: true, tests: false, errors: false, docs: false, reason: "stub: the delta is a small behavior fix" }
-head-check: "target matches"
+head-check:
+  base: null
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
 scope:
   selector: ""
-  target:
-    base: null
-    # A standalone review of the working diff: no pull request to publish to.
-    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 seams: "0 findings; prior finding S1 resolved by the delta"
 code: "0 findings; prior finding C1 validly declined"

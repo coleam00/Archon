@@ -2,12 +2,11 @@
 # and declares a working diff, so nothing is published, and simplify still runs.
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: true, docs: true, reason: "stub: every lens" }
-review__head-check: "target matches"
+review__head-check:
+  base: null
+  pr: null
 review__scope:
   selector: ""
-  target:
-    base: null
-    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
 review__code: "1 finding"

@@ -1,11 +1,26 @@
+/**
+ * Fix the review target before any lens runs, from facts the run can establish.
+ *
+ * The target is resolved from the requested scope (a recorded PR, number, URL,
+ * branch, or empty for the current branch's open PR) through the forge, not from
+ * anything the scope agent says about it. A PR review proceeds only when the PR's
+ * head is the commit this round fixed; otherwise the node refuses with retry
+ * commands for the PR's head. The output is the PR and its live diff base, which
+ * publication checks again before its public write.
+ *
+ * Bound inputs (`with:` bindings, canonical text in env):
+ * - INPUTS_SCOPE: the review's requested scope.
+ * - INPUTS_SELECTOR: the scope agent's selector, read only when INPUTS_SCOPE is
+ *   empty: its reading of a target the trigger message names.
+ * - INPUTS_HEAD: the commit this round reviews, as review-round fixed it.
+ */
+
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { forgeSource, record, samePr, sameRepo, type PrRecord } from '../../.shared/forge.ts';
-import { report, refuse, text } from '../../.shared/io.ts';
+import { forgeSource, sameRepo, type PrRecord } from '../../.shared/forge.ts';
+import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { findRemote } from '../../.shared/remote.ts';
 import {
-  checkReviewBase,
-  declaredPr,
-  recordedPr,
+  liveReviewBase,
   resolveReviewPr,
   retainedReviewRef,
   reviewHead,
@@ -48,40 +63,25 @@ try {
   if (checkout !== head) {
     throw new Error(`this round fixed ${head}, but the checkout is now at ${checkout}`);
   }
-  const scope = text(process.env.INPUTS_SCOPE);
-  const recorded = recordedPr(scope);
-  const target = record(JSON.parse(text(process.env.INPUTS_TARGET)));
-  if (!target || !('pr' in target) || !('base' in target)) throw new Error('missing review target');
-  const declared = declaredPr(JSON.stringify(target.pr));
-  if (recorded && (!declared || !samePr(declared, recorded))) {
-    throw new Error('the scope declaration does not match the recorded pull request');
-  }
   const pr = resolveReviewPr(
-    scope.trim() || text(process.env.INPUTS_SELECTOR).trim(),
+    text(process.env.INPUTS_SCOPE).trim() || text(process.env.INPUTS_SELECTOR).trim(),
     forgeSource()
   );
-  if (pr ? !declared || !samePr(declared, pr) : declared !== undefined) {
-    throw new Error(
-      'the scope declaration does not match the resolved pull request. No review lenses ran.' +
-        (pr ? `\n${retry(pr, reviewHead(pr))}` : '')
-    );
-  }
-  if (pr) {
+  if (!pr) {
+    note('check-review-head: no open PR; reviewing the working diff.');
+    emit({ pr: null, base: null });
+  } else {
     const remoteHead = reviewHead(pr);
     if (remoteHead !== head) {
       throw new Error(
-        `${pr.repo.host}/${pr.repo.path}#${String(pr.number)} is at ` +
-          `${remoteHead}, but this round fixed ${head}. ` +
+        `the checkout is at ${head}, but ${pr.repo.host}/${pr.repo.path}#${String(pr.number)} ` +
+          `is at ${remoteHead}, so this run cannot review the PR's head. ` +
           `No review lenses ran.\n${retry(pr, remoteHead)}`
       );
     }
-    checkReviewBase(pr, JSON.stringify(target.base));
+    note('check-review-head: the PR head is the commit under review.');
+    emit({ pr: { repo: pr.repo, number: pr.number }, base: liveReviewBase(pr) });
   }
-  report(
-    pr
-      ? 'check-review-head: the resolved target matches the commit under review.'
-      : 'check-review-head: no open PR; reviewing the working diff.'
-  );
 } catch (error) {
   refuse(`check-review-head: ${error instanceof Error ? error.message : String(error)}`);
 }

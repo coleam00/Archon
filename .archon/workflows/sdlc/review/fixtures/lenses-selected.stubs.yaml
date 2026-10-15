@@ -3,13 +3,12 @@
 # runs anyway fails this fixture instead of passing quietly.
 mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
-head-check: "target matches"
+head-check:
+  base: null
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
 scope:
   selector: ""
-  target:
-    base: null
-    # A standalone review of the working diff: no pull request to publish to.
-    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 seams: "0 findings"
 code: "0 findings"

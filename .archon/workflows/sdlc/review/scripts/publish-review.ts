@@ -9,19 +9,15 @@
  *
  * A report goes public only about the commit its round fixed at the start
  * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. Its live base must also match the fetched base scope reviewed.
- * The head is checked before the scope agent's declaration, so a
- * correction that was never pushed is named as that rather than as a scope
- * mismatch. Any mismatch refuses, so a verdict about one commit can never
+ * head must be it. Its live base must also still be the base head-check recorded.
+ * Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit on the comment
  * itself rather than trusting the report's text to name it. Once published, the
  * commit is recorded beside the report as the next round's cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
- *   pull-request record here, and that record is then the only write target.
- * - INPUTS_TARGET: the paired PR identity and fetched diff base declared by scope,
- *   both null for a working diff. An explicit scope remains the write target.
+ * - INPUTS_TARGET: head-check's output: the PR this round reviewed and its diff
+ *   base, both null for a working diff. The PR is the only write target.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -37,15 +33,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import { forgeSource, record, sameRepo, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import {
-  checkReviewBase,
-  recordedPr,
-  declaredPr,
-  resolveReviewPr,
-  reviewHead,
-} from '../../.shared/review-target.ts';
+import { liveReviewBase, reviewHead } from '../../.shared/review-target.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
@@ -59,8 +49,8 @@ function lenses(): Record<string, boolean> {
   );
 }
 
-function label(pr: QualifiedPr | undefined): string {
-  return pr ? `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}` : 'no pull request';
+function label(pr: QualifiedPr): string {
+  return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`;
 }
 
 try {
@@ -73,14 +63,9 @@ try {
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
     contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
-  const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const target = record(JSON.parse(text(process.env.INPUTS_TARGET)));
-  if (!target || !('pr' in target) || !('base' in target)) throw new Error('missing review target');
-  const declared = declaredPr(JSON.stringify(target.pr));
-  const scope = text(process.env.INPUTS_SCOPE).trim();
-  const requested = !recorded && scope ? resolveReviewPr(scope, source) : undefined;
-  const bound = recorded ?? requested;
-  const pr = bound ?? declared;
+  if (!target) throw new Error('missing review target');
+  const pr = target.pr === null ? undefined : parseQualifiedPr(JSON.stringify(target.pr));
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
   const report = readFileSync(reportPath, 'utf8');
@@ -89,24 +74,20 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (pr) {
-    const live = requested ?? viewPr(pr, source).pr;
+  if (!pr) {
+    note('publish-review: the review scope is a working diff, so no comment was published.');
+  } else {
+    const live = viewPr(pr, source).pr;
     const remote = reviewHead(live);
     if (remote !== head) {
       throw new Error(
         `this round reviewed ${head}, but ${label(pr)} is at ${remote}: the commits under review were not pushed`
       );
     }
-    checkReviewBase(live, JSON.stringify(target.base));
-  }
-  if (bound && (declared?.number !== bound.number || !sameRepo(declared.repo, bound.repo))) {
-    throw new Error(
-      `the review scope declared ${label(declared)}, but ${recorded ? 'delivery recorded' : 'the requested scope names'} ${label(bound)}`
-    );
-  }
-  if (!pr) {
-    note('publish-review: the review scope is a working diff, so no comment was published.');
-  } else {
+    const reviewed = record(target.base);
+    if (live.base !== reviewed?.branch || liveReviewBase(live).revision !== reviewed.revision) {
+      throw new Error('the PR base changed after head-check; review the new diff');
+    }
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
       MARKER,

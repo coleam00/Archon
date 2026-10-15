@@ -3,13 +3,12 @@
 # the item the assignment gives to part 2 stays open as deferred, and no discovery is
 # filed for it.
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
-head-check: "target matches"
+head-check:
+  base: null
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
 scope:
   selector: ""
-  target:
-    base: null
-    # A standalone review of the working diff: no pull request to publish to.
-    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 docs: "0 findings"
 review-complete: "settled"

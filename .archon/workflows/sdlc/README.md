@@ -29,23 +29,23 @@ script or graph test must exercise its deciding inputs and failure path. Compose
 review tests must execute the check with the caller's actual `with:` bindings.
 
 PR review has two checks at different times. After the scope agent interprets the
-trigger message and returns a selector and qualified PR, `head-check` resolves the
-explicit nonempty `scope` input first, using the agent's selector only when that
-input is empty. It rejects a missing or different PR declaration and compares the
-live PR head with the commit fixed by `mode`, before routing or lenses. Scope also
-records the fetched base branch and revision used for its diff; both checks refuse
-a PR whose current base differs, so retargeting or advancing the base requires a
-new review of that diff. When the
+trigger message and returns a selector, `head-check` resolves the PR from the
+explicit nonempty `scope` input, using the agent's selector only when that input
+is empty. It never reads the agent's opinion of whether a PR is in scope. It
+compares the live PR head with the commit fixed by `mode`, before routing or
+lenses, and outputs the PR with its live base branch and revision. When the
 forge omits the head revision, the check reads the retained PR ref from the base
 repository. If that lookup fails or the ref is absent, it stops with the missing
 prerequisite and no retry command. A resolved mismatch stops with a retained-ref
 fetch and pinned `--from` retry, including for forks and closed or merged PRs. An
 open same-repository PR with a forge-provided revision also gets a branch retry.
 The check never changes the checkout. Keep other non-default review inputs when retrying.
-Publication binds the target to the explicit scope and checks again before its
+Publication writes only to the PR `head-check` output and checks again before its
 write, using the same retained-ref lookup for an absent forge revision, because
-the PR can move while the lenses run. Working-diff reviews need no
-forge head comparison after discovery confirms no open PR.
+the PR can move while the lenses run. It also refuses when the PR's base branch or
+revision changed after `head-check`, so a retargeted or advanced base needs a new
+review. Working-diff reviews need no forge head comparison after discovery
+confirms no open PR.
 
 ### Why this rule exists
 

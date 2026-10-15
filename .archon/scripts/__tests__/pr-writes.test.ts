@@ -402,75 +402,37 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('publishes nothing for a working-diff review and still reports the verdict', () => {
-    const result = publishReview({ inputs: { ...report, targetPr: 'null' } });
+    const result = publishReview({ inputs: { ...report, targetPr: 'null', targetBase: 'null' } });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
     expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
   });
 
-  it('still accepts a legacy empty-object working-diff declaration', () => {
-    const result = publishReview({ inputs: { ...report, targetPr: '{}' } });
-    expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
-    expect(result.forge).toEqual([]);
-  });
-
-  // Delivery hands the review its verified record as the scope. The scope agent's
-  // declaration is then a restatement, not the authority: a wrong or empty one must
-  // not move the comment or silently skip it.
-  it.each([
-    ['declares no pull request', 'null'],
-    ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
-  ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
-    const result = publishReview({
-      inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), targetPr: declared },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('delivery recorded');
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-  });
-
-  it('refuses to publish to a substituted PR even when its head matches', () => {
-    const result = publishReview({
-      inputs: { ...report, INPUTS_SCOPE: PR_URL, targetPr: JSON.stringify({ ...PR, number: 99 }) },
-    });
-    expect(result.code).toBe(1);
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-  });
-
-  for (const scope of [PR_URL, JSON.stringify(PR)]) {
-    for (const change of ['retargeted', 'advanced', 'identity']) {
-      it(`refuses publication after target drift: ${scope}, ${JSON.stringify(change)}`, () => {
-        const result = publishReview({
-          source: 'forge',
-          inputs: {
-            ...report,
-            INPUTS_SCOPE: scope,
-            ...(change === 'advanced'
-              ? { targetBase: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
-              : {}),
-          },
-          forge: {
-            kind: 'fake',
-            response: forgeOperation('pr.view', {
-              pr: forgePrRecord(
-                change === 'retargeted'
-                  ? { base: 'main' }
-                  : change === 'identity'
-                    ? { number: 99 }
-                    : {}
-              ),
-            }),
-          },
-        });
-        expect(result.code).toBe(1);
-        expect(result.forge).toHaveLength(1);
-        expect(result.stderr).toContain(change === 'identity' ? 'does not match' : 'base changed');
-        expect(result.gh).toEqual([]);
+  for (const change of ['retargeted', 'advanced', 'identity']) {
+    it(`refuses publication after target drift: ${change}`, () => {
+      const result = publishReview({
+        source: 'forge',
+        inputs: {
+          ...report,
+          ...(change === 'advanced'
+            ? { targetBase: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
+            : {}),
+        },
+        forge: {
+          kind: 'fake',
+          response: forgeOperation('pr.view', {
+            pr: forgePrRecord(
+              change === 'retargeted' ? { base: 'main' } : change === 'identity' ? { number: 99 } : {}
+            ),
+          }),
+        },
       });
-    }
+      expect(result.code).toBe(1);
+      expect(result.forge).toHaveLength(1);
+      expect(result.stderr).toContain(change === 'identity' ? 'does not match' : 'base changed');
+      expect(result.gh).toEqual([]);
+    });
   }
 
   it('refuses publication when the qualified live base ref cannot be read', () => {
@@ -484,7 +446,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     const result = publishReview({
       cwd,
       source: 'forge',
-      inputs: { ...report, INPUTS_SCOPE: PR_URL },
+      inputs: report,
       forge: { kind: 'fake', response: prView },
     });
     expect(result.code).toBe(1);
@@ -496,14 +458,12 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   for (const moved of ['head', 'base']) {
-    it(`refuses an explicit URL whose ${moved} moved after preflight, without writing a comment`, () => {
+    it(`refuses a PR whose ${moved} moved after head-check, without writing a comment`, () => {
       const cwd = gitCheckout({}, trackTempRoot);
-      const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
       const preflight = runPackScript('review/scripts/check-review-head', {
         cwd,
         inputs: {
           INPUTS_SCOPE: PR_URL,
-          INPUTS_TARGET: JSON.stringify({ pr: PR, base: { branch: 'dev', revision: base } }),
           INPUTS_HEAD: REVIEWED,
           ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
         },
@@ -514,7 +474,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
         expect(push.status).toBe(0);
       }
       const result = publishReview({
-        inputs: { ...report, INPUTS_SCOPE: PR_URL },
+        inputs: { ...report, INPUTS_TARGET: preflight.stdout },
         gh: moved === 'head' ? { pr: { headRefOid: 'pushed-after-preflight' } } : {},
         cwd,
       });
@@ -523,14 +483,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       expect(result.gh.some(call => call.includes('--method'))).toBe(false);
     });
   }
-
-  it('publishes to the recorded pull request when the scope declaration agrees', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
-    expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.includes('repos/example/repo/issues/42/comments'))).toBe(
-      true
-    );
-  });
 
   it('upserts through the plugin on the opt-in path, with the report in the request file', () => {
     const result = publishReview({
@@ -677,7 +629,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     const result = publishReview({
       inputs: {
         ...report,
-        INPUTS_SCOPE: JSON.stringify(PR),
         INPUTS_HEAD: STALE,
         ARCHON_NODE_EXECUTION: atCommit(STALE),
       },
@@ -689,8 +640,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
   });
 
-  // An unpushed correction once reached publication with a scope that declared no
-  // pull request; the error named the declaration instead of the unpushed head.
   it('records the lenses this round ran beside the report for the next round to rerun', () => {
     const recorded = (run: ScriptRun): unknown =>
       JSON.parse(readFileSync(join(run.artifacts, 'reviewed-lenses.json'), 'utf8'));
@@ -741,21 +690,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
       errors: false,
       docs: false,
     });
-  });
-
-  it('names an unpushed head before any scope disagreement', () => {
-    const result = publishReview({
-      inputs: {
-        ...report,
-        INPUTS_SCOPE: JSON.stringify(PR),
-        targetPr: 'null',
-        INPUTS_HEAD: STALE,
-        ARCHON_NODE_EXECUTION: atCommit(STALE),
-      },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('the commits under review were not pushed');
-    expect(result.stderr).not.toContain('delivery recorded');
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

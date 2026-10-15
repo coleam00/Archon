@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -22,23 +22,22 @@ const execution = (head: string) =>
 
 function check(options: ScriptOptions = {}) {
   const cwd = options.cwd ?? gitCheckout({}, track);
-  const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
-  const { targetPr, targetBase, ...inputs } = options.inputs ?? {};
   return runPackScript('review/scripts/check-review-head', {
     ...options,
     cwd,
     inputs: {
       INPUTS_SCOPE: PR_URL,
       INPUTS_SELECTOR: PR_URL,
-      INPUTS_TARGET: JSON.stringify({
-        pr: targetPr === undefined ? PR : JSON.parse(targetPr),
-        base: targetBase === undefined ? { branch: 'dev', revision: base } : JSON.parse(targetBase),
-      }),
       INPUTS_HEAD: HEAD,
       ARCHON_NODE_EXECUTION: execution(HEAD),
-      ...inputs,
+      ...options.inputs,
     },
   });
+}
+
+/** The PR and live diff base a passing check hands to publication. */
+function prTarget(cwd: string) {
+  return { pr: PR, base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') } };
 }
 
 function view(overrides: Record<string, unknown> = {}) {
@@ -51,9 +50,10 @@ function view(overrides: Record<string, unknown> = {}) {
 describe('review head boundary', () => {
   for (const source of ['gh', 'forge']) {
     it(`accepts a matching live head through ${source}`, () => {
-      const run = check({ source, forge: view() });
+      const cwd = gitCheckout({}, track);
+      const run = check({ cwd, source, forge: view() });
       expect(run.code).toBe(0);
-      expect(run.stdout).toContain('matches the commit');
+      expect(JSON.parse(run.stdout)).toEqual(prTarget(cwd));
     });
     it(`refuses a different live head through ${source} before lenses, with retry commands`, () => {
       const cwd = gitCheckout({}, track);
@@ -119,22 +119,6 @@ describe('review head boundary', () => {
   }
 
   for (const scope of [PR_URL, JSON.stringify(PR)]) {
-    for (const change of ['retargeted', 'advanced']) {
-      it(`refuses a changed diff base before lenses: ${scope}, ${JSON.stringify(change)}`, () => {
-        const run = check({
-          source: 'forge',
-          forge: view(change === 'retargeted' ? { base: 'main' } : {}),
-          inputs: {
-            INPUTS_SCOPE: scope,
-            ...(change === 'advanced'
-              ? { targetBase: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
-              : {}),
-          },
-        });
-        expect(run.code).toBe(1);
-        expect(run.stderr).toContain('base changed');
-      });
-    }
     it(`refuses a substituted forge identity: ${scope}`, () => {
       const run = check({
         source: 'forge',
@@ -146,37 +130,27 @@ describe('review head boundary', () => {
     });
   }
 
-  for (const change of [{ baseRefName: 'main' }, { number: 99 }]) {
-    it(`rejects GitHub identity or base drift: ${JSON.stringify(change)}`, () => {
-      const run = check({ gh: { pr: change } });
-      expect(run.code).toBe(1);
-      expect(run.stderr).toContain('number' in change ? 'does not match' : 'base changed');
+  it('rejects a substituted GitHub identity', () => {
+    const run = check({ gh: { pr: { number: 99 } } });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('does not match');
+  });
+
+  for (const baseRevision of ['stale', null]) {
+    it(`records the remote base revision when the forge reports ${String(baseRevision)}`, () => {
+      const cwd = gitCheckout({}, track);
+      writeFileSync(join(cwd, 'base.txt'), 'new base');
+      git(cwd, 'add', 'base.txt');
+      git(cwd, 'commit', '-qm', 'advance remote base');
+      git(cwd, 'push', '-q', 'upstream', 'HEAD:dev');
+      const run = check({ cwd, source: 'forge', forge: view({ base_revision: baseRevision }) });
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.stdout).base).toEqual({
+        branch: 'dev',
+        revision: git(cwd, 'rev-parse', 'HEAD'),
+      });
     });
   }
-
-  it('uses the live base branch even when the forge record has a stale base revision', () => {
-    const run = check({ source: 'forge', forge: view({ base_revision: 'stale' }) });
-    expect(run.code).toBe(0);
-  });
-
-  it('checks a missing forge base revision against the remote base ref', () => {
-    const cwd = gitCheckout({}, track);
-    const base = git(cwd, 'rev-parse', 'dev');
-    const options: ScriptOptions = {
-      cwd,
-      source: 'forge',
-      forge: view({ base_revision: null }),
-      inputs: { targetBase: JSON.stringify({ branch: 'dev', revision: base }) },
-    };
-    expect(check(options).code).toBe(0);
-    writeFileSync(join(cwd, 'base.txt'), 'new base');
-    git(cwd, 'add', 'base.txt');
-    git(cwd, 'commit', '-qm', 'advance remote base');
-    git(cwd, 'push', '-q', 'upstream', 'HEAD:dev');
-    const changed = check(options);
-    expect(changed.code).toBe(1);
-    expect(changed.stderr).toContain('base changed');
-  });
 
   for (const remotes of ['none', 'local', 'fork']) {
     it(`allows an empty-scope working diff with ${remotes} remotes`, () => {
@@ -190,10 +164,11 @@ describe('review head boundary', () => {
       const run = check({
         cwd,
         gh: { noOpenPr: true },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null', targetBase: 'null' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
       });
       expect(run.code).toBe(0);
-      expect(run.stdout).toContain('working diff');
+      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
+      expect(run.stderr).toContain('working diff');
     });
   }
 
@@ -230,7 +205,7 @@ describe('review head boundary', () => {
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/contributor/repo.git');
     const run = check({
       cwd,
-      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null' },
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('more than one open pull request matches');
@@ -248,10 +223,7 @@ describe('review head boundary', () => {
     const run = check({
       source: 'forge',
       forge: view({ number: 99, url: PR_URL.replace('/42', '/99') }),
-      inputs: {
-        INPUTS_SELECTOR: PR_URL.replace('/42', '/99'),
-        targetPr: JSON.stringify({ ...PR, number: 99 }),
-      },
+      inputs: { INPUTS_SELECTOR: PR_URL.replace('/42', '/99') },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('does not match');
@@ -276,17 +248,6 @@ describe('review head boundary', () => {
     expect(run.gh).toEqual([]);
   });
 
-  for (const declared of ['null', JSON.stringify({ ...PR, number: 99 })]) {
-    it(`refuses a recorded target with a conflicting declaration ${declared}`, () => {
-      const run = check({
-        inputs: { INPUTS_SCOPE: JSON.stringify(forgePrRecord()), targetPr: declared },
-      });
-      expect(run.code).toBe(1);
-      expect(run.stderr).toContain('does not match');
-      expect(run.gh).toEqual([]);
-    });
-  }
-
   for (const source of ['gh', 'forge']) {
     it(`does not let scope erase an explicit PR target through ${source}`, () => {
       const cwd = gitCheckout({}, track);
@@ -295,11 +256,11 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true, pr: { headRefOid: 'anotherhead' } },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: PR_URL, INPUTS_SELECTOR: '', targetPr: 'null' },
+        inputs: { INPUTS_SCOPE: PR_URL, INPUTS_SELECTOR: '' },
       });
       expect(run.code).toBe(1);
       if (source === 'gh') {
-        expect(run.stderr).toContain('does not match');
+        expect(run.stderr).toContain('anotherhead');
         expect(run.stderr).toContain(`--from 'anotherhead' --input 'scope=${PR_URL}'`);
       } else {
         expect(run.stderr).toContain('forge pr.view returned no result');
@@ -309,26 +270,21 @@ describe('review head boundary', () => {
     });
 
     for (const scope of ['42', PR_URL, 'feature', '']) {
-      for (const declaration of ['matching', 'null', 'wrong', 'mismatch']) {
-        it(`resolves standalone scope ${JSON.stringify(scope)} through ${source} with ${declaration} declaration`, () => {
+      for (const matching of [true, false]) {
+        it(`resolves standalone scope ${JSON.stringify(scope)} through ${source} with ${matching ? 'a matching' : 'another'} head`, () => {
           const cwd = gitCheckout({}, track);
+          const remoteHead = matching ? HEAD : 'anotherhead';
           const run = check({
             cwd,
             source,
-            forge: view({ head_revision: declaration === 'matching' ? HEAD : 'anotherhead' }),
-            gh: { pr: { headRefOid: declaration === 'matching' ? HEAD : 'anotherhead' } },
-            inputs: {
-              INPUTS_SCOPE: scope,
-              INPUTS_SELECTOR: scope,
-              targetPr: JSON.stringify(
-                declaration === 'null' ? null : declaration === 'wrong' ? { ...PR, number: 99 } : PR
-              ),
-            },
+            forge: view({ head_revision: remoteHead }),
+            gh: { pr: { headRefOid: remoteHead } },
+            inputs: { INPUTS_SCOPE: scope, INPUTS_SELECTOR: scope },
           });
-          expect(run.code).toBe(declaration === 'matching' ? 0 : 1);
-          if (declaration === 'mismatch') expect(run.stderr).toContain('anotherhead');
-          else if (declaration !== 'matching') {
-            expect(run.stderr).toContain('does not match');
+          expect(run.code).toBe(matching ? 0 : 1);
+          if (matching) expect(JSON.parse(run.stdout)).toEqual(prTarget(cwd));
+          else {
+            expect(run.stderr).toContain(`the checkout is at ${HEAD}, but`);
             expect(run.stderr).toContain(
               `archon workflow run archon-review --from 'anotherhead' --input 'scope=${PR_URL}'`
             );
@@ -360,14 +316,14 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
       });
       expect(run.code).toBe(0);
-      expect(run.stdout).toContain('working diff');
+      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
     });
   }
 
-  it('refuses an ambiguous repository before trusting the declaration', () => {
+  it('refuses a number selector when remotes name several repositories', () => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/fork/repo.git');
     const run = check({ cwd, inputs: { INPUTS_SCOPE: '42', INPUTS_SELECTOR: '42' } });
@@ -381,7 +337,7 @@ describe('review head boundary', () => {
     const run = check({
       cwd,
       gh: { noOpenPr: true },
-      inputs: { INPUTS_SCOPE: 'feature', INPUTS_SELECTOR: 'feature', targetPr: 'null' },
+      inputs: { INPUTS_SCOPE: 'feature', INPUTS_SELECTOR: 'feature' },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('no open pull request');
@@ -615,15 +571,12 @@ describe('PR review scheduling with the real head check', () => {
     for (const scenario of [
       'matching',
       'mismatch',
-      'null',
-      'wrong',
       'erased-selector',
       'message-pr',
+      'message-pr-matching',
       'message-pr-no-ambient',
-      'message-pr-ambient-declaration',
-      'message-pr-no-ambient-null',
     ]) {
-      const matching = scenario === 'matching';
+      const matching = scenario === 'matching' || scenario === 'message-pr-matching';
       const override = scenario.startsWith('message-pr');
       const target = override ? { ...PR, number: 99 } : PR;
       const selector = override ? PR_URL.replace('/42', '/99') : PR_URL;
@@ -685,22 +638,9 @@ console.log(response);
             errors: false,
             docs: continuation,
           };
-          const declaredPr =
-            scenario === 'null' ||
-            scenario === 'message-pr-no-ambient-null' ||
-            scenario === 'erased-selector'
-              ? null
-              : scenario === 'message-pr-ambient-declaration'
-                ? PR
-                : scenario === 'wrong'
-                  ? { ...PR, number: 99 }
-                  : target;
+          // The scope agent declares no PR; head-check resolves it from the inputs.
           stubs.scope = {
             selector: scenario === 'erased-selector' ? '' : selector,
-            target: {
-              pr: declaredPr,
-              base: declaredPr ? { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') } : null,
-            },
             report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
           };
           const result = await dryRunWorkflow({
@@ -730,17 +670,14 @@ console.log(response);
               'publish',
             ])
               expect(states.get(node)).toBe('skipped');
-            expect(result.trace.find(entry => entry.nodeId === 'head-check')?.reason).toContain(
-              scenario === 'mismatch' ||
-                scenario === 'message-pr' ||
-                scenario === 'message-pr-no-ambient'
-                ? 'anotherhead'
-                : 'does not match'
+            const reason = result.trace.find(entry => entry.nodeId === 'head-check')?.reason;
+            expect(reason).toContain(`the checkout is at ${head}, but`);
+            expect(reason).toContain(
+              `archon workflow run archon-review --branch 'feature' --input 'scope=${selector}'`
             );
-            if (override)
-              expect(result.trace.find(entry => entry.nodeId === 'head-check')?.reason).toContain(
-                `archon workflow run archon-review --from 'anotherhead' --input 'scope=${selector}'`
-              );
+            expect(reason).toContain(
+              `archon workflow run archon-review --from 'anotherhead' --input 'scope=${selector}'`
+            );
           }
         } finally {
           for (const [key, value] of Object.entries(priorEnv)) {
@@ -754,7 +691,7 @@ console.log(response);
 });
 
 describe('delivery rereview checks the recorded PR after reshape', () => {
-  for (const scenario of ['matching', 'mismatch', 'missing declaration']) {
+  for (const scenario of ['matching', 'mismatch']) {
     it(`gates rereview lenses, publication and CI with ${scenario}`, async () => {
       const cwd = gitCheckout({}, track);
       const head = git(cwd, 'rev-parse', 'HEAD');
@@ -815,13 +752,6 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
         };
         stubs['rereview__scope'] = {
           selector: PR_URL,
-          target: {
-            pr: scenario === 'missing declaration' ? null : PR,
-            base:
-              scenario === 'missing declaration'
-                ? null
-                : { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
-          },
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
         };
         const result = await dryRunWorkflow({
@@ -841,18 +771,11 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           expect(states.get(node)).toBe(scenario === 'matching' ? 'stubbed' : 'skipped');
         for (const lens of ['seams', 'tests', 'errors', 'docs'])
           expect(states.get(`rereview__${lens}`)).toBe('skipped');
-        if (scenario === 'missing declaration') {
+        expect(readFileSync(log, 'utf8')).toContain('pr.view');
+        if (scenario === 'mismatch')
           expect(
             result.trace.find(entry => entry.nodeId === 'rereview__head-check')?.reason
-          ).toContain('does not match the recorded pull request');
-          expect(existsSync(log)).toBe(false);
-        } else {
-          expect(readFileSync(log, 'utf8')).toContain('pr.view');
-          if (scenario === 'mismatch')
-            expect(
-              result.trace.find(entry => entry.nodeId === 'rereview__head-check')?.reason
-            ).toContain('anotherhead');
-        }
+          ).toContain('anotherhead');
       } finally {
         for (const [key, value] of Object.entries(priorEnv)) {
           if (value === undefined) delete process.env[key];

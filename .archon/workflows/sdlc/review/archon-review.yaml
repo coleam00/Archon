@@ -134,37 +134,10 @@ nodes:
     output_format:
       type: object
       properties:
+        # The effective explicit selector: the requested scope unchanged, or, when it
+        # is empty, the target the trigger message names. head-check resolves the PR
+        # from it.
         selector: { type: string }
-        target:
-          anyOf:
-            - type: object
-              properties:
-                base:
-                  type: object
-                  additionalProperties: false
-                  properties:
-                    branch: { type: string, pattern: '\S' }
-                    revision: { type: string, pattern: '\S' }
-                  required: [branch, revision]
-                # This declaration must match the resolved target. Head-check verifies it
-                # before lenses; publication rechecks the bound identity before writing.
-                pr:
-                  type: object
-                  properties:
-                    repo:
-                      type: object
-                      properties:
-                        host: { type: string, pattern: '\S' }
-                        path: { type: string, pattern: '\S' }
-                      required: [host, path]
-                    number: { type: integer, minimum: 1 }
-                  required: [repo, number]
-              required: [pr, base]
-            - type: object
-              properties:
-                pr: { type: 'null' }
-                base: { type: 'null' }
-              required: [pr, base]
         # The engine refuses this node when scope.md is missing or empty, so no
         # verdict is ever judged without its scope.
         report:
@@ -174,8 +147,12 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [selector, target, report]
+      required: [selector, report]
 
+  # Resolves the review target deterministically and refuses a PR whose head is not
+  # the commit under review, before any lens runs. Its output is the PR this round
+  # reviews and its live diff base, both null for a working diff; publish writes to
+  # that PR and nothing else.
   - id: head-check
     script: check-review-head
     runtime: bun
@@ -183,8 +160,28 @@ nodes:
     with:
       scope: "$INPUTS.scope"
       selector: "$scope.output.selector"
-      target: "$scope.output.target"
       head: "$mode.output.head"
+    output_format:
+      type: object
+      properties:
+        pr:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string, pattern: '\S' }
+                path: { type: string, pattern: '\S' }
+              required: [host, path]
+            number: { type: integer, minimum: 1 }
+          required: [repo, number]
+        base:
+          type: [object, 'null']
+          properties:
+            branch: { type: string, pattern: '\S' }
+            revision: { type: string, pattern: '\S' }
+          required: [branch, revision]
+      required: [pr, base]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. Every round
@@ -342,9 +339,7 @@ nodes:
     runtime: bun
     depends_on: [synthesize]
     with:
-      # A recorded or requested PR binds the write target; the declaration must match.
-      scope: "$INPUTS.scope"
-      target: "$scope.output.target"
+      target: { from: "$head-check.output" }
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
       ready: "$synthesize.output.ready"

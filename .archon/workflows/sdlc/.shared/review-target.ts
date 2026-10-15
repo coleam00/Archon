@@ -46,17 +46,6 @@ export function recordedPr(scope: string): QualifiedPr | undefined {
   return record(parsed) ? parseQualifiedPr(scope) : undefined;
 }
 
-/** The pull request the scope agent declared, or undefined for a working diff. */
-export function declaredPr(value: string): QualifiedPr | undefined {
-  const target = value.trim() || 'null';
-  const parsed: unknown = JSON.parse(target);
-  // Older persisted scope output used `{}` for a working diff.
-  if (parsed === null || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
-    return undefined;
-  }
-  return parseQualifiedPr(target);
-}
-
 /** Scope is an explicit PR number, URL, branch, or empty; never a prose selector. */
 export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | undefined {
   const recorded = recordedPr(scope);
@@ -170,18 +159,13 @@ export function reviewHead(pr: PrRecord): string {
   }
 }
 
-/** Refuse a PR whose live base differs from scope's fetched diff base. */
-export function checkReviewBase(pr: PrRecord, value: string): void {
-  const base = record(JSON.parse(value || 'null'));
-  if (
-    typeof base?.branch !== 'string' ||
-    typeof base.revision !== 'string' ||
-    !base.revision.trim()
-  ) {
-    throw new Error('the PR review has no declared diff base; resolve scope again');
-  }
-  if (base.branch !== pr.base)
-    throw new Error('the PR base changed; resolve scope and review the new diff');
+/** The PR's diff base: its live base branch and that branch's revision on the base remote. */
+export interface ReviewBase {
+  branch: string;
+  revision: string;
+}
+
+export function liveReviewBase(pr: PrRecord): ReviewBase {
   const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
   const ref = `refs/heads/${pr.base}`;
   const lookup = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
@@ -197,6 +181,5 @@ export function checkReviewBase(pr: PrRecord, value: string): void {
       `the PR base revision could not be established (lookup exited ${String(lookup.code)})`
     );
   }
-  if (base.revision !== revision)
-    throw new Error('the PR base changed; fetch the base and review the new diff');
+  return { branch: pr.base, revision };
 }

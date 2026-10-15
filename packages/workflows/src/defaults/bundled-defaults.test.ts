@@ -524,100 +524,22 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       const scopeSchema = scope.output_format;
       if (scopeSchema === undefined) throw new Error('scope has no output_format');
-      expect(scopeSchema).toEqual({
-        type: 'object',
-        properties: {
-          selector: { type: 'string' },
-          target: {
-            anyOf: [
-              {
-                type: 'object',
-                properties: {
-                  base: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                      branch: { type: 'string', pattern: '\\S' },
-                      revision: { type: 'string', pattern: '\\S' },
-                    },
-                    required: ['branch', 'revision'],
-                  },
-                  pr: {
-                    type: 'object',
-                    properties: {
-                      repo: {
-                        type: 'object',
-                        properties: {
-                          host: { type: 'string', pattern: '\\S' },
-                          path: { type: 'string', pattern: '\\S' },
-                        },
-                        required: ['host', 'path'],
-                      },
-                      number: { type: 'integer', minimum: 1 },
-                    },
-                    required: ['repo', 'number'],
-                  },
-                },
-                required: ['pr', 'base'],
-              },
-              {
-                type: 'object',
-                properties: { pr: { type: 'null' }, base: { type: 'null' } },
-                required: ['pr', 'base'],
-              },
-            ],
-          },
-          report: {
-            type: 'object',
-            properties: {
-              type: { type: 'string', enum: ['archon_artifact'] },
-              run_id: { type: 'string' },
-              path: { type: 'string', enum: ['review/scope.md'] },
-            },
-            required: ['type', 'run_id', 'path'],
-          },
-        },
-        required: ['selector', 'target', 'report'],
-      });
+      // Scope returns a selector, never a PR declaration: head-check resolves the PR
+      // from the inputs through the forge, and publish writes to head-check's PR.
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
       expect(
-        validateStructuredOutput(
-          { selector: '', target: { pr: null, base: null }, report: scopeReport },
-          scopeSchema
-        ).valid
+        validateStructuredOutput({ selector: '', report: scopeReport }, scopeSchema).valid
       ).toBe(true);
-      expect(
-        validateStructuredOutput({ selector: '', target: { pr: null, base: null } }, scopeSchema)
-          .valid
-      ).toBe(false);
-      expect(
-        validateStructuredOutput(
-          {
-            selector: 'https://github.com/coleam00/Archon/pull/3557',
-            target: {
-              base: { branch: 'dev', revision: 'fetched-base-sha' },
-              pr: {
-                repo: { host: 'github.com', path: 'coleam00/Archon' },
-                number: 3557,
-              },
-            },
-            report: scopeReport,
-          },
-          scopeSchema
-        ).valid
-      ).toBe(true);
-      expect(
-        validateStructuredOutput(
-          { selector: '', target: { pr: {}, base: null }, report: scopeReport },
-          scopeSchema
-        ).valid
-      ).toBe(false);
-      expect(
-        validateStructuredOutput(
-          { target: { pr: null, base: null }, report: scopeReport },
-          scopeSchema
-        ).valid
-      ).toBe(false);
+      expect(validateStructuredOutput({ report: scopeReport }, scopeSchema).valid).toBe(false);
+      expect(validateStructuredOutput({ selector: '' }, scopeSchema).valid).toBe(false);
+      expect(scopeSchema.properties).not.toHaveProperty('target');
+      const headCheck = parsed.workflow.nodes.find(node => node.id === 'head-check');
+      expect(headCheck).toMatchObject({
+        kind: 'exec',
+        script: 'check-review-head',
+        depends_on: ['scope'],
+        with: { scope: '$INPUTS.scope', selector: '$scope.output.selector' },
+      });
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
@@ -954,7 +876,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'publish-review',
-        with: { target: '$scope.output.target' },
+        with: { target: { from: '$head-check.output' } },
       });
       // The verdict the composing loop terminates on passes through unchanged.
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
