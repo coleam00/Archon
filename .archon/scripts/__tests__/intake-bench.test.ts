@@ -253,6 +253,15 @@ describe('bench run', () => {
     expect(lines).toHaveLength(4);
   });
 
+  it('refuses a label that is not a plain id before building any checkout path', () => {
+    const { run, out } = bench();
+    writeFileSync(join(out, 'escape.yaml'), 'label: ../escape\n');
+    const { status, stderr } = run('escape');
+    expect(status).toBe(1);
+    expect(stderr).toContain('`label` must be letters, digits');
+    expect(existsSync(join(out, 'bench', 'escape'))).toBe(false);
+  });
+
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
   function benchLive(scenario: Partial<FakeConfig> = {}) {
     const { runWith, argv, repo, out, cli } = bench(scenario);

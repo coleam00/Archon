@@ -20,6 +20,7 @@
 import { mkdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { isId } from '../../../.shared/bench.ts';
 import { gitOrThrow } from '../../../.shared/git.ts';
 import { renderPage, servePage } from './page.ts';
 import {
@@ -139,7 +140,9 @@ async function main(): Promise<void> {
     const base = gitOrThrow('rev-parse', '--verify', `${values.base ?? 'HEAD'}^{commit}`);
     const versions: { label: string; file: string; cwd: string }[] = [];
     for (const file of versionFiles.map(entry => resolve(entry))) {
-      const label = String((Bun.YAML.parse(await Bun.file(file).text()) as { label?: unknown }).label);
+      const label = (Bun.YAML.parse(await Bun.file(file).text()) as { label?: unknown }).label;
+      // The label names this version's checkout directory, so it is checked before any path is built from it.
+      if (!isId(label)) throw new Error(`${file}: \`label\` must be letters, digits, \`.\`, \`_\` or \`-\``);
       const scratch = live?.get(label);
       if (live !== undefined && scratch === undefined) throw new Error(`${label} has no scratch repository in --live`);
       if (scratch !== undefined) checkScratch(label, scratch, base);
