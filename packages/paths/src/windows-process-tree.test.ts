@@ -196,7 +196,11 @@ it.each([false, true])(
         terminateWindowsProcessTree(10, () => {
           ownershipChecked = true;
         })
-      ).rejects.toThrow('processes 12 have unproved ancestry');
+      ).rejects.toThrow(
+        fails
+          ? 'taskkill denied; Could not confirm process tree 10 exited: processes 12 have unproved ancestry'
+          : 'processes 12 have unproved ancestry'
+      );
       expect(commands.mock.calls.map(([command]) => command)).toEqual([
         'powershell.exe',
         'taskkill',
@@ -209,6 +213,77 @@ it.each([false, true])(
     }
   }
 );
+
+it.each(['listing command', 'listing shape', 'ancestry', 'survivors'] as const)(
+  'retains the taskkill failure when later confirmation fails: %s',
+  async failure => {
+    const taskkillError = new Error('taskkill denied');
+    const listingError = new Error('process listing denied');
+    let listings = 0;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') throw taskkillError;
+      listings++;
+      if (listings > 2) {
+        if (failure === 'listing command') throw listingError;
+        if (failure === 'listing shape') return { stdout: '{}', stderr: '' };
+      }
+      return {
+        stdout: JSON.stringify({
+          takenAt: String(listings * 100),
+          rows:
+            listings > 2 && failure === 'ancestry'
+              ? [{ pid: 12, parentPid: 11, created: '150' }]
+              : [{ pid: 10, parentPid: 1, created: '10' }],
+        }),
+        stderr: '',
+      };
+    });
+    const kill = spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('survivor kill denied');
+    });
+    const evidence = {
+      'listing command': 'process listing denied',
+      'listing shape': 'Windows process listing had an unexpected shape',
+      ancestry: 'processes 12 have unproved ancestry',
+      survivors: 'processes 10 are still running',
+    }[failure];
+    try {
+      const error = await terminateWindowsProcessTree(10, () => {}).catch(
+        (error: unknown) => error
+      );
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('Expected cleanup to fail');
+      expect(error.message).toContain('taskkill denied; ');
+      expect(error.message).toContain(evidence);
+      expect(error.cause).toBeInstanceOf(Error);
+      if (failure === 'listing command') expect(error.cause).toBe(listingError);
+      expect(kill).toHaveBeenCalled();
+    } finally {
+      commands.mockRestore();
+      kill.mockRestore();
+    }
+  }
+);
+
+it('accepts independently confirmed absence after taskkill fails', async () => {
+  let listings = 0;
+  const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+    if (command === 'taskkill') throw new Error('taskkill denied');
+    listings++;
+    return {
+      stdout: JSON.stringify({
+        takenAt: String(listings * 100),
+        rows: listings === 1 ? [{ pid: 10, parentPid: 1, created: '10' }] : [],
+      }),
+      stderr: '',
+    };
+  });
+  try {
+    await expect(terminateWindowsProcessTree(10, () => {})).resolves.toBeUndefined();
+  } finally {
+    commands.mockRestore();
+  }
+});
 
 it('does not kill an initially ambiguous tree after root ownership is lost', async () => {
   const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({

@@ -202,7 +202,7 @@ export async function terminateWindowsProcessTree(
   assertRootOwned: () => void
 ): Promise<void> {
   const before = await listWindowsProcesses();
-  let killFailure: string | undefined;
+  const killFailures: string[] = [];
   if (before.rows.some(row => row.pid === pid)) {
     // The listing can take seconds. A live child handle or owner lease must still
     // pin the root identity. Kill it before ancestry validation can reject cleanup.
@@ -216,38 +216,46 @@ export async function terminateWindowsProcessTree(
         windowsHide: true,
       });
     } catch (error) {
-      killFailure = error instanceof Error ? error.message : String(error);
+      killFailures.push(error instanceof Error ? error.message : String(error));
     }
   }
 
-  const tree = WindowsProcessTree.fromRoot(pid, before);
-  if (!tree) {
-    throw new Error(
-      `Could not confirm process tree ${String(pid)} exited: its root was already gone, ` +
-        'so descendant ancestry cannot be proved'
-    );
-  }
+  try {
+    const tree = WindowsProcessTree.fromRoot(pid, before);
+    if (!tree) {
+      throw new Error(
+        `Could not confirm process tree ${String(pid)} exited: its root was already gone, ` +
+          'so descendant ancestry cannot be proved'
+      );
+    }
 
-  let survivors: number[] = [];
-  for (let round = 0; round < MAX_CONFIRM_ROUNDS; round++) {
-    survivors = tree.observe(await listWindowsProcesses());
-    if (survivors.length === 0) return;
-    // Every kill is followed by a listing, so the last round only lists.
-    if (round === MAX_CONFIRM_ROUNDS - 1) break;
-    for (const survivor of survivors) {
-      try {
-        process.kill(survivor);
-      } catch (error) {
-        // Gone already is what the next listing checks for; anything else is evidence.
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-          killFailure = error instanceof Error ? error.message : String(error);
+    let survivors: number[] = [];
+    for (let round = 0; round < MAX_CONFIRM_ROUNDS; round++) {
+      survivors = tree.observe(await listWindowsProcesses());
+      if (survivors.length === 0) return;
+      // Every kill is followed by a listing, so the last round only lists.
+      if (round === MAX_CONFIRM_ROUNDS - 1) break;
+      for (const survivor of survivors) {
+        try {
+          process.kill(survivor);
+        } catch (error) {
+          // Gone already is what the next listing checks for; anything else is evidence.
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+            killFailures.push(error instanceof Error ? error.message : String(error));
+          }
         }
       }
     }
+    throw new Error(
+      `Could not confirm process tree ${String(pid)} exited: ` +
+        `processes ${survivors.join(', ')} are still running`
+    );
+  } catch (error) {
+    if (killFailures.length === 0) throw error;
+    const confirmationFailure = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not terminate process tree ${String(pid)}: ${killFailures.join('; ')}; ${confirmationFailure}`,
+      { cause: error }
+    );
   }
-  throw new Error(
-    `Could not confirm process tree ${String(pid)} exited: ` +
-      `processes ${survivors.join(', ')} are still running` +
-      (killFailure ? ` (${killFailure})` : '')
-  );
 }

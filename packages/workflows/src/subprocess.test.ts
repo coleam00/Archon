@@ -860,7 +860,7 @@ for (const trigger of ['timeout', 'recorder', 'buffer'] as const) {
           if (command === 'taskkill') {
             killed = true;
             child.emit('exit', 1, null);
-            return { stdout: 'SUCCESS', stderr: '' };
+            throw new Error('taskkill denied');
           }
           return {
             stdout: JSON.stringify({
@@ -889,6 +889,7 @@ for (const trigger of ['timeout', 'recorder', 'buffer'] as const) {
           stdout.emit('data', Buffer.alloc(1024 * 1024 + 1));
         }
         const error = (await outcome) as RawSubprocessRejection;
+        expect(error.cleanupError?.message).toContain('taskkill denied');
         expect(error.cleanupError?.message).toContain('unproved ancestry');
         expect(killed).toBe(true);
         expect(kill).not.toHaveBeenCalled();
