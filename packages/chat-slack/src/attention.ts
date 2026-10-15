@@ -71,8 +71,12 @@ export class SlackAttentionNotices {
     if (notice.type === 'terminal') {
       const [channel, threadTs] = splitConversationId(conversationId ?? destination);
       const { blocks, fallbackText } = buildNoticeTerminalBlocks(notice);
-      await client.chat.postMessage({ channel, thread_ts: threadTs, text: fallbackText, blocks });
-      await this.closeRun(notice.runId, `:lock: Closed, run ${notice.status}`);
+      try {
+        await client.chat.postMessage({ channel, thread_ts: threadTs, text: fallbackText, blocks });
+      } finally {
+        // The host refuses answers once the run ends, so its controls close even when the post fails.
+        await this.closeRun(notice.runId, `:lock: Closed, run ${notice.status}`);
+      }
       return {};
     }
     const [channel, threadTs] = splitConversationId(destination);

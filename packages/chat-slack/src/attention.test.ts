@@ -279,6 +279,20 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
   ]);
 });
 
+test('a failed terminal post still closes the run notices, and the failure surfaces', async () => {
+  await notify(wait('select', [{ id: 'eu' }]));
+  slack.failPost = new Error('channel_not_found');
+  await expect(
+    plugin.attentionNotice({
+      destination: 'C9',
+      notice: { type: 'terminal', runId: 'run-1', workflowName: 'deploy', status: 'failed' },
+    })
+  ).rejects.toThrow('channel_not_found');
+  expect(slack.updates).toEqual([
+    expect.objectContaining({ ts: 'msg-1', text: expect.stringContaining('Closed') }),
+  ]);
+});
+
 test('options beyond Slack limits render the notice without controls', async () => {
   await notify(
     wait(
