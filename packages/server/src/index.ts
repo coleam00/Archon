@@ -70,6 +70,7 @@ import { AttentionRouter } from './services/attention-router';
 import { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,
+  registerGitlabWebhookRoute,
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
 } from './routes/webhooks';
@@ -812,27 +813,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // GitLab webhook endpoint
   if (gitlab) {
-    app.post('/webhooks/gitlab', async c => {
-      const eventType = c.req.header('x-gitlab-event');
-
-      try {
-        const token = c.req.header('x-gitlab-token');
-        if (!token) {
-          return c.json({ error: 'Missing token header' }, 400);
-        }
-
-        const payload = await c.req.text();
-
-        gitlab.handleWebhook(payload, token).catch((error: unknown) => {
-          getLog().error({ err: error, eventType }, 'gitlab.webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType }, 'gitlab.webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGitlabWebhookRoute(app, gitlab);
     getLog().info('gitlab_webhook_registered');
   }
 

@@ -84,6 +84,7 @@ import {
   attentionForm,
   attentionOccurrence,
   attentionOptions,
+  gateOccurrence,
   type WorkflowAttentionWaitContext,
 } from './schemas/workflow-run';
 import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
@@ -5309,6 +5310,7 @@ async function executeLoopGroupBody(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6875,6 +6877,7 @@ async function executeLoopNode(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6916,7 +6919,8 @@ async function executeLoopNode(
  * queue is where it is answered, so a notice the platform cannot deliver leaves the run
  * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
  * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
- * can see that nobody was told.
+ * can see that nobody was told. It names the pause `occurrence` so the push router can
+ * treat that pause as unannounced and notify the owner itself.
  */
 async function sendPauseNotice(
   deps: WorkflowDeps,
@@ -6924,6 +6928,7 @@ async function sendPauseNotice(
   conversationId: string,
   workflowRunId: string,
   nodeId: string,
+  occurrence: string,
   stepName: string,
   notice: string
 ): Promise<void> {
@@ -6939,7 +6944,7 @@ async function sendPauseNotice(
       workflow_run_id: workflowRunId,
       event_type: 'pause_notice_undelivered',
       step_name: stepName,
-      data: { nodeId, platform: platform.getPlatformType() },
+      data: { nodeId, occurrence, platform: platform.getPlatformType() },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -7205,6 +7210,7 @@ async function executeWaitNode(
         conversationId,
         workflowRun.id,
         node.id,
+        attentionOccurrence(context),
         stepNamePrefix + node.id,
         attentionNotification(platform, workflowRun.id, context)
       );
@@ -7551,6 +7557,7 @@ async function executeApprovalNode(
     conversationId,
     workflowRun.id,
     node.id,
+    gateOccurrence(paused),
     stepName,
     approvalMsg
   );
@@ -11429,7 +11436,7 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  await pauseGateRespectingExternalTransition(
+  const paused = await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
@@ -11452,7 +11459,18 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    WRITEBACK_GATE_NODE_ID,
+    gateOccurrence(paused),
+    'container',
+    message
+  );
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */

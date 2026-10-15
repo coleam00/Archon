@@ -659,7 +659,7 @@ describe('per-run gate deferral — real SQLite', () => {
       [result.workflowRunId]
     );
     expect(undelivered.rows.map(row => JSON.parse(row.data))).toEqual([
-      { nodeId: 'review', platform: 'test' },
+      { nodeId: 'review', occurrence: expect.any(String), platform: 'test' },
     ]);
   });
 });
