@@ -1820,6 +1820,43 @@ describe('validateWorkflowResources — skills search roots', () => {
       expect(missing[0].message).toContain("Stub skill 'shared-skill'");
     });
 
+    test('project skills draw no host-user warning; user skills do, even when HOME is under cwd', async () => {
+      process.env.HOME = join(tmpDir, 'home');
+      await stageSkill(tmpDir, '.agents', 'shared-skill');
+      await stageSkill(tmpDir, '.claude', 'claude-skill');
+      await stageAt(join(tmpDir, '.stub', 'skills'), 'stub-skill');
+      await stageSkill(process.env.HOME, '.agents', 'user-skill');
+      const skillIssues = async (provider: string, skill: string) =>
+        (
+          await validateWorkflowResources(
+            makeWorkflow(
+              'test',
+              [
+                {
+                  id: 'step1',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'do work' },
+                  skills: [skill],
+                } as unknown as DagNode,
+              ],
+              provider
+            ),
+            tmpDir,
+            registry
+          )
+        ).filter(issue => issue.field === 'skills');
+
+      expect(await skillIssues('pi', 'shared-skill')).toEqual([]);
+      expect(await skillIssues('claude', 'claude-skill')).toEqual([]);
+      expect(await skillIssues('stub-plugin', 'stub-skill')).toEqual([]);
+      expect(await skillIssues('pi', 'user-skill')).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          message: "Skill 'user-skill' is available only in a host user directory",
+        }),
+      ]);
+    });
+
     test('its install-level settingSources gate the user root', async () => {
       await stageAt(join(fakeHome, '.stub', 'skills'), 'user-skill');
       const workflow = stubWorkflow('user-skill');

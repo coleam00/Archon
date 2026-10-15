@@ -31,11 +31,15 @@ export function skillSearchRoots(cwd: string): string[] {
   // makes tests using staged temp homes impossible.
   const home = process.env.HOME ?? homedir();
   return [
-    join(cwd, '.agents', 'skills'),
-    join(cwd, '.claude', 'skills'),
+    ...projectSkillSearchRoots(cwd),
     join(home, '.agents', 'skills'),
     join(home, '.claude', 'skills'),
   ];
+}
+
+/** The project-local half of {@link skillSearchRoots}. */
+export function projectSkillSearchRoots(cwd: string): string[] {
+  return [join(cwd, '.agents', 'skills'), join(cwd, '.claude', 'skills')];
 }
 
 /**
