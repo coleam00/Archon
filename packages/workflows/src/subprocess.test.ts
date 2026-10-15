@@ -144,7 +144,8 @@ for (const runtime of ['bash', 'bun'] as const) {
         }
         await node;
       }
-    }
+    },
+    10000
   );
 }
 
@@ -382,26 +383,30 @@ test('ending recorded node bodies stops a live wrapper and its grandchild', asyn
   }
 });
 
-posixOnly('node timeout escalates only while its leader remains alive', async () => {
-  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-escalate-')));
-  const ready = join(dir, 'ready');
-  const node = runNode(
-    `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''); setInterval(() => {}, 1000);`,
-    1000
-  ).catch((e: unknown) => e as RawSubprocessRejection);
-  await waitUntil('TERM handler', () => existsSync(ready));
-  const start = Date.now();
-  const error = (await node) as RawSubprocessRejection;
-  expect(error.cleanupError).toBeUndefined();
-  expect(error).toMatchObject({
-    killed: true,
-    timedOut: true,
-    code: null,
-    signal: 'SIGTERM',
-    observedExit: { code: null, signal: 'SIGKILL' },
-  });
-  expect(Date.now() - start).toBeLessThan(3200);
-});
+posixOnly(
+  'node timeout escalates only while its leader remains alive',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-escalate-')));
+    const ready = join(dir, 'ready');
+    const node = runNode(
+      `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''); setInterval(() => {}, 1000);`,
+      1000
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    await waitUntil('TERM handler', () => existsSync(ready));
+    const start = Date.now();
+    const error = (await node) as RawSubprocessRejection;
+    expect(error.cleanupError).toBeUndefined();
+    expect(error).toMatchObject({
+      killed: true,
+      timedOut: true,
+      code: null,
+      signal: 'SIGTERM',
+      observedExit: { code: null, signal: 'SIGKILL' },
+    });
+    expect(Date.now() - start).toBeGreaterThanOrEqual(5000);
+  },
+  10000
+);
 
 posixOnly(
   'an exited leader with a surviving descendant fails cleanup without a late group kill',
@@ -429,7 +434,8 @@ posixOnly(
     } finally {
       if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
     }
-  }
+  },
+  10000
 );
 
 posixOnly(
@@ -458,41 +464,39 @@ posixOnly(
     } finally {
       if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
     }
-  }
+  },
+  10000
 );
 
 for (const recorded of [false, true]) {
-  posixOnly(`owner death ends node body trees (recorded=${recorded})`, async () => {
-    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-owner-')));
-    const ready = join(dir, 'ready');
-    const ownerFile = join(dir, 'owner.ts');
-    writeFileSync(
-      ownerFile,
-      `import {runSubprocess, recordNodeProcessTrees} from ${JSON.stringify(join(import.meta.dir, 'subprocess.ts'))};
-      ${recorded ? 'recordNodeProcessTrees();' : ''}
-      await runSubprocess({kind:'host'}, '/bin/bash', ['-c', ${JSON.stringify(`/bin/sleep 30 & echo $! > '${ready}'; wait`)}], {
-        cwd: ${JSON.stringify(dir)}, env:{}, timeout:30000, killTreeOnTimeout:true, retention:{standalone:true}
-      });`
-    );
-    const owner = Bun.spawn([process.execPath, '--no-env-file', ownerFile], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    try {
-      await waitUntil('owned descendant', () => existsSync(ready));
-      const descendant = Number(readFileSync(ready, 'utf8'));
-      owner.kill('SIGKILL');
-      await owner.exited;
-      await waitUntil('owned descendant to exit', () => !processExists(descendant));
-    } finally {
-      owner.kill('SIGKILL');
-      await owner.exited;
-      if (existsSync(ready)) {
-        const descendant = Number(readFileSync(ready, 'utf8'));
-        if (processExists(descendant)) process.kill(descendant, 'SIGKILL');
+  posixOnly(
+    `node bodies do not arm a watcher with a stored group id (recorded=${recorded})`,
+    async () => {
+      const trees = recorded ? recordNodeProcessTrees() : undefined;
+      const spawn = spyOn(childProcess, 'spawn');
+      try {
+        await runNode(`console.log('completed')`);
+        expect(spawn.mock.calls.map(([cmd]) => cmd)).toEqual([process.execPath]);
+      } finally {
+        spawn.mockRestore();
+        trees?.release();
       }
     }
-  });
+  );
 }
+
+posixOnly('node timeout lets a two-second SIGTERM handler finish cleanup', async () => {
+  const result = await runNode(
+    `process.on('SIGTERM', () => setTimeout(() => { console.log('cleanup finished'); process.exit(0) }, 2000)); setInterval(() => {}, 1000);`,
+    1000
+  ).catch((error: unknown) => error as RawSubprocessRejection);
+  expect(result).toMatchObject({
+    timedOut: true,
+    cleanupError: undefined,
+    stdout: 'cleanup finished\n',
+    observedExit: { code: 0, signal: null },
+  });
+});
 
 test('node bodies preserve output, numeric exit, spawn errno, and the stream bound', async () => {
   expect(await runNode(`process.stdout.write('out'); process.stderr.write('err')`)).toMatchObject({
@@ -547,29 +551,33 @@ posixOnly(
   }
 );
 
-posixOnly('group confirmation preserves a probe permission error', async () => {
-  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-probe-')));
-  const ready = join(dir, 'ready');
-  const kill = process.kill.bind(process);
-  const denied = Object.assign(new Error('group probe denied'), { code: 'EPERM' });
-  const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
-    if (pid < 0 && signal === 0) throw denied;
-    return kill(pid, signal);
-  });
-  try {
-    const rejection = await runNode(
-      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
-      500
-    ).catch((e: unknown) => e as RawSubprocessRejection);
-    expect((rejection as RawSubprocessRejection).cleanupError).toBe(denied);
-  } finally {
-    killSpy.mockRestore();
-    if (existsSync(ready)) {
-      const pid = Number(readFileSync(ready, 'utf8'));
-      if (processExists(pid)) kill(pid, 'SIGKILL');
+posixOnly(
+  'group confirmation preserves a probe permission error',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-probe-')));
+    const ready = join(dir, 'ready');
+    const kill = process.kill.bind(process);
+    const denied = Object.assign(new Error('group probe denied'), { code: 'EPERM' });
+    const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid < 0 && signal === 0) throw denied;
+      return kill(pid, signal);
+    });
+    try {
+      const rejection = await runNode(
+        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+        500
+      ).catch((e: unknown) => e as RawSubprocessRejection);
+      expect((rejection as RawSubprocessRejection).cleanupError).toBe(denied);
+    } finally {
+      killSpy.mockRestore();
+      if (existsSync(ready)) {
+        const pid = Number(readFileSync(ready, 'utf8'));
+        if (processExists(pid)) kill(pid, 'SIGKILL');
+      }
     }
-  }
-});
+  },
+  10000
+);
 
 for (const fails of [false, true]) {
   test(`Windows timeout requires successful tree termination (taskkill fails=${fails})`, async () => {
@@ -612,50 +620,46 @@ for (const fails of [false, true]) {
   });
 }
 
-posixOnly(
-  'a node body leaves stdin open and disarms its watcher without ending a successful background job',
-  async () => {
-    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-background-')));
-    const ready = join(dir, 'ready');
-    const release = join(dir, 'release');
-    const node = runSubprocess(
-      { kind: 'host' },
-      '/bin/bash',
-      [
-        '-c',
-        `/bin/sleep 30 >/dev/null 2>&1 & echo "$$ $!" > '${ready}'; while [ ! -e '${release}' ]; do /bin/sleep 0.05; done`,
-      ],
-      {
-        cwd: dir,
-        env: {},
-        timeout: 5000,
-        killTreeOnTimeout: true,
-        retention: { standalone: true },
-      }
+posixOnly('a node body leaves stdin open without ending a successful background job', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-background-')));
+  const ready = join(dir, 'ready');
+  const release = join(dir, 'release');
+  const node = runSubprocess(
+    { kind: 'host' },
+    '/bin/bash',
+    [
+      '-c',
+      `/bin/sleep 30 >/dev/null 2>&1 & echo "$$ $!" > '${ready}'; while [ ! -e '${release}' ]; do /bin/sleep 0.05; done`,
+    ],
+    {
+      cwd: dir,
+      env: {},
+      timeout: 5000,
+      killTreeOnTimeout: true,
+      retention: { standalone: true },
+    }
+  );
+  try {
+    await waitUntil(
+      'background job',
+      () => existsSync(ready) && readFileSync(ready, 'utf8').trim().split(' ').length === 2
     );
-    try {
-      await waitUntil(
-        'background job',
-        () => existsSync(ready) && readFileSync(ready, 'utf8').trim().split(' ').length === 2
-      );
-      const [root, job] = readFileSync(ready, 'utf8').trim().split(' ').map(Number);
-      expect(lifelineWatches(root)).toBe(true);
-      writeFileSync(release, '');
-      await node;
-      await waitUntil('watcher disarm', () => !lifelineWatches(root));
-      expect(processExists(job)).toBe(true);
-      const stdin = await runNode(
-        `let eof = false; process.stdin.on('end', () => {eof=true}); process.stdin.resume(); setTimeout(() => { console.log(eof); process.exit(0) }, 50)`
-      );
-      expect(stdin.stdout.trim()).toBe('false');
-    } finally {
-      if (existsSync(ready)) {
-        const job = Number(readFileSync(ready, 'utf8').trim().split(' ')[1]);
-        if (processExists(job)) process.kill(job, 'SIGKILL');
-      }
+    const [root, job] = readFileSync(ready, 'utf8').trim().split(' ').map(Number);
+    expect(lifelineWatches(root)).toBe(false);
+    writeFileSync(release, '');
+    await node;
+    expect(processExists(job)).toBe(true);
+    const stdin = await runNode(
+      `let eof = false; process.stdin.on('end', () => {eof=true}); process.stdin.resume(); setTimeout(() => { console.log(eof); process.exit(0) }, 50)`
+    );
+    expect(stdin.stdout.trim()).toBe('false');
+  } finally {
+    if (existsSync(ready)) {
+      const job = Number(readFileSync(ready, 'utf8').trim().split(' ')[1]);
+      if (processExists(job)) process.kill(job, 'SIGKILL');
     }
   }
-);
+});
 
 posixOnly('deadline and owner stop share one tree operation and clear later timers', async () => {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-race-')));

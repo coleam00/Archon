@@ -13,9 +13,9 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * own process group on POSIX; `taskkill /T` walks the tree from the PID on Windows.
  *
  * Process-scoped on purpose: only a foreground CLI owner, which drives exactly one run
- * and holds the process-wide signal handlers for it, turns this on. A detached owner
- * need not: node bodies also watch for owner death when their groups are separate.
- * `archon serve` never records.
+ * and holds the process-wide signal handlers for it, turns this on.
+ * `archon serve` never records. Host node bodies have no owner-death watcher: a
+ * stored group ID cannot safely identify a group after its leader exits.
  *
  * `end()` refuses every later node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
@@ -50,22 +50,12 @@ export function recordNodeProcessTrees(): { end(): Promise<void>; release(): voi
 // without reaching the node, and so does SIGKILL. The watcher sits outside the node's
 // group and session: owner death of any kind closes its stdin before the release line.
 const NODE_LIFELINE = 'IFS= read -r line || kill -s KILL -- "-$1"';
-const GUARDED_NODE_LIFELINE =
-  'IFS= read -r line || { kill -0 "$1" 2>/dev/null && kill -s KILL -- "-$1"; }';
 
-export function armNodeLifeline(
-  pgid: number,
-  onError: (error: Error) => void,
-  guardRoot = false
-): () => void {
-  const watcher = spawn(
-    '/bin/sh',
-    ['-c', guardRoot ? GUARDED_NODE_LIFELINE : NODE_LIFELINE, 'archon-node-lifeline', String(pgid)],
-    {
-      detached: true,
-      stdio: ['pipe', 'ignore', 'ignore'],
-    }
-  );
+export function armNodeLifeline(pgid: number, onError: (error: Error) => void): () => void {
+  const watcher = spawn('/bin/sh', ['-c', NODE_LIFELINE, 'archon-node-lifeline', String(pgid)], {
+    detached: true,
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
   watcher.unref();
   watcher.once('error', onError);
   // EPIPE only means the watcher already exited, so there is nothing left to disarm.
@@ -83,8 +73,11 @@ export const TERMINATION_CONFIRM_MS = 1000;
 
 export class ProcessGroupStillRunningError extends Error {}
 
-export async function confirmGroupGone(pid: number): Promise<void> {
-  const deadline = Date.now() + TERMINATION_CONFIRM_MS;
+export async function confirmGroupGone(
+  pid: number,
+  timeout = TERMINATION_CONFIRM_MS
+): Promise<void> {
+  const deadline = Date.now() + timeout;
   let probeError: unknown;
   while (true) {
     try {

@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { forceTerminateWindowsTree } from '@archon/paths/plugin-process';
 import {
-  armNodeLifeline,
   confirmGroupGone,
   currentNodeProcessRecorder,
   ProcessGroupStillRunningError,
@@ -37,7 +36,6 @@ async function execNodeBody(
   const stopCompleted = new Promise<void>(resolve => {
     stopped = resolve;
   });
-  let disarm = (): void => undefined;
   const terminate = async (): Promise<void> => {
     if (pid === undefined) return;
     if (!posix) {
@@ -61,7 +59,7 @@ async function execNodeBody(
     };
     signal('SIGTERM');
     try {
-      await confirmGroupGone(pid);
+      await confirmGroupGone(pid, 5000);
     } catch (error) {
       // Once the leader exits we can probe its group, but must never signal it again.
       if (observedExit || !(error instanceof ProcessGroupStillRunningError)) throw error;
@@ -85,27 +83,17 @@ async function execNodeBody(
     });
     child.once('exit', (code, signal) => {
       observedExit = { code, signal };
-      disarm();
       child.stdin?.destroy();
     });
     child.once('close', resolve);
   });
   if (pid !== undefined) {
-    if (posix)
-      disarm = armNodeLifeline(
-        pid,
-        error => {
-          failure = new Error(`Could not start node owner-death watcher: ${error.message}`);
-          void stop();
-        },
-        true
-      );
     recorder?.roots.set(pid, {
       end: async () => {
         await stop();
         if (cleanupError) throw cleanupError;
       },
-      disarm,
+      disarm: () => undefined,
     });
   }
   timer = setTimeout(() => {
