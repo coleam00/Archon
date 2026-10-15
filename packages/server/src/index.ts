@@ -297,7 +297,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   await validateAppDefaultsPaths();
 
   // Initialize conversation lock manager
-  const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10');
+  const maxConcurrent = config.concurrency.maxConversations;
   const lockManager = new ConversationLockManager(maxConcurrent);
   getLog().info({ maxConcurrent }, 'lock_manager_initialized');
 
