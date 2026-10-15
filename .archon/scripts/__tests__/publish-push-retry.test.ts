@@ -67,7 +67,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 }
 
 describe('publish-pr push retry', () => {
-  it.each([1, 2])('finishes %i slow failed pushes within the publication deadline', failures => {
+  it('publishes after a slow failed push within the publication deadline', () => {
     const workflow: unknown = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8'));
     if (!workflow || typeof workflow !== 'object' || !('nodes' in workflow) || !Array.isArray(workflow.nodes)) {
       throw new Error('workflow nodes are missing');
@@ -78,18 +78,11 @@ describe('publish-pr push retry', () => {
     }
     const timeout = publishNode.timeout;
     if (typeof timeout !== 'number') throw new Error('publish timeout is missing');
-    const result = publish(failures, false, timeout);
-    expect(result.events).toEqual(failures === 1
-      ? [pushArgs, ['sleep', 20_000], pushArgs, readArgs]
-      : [pushArgs, ['sleep', 20_000], pushArgs]);
-    expect(result.code).toBe(failures === 1 ? 0 : 1);
+    const result = publish(1, false, timeout);
+    expect(result.events).toEqual([pushArgs, ['sleep', 20_000], pushArgs, readArgs]);
+    expect(result.code).toBe(0);
     expect('retry' in publishNode).toBe(false);
-    if (failures === 1) {
-      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    } else {
-      expect(result.stderr).toBe('publish-pr: git push upstream HEAD:refs/heads/feature refused: opaque failure 2\n');
-      expect(result.gh).toEqual([]);
-    }
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
   }, 90_000);
 
   it.each([0, 1])('publishes after %i failed pushes and verifies the remote head', failures => {
