@@ -360,10 +360,15 @@ export async function startRunLiveOwner(
             await terminationPreparation;
             socket.write(TERMINATE_READY);
           })().catch((error: unknown) => {
-            const message = redactCredentialValues(
+            let message = redactCredentialValues(
               error instanceof Error ? error.message : String(error),
               collectCredentialValues(process.env)
-            ).slice(0, MAX_PREPARATION_MESSAGE_CHARS);
+            );
+            if (message.length > MAX_PREPARATION_MESSAGE_CHARS) {
+              const marker = '\n[truncated]\n';
+              const endLength = Math.floor((MAX_PREPARATION_MESSAGE_CHARS - marker.length) / 2);
+              message = `${message.slice(0, endLength)}${marker}${message.slice(-endLength)}`;
+            }
             console.error('Could not prepare detached owner termination:', message);
             const failure: z.infer<typeof preparationFailureSchema> = {
               kind: 'preparation_failed',

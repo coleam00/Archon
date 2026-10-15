@@ -1,5 +1,9 @@
 // @archon-test-isolated
 import { describe, expect, it, spyOn } from 'bun:test';
+import {
+  terminateWindowsProcessTree,
+  windowsProcessCommands,
+} from '@archon/paths/windows-process-tree';
 import { startRunLiveOwner } from './run-live-owner';
 import { DetachedRunOwnerUnavailableError, requestDetachedRunStop } from './run-owner-stop';
 
@@ -19,20 +23,36 @@ describe('detached run control', () => {
     const signal = spyOn(process, 'kill').mockImplementation(() => {
       throw new Error('Must not signal an owner after failed preparation');
     });
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') {
+        throw new Error('taskkill denied; ' + 'Access denied\n'.repeat(100));
+      }
+      return {
+        stdout: JSON.stringify({
+          takenAt: '100',
+          rows: [
+            { pid: 10, parentPid: 1, created: '10' },
+            { pid: 12, parentPid: 11, created: '50' },
+          ],
+        }),
+        stderr: '',
+      };
+    });
     const owner = await startRunLiveOwner(runId, {
       detachedProcessPid: process.pid,
-      beforeTerminate: async () => {
-        throw new Error('taskkill denied; processes 12 have unproved ancestry');
-      },
+      beforeTerminate: () => terminateWindowsProcessTree(10, () => {}),
     });
     try {
       const target = await requestDetachedRunStop(runId);
-      await expect(target.stop()).rejects.toThrow(
-        'taskkill denied; processes 12 have unproved ancestry'
-      );
+      const error = await rejectionFrom(() => target.stop());
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('Expected cleanup to fail');
+      expect(error.message).toContain('taskkill denied');
+      expect(error.message).toContain('processes 12 have unproved ancestry');
       expect(signal).not.toHaveBeenCalled();
     } finally {
       await owner.close();
+      commands.mockRestore();
       signal.mockRestore();
       log.mockRestore();
     }
