@@ -172,10 +172,6 @@ export async function drainResourceStarts(options: {
   });
 }
 
-/**
- * Whether this source already holds a receipt for the delivery. Only a gate for checks that
- * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.
- */
 export async function hasStartReceiptForDelivery(
   sourceInstanceId: string,
   deliveryId: string

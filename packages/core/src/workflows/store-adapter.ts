@@ -33,6 +33,7 @@ import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { installGitHubCliShim } from '../github-auth/gh-shim-install';
 import { loadGitHubAppConfig, isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -112,6 +113,7 @@ export function createWorkflowStore(): IWorkflowStore {
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,
+    hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
@@ -257,8 +259,12 @@ export function createWorkflowDeps(
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.
-    resolveBotGitHubToken: provider
-      ? (owner, repo): Promise<string> => provider.getInstallationToken(owner, repo)
+    githubApp: provider
+      ? {
+          resolveInstallationToken: (owner, repo): Promise<string> =>
+            provider.getInstallationToken(owner, repo),
+          installCliShim: installGitHubCliShim,
+        }
       : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed
