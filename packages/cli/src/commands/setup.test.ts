@@ -2041,7 +2041,7 @@ describe('GitHub setup wizard', () => {
         GITHUB_APP_ID: '123',
         CUSTOM_KEY: 'keep',
         CUSTOM_PATH: String.raw`C:\new folder\custom`,
-        WEBHOOK_SECRET: 'old-webhook',
+        WEBHOOK_SECRET: webhookSecret,
       });
       expect(read().GITHUB_TOKEN).toBeUndefined();
       expect(read().GH_TOKEN).toBeUndefined();

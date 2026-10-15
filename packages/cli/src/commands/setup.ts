@@ -1907,6 +1907,9 @@ function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth:
   const proposed = parseDotenv(content);
   if (replaceGitHubAuth) {
     for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+    // An App's webhook secret is the one typed from the App's settings, so it must win.
+    // PAT mode generates a fresh secret, so an existing one stays for its repo webhooks.
+    if (proposed.GITHUB_APP_ID) delete existing.WEBHOOK_SECRET;
   } else if (
     proposed.GITHUB_APP_ID ||
     (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
@@ -1949,7 +1952,8 @@ function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth:
  * Merge-only by default (existing non-empty values win, user-added keys
  * survive). Backs up the existing file (if any) before every rewrite, even
  * when `--force` is set. Without force, a confirmed GitHub authentication change
- * replaces auth keys while keeping shared webhook settings and unrelated values.
+ * replaces auth keys, and the webhook secret when switching to App mode, while
+ * keeping other values.
  */
 export function writeScopedEnv(
   content: string,
