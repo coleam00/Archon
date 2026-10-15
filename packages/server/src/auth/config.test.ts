@@ -6,6 +6,7 @@ import {
   isEmailAllowed,
   getSignupMode,
   isApiGateEnabled,
+  isConversationOwnershipEnforced,
   isArchonOwnedAuthPath,
 } from './config';
 
@@ -117,6 +118,28 @@ describe('auth/config', () => {
           ARCHON_WEB_AUTH_REQUIRED: 'false',
         })
       ).toBe(false);
+    });
+  });
+
+  describe('isConversationOwnershipEnforced', () => {
+    test('true when web auth is enabled, even with the API gate opted out', () => {
+      expect(
+        isConversationOwnershipEnforced({
+          DATABASE_URL: PG_URL,
+          BETTER_AUTH_SECRET: VALID_SECRET,
+          ARCHON_WEB_AUTH_REQUIRED: 'false',
+        })
+      ).toBe(true);
+    });
+
+    test('true when a proxy supplies identity through ARCHON_WEB_AUTH_HEADER', () => {
+      expect(isConversationOwnershipEnforced({ ARCHON_WEB_AUTH_HEADER: 'X-Forwarded-User' })).toBe(
+        true
+      );
+    });
+
+    test('false on a solo install', () => {
+      expect(isConversationOwnershipEnforced({})).toBe(false);
     });
   });
 

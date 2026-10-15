@@ -8,7 +8,7 @@ Accepted work order:
 
 $INPUTS.work_order
 
-Then read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum.
+The project's own values are in its steering documents: open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — only when a finding depends on a value one of them states, and read the section you cite, not the whole file. A structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum.
 
 ## Establish the contract
 

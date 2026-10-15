@@ -324,6 +324,7 @@ describe('reclaimContainerEnv', () => {
         throw new Error('Unexpected create');
       },
       updateStatus: async () => {},
+      updateMetadata: async () => undefined,
       countActiveByCodebase: async () => 0,
     };
     await reclaimContainerEnv('supplied-env', store);

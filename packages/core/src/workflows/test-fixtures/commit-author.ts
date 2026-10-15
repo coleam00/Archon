@@ -11,6 +11,9 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { createWorkflowDeps } from '../store-adapter';
 import { startAdmittedResourceStart } from '../resource-start-host';
+import { toBranchName } from '@archon/git';
+import { create as createIsolationEnvironment } from '../../db/isolation-environments';
+import type { AdoptionLane } from '../../operations/workflow-adoption';
 import { createCodebase } from '../../db/codebases';
 import { getOrCreateConversation } from '../../db/conversations';
 import { findOrCreateUserByPlatformIdentity } from '../../db/users';
@@ -180,10 +183,20 @@ await import(${JSON.stringify(resolve(import.meta.dir, '../../../../cli/src/cli.
       });
       if (!result.success) throw new Error(JSON.stringify(result));
     } else {
-      let cwd = project;
+      let adoptionLane: AdoptionLane | undefined;
       if (mode === 'adopted') {
-        cwd = join(root, 'adopted');
+        const cwd = join(root, 'adopted');
         await git('worktree', 'add', '-b', 'adopted', cwd);
+        const env = await createIsolationEnvironment({
+          codebase_id: codebase.id,
+          workflow_type: 'task',
+          workflow_id: 'author-adopted',
+          provider: 'worktree',
+          working_path: cwd,
+          branch_name: toBranchName('adopted'),
+          created_by_platform: 'cli',
+        });
+        adoptionLane = { kind: 'reuse-worktree', environment: env };
       }
       await dispatchBackgroundWorkflow(
         {
@@ -195,9 +208,7 @@ await import(${JSON.stringify(resolve(import.meta.dir, '../../../../cli/src/cli.
           codebaseId: codebase.id,
           availableWorkflows: [workflow],
           userId: user.id,
-          ...(mode === 'adopted'
-            ? { adoptionLane: { kind: 'reuse-worktree' as const, workingPath: cwd } }
-            : {}),
+          adoptionLane,
         },
         workflow
       );

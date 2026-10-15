@@ -14,6 +14,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   continuablePauseCursor,
+  deadlineWaitCursor,
   type PauseCursor,
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -116,6 +117,14 @@ const schedule = {
   resumeAt: wait.resumeAt,
   deadlineAt: '2026-01-03T00:00:00.000Z',
 };
+/** Fail a run as an older binary did, with its quota schedule; this binary only reads one. */
+async function failWithSchedule(
+  store: Pick<IWorkflowStore, 'failWorkflowRun' | 'updateWorkflowRun'>,
+  id: string
+): Promise<void> {
+  await store.failWorkflowRun(id, 'quota');
+  await store.updateWorkflowRun(id, { metadata: { scheduled_resume: schedule } });
+}
 const eight = <T>(call: (index: number) => Promise<T>): Promise<T[]> =>
   Promise.all(Array.from({ length: 8 }, (_, index) => call(index)));
 const create = (
@@ -749,6 +758,33 @@ export function describeWorkflowStoreConformance(
         }
       }
     }
+    test('a delayed release cannot remove a later usage-limit wait with the same reset', async () => {
+      const intent = start();
+      expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+      const id = intent.launch.run.id;
+      await store.claimPendingWorkflowRun(id);
+      const limit: Extract<WorkflowWaitContext, { kind: 'quota' }> = {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'first-limit',
+        waitingSince: wait.waitingSince,
+        resumeAt: wait.resumeAt,
+      };
+      const cursor = deadlineWaitCursor(limit);
+      await store.pauseWorkflowRunForWait(id, limit, { kind: 'started', stepName: limit.nodeId });
+      expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: true });
+      await store.resumeWorkflowRun(id, cursor);
+      const again = { ...limit, pauseId: 'second-limit' };
+      await store.pauseWorkflowRunForWait(id, again, { kind: 'started', stepName: again.nodeId });
+      expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: false });
+      expect(await rejection(store.resumeWorkflowRun(id, cursor))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(await store.releasePausedRunSlot(id, deadlineWaitCursor(again))).toEqual({
+        released: true,
+      });
+    });
     test('release refuses another pause and a run that holds no slot', async () => {
       const id = await admitPaused(start());
       for (const cursor of [
@@ -1282,7 +1318,7 @@ export function describeWorkflowStoreConformance(
         nodeId: wait.nodeId,
         resumeAt: wait.resumeAt,
       });
-      await store.failWorkflowRun(run.id, 'quota', { scheduledResume: schedule });
+      await failWithSchedule(store, run.id);
       expect(
         await rejection(
           store.resumeWorkflowRun(run.id, {
@@ -1304,7 +1340,6 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, run.id)).toEqual([
         'wait_started',
         'workflow_unpaused',
-        'quota_resume_scheduled',
         'workflow_failed',
         'workflow_resumed',
         'quota_resume_triggered',
@@ -1698,6 +1733,41 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, signaled.id)).toEqual(['wait_started', 'wait_signaled']);
       expect(await due(new Date())).toContain(signaled.id);
     });
+    test('a usage-limit wait is due at its reset, and its claim clears it', async () => {
+      const limit: Extract<WorkflowWaitContext, { kind: 'quota' }> = {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince: wait.waitingSince,
+        resumeAt: wait.resumeAt,
+      };
+      const run = await running(store);
+      await store.pauseWorkflowRunForWait(run.id, limit, {
+        kind: 'started',
+        stepName: limit.nodeId,
+      });
+      const paused = await store.getWorkflowRun(run.id);
+      expect(paused?.status).toBe('paused');
+      expect(paused && continuablePauseCursor(paused)).toEqual(deadlineWaitCursor(limit));
+      const due = async (now: Date): Promise<string[]> =>
+        (await store.listDueWorkflowContinuations(now, 10)).map(row => row.id);
+      expect(await due(new Date(Date.parse(limit.resumeAt) - 1000))).not.toContain(run.id);
+      expect(await due(new Date(Date.parse(limit.resumeAt) + 1000))).toContain(run.id);
+      const resumed = await store.resumeWorkflowRun(run.id, deadlineWaitCursor(limit));
+      expect(resumed.status).toBe('running');
+      expect(resumed.metadata.wait).toBeUndefined();
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toBeUndefined();
+      expect(await types(store, run.id)).toEqual(['wait_started', 'workflow_unpaused']);
+
+      const cancelled = await running(store);
+      await store.pauseWorkflowRunForWait(cancelled.id, limit, {
+        kind: 'started',
+        stepName: limit.nodeId,
+      });
+      expect(await store.cancelWorkflowRun(cancelled.id)).toEqual({ cancelled: true });
+      expect(await due(new Date(Date.parse(limit.resumeAt) + 1000))).not.toContain(cancelled.id);
+    });
     test('due continuations come earliest first, so a limit keeps the most overdue', async () => {
       const later = await running(store);
       await store.pauseWorkflowRunForWait(
@@ -1785,7 +1855,7 @@ export function describeWorkflowStoreConformance(
       // This gate's run was resumed from a quota schedule first; the triggered schedule it
       // keeps must not sort it among the timed rows.
       const gate = await running(store);
-      await store.failWorkflowRun(gate.id, 'quota', { scheduledResume: schedule });
+      await failWithSchedule(store, gate.id);
       await store.resumeWorkflowRun(gate.id, {
         kind: 'quota',
         attempt: schedule.attempt,
@@ -2342,7 +2412,7 @@ export function describeWorkflowStoreConformance(
         if (mode === 'reject' || mode === 'reset') await store.pauseWorkflowRun(run.id, approval);
         const writers: Record<typeof mode, () => Promise<unknown>> = {
           complete: () => store.completeWorkflowRun(run.id, { duration_ms: 1 }),
-          fail: () => store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule }),
+          fail: () => store.failWorkflowRun(run.id, 'failed'),
           cancel: () => store.cancelWorkflowRun(run.id),
           'fan-out': () => store.cancelFanOutRun(run.id, 'fan_out_sibling'),
           reject: () =>
@@ -2388,7 +2458,7 @@ export function describeWorkflowStoreConformance(
     );
     test('a racing resume follows the failure event when it succeeds', async () => {
       const run = await running(store);
-      const pending = store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule });
+      const pending = store.failWorkflowRun(run.id, 'failed');
       try {
         await store.getWorkflowRun(run.id);
         await store.listWorkflowEvents(run.id);

@@ -185,6 +185,15 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     );
   }
 
+  if (attention.kind === 'usage_limit') {
+    return (
+      header +
+      `Run \`${runId}\` (**${workflowName}**) is paused until a provider usage limit resets at ` +
+      `${attention.resumeAt}, and then continues on its own. It has no gate you can resolve. ` +
+      `Abandon it only if the user wants it stopped: \`${cmd(`abandon ${runId}`)}\`.`
+    );
+  }
+
   if (attention.kind === 'attention') {
     return (
       '## Paused, needs attention\n\n' +

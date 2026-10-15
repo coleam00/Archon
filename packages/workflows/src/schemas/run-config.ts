@@ -6,13 +6,25 @@ export const DEFAULT_TOOL_CALL_ATTENTION_MS = 30 * 60 * 1000;
 
 const providerDefaultsSchema = z.record(z.string(), z.unknown());
 
+/**
+ * Settings of the scheduled quota continuation that a usage-limit wait replaced. They
+ * still parse, so a config file or a persisted run config that sets them stays readable,
+ * but they have no effect: a usage-limit wait lasts until the provider's reported reset,
+ * with no fallback time, attempt cap or deadline.
+ */
+const deprecatedQuotaPolicySchema = z.object({
+  quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+  quotaMaxAttempts: z.number().int().positive().optional(),
+  quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+});
+const DEPRECATED_QUOTA_POLICY_KEYS = deprecatedQuotaPolicySchema.keyof().options;
+type DeprecatedQuotaPolicyKey = (typeof DEPRECATED_QUOTA_POLICY_KEYS)[number];
+
 export const workflowRunContinuationConfigSchema = z
   .object({
     toolCallAttentionMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
     autoResumeOnQuotaReset: z.boolean().optional(),
-    quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
-    quotaMaxAttempts: z.number().int().positive().optional(),
-    quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+    ...deprecatedQuotaPolicySchema.shape,
   })
   .strict();
 
@@ -61,8 +73,29 @@ export const workflowRunConfigMetadataSchema = z
 export type WorkflowRunConfigMetadata = z.infer<typeof workflowRunConfigMetadataSchema>;
 
 export type WorkflowContinuationConfig = z.infer<typeof workflowRunContinuationConfigSchema>;
-export type ResolvedWorkflowPolicy = WorkflowContinuationConfig & {
-  autoResumeOnQuotaReset: boolean;
-  quotaMaxAttempts: number;
-  quotaDeadlineMs: number;
-};
+
+export type LiveWorkflowPolicy = Omit<WorkflowContinuationConfig, DeprecatedQuotaPolicyKey>;
+export type ResolvedWorkflowPolicy = LiveWorkflowPolicy & { autoResumeOnQuotaReset: boolean };
+
+/** `config` without its deprecated keys. */
+export function liveWorkflowPolicy(config: WorkflowContinuationConfig): LiveWorkflowPolicy {
+  const live = { ...config };
+  for (const key of DEPRECATED_QUOTA_POLICY_KEYS) delete live[key];
+  return live;
+}
+
+/** The deprecation warning for `config`, or undefined when it sets no deprecated key. */
+export function deprecatedQuotaPolicyWarning(
+  config: WorkflowContinuationConfig
+): string | undefined {
+  const keys = DEPRECATED_QUOTA_POLICY_KEYS.filter(key => config[key] !== undefined);
+  if (keys.length === 0) return undefined;
+  return (
+    `workflows.${keys.join(', workflows.')} ` +
+    (keys.length === 1
+      ? 'is deprecated and has no effect. '
+      : 'are deprecated and have no effect. ') +
+    'A run that hits a provider usage limit waits until the reset time the ' +
+    "provider reports; 'workflows.autoResumeOnQuotaReset: false' turns that off."
+  );
+}
