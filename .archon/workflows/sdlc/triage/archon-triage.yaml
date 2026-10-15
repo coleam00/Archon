@@ -104,7 +104,40 @@ nodes:
               additionalProperties: false
               properties:
                 contract: { type: string, enum: [NO_ACTION] }
-              required: [contract]
+                # What made the item closable: the open issue it duplicates, or the
+                # merged change that delivered it. The URL is one the agent opened,
+                # never a guess; a duplicate also names the original as an item, so
+                # the close can link back to it.
+                closure:
+                  anyOf:
+                    - &duplicate_closure
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        kind: { type: string, enum: [duplicate] }
+                        url: { type: string, pattern: '\S' }
+                        original: &item_ref
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            repo:
+                              type: object
+                              properties:
+                                host: { type: string, pattern: '\S' }
+                                path: { type: string, pattern: '\S' }
+                              required: [host, path]
+                              additionalProperties: false
+                            number: { type: integer, minimum: 1 }
+                          required: [repo, number]
+                      required: [kind, url, original]
+                    - &delivered_closure
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        kind: { type: string, enum: [delivered] }
+                        url: { type: string, pattern: '\S' }
+                      required: [kind, url]
+              required: [contract, closure]
         # Five judged fields, each a value and a one-line reason. Only type and
         # size become labels; a composing caller reads all five from the verdict.
         type: &type_field
@@ -147,18 +180,7 @@ nodes:
         # was not a tracker issue. Any other pairing is re-asked at this node.
         item:
           anyOf:
-            - type: object
-              additionalProperties: false
-              properties:
-                repo:
-                  type: object
-                  properties:
-                    host: { type: string, pattern: '\S' }
-                    path: { type: string, pattern: '\S' }
-                  required: [host, path]
-                  additionalProperties: false
-                number: { type: integer, minimum: 1 }
-              required: [repo, number]
+            - *item_ref
             - type: object
               additionalProperties: false
               properties:
@@ -252,6 +274,12 @@ nodes:
           type: array
           items:
             type: string
+        # What made a NO_ACTION item closable; null on every other verdict.
+        closure:
+          anyOf:
+            - type: 'null'
+            - *duplicate_closure
+            - *delivered_closure
         summary:
           type: string
         # The same pointer, so a composing caller resolves to a verdict that still
@@ -278,5 +306,6 @@ nodes:
         - proposed_edits
         - blocked_reason
         - blocked_by
+        - closure
         - summary
         - report

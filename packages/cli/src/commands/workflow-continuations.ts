@@ -38,7 +38,7 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
   const [executable, ...prefix] = cliProgramArguments();
   return {
     id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
-    programArguments: [executable, ...prefix, 'workflow', 'wake', '--json'],
+    programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
     workingDirectory: archonHome,
     archonHome,
     schedule: { intervalSeconds, runAtLoad: true },
@@ -70,15 +70,16 @@ async function admit(
           reason: `CLI cannot deliver results to '${conversation.platform_type}'; use its server host`,
         };
       }
+      let workingPathError: string | undefined;
       try {
         if (!freshRun.working_path || !(await stat(freshRun.working_path)).isDirectory()) {
-          return { kind: 'unavailable', reason: 'recorded working path is not a directory' };
+          workingPathError = 'recorded working path is not a directory';
         }
       } catch (error) {
-        return {
-          kind: 'unavailable',
-          reason: `recorded working path is unavailable: ${errorMessage(error)}`,
-        };
+        workingPathError = `recorded working path is unavailable: ${errorMessage(error)}`;
+      }
+      if (workingPathError) {
+        return { kind: 'unavailable', reason: workingPathError };
       }
       return {
         kind: 'ready',
@@ -132,6 +133,10 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     return { runId, kind: outcome.kind, reason: outcome.reason, ...deferral };
   if (outcome.kind === 'failed')
     return { runId, kind: outcome.kind, error: errorMessage(outcome.error), ...deferral };
+  if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy') {
+    const { deferError: _deferError, ...refusal } = outcome;
+    return { ...refusal, ...deferral };
+  }
   return { runId, kind: outcome.kind, ...deferral };
 }
 
@@ -139,6 +144,8 @@ function successful(outcome: SettledOutcome): boolean {
   return (
     outcome.deferError === undefined &&
     (outcome.kind === 'not-accepted' ||
+      outcome.kind === 'waiting_for_capacity' ||
+      outcome.kind === 'resource_busy' ||
       (outcome.kind === 'accepted' && outcome.status !== 'failed'))
   );
 }
@@ -170,7 +177,7 @@ async function report(
     );
     for (const outcome of outcomes) {
       console.log(
-        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
+        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
       );
     }
     if (signaled && !ok)

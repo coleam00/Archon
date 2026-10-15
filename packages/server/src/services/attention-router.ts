@@ -1,7 +1,9 @@
 import { createLogger } from '@archon/paths';
+import type { IDatabase } from '@archon/core/db';
 import { listRunsNeedingAttention, listNotifiedTerminalRuns } from '@archon/core/db/workflows';
 import {
   attentionConversationPlatforms,
+  insertWorkflowEvent,
   listAttentionNotices,
   persistWorkflowEvent,
 } from '@archon/core/db/workflow-events';
@@ -23,6 +25,37 @@ export interface PushDestination {
   readonly id: string;
   state(): Promise<PushDestinationState>;
   deliver(notice: AttentionNotice, previous?: AttentionNoticeData): Promise<PushDeliveryResult>;
+}
+
+/**
+ * Record every open pause as already noticed for `destination`, so activating it sends
+ * nothing for runs that were waiting before. Runs inside the caller's transaction.
+ */
+export async function recordActivationBaseline(
+  destination: string,
+  inlinePlatforms: ReadonlySet<string>,
+  query: IDatabase['query']
+): Promise<void> {
+  const runs = await listRunsNeedingAttention(query);
+  const conversationPlatforms = await attentionConversationPlatforms(
+    runs.map(run => run.id),
+    query
+  );
+  const { baselines } = selectAttentionNotices({
+    runs,
+    terminalRuns: [],
+    ledger: [],
+    destinations: [destination],
+    initialized: new Set(),
+    conversationPlatforms,
+    inlinePlatforms,
+  });
+  for (const baseline of baselines)
+    await insertWorkflowEvent(query, {
+      workflow_run_id: baseline.runId,
+      event_type: 'attention_notice_sent',
+      data: baseline.data,
+    });
 }
 
 export class AttentionRouter {
@@ -95,7 +128,10 @@ export class AttentionRouter {
         });
         this.log.info('attention.notice_sent');
       } catch (err) {
-        this.log.error({ err }, 'attention.notice_failed');
+        this.log.error(
+          { err, destination: destination.id, runId: notice.run.id },
+          'attention.notice_failed'
+        );
       }
     }
   }

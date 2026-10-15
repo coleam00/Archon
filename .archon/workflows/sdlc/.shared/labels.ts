@@ -32,7 +32,7 @@ export const PACK_LABELS = {
   },
   'archon-close': {
     color: '6A737D',
-    description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
+    description: 'Triage: a duplicate, or already delivered',
   },
   'archon-type-bug': { color: 'D73A4A', description: 'Triage: something that worked is broken' },
   'archon-type-feature': { color: 'A2EEEF', description: 'Triage: new behavior' },

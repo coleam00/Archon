@@ -340,8 +340,8 @@ describe('bundled-defaults', () => {
     });
 
     // Every implementation pass before CI is reviewed: the first by the full routed
-    // review, later ones by delta (the same lenses after review findings, the general
-    // code reviewer after a CI fix). One named exception: the post-review reshape,
+    // review, later ones by delta (the previous round's lenses plus any the delta needs
+    // after review findings, the general code reviewer after a CI fix). One named exception: the post-review reshape,
     // which adopts or declines the structure pass's findings and goes straight to CI.
     it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
@@ -869,8 +869,8 @@ describe('bundled-defaults', () => {
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
-      expect(publish.timeout).toBe(30000);
-      expect(publish.retry).toEqual({ max_attempts: 2, delay_ms: 20000 });
+      expect(publish.timeout).toBe(180000);
+      expect(publish.retry).toBeUndefined();
       expect(publish.output_type).toBe('pull-request');
       expect(publish.output_format).toMatchObject({
         properties: {

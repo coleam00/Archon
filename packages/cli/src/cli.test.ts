@@ -596,7 +596,7 @@ describe('workflow run config argument', () => {
         { encoding: 'utf8' }
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Run config key 'paths' cannot apply");
+      expect(result.stderr).toContain("Unknown run config key 'paths'");
       expect(result.stderr).not.toContain('Unable to read run config');
     } finally {
       await removeTempTree(repo);

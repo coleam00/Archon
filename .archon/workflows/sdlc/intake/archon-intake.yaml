@@ -4,7 +4,9 @@ description: |
   request on the issue's work item; the run then claims the best waiting item
   and decides, with a script and before any model reads the text, whether its
   author is a listed maintainer. A maintainer's issue is triaged, and the
-  verdict becomes the item's stage and a route label. An outside issue gets
+  verdict becomes the item's stage and a route label; a duplicate or an
+  already delivered item the triage policy lets close is closed with a link to
+  what resolved it. An outside issue gets
   archon-needs-maintainer and starts no agent until a listed maintainer
   promotes it by adding archon-triage or a route label. With mode eval the run
   writes nothing: it decides the named issue as it was opened and returns the
@@ -115,8 +117,8 @@ nodes:
       required: [path, item, target, decision, seen]
 
   # Only a maintainer's item, or an outside item a maintainer promoted at its
-  # current body, reaches this agent. Unpublished: the outcome writes the labels
-  # after the work item.
+  # current body, reaches this agent. Unpublished: the outcome writes the labels,
+  # and closes a NO_ACTION item, after the work item.
   - id: triage
     include: archon-triage
     depends_on: [facts]
@@ -149,6 +151,7 @@ nodes:
       proposed_edits: { from: "$triage.output.proposed_edits", if_skipped: null }
       blocked_reason: { from: "$triage.output.blocked_reason", if_skipped: null }
       blocked_by: { from: "$triage.output.blocked_by", if_skipped: null }
+      closure: { from: "$triage.output.closure", if_skipped: null }
     output_format:
       type: object
       properties:

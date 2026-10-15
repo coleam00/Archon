@@ -6,10 +6,12 @@
  * This service never mutates run lifecycle state.
  */
 import { createLogger } from '@archon/paths';
-import type {
-  ExecutionOwnerRecord,
-  RunAttention,
-  WorkflowRunStatus,
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  type ExecutionOwnerRecord,
+  type RunAttention,
+  type WorkflowRun,
+  type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   isOwnerEndpointLocal,
@@ -17,6 +19,7 @@ import {
   type RunAttentionReadStore,
   type RunResolution,
 } from '@archon/workflows/run-attention-resolution';
+import type { RunOwnerLossWatch } from '@archon/workflows/attention-watch';
 
 import {
   watchRunLiveOwner,
@@ -283,4 +286,29 @@ export async function waitForRunAttention(
     discardOwnerWatch();
     unsubscribeDoorbell?.();
   }
+}
+
+/**
+ * The attention watch's owner liveness, by the rule `workflow wait` uses: `owner_lost`
+ * reports the observed status, and any other end of the wait means the run no longer
+ * needs watching. A running row's tool-call attention is not an end of the wait: a process
+ * that died mid-call leaves exactly that row, so the watch reads running rows without it
+ * and keeps asking for their owner. Polls only; one notification
+ * listener per running run would hold one database connection each.
+ */
+export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWatch {
+  const ownerStore: RunAttentionReadStore = {
+    getWorkflowRun: async id => withoutRunningAttention(await store.getWorkflowRun(id)),
+  };
+  return async (runId, signal) => {
+    const result = await waitForRunAttention(ownerStore, runId, { signal });
+    return result.kind === 'owner_lost' ? { observedStatus: result.observedStatus } : null;
+  };
+}
+
+function withoutRunningAttention(run: WorkflowRun | null): WorkflowRun | null {
+  if (run?.status !== 'running' || !Object.hasOwn(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY))
+    return run;
+  const { [TOOL_CALL_ATTENTION_METADATA_KEY]: _attention, ...metadata } = run.metadata;
+  return { ...run, metadata };
 }

@@ -1,3 +1,4 @@
+import { escapeRegExp } from '@archon/paths/regexp';
 /**
  * Shared helpers for executor.ts and dag-executor.ts.
  *
@@ -780,13 +781,6 @@ export function buildPromptWithContext(
 }
 
 // ─── Completion Signal Detection ────────────────────────────────────────────
-
-/**
- * Escape special regex characters in string
- */
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Detect whether the AI output contains a completion signal.

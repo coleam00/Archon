@@ -5,7 +5,8 @@
  * branch per contract verdict, each carrying only its own fields), so an illegal
  * combination is re-asked at that node rather than refused here. This flattens the
  * decision into the fields every caller reads and checks what a schema cannot:
- * blockers are qualified URLs. The pack's own labels
+ * blockers and a closure's link are qualified URLs. Closing the item is not this
+ * node's write: archon-intake performs it. The pack's own labels
  * derive from the declared fields here rather than being chosen by the model, and
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
@@ -13,6 +14,7 @@
  * the repository already has. Publishing uses the selected forge source.
  */
 
+import type { Closure } from '../../.shared/close.ts';
 import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
@@ -58,7 +60,7 @@ type Decision =
   | { contract: 'READY'; route: 'continue'; pull_request: number }
   | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
   | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
-  | { contract: 'NO_ACTION' };
+  | { contract: 'NO_ACTION'; closure: Closure };
 
 function main(): void {
   const decision = bound(process.env.INPUTS_DECISION) as Decision;
@@ -68,6 +70,7 @@ function main(): void {
   const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
   const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
   const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
+  const closure = 'closure' in decision ? decision.closure : null;
   const type = bound(process.env.INPUTS_TYPE) as Field<WorkType>;
   const size = bound(process.env.INPUTS_SIZE) as Field<Size>;
   // Passed through for the caller; no label mirrors these three.
@@ -106,6 +109,10 @@ function main(): void {
 
   if (!blockedBy.every(isQualifiedUrl)) {
     invalid('blocked_by must be a list of fully qualified http(s) URLs');
+    return;
+  }
+  if (closure !== null && !isQualifiedUrl(closure.url)) {
+    invalid('closure.url must be a fully qualified http(s) URL');
     return;
   }
   if (trimmed(summary) === '') {
@@ -149,6 +156,7 @@ function main(): void {
     proposed_edits: { title: edits.title, body: edits.body },
     blocked_reason: blockedReason,
     blocked_by: blockedBy,
+    closure,
     summary,
     report,
   });

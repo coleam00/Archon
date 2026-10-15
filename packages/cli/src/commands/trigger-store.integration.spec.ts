@@ -327,6 +327,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       engine: {
         resume: host.engine.resume.bind(host.engine),
         subscribe: host.engine.subscribe.bind(host.engine),
+        watchAttention: host.engine.watchAttention.bind(host.engine),
         submit: async (
           input: Parameters<typeof host.engine.submit>[0]
         ): ReturnType<typeof host.engine.submit> => {

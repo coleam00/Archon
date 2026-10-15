@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -e -o pipefail
 
 # Ensure required subdirectories exist.
 # Named volumes inherit these from the image layer on first run; bind mounts do not,
@@ -72,14 +72,9 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
-# With /home/appuser now persisted, ~/.gitconfig survives across restarts —
-# so we must check before --add or duplicate safe.directory lines accumulate
-# every boot.
-find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-  repo_dir="$(dirname "$git_dir")"
-  if ! $RUNNER git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$repo_dir"; then
-    $RUNNER git config --global --add safe.directory "$repo_dir"
-  fi
+find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
+  repo_dir="${git_dir%/.git}"
+  $RUNNER bun -e 'import { addSafeDirectory, toRepoPath } from "@archon/git"; await addSafeDirectory(toRepoPath(process.argv[1]));' "$repo_dir"
 done
 
 # The token stays in the environment, not in the persisted ~/.gitconfig.

@@ -232,26 +232,6 @@ export async function updateMetadata(id: string, metadata: Record<string, unknow
 }
 
 /**
- * Find environments by related issue (from metadata)
- */
-export async function findByRelatedIssue(
-  codebaseId: string,
-  issueNumber: number
-): Promise<IsolationEnvironmentRow | null> {
-  const dialect = getDialect();
-  const result = await pool.query<IsolationEnvironmentRow>(
-    `SELECT * FROM remote_agent_isolation_environments
-     WHERE codebase_id = $1
-       AND status = 'active'
-       AND ${dialect.jsonArrayContains('metadata', 'related_issues', 2)}
-     LIMIT 1`,
-    [codebaseId, String(issueNumber)]
-  );
-  const row = result.rows[0];
-  return row ? normalizeEnvironmentRow(row) : null;
-}
-
-/**
  * Count active environments for a codebase (for limit checks)
  */
 export async function countActiveByCodebase(codebaseId: string): Promise<number> {
@@ -312,9 +292,8 @@ export async function getLiveRunOwningEnv(
   release?: FailedRunRelease
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
-  const envIdExtract = postgres
-    ? "r.metadata->>'isolation_env_id'"
-    : "json_extract(r.metadata, '$.isolation_env_id')";
+  const dialect = getDialect();
+  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
   // UUID identifiers must compare as text so $1 has one type across metadata,
   // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
@@ -336,13 +315,11 @@ export async function getLiveRunOwningEnv(
       const coalesced = 'COALESCE(r.completed_at, r.last_activity_at, r.started_at)';
       const lastActive = postgres ? coalesced : `datetime(${coalesced})`;
       params.push(release.staleDays);
-      const threshold = getDialect().nowMinusDays(params.length);
+      const threshold = dialect.nowMinusDays(params.length);
       releaseFilter = `AND (r.status NOT IN (${settleable}) OR ${lastActive} IS NULL OR ${lastActive} >= ${threshold})`;
     }
   }
-  const ownedEnvExtract = postgres
-    ? "r.metadata->'owned_worktree'->>'envId'"
-    : "json_extract(r.metadata, '$.owned_worktree.envId')";
+  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r

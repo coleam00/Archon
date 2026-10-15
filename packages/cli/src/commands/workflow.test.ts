@@ -1,5 +1,5 @@
 import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
-import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
+import { PROVIDER_EVENT_ROW_TYPES, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
@@ -2292,7 +2292,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
    * empty for an in-place prior run, the surviving worktree record by default.
    */
   async function stubFailedPriorRun(
-    status: 'failed' | 'running' = 'failed',
+    status: 'failed' | 'running' | 'paused' = 'failed',
     isolationEnvs: Array<Record<string, unknown>> = [
       {
         id: 'env-1',
@@ -2376,6 +2376,23 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
       })
     ).rejects.toThrow(
       /^Cannot resume: the prior run for 'archon-ship' has no completed nodes and no interactive-loop state\.\nNothing can be skipped, so start a fresh run instead:\n  archon workflow run archon-ship --supersedes run-dead$/
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('reports a resume refused for capacity as a busy resource, not lost state', async () => {
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    await stubFailedPriorRun('paused');
+    (hydrateResumableRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowResourceBusyError('run-dead', { kind: 'run', id: 'holder-1' }, 'paused')
+    );
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
+        resume: true,
+      })
+    ).rejects.toThrow(
+      /^Cannot resume workflow 'archon-ship' now: Workflow run 'run-dead' cannot resume while resource owner 'holder-1' has priority\. It stays paused;/
     );
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
@@ -11666,9 +11683,8 @@ describe('workflowRejectCommand', () => {
       // what was recorded before that point.
     }
 
-    // No `reason` argument at all — the CLI must default it to 'Rejected'
-    // before it reaches rejectWorkflow, otherwise the new-mode structured
-    // output (#2707) records an empty string instead (#2740).
+    // No `reason` argument at all — rejectWorkflow records the 'Rejected'
+    // default on the new-mode structured output (#2740).
     const structuredOutput = { decision: 'reject', text: 'Rejected' };
     expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
       'run-new-mode',
@@ -15362,9 +15378,9 @@ describe('workflow run credential launch refusal', () => {
     const createDeps = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original(),
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async (_userId, vendor) => ({
+      getUserProviderCredential: async (_userId, vendor) => ({
         kind: 'api_key',
-        status:
+        getStatus: async () =>
           adopt && vendor === 'anthropic'
             ? { state: 'usable', source: 'archon' }
             : {

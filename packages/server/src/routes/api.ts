@@ -53,6 +53,7 @@ import {
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
+  type CloneOptions,
   inspectProjectBaseBranch,
   ProjectRegistrationError,
   registerRepository,
@@ -1178,6 +1179,7 @@ const resumeWorkflowRunRoute = createRoute({
     400: jsonError('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('Resource busy; the run keeps its state'),
     500: jsonError('Server error'),
   },
 });
@@ -1246,6 +1248,7 @@ const approveWorkflowRunRoute = createRoute({
     400: jsonGateRefusal('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('The answer names an occurrence the run is no longer paused at'),
     500: jsonError('Server error'),
   },
 });
@@ -1267,6 +1270,7 @@ const rejectWorkflowRunRoute = createRoute({
     400: jsonGateRefusal('Bad request'),
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
+    409: jsonError('The answer names an occurrence the run is no longer paused at'),
     500: jsonError('Server error'),
   },
 });
@@ -2013,7 +2017,8 @@ export function registerApiRoutes(
   webAdapter: WebAdapter,
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
-  attention?: { webPush: WebPushDestination; router: AttentionRouter }
+  attention?: { webPush: WebPushDestination; router: AttentionRouter },
+  registration: Pick<CloneOptions, 'githubAppAuth'> = {}
 ): void {
   const {
     assertRunActionAllowed,
@@ -3299,7 +3304,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(inspectBaseBranchRoute, async c => {
     const body = getValidatedBody(c, inspectBaseBranchBodySchema);
     try {
-      return c.json(await inspectProjectBaseBranch(body), 200);
+      return c.json(await inspectProjectBaseBranch(body, registration), 200);
     } catch (error) {
       if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'inspect_base_branch_failed');
@@ -3314,7 +3319,10 @@ export function registerApiRoutes(
     try {
       let result;
       if ('url' in body) {
-        result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
+        result = await cloneRepository(body.url, {
+          ...registration,
+          baseBranch: body.base_branch ?? undefined,
+        });
       } else if (body.folder === true) {
         result = await registerFolder(body.path, undefined, {
           baseBranch: body.base_branch ?? undefined,
@@ -4031,12 +4039,14 @@ export function registerApiRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        const headlessResumed = await resumeWorkflowRunFromServer(
+        const headless = await resumeWorkflowRunFromServer(
           createSqlWorkflowHost(),
           run,
           actor.kind === 'user' ? actor.userId : undefined
         );
-        if (!headlessResumed) {
+        if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
+          return apiError(c, 409, headless.message);
+        if (headless.kind === 'not_resumed') {
           return apiError(
             c,
             400,
@@ -4249,6 +4259,18 @@ export function registerApiRoutes(
       }
       const actor = await resolveRunActor(c);
       await assertRunActionAllowed(run, actor, 'approve');
+      const rawBody = await c.req.text();
+      let input: unknown;
+      try {
+        input = rawBody.trim() === '' ? {} : JSON.parse(rawBody);
+      } catch {
+        return apiError(c, 400, 'Request body is not valid JSON');
+      }
+      const parsed = approveWorkflowRunBodySchema.safeParse(input);
+      if (!parsed.success) return apiError(c, 400, parsed.error.message);
+      const body = parsed.data;
+      const origin: GateAnswerOrigin = { via: 'api', expectedGate: body.expectedGate };
+      assertAnswerAdmissible(run, origin);
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
       }
@@ -4262,33 +4284,15 @@ export function registerApiRoutes(
       }
       const approveRefusal = answerRefusal(run, 'approve');
       if (approveRefusal !== null) return apiError(c, 400, approveRefusal);
-      // Distinguish "no body sent" (legitimate bare approve) from "body sent but
-      // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
-      // signal-bearing loop gate, so silently coercing a malformed body to {}
-      // would discard intended feedback and finalize undiagnosed — reject it.
-      const rawBody = await c.req.text();
-      let body: { comment?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { comment?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.approve_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"comment": "..."} or no body'
-          );
-        }
-      }
       // Shared gate logic (events, telemetry, metadata staging) — the run stays
       // 'paused' with metadata.approval.resolved = 'approved' (#2075). The
       // pre-checks above map the common error cases to 400s; approveWorkflow
-      // re-validates and anything it throws past them is a 500.
+      // re-validates and the atomic resolution checks the expected gate again.
       // The raw (possibly undefined) comment is passed through — approveWorkflow
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      await approveWorkflow(runId, body.comment, actor, { via: 'api' });
+      await approveWorkflow(runId, body.comment, actor, origin);
 
       return c.json({
         success: true,
@@ -4296,6 +4300,7 @@ export function registerApiRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
       return apiError(c, 500, 'Failed to approve workflow run');
     }
@@ -4311,6 +4316,18 @@ export function registerApiRoutes(
       }
       const actor = await resolveRunActor(c);
       await assertRunActionAllowed(run, actor, 'reject');
+      const rawBody = await c.req.text();
+      let input: unknown;
+      try {
+        input = rawBody.trim() === '' ? {} : JSON.parse(rawBody);
+      } catch {
+        return apiError(c, 400, 'Request body is not valid JSON');
+      }
+      const parsed = rejectWorkflowRunBodySchema.safeParse(input);
+      if (!parsed.success) return apiError(c, 400, parsed.error.message);
+      const body = parsed.data;
+      const origin: GateAnswerOrigin = { via: 'api', expectedGate: body.expectedGate };
+      assertAnswerAdmissible(run, origin);
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
       }
@@ -4324,27 +4341,10 @@ export function registerApiRoutes(
       }
       const rejectRefusal = answerRefusal(run, 'reject');
       if (rejectRefusal !== null) return apiError(c, 400, rejectRefusal);
-      // Mirror of the approve route's malformed-body guard: a swallowed parse
-      // failure would silently drop the reviewer's reason.
-      const rawBody = await c.req.text();
-      let body: { reason?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { reason?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.reject_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"reason": "..."} or no body'
-          );
-        }
-      }
-      const reason = body.reason ?? 'Rejected';
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const result = await rejectWorkflow(runId, reason, actor, { via: 'api' });
+      const result = await rejectWorkflow(runId, body.reason, actor, origin);
 
       if (result.cancelled) {
         return c.json({
@@ -4363,6 +4363,7 @@ export function registerApiRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');
       return apiError(c, 500, 'Failed to reject workflow run');
     }
@@ -4411,12 +4412,7 @@ export function registerApiRoutes(
       const respondRefusal = answerRefusal(run, decision);
       if (respondRefusal !== null) return apiError(c, 400, respondRefusal);
 
-      // Mirrors the dedicated /reject route's default: an empty/omitted text becomes
-      // 'Rejected' rather than reaching a new-mode gate's structured output as ''.
-      // Only for decision === 'reject' — every other decision (including 'approve',
-      // which stays optional/undefined) is unaffected.
-      const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text, actor, origin);
+      const result = await respondToWorkflow(runId, decision, body.text, actor, origin);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({

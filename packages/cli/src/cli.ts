@@ -1173,7 +1173,7 @@ async function main(): Promise<number> {
             if (positionals[3] !== undefined) {
               return await fail(
                 jsonFlag,
-                'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>] [--json]'
+                'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>] [--watch [--after <cursor>]] [--json]'
               );
             }
             return await workflowAttentionCommand(workflowHost, effectiveCwd, positionals[2], {
@@ -1183,6 +1183,8 @@ async function main(): Promise<number> {
               labels: (values.label as string[] | undefined) ?? [],
               sort: values.sort as string | undefined,
               countBy: values['count-by'] as string | undefined,
+              watch: values.watch as boolean | undefined,
+              after: values.after as string | undefined,
             });
           }
 

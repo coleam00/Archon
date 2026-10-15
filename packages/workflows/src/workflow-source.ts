@@ -73,6 +73,8 @@ import {
 } from './defaults/bundle-inventory';
 import {
   readWorkflowSourceState,
+  workflowSourceMetadataSchema,
+  WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceConfigSchema,
   type WorkflowSourceConfig,
 } from './schemas/workflow-run';
@@ -458,9 +460,41 @@ export type WorkflowSourceManifest = z.infer<typeof workflowSourceManifestSchema
  * the capture exists to prevent.
  */
 export class WorkflowSourceIntegrityError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly path?: string
+  ) {
     super(message);
     this.name = 'WorkflowSourceIntegrityError';
+  }
+}
+
+export class WorkflowSourceUnavailableError extends WorkflowSourceIntegrityError {
+  constructor(
+    readonly path: string,
+    cause: unknown
+  ) {
+    super(
+      `Workflow source at ${path} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      path
+    );
+    this.name = 'WorkflowSourceUnavailableError';
+    this.cause = cause;
+  }
+}
+
+function sourceReadError(path: string, error: unknown): unknown {
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  switch (code) {
+    case 'ENOENT':
+    case 'ENOTDIR':
+    case 'EISDIR':
+    case 'EACCES':
+    case 'EPERM':
+    case 'ELOOP':
+      return new WorkflowSourceUnavailableError(path, error);
+    default:
+      return error;
   }
 }
 
@@ -841,12 +875,7 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   const entries: DigestEntry[] = [];
 
   const walk = async (dir: string, rel: string): Promise<void> => {
-    let dirEntries;
-    try {
-      dirEntries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const dirEntries = await readdir(dir, { withFileTypes: true });
     for (const entry of dirEntries) {
       const relPath = rel === '' ? entry.name : join(rel, entry.name);
       if (entry.isDirectory()) {
@@ -862,11 +891,6 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   await walk(root, '');
 
   return entries;
-}
-
-/** Content digest over every captured file. */
-async function digestTree(root: string): Promise<string> {
-  return foldDigest(await digestEntries(root));
 }
 
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
@@ -1038,22 +1062,22 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
-    throw new WorkflowSourceIntegrityError(
-      `Workflow source capture at ${captureRoot} has no manifest: ${(error as Error).message}`
-    );
+    throw sourceReadError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(raw);
   } catch (error) {
     throw new WorkflowSourceIntegrityError(
-      `Workflow source manifest at ${captureRoot} is not valid JSON: ${(error as Error).message}`
+      `Workflow source manifest at ${captureRoot} is not valid JSON: ${(error as Error).message}`,
+      join(captureRoot, MANIFEST_FILE)
     );
   }
   const parsed = workflowSourceManifestSchema.safeParse(parsedJson);
   if (!parsed.success) {
     throw new WorkflowSourceIntegrityError(
-      `Workflow source manifest at ${captureRoot} is not a shape this build understands: ${parsed.error.message}`
+      `Workflow source manifest at ${captureRoot} is not a shape this build understands: ${parsed.error.message}`,
+      join(captureRoot, MANIFEST_FILE)
     );
   }
   return parsed.data;
@@ -1065,7 +1089,7 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
  * Throws {@link WorkflowSourceIntegrityError} when the manifest is missing, unreadable, of
  * an unknown shape, or when the digest no longer matches. Every one of those means the
  * run's executable source cannot be established, which is a reason to stop rather than to
- * quietly execute something else.
+ * quietly execute something else. Temporary I/O errors propagate unchanged for retry.
  */
 export async function loadWorkflowSource(
   captureRoot: string,
@@ -1086,7 +1110,8 @@ export async function loadWorkflowSource(
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} is not the one this run recorded ` +
         `(run expects ${expectedDigest.slice(0, 12)}…, capture claims ` +
-        `${manifest.digest.slice(0, 12)}…). The capture has been replaced.`
+        `${manifest.digest.slice(0, 12)}…). The capture has been replaced.`,
+      captureRoot
     );
   }
   if (
@@ -1098,15 +1123,23 @@ export async function loadWorkflowSource(
   ) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} has different resolution settings than this ` +
-        'run recorded. The capture manifest has changed.'
+        'run recorded. The capture manifest has changed.',
+      captureRoot
     );
   }
-  const digest = await digestTree(captureRoot);
+  let entries: DigestEntry[];
+  try {
+    entries = await digestEntries(captureRoot);
+  } catch (error) {
+    throw sourceReadError(captureRoot, error);
+  }
+  const digest = foldDigest(entries);
   if (digest !== manifest.digest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
         `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
-        'The captured source has changed since the run started.'
+        'The captured source has changed since the run started.',
+      captureRoot
     );
   }
   if (manifest.engine_version !== BUNDLED_VERSION) {
@@ -1157,8 +1190,12 @@ export async function resolveRunSourceCapture(
   if (state.kind === 'unreadable') {
     // NOT the same as having no record. This run recorded something; we simply cannot
     // read it. Resolving live here would execute source the run never agreed to.
+    const recordedPath = workflowSourceMetadataSchema
+      .pick({ root: true })
+      .safeParse(metadata?.[WORKFLOW_SOURCE_METADATA_KEY]);
     throw new WorkflowSourceIntegrityError(
-      `This run's workflow source record cannot be read by this build: ${state.detail}`
+      `This run's workflow source record cannot be read by this build: ${state.detail}`,
+      recordedPath.success ? recordedPath.data.root : undefined
     );
   }
   if (state.kind === 'absent') return undefined;

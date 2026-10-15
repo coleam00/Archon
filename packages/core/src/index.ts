@@ -112,6 +112,7 @@ export {
   inspectProjectBaseBranch,
   ProjectRegistrationError,
   type RegistrationOptions,
+  type CloneOptions,
   type ProjectBaseBranchInspection,
 } from './handlers/sql-registration';
 
@@ -182,13 +183,7 @@ export type {
 // =============================================================================
 // State
 // =============================================================================
-export {
-  type TransitionTrigger,
-  shouldCreateNewSession,
-  shouldDeactivateSession,
-  detectPlanToExecuteTransition,
-  getTriggerForCommand,
-} from './state/session-transitions';
+export { type TransitionTrigger, getTriggerForCommand } from './state/session-transitions';
 
 // =============================================================================
 // Utils
@@ -214,6 +209,7 @@ export { getLinkedIssueNumbers } from './utils/github-graphql';
 export {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
+  loadGitHubAppConfig,
   installCredentialHelper,
   AppNotInstalledError,
   AppPrivateKeyError,

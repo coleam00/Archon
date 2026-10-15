@@ -27,13 +27,12 @@
  *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
  *   node forwards.
  * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
- *   continuation skipped it) and review-round's output, whose lens fields hold a
- *   continuation's set. The lenses this round ran are recorded beside the report
- *   as the next round's lens set.
+ *   light continuation skipped it) and review-round's output, whose lens fields
+ *   hold the set a continuation reruns. The lenses this round ran, their union,
+ *   are recorded beside the report as the next round's lens set.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
@@ -71,11 +70,13 @@ function declaredPr(value: string): QualifiedPr | undefined {
   return parseQualifiedPr(target);
 }
 
-/** The lenses this round ran: the route agent's call on a first round, review-round's otherwise. */
+/** The lenses this round ran: the route agent's selection together with review-round's. */
 function lenses(): Record<string, boolean> {
-  const decision = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
-  const source = decision ?? record(JSON.parse(text(process.env.INPUTS_MODE)));
-  return Object.fromEntries(REVIEW_LENSES.map(lens => [lens, source?.[lens] === true]));
+  const route = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
+  const mode = record(JSON.parse(text(process.env.INPUTS_MODE)));
+  return Object.fromEntries(
+    REVIEW_LENSES.map(lens => [lens, route?.[lens] === true || mode?.[lens] === true])
+  );
 }
 
 function label(pr: QualifiedPr | undefined): string {
@@ -122,15 +123,13 @@ try {
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
-    const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
-    try {
-      const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`);
-      const comment = upsertComment(pr, MARKER, marked, source);
-      note(`publish-review: canonical review comment at ${comment.url}`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    const comment = upsertComment(
+      { kind: 'pr', ref: pr },
+      MARKER,
+      `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`,
+      source
+    );
+    note(`publish-review: canonical review comment at ${comment.url}`);
   }
   // review-round reads these as the next round's cursor and lens set.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);

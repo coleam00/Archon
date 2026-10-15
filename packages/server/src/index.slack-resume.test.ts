@@ -12,7 +12,7 @@ import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
-import type { WorkflowResumeTarget } from './services/workflow-resume-service';
+import type { ServerResumeOutcome, WorkflowResumeTarget } from './services/workflow-resume-service';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import { clearConfigCache, loadConfig, toSafeConfig } from '@archon/core/config/config-loader';
 
@@ -20,7 +20,10 @@ const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
-type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
+type SlackWorkflowResume = (
+  runId: string,
+  slackUserId: string
+) => Promise<ServerResumeOutcome['kind']>;
 
 const persistedRun: WorkflowRun = {
   origin: { conversationId: 'conversation-1' },
@@ -67,7 +70,9 @@ const mockWorkflowResumeTargetForRun = mock(
     _platforms: ReadonlyMap<string, IWorkflowPlatform>
   ): Promise<WorkflowResumeTarget> => resumeTarget
 );
-const mockResumeWorkflowRunFromServer = mock(async (): Promise<boolean> => true);
+const mockResumeWorkflowRunFromServer = mock(
+  async (): Promise<ServerResumeOutcome> => ({ kind: 'resumed' })
+);
 
 const hostedPlugins: string[][] = [];
 const mockChatHostStart = mock(() => {});
@@ -78,7 +83,7 @@ const mockBridgeDetach = mock(() => {});
 mock.module('./chat-host/runtime', () => ({
   createChatHost: (installed: { descriptor: { id: string } }[]) => {
     hostedPlugins.push(installed.map(plugin => plugin.descriptor.id));
-    return { start: mockChatHostStart, stop: mockChatHostStop };
+    return { start: mockChatHostStart, stop: mockChatHostStop, attentionDestinations: [] };
   },
 }));
 
@@ -341,8 +346,8 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-const mockRegisterApiRoutes = mock(
-  (_app: unknown, _adapter: unknown, _lockManager: ConversationLockManager): void => undefined
+const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRoutes>(
+  () => undefined
 );
 mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
@@ -535,6 +540,28 @@ describe('server conversation admission configuration', () => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test('server passes its configured App provider to the URL API routes', async () => {
+    process.env.GITHUB_APP_ID = '123';
+    process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+    process.env.WEBHOOK_SECRET = 'test-webhook';
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      mockRegisterApiRoutes.mockClear();
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345 });
+      expect(mockRegisterApiRoutes.mock.calls.at(-1)?.[5]?.githubAppAuth).toBe(
+        installationTokenProvider
+      );
+    } finally {
+      serveSpy.mockRestore();
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.WEBHOOK_SECRET;
+    }
+  });
+
   test('server publishes the bound port to credential-helper children', async () => {
     process.env.ARCHON_PORT = '3090';
     process.env.PORT = '3000';
@@ -609,7 +636,7 @@ describe('Slack workflow resume composition', () => {
           stdout: 'pipe',
           stderr: 'pipe',
         });
-        child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
+        child.stdin.write('protocol=https\nhost=github.com\npath=owner/.github-private.git\n\n');
         child.stdin.end();
         const [exitCode, stdout, stderr] = await Promise.all([
           child.exited,
@@ -620,7 +647,7 @@ describe('Slack workflow resume composition', () => {
         expect(stdout).toContain('password=inherited-port-token');
         expect(stderr).toBe('');
         expect(mockInstallationToken).toHaveBeenCalledTimes(1);
-        expect(mockInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+        expect(mockInstallationToken).toHaveBeenCalledWith('owner', '.github-private');
       } finally {
         serveSpy.mockRestore();
         listener?.stop(true);
@@ -765,7 +792,7 @@ describe('Slack workflow resume composition', () => {
 
       const accepted = await capturedResume?.('run-1', 'U123');
 
-      expect(accepted).toBe(true);
+      expect(accepted).toBe('resumed');
       expect(mockGetWorkflowRun).toHaveBeenCalledWith('run-1');
       expect(mockFindOrCreateUser).toHaveBeenCalledWith('slack', 'U123', undefined);
       expect(mockWorkflowResumeTargetForRun).toHaveBeenCalledTimes(1);
@@ -779,6 +806,17 @@ describe('Slack workflow resume composition', () => {
         'actor-user-1',
         resumeTarget
       );
+      mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
+        kind: 'waiting_for_capacity',
+        message: 'busy',
+      });
+      expect(await capturedResume?.('run-1', 'U123')).toBe('waiting_for_capacity');
+      // A refused run that keeps no place is not waiting for capacity.
+      mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
+        kind: 'resource_busy',
+        message: 'busy',
+      });
+      expect(await capturedResume?.('run-1', 'U123')).toBe('not_resumed');
     } finally {
       serveSpy.mockRestore();
     }

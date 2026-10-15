@@ -26,7 +26,7 @@ const roots = trackTempRoots();
 // Restore the keys in place: assigning a new object to process.env drops
 // Bun's case-insensitive Windows env, so later files read PATH as undefined.
 const prior = Object.fromEntries(
-  ['ARCHON_HOME', 'DATABASE_URL'].map(key => [key, process.env[key]])
+  ['ARCHON_HOME', 'DATABASE_URL', 'GIT_CONFIG_GLOBAL'].map(key => [key, process.env[key]])
 );
 afterEach(() => {
   for (const [key, value] of Object.entries(prior)) {
@@ -47,6 +47,7 @@ test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as cons
     setPlatformPolicies([]);
     const home = roots(await realpath(await mkdtemp(join(tmpdir(), 'file-reclaim-'))));
     process.env.ARCHON_HOME = home;
+    process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
     process.env.DATABASE_URL = '';
     const repo = join(home, 'repo');
     await mkdir(repo);

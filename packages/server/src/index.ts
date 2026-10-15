@@ -352,14 +352,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       .filter(plugin => plugin.descriptor.capabilities.runEvents)
       .map(plugin => plugin.descriptor.id)
   );
-  const webPush = new WebPushDestination(inlinePlatforms);
-  const attentionRouter = new AttentionRouter([webPush], inlinePlatforms);
   const chatHost = createChatHost(
     chatPlugins,
     config.streaming,
     lockManager,
     workflowPlatforms,
-    activePlatforms
+    activePlatforms,
+    { routes: config.attentionNotices, inlinePlatforms }
+  );
+  // Each route's activation baseline commits before the router's first scan.
+  await Promise.all(chatHost.attentionDestinations.map(destination => destination.activate()));
+  const webPush = new WebPushDestination(inlinePlatforms);
+  const attentionRouter = new AttentionRouter(
+    [webPush, ...chatHost.attentionDestinations],
+    inlinePlatforms
   );
   for (const plugin of chatPlugins) {
     getLog().info(
@@ -635,10 +641,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       workflowPlatforms.set(slack.getPlatformType(), slack);
       slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
         const run = await workflowDb.getWorkflowRun(runId);
-        if (!run) return false;
+        if (!run) return 'not_resumed';
         const actorUserId = await resolveUserId('slack', slackUserId, undefined);
         const target = await workflowResumeTargetForRun(run, workflowPlatforms);
-        return resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target);
+        const outcome = await resumeWorkflowRunFromServer(
+          createSqlWorkflowHost(),
+          run,
+          actorUserId,
+          target
+        );
+        return outcome.kind === 'resource_busy' ? 'not_resumed' : outcome.kind;
       });
       slackBridge.attach();
 
@@ -727,10 +739,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager, activePlatforms, {
-    webPush,
-    router: attentionRouter,
-  });
+  registerApiRoutes(
+    app,
+    webAdapter,
+    lockManager,
+    activePlatforms,
+    {
+      webPush,
+      router: attentionRouter,
+    },
+    { githubAppAuth: githubAppAuthProvider ?? undefined }
+  );
 
   // GitHub webhook endpoint
   if (github) {

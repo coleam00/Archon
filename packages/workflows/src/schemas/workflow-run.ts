@@ -472,6 +472,17 @@ export function pendingWorkflowWaitDeadline(
   return wait;
 }
 
+/**
+ * Whether a deadline-bearing wait is ready to continue: its deadline passed, or its event
+ * was signaled (a signal leaves `resumeAt` in the future). The SQL continuation listing
+ * restates this; the store conformance suite pins the two together.
+ */
+export function workflowWaitDue(wait: WorkflowDeadlineWaitContext, now: number): boolean {
+  return (
+    Date.parse(wait.resumeAt) <= now || (wait.kind === 'event' && wait.signaledAt !== undefined)
+  );
+}
+
 /** The identity a continuation host claims an answered pause by. */
 export interface PauseContinuation {
   nodeId: string;
@@ -495,7 +506,7 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || run.metadata.isolation === 'container') return undefined;
+  if (run.status !== 'paused' || isContainerRun(run)) return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {
     if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)
@@ -733,6 +744,25 @@ export function readRunStopReason(
   metadata: Record<string, unknown> | undefined
 ): RunStopReason | undefined {
   const parsed = runStopReasonSchema.safeParse(metadata?.[RUN_STOP_REASON_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Key under which a paused run that gave back its resource slot records that its
+ * continuation was refused for capacity (#4045): `{ since }`, the first refusal. The run
+ * is then a capacity waiter: it keeps its place ahead of queued new starts, ordered by
+ * `since`, so a later refusal keeps the first value. Cleared by `resumeWorkflowRun` and by
+ * `releasePausedRunSlot`, so a later pause never inherits it.
+ */
+export const CAPACITY_WAIT_METADATA_KEY = 'capacity_wait';
+
+const capacityWaitSchema = z.object({ since: z.string() });
+
+/** Typed view of the capacity wait; undefined when the run carries none this build can read. */
+export function readCapacityWait(
+  metadata: Record<string, unknown> | undefined
+): z.infer<typeof capacityWaitSchema> | undefined {
+  const parsed = capacityWaitSchema.safeParse(metadata?.[CAPACITY_WAIT_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -1046,14 +1076,15 @@ const approvalDecisionsSchema = z.union([
 ]);
 
 export const approvalContextSchema = approvalContextBaseSchema.and(approvalDecisionsSchema);
-export const expectedApprovalGateSchema = approvalContextBaseSchema
-  .pick({ nodeId: true, pauseId: true })
-  .required();
+export const expectedApprovalGateSchema = z.union([
+  z.string().min(1),
+  z.object({ nodeId: z.string().min(1), pauseId: z.string().min(1) }),
+]);
 
 export type ApprovalContext = z.infer<typeof approvalContextSchema>;
 
 /** Old node-only buttons may resolve only contexts without a pause identity. */
-export type ExpectedApprovalGate = string | Required<Pick<ApprovalContext, 'nodeId' | 'pauseId'>>;
+export type ExpectedApprovalGate = z.infer<typeof expectedApprovalGateSchema>;
 
 /**
  * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
@@ -1263,10 +1294,9 @@ export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pause
  * The single derivation of "what does this run need from outside, if anything".
  *
  * No database or I/O. The clock computes display durations only. The run row is
- * the authority: attention is
- * never derived from the event log, because terminal transitions exist that write no
- * terminal event (`resolveAndCancelApprovalGate` cancels a run while inserting only
- * `approval_received`), and two gate pauses write an unreliable event or none at all.
+ * the authority: attention is never derived from the event log. Every write that
+ * changes it commits an event, which the attention watch uses only as a wake, because
+ * a delivered event can later be retracted by recovery.
  *
  * Consumed by `assertApprovable`/`assertRejectable`, the server approve/reject/respond
  * routes, the orchestrator's paused-gate prompt section, `waitForRunAttention`, and the

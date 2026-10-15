@@ -13,6 +13,7 @@
     "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
+    "./attention-watch": "./src/attention-watch.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
@@ -167,6 +168,9 @@
       "src/script-discovery.test.ts"
     ],
     [
+      "src/script-discovery-links.test.ts"
+    ],
+    [
       "src/bundle-live-selection.test.ts"
     ],
     [
@@ -226,7 +230,8 @@
       "src/file-store/"
     ],
     [
-      "src/run-subscription.test.ts"
+      "src/run-subscription.test.ts",
+      "src/attention-watch.test.ts"
     ],
     [
       "src/state-document-store.test.ts",
