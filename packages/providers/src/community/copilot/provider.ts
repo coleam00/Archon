@@ -141,12 +141,9 @@ function resolveCopilotReasoning(
 
 function resolveSystemMessage(requestOptions?: SendQueryOptions): SystemMessageConfig | undefined {
   const requestPrompt = requestOptions?.systemPrompt;
-  const nodePrompt =
-    typeof requestOptions?.nodeConfig?.systemPrompt === 'string'
-      ? requestOptions.nodeConfig.systemPrompt
-      : undefined;
-  const explicitPrompt = requestPrompt ?? nodePrompt;
-  const content = explicitPrompt ?? requestOptions?.appendSystemPrompt;
+  const explicitPrompt = requestPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
+  const prompt = explicitPrompt ?? requestOptions?.appendSystemPrompt;
+  const content = Array.isArray(prompt) ? prompt.join('\n') : prompt;
   if (typeof content === 'string' && content.length > 0) {
     return { mode: explicitPrompt !== undefined ? 'replace' : 'append', content };
   }

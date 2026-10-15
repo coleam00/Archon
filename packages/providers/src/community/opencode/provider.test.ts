@@ -233,6 +233,39 @@ describe('OpencodeProvider', () => {
     tempDirs.clear();
   });
 
+  test.each([
+    { options: { appendSystemPrompt: 'append' }, expected: 'append' },
+    {
+      options: { nodeConfig: { systemPrompt: 'node' }, appendSystemPrompt: 'append' },
+      expected: 'node',
+    },
+    {
+      options: {
+        systemPrompt: 'request',
+        nodeConfig: { systemPrompt: 'node' },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'request',
+    },
+  ])('sends the selected system prompt to the SDK: $expected', async ({ options, expected }) => {
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+    const result = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        ...options,
+      })
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.failure).toBeUndefined();
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: '/tmp' },
+      body: expect.objectContaining({ system: expected }),
+    });
+  });
+
   test('a part-update stream yields one chunk per text or reasoning part, once it ends', async () => {
     const update = (part: Record<string, unknown>, delta?: string): OpencodeEvent => ({
       type: 'message.part.updated',

@@ -281,6 +281,7 @@ describe('CopilotProvider.sendQuery', () => {
   test.each([
     {
       source: 'request systemPrompt',
+      expected: 'Be concise.',
       options: {
         systemPrompt: 'Be concise.',
         nodeConfig: { systemPrompt: 'Lower-priority node prompt.' },
@@ -289,12 +290,30 @@ describe('CopilotProvider.sendQuery', () => {
     },
     {
       source: 'nodeConfig.systemPrompt',
+      expected: 'Be concise.',
       options: {
         nodeConfig: { systemPrompt: 'Be concise.' },
         appendSystemPrompt: 'Lower-priority appended instructions.',
       },
     },
-  ])('$source replaces the default system message', async ({ options }) => {
+    {
+      source: 'request array systemPrompt',
+      expected: 'Be\nconcise.',
+      options: {
+        systemPrompt: ['Be', 'concise.'] satisfies string[],
+        nodeConfig: { systemPrompt: 'Lower-priority node prompt.' },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+    {
+      source: 'node array systemPrompt',
+      expected: 'Be\nconcise.',
+      options: {
+        nodeConfig: { systemPrompt: ['Be', 'concise.'] satisfies string[] },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+  ])('$source replaces the default system message', async ({ expected, options }) => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -310,7 +329,7 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     const opts = createSessionSpy.mock.calls[0]![0] as SessionConfig;
-    expect(opts.systemMessage).toEqual({ content: 'Be concise.', mode: 'replace' });
+    expect(opts.systemMessage).toEqual({ content: expected, mode: 'replace' });
   });
 
   test('appendSystemPrompt appends to the default system message', async () => {

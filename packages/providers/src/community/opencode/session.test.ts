@@ -13,8 +13,17 @@ describe('createSessionPromptBody', () => {
   test('prefers an explicit system prompt over appended instructions', () => {
     const body = createSessionPromptBody('hi', model, {
       systemPrompt: 'system',
+      nodeConfig: { systemPrompt: 'node' },
       appendSystemPrompt: 'append',
     });
     expect(body.system).toBe('system');
+  });
+  test('prefers a node system prompt over appended instructions', () => {
+    expect(
+      createSessionPromptBody('hi', model, {
+        nodeConfig: { systemPrompt: 'node' },
+        appendSystemPrompt: 'append',
+      }).system
+    ).toBe('node');
   });
 });

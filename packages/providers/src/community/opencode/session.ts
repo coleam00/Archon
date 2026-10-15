@@ -160,7 +160,10 @@ export function createSessionPromptBody(
   const singleAgent = agentOverride ?? selectSingleAgent(requestOptions?.nodeConfig?.agents);
   const adaptedAgentConfig = singleAgent ? adaptNamedAgentForOpencode(singleAgent) : undefined;
   const effectivePrompt = resolvePromptForAgent(singleAgent, prompt);
-  const system = requestOptions?.systemPrompt ?? requestOptions?.appendSystemPrompt;
+  const system =
+    requestOptions?.systemPrompt ??
+    requestOptions?.nodeConfig?.systemPrompt ??
+    requestOptions?.appendSystemPrompt;
   const promptBody: Record<string, unknown> = {
     parts: [{ type: 'text', text: effectivePrompt }],
     model: adaptedAgentConfig?.model ?? model,
