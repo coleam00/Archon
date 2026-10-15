@@ -5,6 +5,7 @@ test('Slack declares the installed host policy', () => {
   expect(descriptor).toMatchObject({
     id: 'slack',
     capabilities: {
+      attentionNotices: true,
       canDetachProject: true,
       defaultWorkflowDispatch: 'foreground',
       resultFooter: true,
