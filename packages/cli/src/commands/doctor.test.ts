@@ -117,6 +117,26 @@ describe('checkGhAuth', () => {
     expect(execSpy).not.toHaveBeenCalled();
   });
 
+  it('does not print a private key pasted into GITHUB_APP_PRIVATE_KEY_PATH', async () => {
+    const sentinel = 'sentinel-private-key-material';
+    const pastedKey = `-----BEGIN PRIVATE KEY-----\n${sentinel}\n-----END PRIVATE KEY-----`;
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+        ])
+      ).toBe(1);
+      const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
+      expect(printed).toContain('GITHUB_APP_PRIVATE_KEY_PATH');
+      expect(printed).not.toContain(sentinel);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it('renders App results and returns the corresponding doctor exit status', async () => {
     const output = spyOn(console, 'log').mockImplementation(() => {});
     try {
