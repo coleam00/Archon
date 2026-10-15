@@ -36,6 +36,7 @@ import type {
   Conversation,
   Codebase,
   AttachedFile,
+  CommandResult,
   WorkflowRequest,
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
@@ -2053,6 +2054,7 @@ export async function handleMessage(
     isolationHints,
     attachedFiles,
     actor,
+    workflowName,
   } = context;
   const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
@@ -2063,9 +2065,10 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
-    const parsed = trimmedMessage.startsWith('/')
-      ? commandHandler.parseCommand(message)
-      : undefined;
+    const parsed =
+      workflowName === undefined && trimmedMessage.startsWith('/')
+        ? commandHandler.parseCommand(message)
+        : undefined;
     if (parsed?.command === 'detach-project') {
       const reply = await handleDetachProject(
         platform,
@@ -2097,7 +2100,36 @@ export async function handleMessage(
       conversationId
     );
 
+    const deliverCommandResult = async (result: CommandResult): Promise<void> => {
+      await platform.sendMessage(conversationId, result.message);
+      if (!result.workflow) return;
+      await handleWorkflowRunCommand(
+        platform,
+        conversationId,
+        conversation,
+        result.workflow,
+        actor,
+        isolationHints,
+        {
+          // Declared inputs (#2554) arrive on the request context, not in the
+          // command text — the run route is the only caller that sets them.
+          inputs: context.workflowInputs,
+          modelOverrides: context.workflowModelOverrides,
+          runConfig: context.workflowRunConfig,
+          // Between-run continuation (#2747), same channel.
+          adoptRunId: context.workflowAdoptRunId,
+          supersedesRunId: context.workflowSupersedesRunId,
+        }
+      );
+    };
+
     // 2. Check for deterministic commands
+    if (workflowName !== undefined) {
+      await deliverCommandResult(
+        await commandHandler.startWorkflow(conversation, workflowName, message, false, platform)
+      );
+      return;
+    }
     if (parsed) {
       const { command } = parsed;
       const deterministicCommands = [
@@ -2147,29 +2179,9 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
-        await platform.sendMessage(conversationId, result.message);
-
-        if (result.workflow) {
-          await handleWorkflowRunCommand(
-            platform,
-            conversationId,
-            conversation,
-            result.workflow,
-            actor,
-            isolationHints,
-            {
-              // Declared inputs (#2554) arrive on the request context, not in the
-              // command text — the run route is the only caller that sets them.
-              inputs: context?.workflowInputs,
-              modelOverrides: context?.workflowModelOverrides,
-              runConfig: context?.workflowRunConfig,
-              // Between-run continuation (#2747), same channel.
-              adoptRunId: context?.workflowAdoptRunId,
-              supersedesRunId: context?.workflowSupersedesRunId,
-            }
-          );
-        }
+        await deliverCommandResult(
+          await commandHandler.handleCommand(conversation, message, actor, platform)
+        );
         return;
       }
     }

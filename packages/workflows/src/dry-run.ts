@@ -1,5 +1,5 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';

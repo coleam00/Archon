@@ -4133,6 +4133,8 @@ export interface components {
                 /** @enum {string} */
                 source: 'provider';
                 value: number;
+                /** @enum {boolean} */
+                partial?: true;
               }
             | {
                 /** @enum {string} */
@@ -4726,6 +4728,10 @@ export interface components {
       };
       evidence_policy?: {
         required: boolean;
+      };
+      budget?: {
+        max_work_units?: number;
+        max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
@@ -5498,6 +5504,8 @@ export interface components {
                   /** @enum {string} */
                   source: 'provider';
                   value: number;
+                  /** @enum {boolean} */
+                  partial?: true;
                 }
               | {
                   /** @enum {string} */
@@ -5850,6 +5858,7 @@ export interface components {
         | 'node_error'
         | 'unhandled_error'
         | 'evidence_missing'
+        | 'budget_refused'
         | 'source_unavailable'
         | 'not_finalized'
         | 'process_terminated'

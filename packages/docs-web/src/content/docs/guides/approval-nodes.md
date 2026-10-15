@@ -280,3 +280,6 @@ This describes the deprecated shapes for runs and workflows that still use them.
 - While approved or rejected-with-rework, a gate's run stays `paused` with
   `metadata.approval.resolved` set until the resume machinery picks it up, so a
   `failed` status always means a real failure.
+- A gate in a container run, or one already paused when you upgraded, does not
+  continue on its own after it is answered. Run `archon workflow resume <run-id>`
+  in the same project.

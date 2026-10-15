@@ -116,6 +116,7 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `effort` | No | string | Reasoning depth on any provider that has one; also a node field: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` \| `persistent` |
 | `modelReasoningEffort` | No | string | **Deprecated** — translated into `effort` at load (dropped if `effort` is also declared), with a warning: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` \| `persistent` |
 | `webSearchMode` | No | string | Codex only, no per-node form. Gates Codex's built-in search tool, not network access: `disabled` \| `cached` \| `live` |
+| `budget` | No | object | Ceiling on the run's total work and spend, not concurrency: `max_work_units` (integer) and/or `max_spend_usd` (USD). See [Run budgets](/guides/authoring-workflows/#run-budgets) |
 
 ### Node Options (DAG)
 

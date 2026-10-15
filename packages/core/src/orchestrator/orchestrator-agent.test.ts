@@ -270,9 +270,13 @@ const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
   args: [],
 }));
+const mockStartWorkflow = mock<typeof CommandHandler.startWorkflow>(() =>
+  Promise.resolve({ success: true, message: 'ok' })
+);
 mock.module('../handlers/command-handler', () => ({
   parseCommand: mockParseCommand,
   handleCommand: mockHandleCommand,
+  startWorkflow: mockStartWorkflow,
 }));
 
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
@@ -2390,6 +2394,8 @@ describe('workflow dispatch routing', () => {
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
     );
+    mockParseCommand.mockClear();
+    mockStartWorkflow.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockGetCodebase.mockReset();
@@ -3475,6 +3481,37 @@ describe('workflow dispatch routing', () => {
   // -------------------------------------------------------------------------
   // Declared inputs supplied by the run route (#2554)
   // -------------------------------------------------------------------------
+
+  test('context.workflowName starts that workflow with the message verbatim, never parsed as a command', async () => {
+    // A message that would be a command, and would set --force, if it were parsed (#4159).
+    const message = '/detach-project "acme" --force\n  keep this indent';
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockStartWorkflow.mockReturnValueOnce(Promise.resolve(makeWorkflowResult({ args: message })));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', message, {
+      actor: operator,
+      workflowName: 'test-workflow',
+      workflowInputs: { diff: 'D1' },
+    });
+
+    expect(mockParseCommand).not.toHaveBeenCalled();
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockStartWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: makeDispatchConversation().id }),
+      'test-workflow',
+      message,
+      false,
+      platform
+    );
+    const ctx = mockDispatchBackgroundWorkflow.mock.calls[0][0] as {
+      originalMessage: string;
+      inputs?: Record<string, string>;
+    };
+    expect(ctx.originalMessage).toBe(message);
+    expect(ctx.inputs).toEqual({ diff: 'D1' });
+  });
 
   test('threads context.workflowInputs into executeWorkflow for a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));

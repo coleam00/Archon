@@ -675,6 +675,19 @@ categorical `reason` and the `signal` that arrived. Resuming the run clears it, 
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.
 
+After recording why the run stopped, the owner ends the process tree of every `bash:` or
+`script:` node still running, including an `until_bash` check, so a resume does not overlap the
+interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
+`trigger execute`. A node counts as running until its output closes, so a background job that
+still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
+their own session during a foreground run, so they have no controlling terminal, and a small
+watcher process ends the node's process group if the owner dies before its teardown does (a
+terminal hangup, a second Ctrl-C, `kill -9`); a run whose stop was never recorded stays
+`running`. A process that starts its own session or process group (`setsid`, a daemon)
+escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
+root already exited is not reached, and an owner killed before its teardown leaves the tree
+running.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`
@@ -1467,14 +1480,19 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+
+Without `--force`, completion refuses an environment a workflow run can still claim, the
+same live-run lock `isolation cleanup` and `/worktree remove` apply: a running, pending or
+paused run, or a failed run that can still be resumed. If that lookup fails, completion
+refuses rather than skipping the check.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

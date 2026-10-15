@@ -255,7 +255,12 @@ export async function triggerCommand(
         });
       },
       guardOwnedRun: owned =>
-        registerOwnedRunTermination({ store: deps.store, ...owned, logModule: 'cli.trigger' }),
+        registerOwnedRunTermination({
+          store: deps.store,
+          ...owned,
+          logModule: 'cli.trigger',
+          endNodeProcessTrees: !detachedProcessOwner,
+        }),
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);

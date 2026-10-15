@@ -1,7 +1,7 @@
 # Dry-run fixture: the route agent picks seams, code and docs for a change that edits a
 # typed contract and its user docs. The lenses it left out carry no stub, so one that
 # runs anyway fails this fixture instead of passing quietly.
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
 scope:
   # A standalone review of the working diff: no pull request to publish to.
