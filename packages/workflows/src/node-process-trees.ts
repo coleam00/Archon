@@ -6,6 +6,7 @@ export interface NodeProcessRecorder {
   roots: Map<number, { end(): Promise<void>; disarm(): void }>;
   ended: boolean;
   recordLegacyNodes: boolean;
+  stopReleased?: Promise<void>;
   end(): Promise<void>;
 }
 let nodeProcessRecorder: NodeProcessRecorder | undefined;
@@ -58,8 +59,11 @@ export function recordNodeProcessTrees(recordLegacyNodes = true): {
 }
 
 /** Prepare a detached owner's nodes before acknowledging its termination lease. */
-export async function endRecordedNodeProcessTrees(): Promise<void> {
-  await nodeProcessRecorder?.end();
+export async function endRecordedNodeProcessTrees(stopReleased: Promise<void>): Promise<void> {
+  const recorder = nodeProcessRecorder;
+  if (!recorder) return;
+  recorder.stopReleased = stopReleased;
+  await recorder.end();
 }
 
 // A node runs in its own session, so terminal hangup or a second Ctrl-C kills the owner

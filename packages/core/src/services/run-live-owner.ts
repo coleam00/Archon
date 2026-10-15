@@ -30,8 +30,8 @@ export type RunLiveOwnerOptions =
   | {
       /** PID of an owner executing only this run and leading its own process group. */
       detachedProcessPid: number;
-      /** End separately grouped node bodies before acknowledging owner termination. */
-      beforeTerminate: () => Promise<void>;
+      /** End node bodies before acknowledging termination; hold their results until release. */
+      beforeTerminate: (stopReleased: Promise<void>) => Promise<void>;
     };
 
 export interface RunLiveOwner {
@@ -341,7 +341,10 @@ export async function startRunLiveOwner(
           socket.setTimeout(0);
           for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
           void (async () => {
-            terminationPreparation ??= Promise.resolve().then(options.beforeTerminate);
+            terminationPreparation ??= Promise.resolve().then(() => {
+              const stopReleased = new Promise<void>(resolve => stopReleaseWaiters.add(resolve));
+              return options.beforeTerminate(stopReleased);
+            });
             await terminationPreparation;
             socket.write(TERMINATE_READY);
           })().catch((error: unknown) => {

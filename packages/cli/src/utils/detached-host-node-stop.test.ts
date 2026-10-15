@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import { requestRunLiveOwnerStop, startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import {
+  endRecordedNodeProcessTrees,
+  recordNodeProcessTrees,
+  runSubprocess,
+} from '@archon/workflows/subprocess';
 
 const trackTempRoot = trackTempRoots();
 const posixTest = process.platform === 'win32' ? test.skip : test;
@@ -17,6 +23,67 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
+
+test('a stopped host node settles only after the controller releases its termination lease', async () => {
+  const readyPath = join(
+    trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-host-handoff-'))),
+    'ready'
+  );
+  const runId = crypto.randomUUID();
+  const trees = recordNodeProcessTrees(false);
+  const owner = await startRunLiveOwner(runId, {
+    detachedProcessPid: process.pid,
+    beforeTerminate: endRecordedNodeProcessTrees,
+  });
+  let settled = false;
+  const node = runSubprocess(
+    { kind: 'host' },
+    process.execPath,
+    [
+      '-e',
+      `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    ],
+    {
+      cwd: import.meta.dir,
+      timeout: 30_000,
+      env: process.env,
+      killTreeOnTimeout: true,
+      retention: { standalone: true },
+    }
+  ).then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  let lease: Awaited<ReturnType<typeof requestRunLiveOwnerStop>> | undefined;
+  try {
+    const deadline = Date.now() + 5000;
+    while (!existsSync(readyPath) || readFileSync(readyPath, 'utf8').trim() === '') {
+      if (Date.now() >= deadline) throw new Error('Node did not start');
+      await Bun.sleep(25);
+    }
+    const pid = Number(readFileSync(readyPath, 'utf8'));
+    lease = await requestRunLiveOwnerStop(runId);
+    await lease.commit();
+    expect(alive(pid)).toBe(false);
+    // Windows enumerates the owner's tree here before killing it. The executor
+    // must not publish the node's forced exit as a workflow failure in that gap.
+    await Bun.sleep(100);
+    expect(settled).toBe(false);
+    lease.release();
+    await node;
+    expect(settled).toBe(true);
+  } finally {
+    lease?.release();
+    await owner.close();
+    await trees.end();
+    trees.release();
+    await node;
+  }
+}, 15_000);
 for (const mode of ['normal', 'survivor', 'timeout', 'max-buffer'] as const) {
   posixTest(
     `detached host node stop ${mode === 'normal' ? 'ends the node before success' : `refuses success when cleanup cannot be proved (${mode})`}`,

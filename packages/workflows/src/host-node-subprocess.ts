@@ -17,7 +17,10 @@ async function execNodeBody(
   options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
 ): Promise<{ stdout: string; stderr: string }> {
   const recorder = currentNodeProcessRecorder();
-  if (recorder?.ended) throw new Error('The run owner is terminating; node subprocess not started');
+  if (recorder?.ended) {
+    await recorder.stopReleased;
+    throw new Error('The run owner is terminating; node subprocess not started');
+  }
   const posix = process.platform !== 'win32';
   const child = spawn(cmd, args, {
     cwd: options.cwd,
@@ -125,6 +128,9 @@ async function execNodeBody(
     stdout: streams.stdout.toString('utf8'),
     stderr: streams.stderr.toString('utf8'),
   };
+  // The controller owns run settlement while its termination lease is open.
+  // Windows can spend seconds listing the owner's tree after node cleanup.
+  await recorder?.stopReleased;
   if (timedOut || failure || cleanupError || observedExit?.code !== 0) {
     throw Object.assign(
       failure ??
