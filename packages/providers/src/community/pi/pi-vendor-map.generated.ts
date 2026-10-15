@@ -68,7 +68,7 @@ export const PI_AMBIENT_VENDORS: readonly string[] = ["amazon-bedrock","google-v
 export const PI_CREDENTIAL_SPECS: CredentialSpec[] = [
   { vendor: "amazon-bedrock", displayName: "Amazon Bedrock", kinds: ["ambient"] },
   { vendor: "ant-ling", displayName: "Ant Ling", kinds: ["api_key"] },
-  { vendor: "anthropic", displayName: "Anthropic", kinds: ["api_key", "subscription"] },
+  { vendor: "anthropic", displayName: "Anthropic", kinds: ["api_key"] },
   { vendor: "azure", displayName: "Azure OpenAI", kinds: ["api_key"] },
   { vendor: "baseten", displayName: "Baseten", kinds: ["api_key"] },
   { vendor: "cerebras", displayName: "Cerebras", kinds: ["api_key"] },

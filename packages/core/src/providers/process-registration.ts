@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
   isMaintainedProvider,
+  hasValidProviderCapabilities,
   type ProviderRegistration,
   type ProviderDefaults,
 } from '@archon/provider-contract';
@@ -19,7 +20,7 @@ export function processProviderRegistration(
   argv: readonly [string, ...string[]]
 ): ProviderRegistration {
   const descriptor = providerPluginDescriptorSchema.parse(input);
-  if (descriptor.capabilities.sessionFork && !descriptor.capabilities.sessionResume) {
+  if (!hasValidProviderCapabilities(descriptor.capabilities)) {
     throw new Error(`Provider plugin ${descriptor.id}: sessionFork requires sessionResume`);
   }
   for (const spec of descriptor.credentials.specs) {

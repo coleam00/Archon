@@ -41,7 +41,7 @@ import type { Session } from '../schemas/session';
 import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toBranchName } from '@archon/git';
-import type { IAgentProvider, ProviderCapabilities } from '@archon/providers/types';
+import type { IAgentProvider, NativeTool, ProviderCapabilities } from '@archon/providers/types';
 import type * as Git from '@archon/git';
 import type * as ConfigLoader from '../config/config-loader';
 import type * as ConversationDb from '../db/conversations';
@@ -62,6 +62,7 @@ import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '../utils/command-args';
 
 const operator: RunActor = { kind: 'operator' };
 
@@ -151,8 +152,11 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 // Tests below derive their expected path from it rather than from a POSIX
 // literal: it makes a path absolute, and on Windows `resolve('/path')` is
 // drive-qualified (`D:\path`).
-const { canonicalizeProjectPath } = await import('@archon/paths');
+const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
+  await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -193,6 +197,9 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 const mockDeleteCodebase = mock<typeof CodebaseDb.deleteCodebase>(() => Promise.resolve());
 class MockCodebaseNotFoundError extends Error {
@@ -213,6 +220,7 @@ mock.module('../db/codebases', () => ({
     })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
   deleteCodebase: mockDeleteCodebase,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
@@ -262,9 +270,13 @@ const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
   args: [],
 }));
+const mockStartWorkflow = mock<typeof CommandHandler.startWorkflow>(() =>
+  Promise.resolve({ success: true, message: 'ok' })
+);
 mock.module('../handlers/command-handler', () => ({
   parseCommand: mockParseCommand,
   handleCommand: mockHandleCommand,
+  startWorkflow: mockStartWorkflow,
 }));
 
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
@@ -409,7 +421,11 @@ const providerRegistry: ProviderRegistry = {
     builtIn: true,
     capabilities: mockGetProviderCapabilities(),
     parseConfig: raw => raw,
-    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+    credentials: {
+      kind: 'static',
+      specs: [{ vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'] }],
+      vendorFor: () => 'anthropic',
+    },
   }),
   list: () => [],
 };
@@ -871,8 +887,34 @@ describe('parseOrchestratorCommands', () => {
       expect(result.workflowInvocation?.synthesizedPrompt).toBeUndefined();
     });
 
+    test('keeps escaped quotes inside a double-quoted --prompt', () => {
+      const response =
+        '/invoke-workflow implement --project my-project --prompt "Fix the \\"login\\" bug and add tests"';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+
+      expect(result.workflowInvocation?.synthesizedPrompt).toBe(
+        'Fix the "login" bug and add tests'
+      );
+    });
+
+    test('keeps escaped quotes inside a single-quoted --prompt', () => {
+      const response =
+        "/invoke-workflow implement --project my-project --prompt 'Don\\'t break the build'";
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+
+      expect(result.workflowInvocation?.synthesizedPrompt).toBe("Don't break the build");
+    });
+
+    test('leaves backslashes that do not escape a quote untouched', () => {
+      const response =
+        '/invoke-workflow implement --project my-project --prompt "Edit C:\\Users\\me\\file"';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+
+      expect(result.workflowInvocation?.synthesizedPrompt).toBe('Edit C:\\Users\\me\\file');
+    });
+
     test('synthesizedPrompt is undefined when --prompt has empty string (double quotes)', () => {
-      // The regex [^"]+ requires at least one character so "" does not match the pattern.
+      // The quoted-argument pattern requires at least one character, so "" does not match.
       // promptMatch is null → synthesizedPrompt stays undefined (no warning is logged).
       const response = '/invoke-workflow assist --project my-project --prompt ""';
       const result = parseOrchestratorCommands(response, codebases, workflows);
@@ -881,7 +923,7 @@ describe('parseOrchestratorCommands', () => {
     });
 
     test('does not log synthesized_prompt_empty_discarded warning when --prompt ""', () => {
-      // With --prompt "", the regex [^"]+ does not match so promptMatch is null.
+      // With --prompt "", the quoted-argument pattern does not match so promptMatch is null.
       // The `if (promptMatch && !synthesizedPrompt)` guard is never entered.
       const response = '/invoke-workflow assist --project my-project --prompt ""';
       parseOrchestratorCommands(response, codebases, workflows);
@@ -890,7 +932,7 @@ describe('parseOrchestratorCommands', () => {
     });
 
     test('logs synthesized_prompt_empty_discarded when --prompt has only whitespace', () => {
-      // With --prompt "   ", [^"]+ matches whitespace; after .trim() rawPrompt is "".
+      // With --prompt "   ", the pattern matches whitespace; after .trim() rawPrompt is "".
       // The `if (promptMatch && !synthesizedPrompt)` branch executes and logs a warning.
       const response = '/invoke-workflow assist --project my-project --prompt "   "';
       parseOrchestratorCommands(response, codebases, workflows);
@@ -2372,6 +2414,8 @@ describe('workflow dispatch routing', () => {
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
     );
+    mockParseCommand.mockClear();
+    mockStartWorkflow.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockGetCodebase.mockReset();
@@ -3458,6 +3502,37 @@ describe('workflow dispatch routing', () => {
   // Declared inputs supplied by the run route (#2554)
   // -------------------------------------------------------------------------
 
+  test('context.workflowName starts that workflow with the message verbatim, never parsed as a command', async () => {
+    // A message that would be a command, and would set --force, if it were parsed (#4159).
+    const message = '/detach-project "acme" --force\n  keep this indent';
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockStartWorkflow.mockReturnValueOnce(Promise.resolve(makeWorkflowResult({ args: message })));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', message, {
+      actor: operator,
+      workflowName: 'test-workflow',
+      workflowInputs: { diff: 'D1' },
+    });
+
+    expect(mockParseCommand).not.toHaveBeenCalled();
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockStartWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: makeDispatchConversation().id }),
+      'test-workflow',
+      message,
+      false,
+      platform
+    );
+    const ctx = mockDispatchBackgroundWorkflow.mock.calls[0][0] as {
+      originalMessage: string;
+      inputs?: Record<string, string>;
+    };
+    expect(ctx.originalMessage).toBe(message);
+    expect(ctx.inputs).toEqual({ diff: 'D1' });
+  });
+
   test('threads context.workflowInputs into executeWorkflow for a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -3537,9 +3612,8 @@ describe('workflow dispatch routing', () => {
       ...original,
       isPerUserProviderKeysEnabled: () => true,
       getUserProviderCredentialStatus: async () => ({
-        state: 'unusable',
-        source: 'archon',
-        evidence: 'cannot read',
+        kind: 'api_key',
+        status: { state: 'unusable', source: 'archon', evidence: 'cannot read' },
       }),
     }));
     const platform = makeForegroundPlatform();
@@ -4176,6 +4250,159 @@ describe('workflow dispatch routing', () => {
       working_path: null,
     });
     expect(opts.priorCompletedNodes).toBeUndefined();
+  });
+
+  describe('typed chat tools (Claude, Pi)', () => {
+    const task = 'Fix the "login" bug and add tests';
+    let capsMock: ReturnType<typeof mock>;
+
+    beforeEach(async () => {
+      const providers = await import('@archon/providers');
+      capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+      capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: true });
+      mockSendQuery.mockReset();
+      mockListCodebases.mockReset();
+      mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase()]));
+    });
+
+    afterEach(() => {
+      // Restore the shared baseline, not a subset (see 'paused approval gate routing').
+      capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    });
+
+    function turnToolNames(): string[] {
+      const options = mockSendQuery.mock.calls.at(-1)?.[3] as
+        | { nativeTools?: { name: string }[] }
+        | undefined;
+      return (options?.nativeTools ?? []).map(t => t.name);
+    }
+
+    /** The agent calls `invoke_workflow` with each input in turn, then replies `reply`. */
+    function agentInvokes(
+      inputs: Record<string, unknown>[],
+      sink: string[],
+      reply = 'On it.'
+    ): void {
+      mockSendQuery.mockImplementationOnce(async function* () {
+        const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+        const tool = options.nativeTools.find(t => t.name === 'invoke_workflow');
+        for (const input of inputs) sink.push(await tool!.handler(input));
+        yield { type: 'agent_message_chunk', text: reply };
+        yield { type: 'result', sessionId: 'session-1' };
+      });
+    }
+
+    const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
+
+    test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
+      await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
+      expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project']);
+
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
+      expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project', 'manage_run']);
+    });
+
+    test('a background surface dispatches the typed prompt verbatim after the turn', async () => {
+      const results: string[] = [];
+      agentInvokes([launch], results);
+      await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', { actor: operator });
+
+      expect(results[0]).toContain('Queued test-workflow on test-repo');
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({ originalMessage: task }),
+        expect.anything()
+      );
+    });
+
+    test('a foreground surface runs the launch in the foreground with the isolation hints', async () => {
+      mockGetCodebase.mockResolvedValue(makeCodebase());
+      const isolationHints = { workflowType: 'issue', workflowId: '42' } as const;
+      agentInvokes([launch], []);
+      await handleMessage(makeForegroundPlatform(), 'conv-1', 'fix the login bug', {
+        actor: operator,
+        isolationHints,
+      });
+
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockValidateAndResolveIsolation.mock.calls[0]?.[4]).toMatchObject(isolationHints);
+      mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    });
+
+    test('a launch sees a project registered earlier in the same turn', async () => {
+      mockListCodebases.mockImplementation(() => Promise.resolve([]));
+      const results: string[] = [];
+      mockSendQuery.mockImplementationOnce(async function* () {
+        const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+        mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase()]));
+        results.push(
+          await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch)
+        );
+        yield { type: 'result', sessionId: 'session-1' };
+      });
+      await handleMessage(makePlatform(), 'conv-1', 'clone and fix', { actor: operator });
+
+      expect(results[0]).toContain('Queued test-workflow on test-repo');
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    test('a second launch in the same turn is refused and only the first dispatches', async () => {
+      const results: string[] = [];
+      agentInvokes([launch, { ...launch, prompt: 'something else' }], results);
+      await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', { actor: operator });
+
+      expect(results[1]).toContain('Only one workflow launch per reply');
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({ originalMessage: task }),
+        expect.anything()
+      );
+    });
+
+    test.each(['stream', 'batch'] as const)(
+      'a turn that ends in an error result drops its queued launch (%s)',
+      async mode => {
+        mockSendQuery.mockImplementationOnce(async function* () {
+          const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+          await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+          yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'fix the login bug', { actor: operator });
+
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      }
+    );
+
+    test('a turn that throws after queueing a launch dispatches nothing', async () => {
+      mockSendQuery.mockImplementationOnce(async function* () {
+        const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+        await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+        yield { type: 'agent_message_chunk', text: 'On it.' };
+        throw new Error('provider crashed');
+      });
+      await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', { actor: operator });
+
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
+
+    test('the command scan is off: a /invoke-workflow line in the reply is plain text', async () => {
+      const reply = '/invoke-workflow test-workflow --project test-repo --prompt "x"\n';
+      agentInvokes([], [], reply);
+      const platform = makePlatform();
+      platform.getStreamingMode.mockReturnValue('stream');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+
+      expect(platform.sendMessage.mock.calls.map(c => c[1])).toContain(reply);
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -5366,6 +5593,30 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     );
   });
 
+  test('stream mode — an escaped quote in a split --prompt reaches the run intact', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'agent_message_chunk',
+        text: '/invoke-workflow assist --project my-project --prompt "Fix the \\"lo',
+      };
+      yield { type: 'agent_message_chunk', text: 'gin\\" bug and add tests"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'Fix the "login" bug and add tests' }),
+      expect.anything()
+    );
+  });
+
   test('stream mode — command in single chunk still works (non-regression)', async () => {
     mockParseCommand.mockReturnValueOnce({
       command: 'register-project',
@@ -5470,9 +5721,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(requestOptions?.protectedEnvKeys).toEqual(['OPENROUTER_API_KEY']);
   });
 
-  test('anthropic OAuth subscription delivers ANTHROPIC_OAUTH_TOKEN into chat env (#1984)', async () => {
-    // env-only chat: the bearer must reach the env under the Pi-readable OAuth var,
-    // not only the native-Claude var — otherwise a Pi-default install can't see it.
+  test('a Claude subscription reaches chat only as CLAUDE_CODE_OAUTH_TOKEN; Pi gets no ANTHROPIC_OAUTH_TOKEN', async () => {
     mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
       {
         provider: 'anthropic',
@@ -5482,10 +5731,8 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
-    expect(requestOptions?.env).toMatchObject({
-      ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x',
-      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x',
-    });
+    expect(requestOptions?.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x' });
+    expect(requestOptions?.env).not.toHaveProperty('ANTHROPIC_OAUTH_TOKEN');
   });
 
   test('title generation receives the per-user env bag (#1984)', async () => {
@@ -5507,11 +5754,8 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     const titleOptions = mockGenerateAndSetTitle.mock.calls[0]?.[6] as
       | { env?: Record<string, string>; protectedEnvKeys?: readonly string[] }
       | undefined;
-    expect(titleOptions?.env).toMatchObject({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x' });
-    expect([...(titleOptions?.protectedEnvKeys ?? [])].sort()).toEqual([
-      'ANTHROPIC_OAUTH_TOKEN',
-      'CLAUDE_CODE_OAUTH_TOKEN',
-    ]);
+    expect(titleOptions?.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x' });
+    expect(titleOptions?.protectedEnvKeys).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
   });
 
   test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
@@ -7392,14 +7636,20 @@ describe('handleMessage — legacy registration recovery', () => {
       { ...makeNamedCodebase('other'), default_cwd: 'other/path' },
       { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
     ]);
+    const repairRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-legacy-repair-')));
+    const replacement = join(repairRoot, 'repo');
+    await mkdir(replacement, { recursive: true });
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
-      {
-        default_cwd: await canonicalizeProjectPath('/'),
-      }
+    await handleMessage(
+      platform,
+      'conv-1',
+      `/register-project My-App ${quoteCommandArg(replacement)}`,
+      { actor: operator }
     );
+    expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith('id-my-app', {
+      default_cwd: await canonicalizeProjectPath(replacement),
+      kind: 'repo',
+    });
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'

@@ -115,7 +115,12 @@ paths:
   workspaces: ~/.archon/workspaces
   worktrees: ~/.archon/worktrees
 
-# Concurrency limits
+# Server-wide conversation admission
+# Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
+# Repository config cannot change this limit.
+# Nonnumeric env values such as abc are ignored; 5abc is parsed as 5.
+# Copied/generated .env files set MAX_CONCURRENT_CONVERSATIONS=10.
+# Remove or comment out that assignment to use the YAML limit.
 concurrency:
   maxConversations: 10
   # Optional install-wide cap on simultaneous provider attempts, by provider ID.
@@ -516,7 +521,7 @@ Environment variables override all other configuration. They are organized by ca
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
-| `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
+| `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days. Must be a positive integer; invalid values stop startup. | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
 | `ARCHON_BASH_PATH` | Override the bash executable path used by `bash` nodes and loop `until_bash`. Eagerly validated at resolution time — typos surface immediately instead of as opaque ENOENTs inside the first bash-node fire. | `bash` on Linux/macOS; on Windows, the first existing of the common Git-Bash locations: `%ProgramFiles%\Git\bin\bash.exe`, `%ProgramFiles%\Git\usr\bin\bash.exe`, `%ProgramFiles(x86)%\Git\bin\bash.exe`, `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`, `%USERPROFILE%\scoop\apps\git\current\bin\bash.exe` |
 | `WSL_DISTRO_NAME` | Set automatically by WSL in every distro shell. Archon reads it (via `/api/health`) to emit Windows-host-friendly `vscode://vscode-remote/wsl+<distro>/...` "Open in IDE" URIs. You do not normally set this yourself; override it only to force a specific distro name into the URI. | -- (unset outside WSL) |
@@ -645,9 +650,9 @@ Signup uses email + password (no email verification by default). **Signup postur
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `STALE_THRESHOLD_DAYS` | Days before an inactive worktree is considered stale | `14` |
+| `STALE_THRESHOLD_DAYS` | Days before an inactive worktree is considered stale. Must be a positive integer; invalid values stop startup. | `14` |
 | `MAX_WORKTREES_PER_CODEBASE` | Max worktrees per codebase before auto-cleanup | `25` |
-| `CLEANUP_INTERVAL_HOURS` | How often the background cleanup service runs | `6` |
+| `CLEANUP_INTERVAL_HOURS` | How often the background cleanup service runs. Must be a positive integer from 1 to 596 (the runtime timer limit); invalid values stop startup. | `6` |
 
 ### Docker / Deployment
 

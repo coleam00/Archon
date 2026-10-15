@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /** Reserved `type` discriminator. An object carrying it MUST be a valid pointer. */
 export const ARTIFACT_POINTER_TYPE = 'archon_artifact';

@@ -261,20 +261,6 @@ export function resetOAuthFlowRegistrationForTest(): void {
 // scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 
-// Pi provider id → OAuth-subscription env var. pi-ai's getApiKeyEnvVars lists
-// the OAuth var ahead of the API-key var (e.g. anthropic →
-// ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]). Archon delivers subscriptions
-// to env-only chat under this var (delivery.ts), but the per-user injection never
-// writes to process.env — Pi only ingests requestOptions.env via the explicit
-// bridge below, so the bridge must read the OAuth var too (#1984). github-copilot
-// delivers its single COPILOT_GITHUB_TOKEN (already the API-key var); openai is
-// shipped by delivery.ts as a CODEX_HOME/auth.json file (dropped in env-only chat),
-// never an env var — so on this env channel anthropic is the only backend that
-// needs a distinct OAuth var.
-const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
-  anthropic: 'ANTHROPIC_OAUTH_TOKEN',
-};
-
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
@@ -286,58 +272,6 @@ function getLog(): ReturnType<typeof createLogger> {
 // import path stable; new providers should import from `../../shared/structured-output`.
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 export { augmentPromptForJsonSchema };
-
-/**
- * Anthropic subscription OAuth access tokens are `sk-ant-oat…` (API keys are
- * `sk-ant-api…`). This is the same content-shape discriminator pi-ai's
- * createClient uses to pick OAuth vs API-key auth downstream, so Archon's
- * detection can never disagree with the SDK's.
- */
-function isAnthropicOAuthToken(token: string | null | undefined): boolean {
-  return typeof token === 'string' && token.startsWith('sk-ant-oat');
-}
-
-/**
- * Archon's default system prompt for Pi sessions that authenticate to
- * Anthropic with a SUBSCRIPTION OAuth token (Claude Pro/Max, `sk-ant-oat*`).
- *
- * WHY THIS EXISTS (load-bearing — do not drop without re-reading):
- * Pi's built-in coding-agent system prompt (pi-coding-agent's
- * `buildSystemPrompt`) embeds a self-referential "Pi documentation" block
- * ("...read only when the user asks about pi itself, its SDK, extensions,
- * themes, skills, or TUI...") plus an "operating inside pi, a coding agent
- * harness" identity line. That block is dense with third-party-coding-tool
- * vocabulary, and Anthropic's post-2026-04-04 subscription-OAuth enforcement
- * classifies any request carrying it as a third-party app — returning
- * `400 invalid_request_error "You're out of extra usage"` for Pro/Max OAuth
- * tokens, even though the same token works for first-party Claude Code.
- *
- * Supplying ANY custom system prompt makes pi-coding-agent take its
- * `customPrompt` branch, which omits the incriminating block entirely. pi-ai
- * still prepends the OAuth-required "You are Claude Code, Anthropic's official
- * CLI for Claude." block as system[0], so subscription tokens are accepted.
- * Verified at the wire level (PR #1831): [CC, this-prompt] → HTTP 200;
- * [CC, pi-default-with-docs-block] → HTTP 400.
- *
- * Scope is deliberately narrow: the fallback applies ONLY when the session
- * will use Anthropic subscription-OAuth auth. API-key sessions and
- * non-Anthropic backends keep Pi's built-in prompt (with its dynamic tool
- * list) — there is no benefit to replacing it there. Workflow- or
- * request-level `systemPrompt` still wins (see sendQuery step 4c).
- */
-export const ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT = `You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
-
-Use the available tools to accomplish the task:
-- read: examine file contents instead of cat/sed
-- bash: run shell commands (ls, grep, find, build, test)
-- edit: make precise, minimal text replacements; each match must be unique
-- write: create new files or fully rewrite existing ones
-
-Guidelines:
-- Prefer reading files before editing them.
-- Keep edits small and targeted; do not pad with unchanged context.
-- Be concise in your responses.
-- Show file paths clearly when working with files.`;
 
 function resolvePiModel(
   modelRef: string | undefined,
@@ -464,8 +398,7 @@ export async function resolvePiAuth(
  * The credential decision a Pi turn makes before its session starts; the login check
  * reports the same one. A model outside Pi's static catalog may belong to an extension
  * provider, which manages its credential outside Pi's store (kiro uses AWS SSO), so a
- * missing credential is not an error for it. Anthropic is resolved even then: a turn needs
- * the key to choose the subscription-OAuth system prompt.
+ * missing credential is not an error for it.
  */
 async function resolvePiTurnAuth(
   runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'listCredentials'>,
@@ -474,10 +407,8 @@ async function resolvePiTurnAuth(
   credentialValues: readonly string[],
   signal?: AbortSignal
 ): Promise<{ status: CredentialStatus; apiKey?: string }> {
-  const deferred = { status: { state: 'not_checked', source: 'native' } } as const;
-  if (!catalogued && providerId !== 'anthropic') return deferred;
-  const resolved = await resolvePiAuth(runtime, providerId, credentialValues, signal);
-  return !catalogued && resolved.status.state === 'not_connected' ? deferred : resolved;
+  if (!catalogued) return { status: { state: 'not_checked', source: 'native' } };
+  return resolvePiAuth(runtime, providerId, credentialValues, signal);
 }
 
 /**
@@ -521,10 +452,29 @@ async function applyPiEnvOverride(
   providerId: string,
   env: Readonly<Record<string, string | undefined>>
 ): Promise<void> {
-  const oauthVar = PI_OAUTH_ENV_VARS[providerId];
   const keyVar = PI_PROVIDER_ENV_VARS[providerId];
-  const key = (oauthVar ? env[oauthVar] : undefined) ?? (keyVar ? env[keyVar] : undefined);
+  const key = keyVar ? env[keyVar] : undefined;
   if (key) await runtime.setRuntimeApiKey(providerId, key);
+}
+
+/**
+ * A Claude subscription runs only on the Claude provider (AGENTS.md: provider
+ * authentication), so the Anthropic hint points there instead of at `pi /login`. Archon
+ * stores one credential per vendor, so `archon ai key set anthropic` would replace the
+ * user's subscription and is not offered either.
+ */
+function piNotConnectedMessage(providerId: string): string {
+  const envVarName = PI_PROVIDER_ENV_VARS[providerId];
+  const envHint = envVarName
+    ? ` Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
+    : '';
+  if (providerId === 'anthropic') {
+    return (
+      `Pi auth: no Anthropic API key. Pi runs Anthropic models with an API key.${envHint} ` +
+      'A Claude subscription runs on the Claude provider: use `provider: claude`.'
+    );
+  }
+  return `Pi auth: no credentials for provider '${providerId}'.${envHint} Or run \`pi\` and type \`/login\` locally.`;
 }
 
 /**
@@ -811,8 +761,6 @@ export class PiProvider implements IAgentProvider {
     }
 
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
-    const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
-    const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
     const authEnv = piAuthEnv(piConfig.env, requestOptions?.env, requestOptions?.protectedEnvKeys);
     let requestModelRuntime: RequestModelRuntime;
     try {
@@ -856,13 +804,9 @@ export class PiProvider implements IAgentProvider {
 
       // 4. Resolve credentials. Per-request env vars override auth.json entries via
       //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi
-      //    login. Subscriptions delivered to env-only chat arrive under the OAuth var
-      //    (e.g. ANTHROPIC_OAUTH_TOKEN); read it first, then the API-key var. pi-ai's
-      //    createClient discriminates OAuth vs api-key by token content (sk-ant-oat*),
-      //    so one runtime channel serves both — and setRuntimeApiKey stays runtime-only
-      //    (no auth.json disk write, unlike AuthStorage.set) (#1984).
+      //    login. setRuntimeApiKey stays runtime-only (no auth.json disk write, unlike
+      //    AuthStorage.set).
       await applyPiEnvOverride(modelRuntime, parsed.provider, authEnv.credentialEnv);
-      let resolvedKey: string | undefined;
       const { status: authStatus, apiKey } = await resolvePiTurnAuth(
         modelRuntime,
         parsed.provider,
@@ -871,16 +815,8 @@ export class PiProvider implements IAgentProvider {
         requestOptions?.abortSignal
       );
       switch (authStatus.state) {
-        case 'not_connected': {
-          // Name the OAuth var first when the backend has one: the resolver prefers it (#1984).
-          const envHint = envVarName
-            ? ` Set ${oauthVarName ? `${oauthVarName} (subscription) or ${envVarName}` : envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
-            : '';
-          throw new ClassifiedProviderError(
-            'auth',
-            `Pi auth: no credentials for provider '${parsed.provider}'.${envHint} Or run \`pi\` and type \`/login\` locally.`
-          );
-        }
+        case 'not_connected':
+          throw new ClassifiedProviderError('auth', piNotConnectedMessage(parsed.provider));
         case 'unusable':
           throw new ClassifiedProviderError('auth', authStatus.evidence);
         case 'check_failed':
@@ -892,14 +828,13 @@ export class PiProvider implements IAgentProvider {
           if (model) getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
           break;
         case 'usable':
-          resolvedKey = apiKey;
           // Pi runs a models.json key command on every getAuth, so the session's request
           // would run it again. Pin the key the check just resolved as a runtime-only key;
           // Pi reads a runtime key before models.json, so the command runs once per node.
           // The pinned key is fixed for the whole node: a short-lived token the command prints
-          // can expire before a long node ends. Only a catalogued model (or Anthropic) reaches
-          // here; an extension provider's model is not_checked, so Pi keeps running its key
-          // command on each request.
+          // can expire before a long node ends. Only a catalogued model reaches here; an
+          // extension provider's model is not_checked, so Pi keeps running its key command
+          // on each request.
           // A stored auth.json credential wins over models.json and may be an OAuth grant Pi
           // refreshes in session, so it is never pinned. The store is read directly: Pi's
           // auth status falls back to models.json when another provider's check throws.
@@ -970,23 +905,10 @@ export class PiProvider implements IAgentProvider {
         );
         return undefined;
       };
-      const explicitSystemPrompt =
+      const systemPrompt =
         coerceStringPrompt(requestOptions?.systemPrompt, 'request') ??
         coerceStringPrompt(nodeConfig?.systemPrompt, 'node') ??
         requestOptions?.appendSystemPrompt;
-
-      //        When no explicit prompt is set AND this session authenticates to
-      //        Anthropic with a subscription OAuth token, fall back to
-      //        ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT — Anthropic's OAuth
-      //        endpoint hard-400s Pi's self-identifying built-in prompt (see the
-      //        constant's doc comment). Every other session (API-key auth,
-      //        non-Anthropic backends) keeps `undefined` so Pi's built-in prompt,
-      //        with its dynamic tool list, stays intact.
-      const usesAnthropicOAuth =
-        parsed.provider === 'anthropic' && isAnthropicOAuthToken(resolvedKey);
-      const systemPrompt =
-        explicitSystemPrompt ??
-        (usesAnthropicOAuth ? ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT : undefined);
 
       //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
       //        Resolve each name against .agents/skills and .claude/skills (project
@@ -1160,12 +1082,7 @@ export class PiProvider implements IAgentProvider {
           cwd,
           thinkingLevel,
           toolCount: filteredTools?.length,
-          systemPromptSource:
-            explicitSystemPrompt !== undefined
-              ? 'explicit'
-              : systemPrompt !== undefined
-                ? 'anthropic-oauth-default'
-                : 'pi-builtin',
+          systemPromptSource: systemPrompt !== undefined ? 'explicit' : 'pi-builtin',
           skillCount: skillPaths.length,
           missingSkillCount: missingSkills.length,
           extensionsEnabled: enableExtensions,

@@ -268,6 +268,16 @@ describe('checkAssistantLogin', () => {
         message: 'pi: uses the credential connected in Archon',
       });
       expect(native).toHaveBeenCalledTimes(1);
+      // Pi cannot use a connected Claude subscription, so doctor checks the native login
+      // and, finding none, points at the provider that can.
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'oauth', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toEqual({
+        label: 'Assistant login',
+        status: 'fail',
+        message:
+          'pi: no native credential, and the anthropic subscription connected in Archon runs on `provider: claude`, not on pi. Use `provider: claude`, or give pi its own anthropic API key.',
+      });
+      expect(native).toHaveBeenCalledTimes(2);
       // With no model in Archon config, doctor cannot tell which connected vendor the run
       // uses, so a missing native login is a warning that names the connected one.
       load.mockResolvedValue({
@@ -280,7 +290,7 @@ describe('checkAssistantLogin', () => {
         status: 'warn',
         message: expect.stringContaining('anthropic'),
       });
-      expect(native).toHaveBeenCalledTimes(2);
+      expect(native).toHaveBeenCalledTimes(3);
       // A credential Pi cannot use does not soften a missing native login.
       rows.mockResolvedValue([{ provider: 'not-a-pi-vendor', kind: 'api_key', label: null }]);
       expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
@@ -996,7 +1006,7 @@ describe('checkConnectedProviders', () => {
   type Status = Awaited<ReturnType<ProviderDeps['getStoredCredentialStatus']>>;
 
   function depsWith(
-    rows: { provider: string; kind: string; label: string | null }[],
+    rows: Awaited<ReturnType<ProviderDeps['listUserProviderKeys']>>,
     statuses: Record<string, Status> = {}
   ): () => Promise<ProviderDeps> {
     return async () => ({

@@ -122,10 +122,10 @@ export async function validateWorkflowsCommand(
       defaultProvider
     );
 
-    // Surface parse-time unknown-key warnings (#2213) as validation issues
+    // Surface parse-time warnings (unknown keys, deprecations) as validation issues
     if (parseWarnings && parseWarnings.length > 0) {
       for (const warning of parseWarnings) {
-        issues.push({ level: 'warning', field: 'unknown_key', message: warning });
+        issues.push({ level: 'warning', field: 'parse_warning', message: warning });
       }
     }
 

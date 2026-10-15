@@ -8,7 +8,8 @@ description: |
   with the base send the work back to implement for another round, which merges
   the base on a conflict; every other ending is not ready, with
   its reason. A red PR never stays ready. The PR description is updated once the
-  rounds end, and the outcome relays discoveries to the operator. There is no in-run approval
+  rounds end, and the report relays discoveries to the operator on every ending,
+  a failure included. There is no in-run approval
   gate — the human gate is PR review and merge on GitHub, outside the run.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
@@ -31,16 +32,23 @@ inputs:
       an existing pull request when this run was launched on its branch
       (`--adopt`, or from the pull request). Empty means the run's trigger
       message is the work.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this delivery is, forwarded
+      unchanged to every review in the rounds. archon-review's `part` input
+      owns its shape. Empty delivers the whole contract.
   # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
-# A composed caller reads the outcome: ready with the pull request's URL, or not
+# A composed caller reads the report: ready with the pull request's URL, or not
 # ready with the reason the rounds ended. Not ready is a valid completion, like
-# `delivered: false` in the callers; a delivery that broke fails instead, naming
-# the node that failed.
-returns: outcome
+# `delivered: false` in the callers. A delivery that broke still completes the
+# report, not ready with reason `failed`, and the run still fails, naming the node
+# that failed.
+returns: report
 outcome_field: ready
 
 nodes:
@@ -117,6 +125,7 @@ nodes:
             prior_report: "$LOOP_PREV.round.output.prior_report"
             light: "$LOOP_PREV.round.output.light_review"
             work_order: "$INPUTS.work"
+            part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
         # After a review passes, before CI. Once per run: a later round finds the
@@ -159,6 +168,7 @@ nodes:
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             light: "true"
             work_order: "$INPUTS.work"
+            part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
         # CI is the project's full validation: implementers run only focused checks.
@@ -247,8 +257,8 @@ nodes:
         summary: { type: string, pattern: '\S' }
       required: [changed, summary]
 
-  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts):
-  # ready with the pull request's URL, or not ready with why.
+  # Composes the success-path report (scripts/outcome.ts): ready with the pull
+  # request's URL, or not ready with why. `report` relays it.
   - id: outcome
     script: outcome
     runtime: bun
@@ -256,13 +266,27 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       rounds: { from: "$rounds.output" }
+
+  # The workflow's terminal report on every ending. A node failure skips `outcome`
+  # (never fails it), so `all_done` still runs this node and the binding reads null.
+  # `always_run` because it reads discoveries its dependency edge does not carry.
+  - id: report
+    script: report
+    runtime: bun
+    always_run: true
+    depends_on: [outcome]
+    trigger_rule: all_done
+    with:
+      outcome: { from: "$outcome.output", if_skipped: null }
     output_format:
       type: object
       properties:
         ready: { type: boolean }
         reason:
           type: string
-          enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap]
+          enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap, failed]
+        # The pull request, ready or not; '' when no round opened one, or when a node
+        # failure kept the report from learning it.
         pr_url: { type: string }
         # The last round's CI re-run: none, or how the one re-run of failed jobs ended.
         ci_rerun: { type: string, enum: [none, green, red] }

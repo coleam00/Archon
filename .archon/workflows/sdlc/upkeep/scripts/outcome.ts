@@ -12,9 +12,9 @@
  * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_PR_URL: deliver's `ready`, `summary`
  *   and `pr_url`, or "null" when the deliver branch was skipped (no_action).
  *
- * A failed delivery cannot reach this node: the failure
- * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
- * record names the node that actually failed.
+ * A failed delivery arrives as deliver's not-ready report, its summary saying a node
+ * failed, and is relayed like any other not-ready delivery; the run still fails,
+ * naming the node that failed.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';

@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
 
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;

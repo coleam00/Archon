@@ -63,10 +63,17 @@ nodes:
 
   - id: approve
     depends_on: [review]
-    loop:                                      # Human approval gate
-      prompt: "Present the changes for review. Address any feedback."
-      until: APPROVED
-      interactive: true                        # Pauses and waits for human input
+    loop_group:                                # Repeat until approved
+      max_iterations: 5
+      until_bash: 'decision=$ask.output.decision; [ "$decision" = approve ]'
+      nodes:
+        - id: revise
+          prompt: "Address this feedback, if any: $LOOP_PREV.ask.output.text"
+        - id: ask
+          depends_on: [revise]
+          wait:                                # Pauses until you approve or reject
+            attention: "Review the changes. Approve, or reject with what to change."
+            form: approval
 
   - id: create-pr
     depends_on: [approve]

@@ -63,7 +63,7 @@ A fan-out child that pauses stays paused as its own run, waiting for an answer l
 
 | Feature | Verdict | Why |
 |---------|---------|-----|
-| `approval:` nodes, `trigger_rule`, `retry:` | ✅ admitted | Pure governance — the engine must see them to pause, join, and re-run |
+| `wait: attention` forms (which replace the deprecated `approval:` nodes), `trigger_rule`, `retry:` | ✅ admitted | Pure governance — the engine must see them to pause, validate answers, join, and re-run |
 | `loop:` / `loop_group:` | ✅ admitted | Iteration structure the engine must own for events, gates, and cost accounting |
 | `include:` (load-time inlining, [#2121](https://github.com/coleam00/Archon/issues/2121)) | ✅ admitted | Textual composition, zero new runtime semantics — the engine sees a flat DAG |
 | Runtime-width composed blocks (`include:` + `fan_out:`, [#2512](https://github.com/coleam00/Archon/issues/2512)) | ✅ admitted (narrow coordination exception) | The include target and its complete body remain static: load time resolves and validates the full include closure, package resources, inputs, references, governance constraints, and the absence of suspension paths. Runtime contributes only the ordered item data and therefore the number of isolated, instance-qualified repetitions the engine must own for bounded scheduling, persistence, resume, audit, and aggregation. The first durable instance snapshot is authoritative. Dynamic targets, runtime-authored body structure, and gates/waits without durable per-item cursors remain rejected ([#2810](https://github.com/coleam00/Archon/issues/2810)). |
