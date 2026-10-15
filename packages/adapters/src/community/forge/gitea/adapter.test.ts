@@ -56,7 +56,9 @@ const mockGetOrCreateConversation = mock(
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  (typeof import('@archon/core/db/conversations'))['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -69,9 +71,11 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
@@ -415,6 +419,42 @@ describe('GiteaAdapter', () => {
     afterEach(() => {
       if (originalAllowedUsers !== undefined) {
         process.env.GITEA_ALLOWED_USERS = originalAllowedUsers;
+      }
+    });
+
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: null,
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-allocated',
+        codebase_id: null,
+        cwd: null,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      });
+      mockUpdateConversation.mockResolvedValueOnce(undefined);
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      try {
+        await adapter.handleWebhook(
+          utf8(createCommentPayload('@archon help', 'user123')),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith('testuser', 'testrepo', 'main', path, true);
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
       }
     });
 

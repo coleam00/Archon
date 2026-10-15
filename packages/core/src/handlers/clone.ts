@@ -7,7 +7,6 @@ import {
   type CodebaseSource,
   type ProjectBaseBranchInspection,
 } from '../schemas/codebase';
-import { loadRepoConfig } from '../config/config-loader';
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import type { IWorkflowHostStore } from '../workflows/host-store';
@@ -20,17 +19,25 @@ import {
   validateCloneUrl,
   type CloneCredentials,
   githubTokenCredentials,
-  getDefaultRemote,
   findRepoRoot,
   inspectRemoteBranches,
   validateBranchName,
   ConfiguredBaseBranchNotFoundError,
   InvalidBaseBranchError,
 } from '@archon/git';
+import {
+  ProjectRegistrationError,
+  findRegisteredRemote as findRemoteOwner,
+  effectiveRegistrationUrl,
+  registrationRemote,
+  registrationRemotes,
+  ambiguousRegistrationRemote,
+} from '../services/registration-remote';
+export { ProjectRegistrationError } from '../services/registration-remote';
+
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import {
   allocateProjectName,
-  remoteIdentity,
   type ProjectIdentity,
 } from '../services/project-registration-identity';
 import { quoteCommandArg } from '../utils/command-args';
@@ -223,13 +230,6 @@ async function setupAppRepository(path: string): Promise<void> {
   }
 }
 
-export class ProjectRegistrationError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'ProjectRegistrationError';
-  }
-}
-
 function rejectExistingChoice(options: RegistrationOptions): void {
   if (options.baseBranch !== undefined)
     throw new ProjectRegistrationError(
@@ -248,38 +248,7 @@ async function findRegisteredRemote(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   remoteUrl: string
 ): Promise<Codebase | null> {
-  const identity = remoteIdentity(remoteUrl);
-  for (const project of await codebases.listCodebases()) {
-    if (project.kind === 'folder') continue;
-    let registeredUrl = project.repository_url;
-    // Older chat registrations omitted repository_url even for remote-backed repos.
-    if (!registeredUrl) {
-      try {
-        registeredUrl = await effectiveRegistrationUrl(project.default_cwd);
-      } catch (error) {
-        throw new ProjectRegistrationError(
-          `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
-            'Restore access to that checkout or repair it with /update-project before registering another repository. ' +
-            `Git error: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error }
-        );
-      }
-    }
-    if (registeredUrl && remoteIdentity(registeredUrl) === identity) return project;
-  }
-  return null;
-}
-
-async function effectiveRegistrationUrl(path: string): Promise<string | null> {
-  const remote = await registrationRemote(path);
-  if (!remote) return null;
-  const { stdout } = await execFileAsync('git', ['-C', path, 'remote', 'get-url', remote]);
-  return stdout.trim() || null;
-}
-
-async function registrationRemote(path: string): Promise<string | null> {
-  const config = await loadRepoConfig(path);
-  return config.worktree?.remote?.trim() || (await getDefaultRemote(toRepoPath(path)));
+  return findRemoteOwner(await codebases.listCodebases(), remoteUrl);
 }
 
 async function validateRegistrationChoice(
@@ -587,7 +556,21 @@ export async function registerRepository(
     };
   }
 
-  const remoteUrl = await effectiveRegistrationUrl(localPath);
+  const { selected, names } = await registrationRemotes(localPath);
+  if (!selected && names.length > 0) {
+    for (const remote of names) {
+      const url = await effectiveRegistrationUrl(localPath, remote);
+      const owner = url && (await findRegisteredRemote(codebases, url));
+      if (owner) {
+        throw new ProjectRegistrationError(
+          `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
+            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+        );
+      }
+    }
+    throw ambiguousRegistrationRemote(localPath, names);
+  }
+  const remoteUrl = selected ? await effectiveRegistrationUrl(localPath, selected) : null;
 
   // Extract repo name from directory name
   const repoName = basename(localPath);

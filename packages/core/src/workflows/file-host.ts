@@ -20,6 +20,7 @@ import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { assertProjectRegistrationAvailable } from '../services/project-registration-identity';
+import { findRegisteredRemote } from '../services/registration-remote';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
@@ -115,8 +116,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         (await readPublicCodebases())
           .filter(row => row.name === name)
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
-      findCodebaseByRepoUrl: async url =>
-        (await readPublicCodebases()).find(row => row.repository_url === url) ?? null,
+      findCodebaseByRepoUrl: async url => findRegisteredRemote(await readPublicCodebases(), url),
       createCodebase: async input => {
         assertAbsoluteDefaultCwd(input.default_cwd, input.name);
         const row = {

@@ -23,6 +23,12 @@ Archon provides a unified directory and configuration system with:
 
 ### User-Level: `~/.archon/`
 
+The workspace entries below show default shapes. Registration allocates a unique,
+readable name when a new project would share another project's name or storage root.
+For example, a repository can use `acme/api-2` or `_local/api-2`, and a folder can
+use `_folder/my-app-2`. The allocated name determines its workspace segment;
+existing projects keep their names and storage.
+
 ```
 ~/.archon/                          # ARCHON_HOME
 ├── workspaces/                     # Per-project storage (project-centric layout)
@@ -60,7 +66,7 @@ Archon provides a unified directory and configuration system with:
 
 **Purpose:**
 - `workspaces/<project>/` - Everything one project produces. The project segment is
-  resolved once per run from the codebase identity: `owner/repo` for a repo with a
+  resolved once per run from the allocated codebase identity. Default shapes are: `owner/repo` for a repo with a
   remote, `_local/<basename>` for a no-remote local repo, `_folder/<slug>` for a folder
   project, and `_cwd/<basename>` when a run has no registered codebase at all. Folder
   projects and `_cwd` projects have no `source/` or `worktrees/` — they run in place.

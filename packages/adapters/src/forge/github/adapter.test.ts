@@ -851,6 +851,31 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+      });
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      try {
+        await adapter.handleWebhook(
+          createCommentPayload('@archon help', 'user123'),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith('testuser', 'testrepo', 'main', path, true);
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-test', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
+      }
+    });
+
     test('attribution falls back to sender.login when comment.user is absent', async () => {
       const adapter = createSelfFilterAdapter();
       const payload = createCommentPayload('@archon help', undefined); // no comment.user

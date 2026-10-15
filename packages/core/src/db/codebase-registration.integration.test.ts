@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { afterAll, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,10 @@ const { createCodebase, createManagedCodebase, listCodebases } = await import('.
 afterAll(async () => {
   for (const db of databases) await db.close();
   await removeTempTree(root);
+});
+
+afterEach(async () => {
+  await databases[0].query('DELETE FROM remote_agent_codebases');
 });
 
 for (const kind of ['folder', 'repo'] as const) {
@@ -50,7 +54,7 @@ test('independent forge claims allocate separate managed roots', async () => {
   ]);
   expect(new Set(projects.map(project => project.name)).size).toBe(2);
   expect(new Set(projects.map(project => project.default_cwd)).size).toBe(2);
-  expect(await listCodebases()).toHaveLength(4);
+  expect(await listCodebases()).toHaveLength(2);
 });
 
 test('concurrent registrations with distinct names cannot claim the same remote', async () => {

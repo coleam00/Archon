@@ -3,7 +3,7 @@
  *
  * Runs in its own test batch to avoid mock.module pollution with other adapters.
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 import type { Codebase, Conversation } from '@archon/core';
 
@@ -75,7 +75,9 @@ const mockGetOrCreateConversation = mock(
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  (typeof import('@archon/core/db/conversations'))['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -88,9 +90,11 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
@@ -232,6 +236,38 @@ describe('GitLabAdapter', () => {
       { gitlabUrl: 'https://gitlab.example.com' },
       'gitlab.adapter_initialized'
     );
+  });
+
+  test('allocated checkout path reaches preparation and conversation storage', async () => {
+    const adapter = createAdapter();
+    const path = '/tmp/test-workspaces/mygroup/myproject-2/source';
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: null,
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-allocated',
+      codebase_id: null,
+      cwd: null,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockUpdateConversation.mockResolvedValueOnce(undefined);
+    // @ts-expect-error - observe the private checkout boundary
+    const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+    try {
+      await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+      expect(prepare).toHaveBeenCalledWith('mygroup/myproject', 'main', path, true);
+      expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+        codebase_id: 'allocated',
+        cwd: path,
+      });
+    } finally {
+      prepare.mockRestore();
+    }
   });
 
   test.each(['own', 'marked'])('suppresses %s comments without logging identities', async kind => {

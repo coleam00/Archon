@@ -27,7 +27,7 @@ mock.module('../db/connection', () => ({
 
 const { registerFolder, registerRepository, ProjectRegistrationError } =
   await import('./sql-registration');
-const { createCodebase, createManagedCodebase, getCodebase, listCodebases } =
+const { createCodebase, createManagedCodebase, findCodebaseByRepoUrl, getCodebase, listCodebases } =
   await import('../db/codebases');
 const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 
@@ -85,6 +85,126 @@ describe('project storage collisions', () => {
       3
     );
   });
+
+  test('nested forge namespaces register with distinct source and storage roots', async () => {
+    const root = await makeHome();
+    const projects = [];
+    for (const host of ['gitlab.example', 'other.example']) {
+      projects.push(
+        await createManagedCodebase({
+          name: 'org/team/subteam/project',
+          default_cwd: join(root, '.archon/workspaces/org/team/subteam/project/source'),
+          repository_url: `https://${host}/org/team/subteam/project`,
+        })
+      );
+    }
+    expect(new Set(projects.map(project => project.default_cwd)).size).toBe(2);
+    expect(projects[0].name).toBe('org/team/subteam/project');
+    expect(projects[0].default_cwd).toBe(
+      join(root, '.archon/workspaces/org/team/subteam/project/source')
+    );
+    expect(await storageRoot(projects[1].id)).not.toBe(await storageRoot(projects[0].id));
+    expect(projects[1].default_cwd).toBe(join(await storageRoot(projects[1].id), 'source'));
+  });
+
+  test.each(['github.com', 'gitlab.example', 'gitea.example'])(
+    'forge lookup reuses SSH and URL-less registrations on %s',
+    async host => {
+      const root = await makeHome();
+      const path = await gitCheckout(join(root, 'checkout'), `git@${host}:acme/api.git`);
+      const project = await createCodebase({
+        name: 'My API',
+        default_cwd: path,
+        repository_url: `git@${host}:acme/api.git`,
+      });
+      expect((await findCodebaseByRepoUrl(`https://${host}/acme/api`))?.id).toBe(project.id);
+      await db.query('UPDATE remote_agent_codebases SET repository_url = NULL WHERE id = $1', [
+        project.id,
+      ]);
+      expect((await findCodebaseByRepoUrl(`https://${host}/acme/api.git`))?.id).toBe(project.id);
+      await expect(
+        createManagedCodebase({
+          name: 'acme/api',
+          default_cwd: join(root, 'managed/source'),
+          repository_url: `https://${host}/acme/api`,
+        })
+      ).rejects.toThrow(path);
+      expect(await listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test('legacy duplicate remote owners are refused instead of picking one', async () => {
+    const root = await makeHome();
+    const first = await createCodebase({
+      name: 'acme/one',
+      default_cwd: join(root, 'first'),
+      repository_url: 'git@github.com:acme/api.git',
+    });
+    const second = await createCodebase({
+      name: 'acme/two',
+      default_cwd: join(root, 'second'),
+      repository_url: 'https://other.example/acme/api',
+    });
+    await db.query('UPDATE remote_agent_codebases SET repository_url = $1 WHERE id = $2', [
+      'https://github.com/acme/api',
+      second.id,
+    ]);
+    const error = await findCodebaseByRepoUrl('https://github.com/acme/api.git').catch(
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(ProjectRegistrationError);
+    for (const project of [first, second]) {
+      expect(error instanceof Error && error.message).toContain(project.name);
+      expect(error instanceof Error && error.message).toContain(project.default_cwd);
+    }
+  });
+
+  test.each(['incoming', 'legacy'])(
+    'ambiguous %s remotes cannot clear remote ownership',
+    async side => {
+      const root = await makeHome();
+      const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
+      const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
+      const ambiguous = side === 'incoming' ? second : first;
+      execFileSync('git', ['-C', ambiguous, 'remote', 'rename', 'origin', 'upstream']);
+      execFileSync('git', [
+        '-C',
+        ambiguous,
+        'remote',
+        'add',
+        'mirror',
+        'https://mirror.example/acme/api.git',
+      ]);
+      await createCodebase({ name: 'Legacy API', default_cwd: first });
+      await expect(registerRepository(second)).rejects.toThrow(first);
+      expect(await listCodebases()).toHaveLength(1);
+      if (side === 'incoming') {
+        await db.query('DELETE FROM remote_agent_codebases');
+        await expect(registerRepository(second)).rejects.toThrow('worktree.remote');
+        expect(await listCodebases()).toHaveLength(0);
+      }
+    }
+  );
+
+  test.each(['incoming', 'legacy'])(
+    'invalid %s config refuses registration with the original cause',
+    async side => {
+      const root = await makeHome();
+      const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
+      const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
+      const broken = side === 'incoming' ? second : first;
+      await mkdir(join(broken, '.archon'));
+      await writeFile(join(broken, '.archon/config.yaml'), 'worktree: [');
+      await createCodebase({ name: 'Legacy API', default_cwd: first });
+      const error = await registerRepository(second).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect(error instanceof Error && error.cause).toBeInstanceOf(Error);
+      expect(error instanceof Error && error.message).toContain(broken);
+      if (side === 'legacy')
+        await expect(findCodebaseByRepoUrl('https://github.com/acme/api')).rejects.toThrow();
+      expect(await listCodebases()).toHaveLength(1);
+    }
+  );
 
   test('concurrent folder claims cannot insert two owners of one storage root', async () => {
     const root = await makeHome();

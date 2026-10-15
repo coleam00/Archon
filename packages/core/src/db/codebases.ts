@@ -17,6 +17,7 @@ import {
   assertProjectRegistrationAvailable,
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
+import { findRegisteredRemote } from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
@@ -64,13 +65,23 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
     const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
     let project = { ...data, kind: data.kind ?? 'repo' };
     if (managed) {
+      const owner =
+        project.repository_url &&
+        (await findRegisteredRemote(registered.rows, project.repository_url));
+      if (owner) {
+        throw new Error(
+          `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
+            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+        );
+      }
       const name = allocateProjectName(project, registered.rows);
       const identity = parseOwnerRepo(name);
-      if (!identity) throw new Error(`Managed repository requires an owner/repo name: ${name}`);
       project = {
         ...project,
         name,
-        default_cwd: getProjectSourcePath(identity.owner, identity.repo),
+        default_cwd: identity
+          ? getProjectSourcePath(identity.owner, identity.repo)
+          : project.default_cwd,
       };
     }
     assertProjectRegistrationAvailable(project, registered.rows);
@@ -142,12 +153,7 @@ export async function getCodebaseCommands(
 }
 
 export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase | null> {
-  const result = await pool.query<Codebase>(
-    'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
-    [repoUrl]
-  );
-  const row = result.rows[0];
-  return row ? validateCodebase(row) : null;
+  return findRegisteredRemote(await listCodebases(), repoUrl);
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {

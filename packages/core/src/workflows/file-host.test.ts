@@ -1,6 +1,7 @@
 import { afterEach, expect, expectTypeOf, test } from 'bun:test';
 import type { z } from 'zod';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -157,4 +158,32 @@ test('two file hosts cannot register owners of the same project storage', async 
   ]);
   expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
   expect(await first.records.codebases.listCodebases()).toHaveLength(1);
+});
+
+test('file host remote lookup reuses SSH and legacy checkout identities', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-remote-')));
+  process.env.ARCHON_HOME = home;
+  execFileSync('git', ['-C', home, 'init', '-q']);
+  execFileSync('git', [
+    '-C',
+    home,
+    'remote',
+    'add',
+    'origin',
+    'git@gitlab.example:org/team/app.git',
+  ]);
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const project = await host.records.codebases.createCodebase({
+    name: 'My App',
+    default_cwd: home,
+    repository_url: 'git@gitlab.example:org/team/app.git',
+  });
+  expect(
+    (await host.records.codebases.findCodebaseByRepoUrl('https://gitlab.example/org/team/app'))?.id
+  ).toBe(project.id);
+  await host.records.codebases.updateCodebase(project, { repository_url: null });
+  expect(
+    (await host.records.codebases.findCodebaseByRepoUrl('https://gitlab.example/org/team/app.git'))
+      ?.id
+  ).toBe(project.id);
 });

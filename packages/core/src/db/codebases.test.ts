@@ -392,8 +392,7 @@ describe('codebases', () => {
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
-        ['https://github.com/user/repo']
+        'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
       );
     });
 
