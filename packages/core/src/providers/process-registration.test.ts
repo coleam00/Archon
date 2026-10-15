@@ -207,11 +207,17 @@ test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 
 
 test.each(
   (['$ref', 'allOf', 'anyOf', 'oneOf'] as const).flatMap(composition =>
-    [false, true].map(constrainBranchModel => ({ composition, constrainBranchModel }))
+    [false, true].flatMap(constrainBranchModel =>
+      [false, true].map(stripUnknownKeys => ({
+        composition,
+        constrainBranchModel,
+        stripUnknownKeys,
+      }))
+    )
   )
 )(
-  '$composition siblings preserve root model rules (branch model constraint: $constrainBranchModel)',
-  ({ composition, constrainBranchModel }) => {
+  '$composition siblings preserve root model rules (branch constraint: $constrainBranchModel, strip: $stripUnknownKeys)',
+  ({ composition, constrainBranchModel, stripUnknownKeys }) => {
     const root = z.toJSONSchema(
       z.object({
         model: normalizedConfigString(z.string().regex(/^\s*openai\s*\//), 'slash-separated'),
@@ -237,7 +243,12 @@ test.each(
     const registration = processProviderRegistration(
       providerPluginDescriptorSchema.parse({
         ...descriptor,
-        config: { install: run, run, snapshot: run },
+        config: {
+          install: run,
+          run,
+          snapshot: run,
+          ...(stripUnknownKeys ? { stripUnknownKeys: true } : {}),
+        },
         credentials: {
           kind: 'static',
           specs: [
@@ -302,7 +313,7 @@ test('oneOf credential lookup accepts a distinct second model branch', () => {
   }
 });
 
-function modelLookupRegistration(run: z.core.JSONSchema.BaseSchema) {
+function modelLookupRegistration(run: unknown) {
   return processProviderRegistration(
     providerPluginDescriptorSchema.parse({
       ...descriptor,
@@ -688,4 +699,83 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
   });
   expect(getUserProviderCredentialStatus).toHaveBeenCalledWith('user', 'google');
   expect(checkCredential).not.toHaveBeenCalled();
+});
+
+test.each(
+  (['$ref', 'allOf', 'anyOf', 'oneOf'] as const).flatMap(composition =>
+    [false, true].flatMap(required =>
+      [false, true].map(stripUnknownKeys => ({ composition, required, stripUnknownKeys }))
+    )
+  )
+)(
+  '$composition typed wrappers retain branch fields (required: $required, strip: $stripUnknownKeys)',
+  ({ composition, required, stripUnknownKeys }) => {
+    const branch: z.core.JSONSchema.BaseSchema = {
+      type: 'object',
+      properties: { model: { type: 'string' } },
+      ...(required ? { required: ['model'] } : {}),
+    };
+    const schema = {
+      type: 'object',
+      ...(composition === '$ref'
+        ? { $defs: { branch }, $ref: '#/$defs/branch' }
+        : { [composition]: [branch] }),
+    };
+    const registration = processProviderRegistration(
+      providerPluginDescriptorSchema.parse({
+        ...descriptor,
+        config: {
+          install: schema,
+          run: schema,
+          snapshot: schema,
+          ...(stripUnknownKeys ? { stripUnknownKeys: true } : {}),
+        },
+      }),
+      argv
+    );
+    for (const scope of ['install', 'run', 'snapshot'] as const) {
+      expect(registration.parseConfig({ model: 'openai/gpt' }, scope)).toEqual({
+        model: 'openai/gpt',
+      });
+      if (!required) expect(registration.parseConfig({}, scope)).toEqual({});
+      expect(registration.parseConfig({ model: 'openai/gpt', unknown: true }, scope)).toEqual(
+        stripUnknownKeys || scope === 'snapshot'
+          ? { model: 'openai/gpt' }
+          : { model: 'openai/gpt', unknown: true }
+      );
+    }
+  }
+);
+
+test.each([{ type: undefined }, { type: ['object', 'null'] }, { type: 'object' }])(
+  'object-applicable type $type normalizes run config and credential lookup alike',
+  ({ type }) => {
+    const model = z.toJSONSchema(normalizedConfigString(z.string(), 'slash-separated'), {
+      io: 'input',
+    });
+    const registration = modelLookupRegistration({
+      ...(type === undefined ? {} : { type }),
+      properties: { model },
+    });
+    expect(registration.parseConfig({ model: ' openai / gpt ' }, 'run')).toEqual({
+      model: 'openai/gpt',
+    });
+    expect(registration.credentials.vendorFor(' openai / gpt ')).toBe('openai');
+  }
+);
+
+test('matching pattern normalizes an explicitly declared model in both registration paths', () => {
+  const registration = modelLookupRegistration({
+    type: 'object',
+    properties: { model: { type: 'string' } },
+    patternProperties: {
+      '^model$': z.toJSONSchema(normalizedConfigString(z.string(), 'slash-separated'), {
+        io: 'input',
+      }),
+    },
+  });
+  expect(registration.parseConfig({ model: ' openai / gpt ' }, 'run')).toEqual({
+    model: 'openai/gpt',
+  });
+  expect(registration.credentials.vendorFor(' openai / gpt ')).toBe('openai');
 });

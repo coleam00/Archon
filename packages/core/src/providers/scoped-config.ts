@@ -111,37 +111,54 @@ export function scopedConfigSchema(
   snapshot: boolean
 ): z.ZodType {
   const validator = z.fromJSONSchema(schema);
+  // Composed schemas describe the same object. Stripping in one conjunct must
+  // retain fields declared by its siblings.
+  const declaresKey = (node: JsonSchema, key: string): boolean => {
+    if (typeof node !== 'object') return node;
+    return (
+      Object.hasOwn(node.properties ?? {}, key) ||
+      Object.keys(node.patternProperties ?? {}).some(pattern => new RegExp(pattern).test(key)) ||
+      node.additionalProperties === true ||
+      typeof node.additionalProperties === 'object' ||
+      (!!node.$ref && declaresKey(resolveConfigReference(node, schema), key)) ||
+      [...(node.allOf ?? []), ...(node.anyOf ?? []), ...(node.oneOf ?? [])].some(branch =>
+        declaresKey(branch, key)
+      )
+    );
+  };
   const project = (
     value: unknown,
     unresolved: JsonSchema,
     root = false,
-    output = false
+    output = false,
+    objectSchema = unresolved
   ): unknown => {
     const node = unresolved;
     if (typeof node !== 'object') return value;
     const original = value;
-    if (node.$ref) value = project(value, resolveConfigReference(node, schema), root, output);
+    if (node.$ref)
+      value = project(value, resolveConfigReference(node, schema), root, output, objectSchema);
     const branches = node.anyOf ?? node.oneOf;
     if (branches) {
       for (const branch of branches) {
-        const projected = project(original, branch, root);
+        const projected = project(original, branch, root, false, objectSchema);
         if (
           z
             .fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
             .safeParse(projected).success
         ) {
-          value = output ? project(value, branch, root, true) : projected;
+          value = output ? project(value, branch, root, true, objectSchema) : projected;
           break;
         }
       }
     }
     if (node.allOf?.length) {
       if (output) {
-        for (const branch of node.allOf) value = project(value, branch, root, true);
+        for (const branch of node.allOf) value = project(value, branch, root, true, objectSchema);
       } else {
         const members: z.ZodType[] = node.allOf.map(branch =>
           z.preprocess(
-            input => project(input, branch, root),
+            input => project(input, branch, root, false, objectSchema),
             z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
           )
         );
@@ -163,7 +180,7 @@ export function scopedConfigSchema(
           : item;
       });
     }
-    if (value === null || typeof value !== 'object' || node.type !== 'object') return value;
+    if (value === null || typeof value !== 'object') return value;
     const properties = node.properties ?? {};
     const patterns = Object.entries(node.patternProperties ?? {}).map(([pattern, child]) => ({
       pattern: new RegExp(pattern),
@@ -211,7 +228,7 @@ export function scopedConfigSchema(
           ];
         if (typeof node.additionalProperties === 'object')
           return [[key, project(field, node.additionalProperties, false, output)]];
-        return strip ? [] : [[key, field]];
+        return strip && !declaresKey(objectSchema, key) ? [] : [[key, field]];
       })
     );
   };
