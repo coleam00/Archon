@@ -428,16 +428,17 @@ describe('bench run', () => {
     if (detail !== undefined) writeFileSync(join(cli, 'detail.json'), JSON.stringify(detail(out)));
     const preload = join(cli, 'preload.ts');
     writeFileSync(preload, `import { install } from ${JSON.stringify(FAKE_ARCHON)};\ninstall(${JSON.stringify(cli)});\n`);
-    const run = (...args: string[]) => {
+    const run = (...args: string[]) => runIn({}, ...args);
+    const runIn = (env: Record<string, string>, ...args: string[]) => {
       const result = spawnSync(
         process.execPath,
         ['--preload', preload, script, 'run', '--set', set, '--batch', 'counting', '--version', join(out, 'v.yaml'), '--out', out, ...args],
-        { cwd: repo, encoding: 'utf8' }
+        { cwd: repo, encoding: 'utf8', env: { ...process.env, ...env } }
       );
       return { status: result.status, stderr: result.stderr, lines: readLines(join(out, 'samples.jsonl')) };
     };
     const argv = (n: number): unknown => JSON.parse(readFileSync(join(cli, `argv-${n}.json`), 'utf8'));
-    return { out, run, argv, packSha };
+    return { out, cli, run, runIn, argv, packSha };
   }
 
   it('launches a sealed checkout with the work order and records a completed sample', () => {
@@ -522,5 +523,16 @@ describe('bench run', () => {
     expect(stderr).toContain('run run-1 may still be running');
     expect(lines.map(line => [line.run_id, line.passed])).toEqual([['run-1', false]]);
     expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting', 'a.txt'))).toBe(true);
+  });
+
+  it('refuses to launch a checkout that can reach another remote', () => {
+    const { out, cli, runIn } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
+    // Git config the operator's machine adds to every repository reaches the checkout too.
+    const leak = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'remote.upstream.url', GIT_CONFIG_VALUE_0: 'https://example.invalid/repo.git' };
+    const { status, stderr } = runIn(leak, '--variant', 'v1');
+    expect(status).toBe(1);
+    expect(stderr).toContain('v counting/v1: not sealed: remotes are origin, upstream, not only origin');
+    expect(existsSync(join(cli, 'argv-1.json'))).toBe(false);
+    expect(existsSync(join(out, 'samples.jsonl'))).toBe(false);
   });
 });
