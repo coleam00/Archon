@@ -399,7 +399,7 @@ Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard
 
 Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
 
-A Claude Pro/Max subscription runs on the Claude provider (`provider: claude`). Archon does not deliver a Claude subscription to Pi; Pi runs Anthropic models with an Anthropic API key, or with a login you made in Pi itself (`pi /login`), which Archon leaves to Pi.
+For Anthropic models, use `provider: claude` with your Claude Pro/Max subscription, or give Pi an `ANTHROPIC_API_KEY`. Claude Pro/Max OAuth through Pi, including a native `pi /login` session, is not a supported Anthropic path: Pi's default system prompt can be rejected by Anthropic for subscription tokens. Archon preserves Pi's native credentials but does not deliver its stored Claude subscription to Pi.
 
 **OAuth subscriptions (run `pi /login` locally):**
 - OpenAI ChatGPT Plus/Pro

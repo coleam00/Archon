@@ -1076,14 +1076,15 @@ const approvalDecisionsSchema = z.union([
 ]);
 
 export const approvalContextSchema = approvalContextBaseSchema.and(approvalDecisionsSchema);
-export const expectedApprovalGateSchema = approvalContextBaseSchema
-  .pick({ nodeId: true, pauseId: true })
-  .required();
+export const expectedApprovalGateSchema = z.union([
+  z.string().min(1),
+  z.object({ nodeId: z.string().min(1), pauseId: z.string().min(1) }),
+]);
 
 export type ApprovalContext = z.infer<typeof approvalContextSchema>;
 
 /** Old node-only buttons may resolve only contexts without a pause identity. */
-export type ExpectedApprovalGate = string | Required<Pick<ApprovalContext, 'nodeId' | 'pauseId'>>;
+export type ExpectedApprovalGate = z.infer<typeof expectedApprovalGateSchema>;
 
 /**
  * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate

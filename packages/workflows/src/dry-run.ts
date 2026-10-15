@@ -13,6 +13,7 @@ import {
   inputEnvVars,
   nodeTemplateReferences,
   resolveNodeBindings,
+  resolveAttentionOptions,
   substituteLoopBodyText,
   type LoopBodyScope,
   type ShellInputContext,
@@ -845,18 +846,15 @@ function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined
 /**
  * Hold an authored answer to an attention wait to the options the wait declares, as
  * every answer surface does; the form's output contract alone accepts any decision.
- * Options read from an upstream output exist only at pause time, so a dry run checks an
- * answer to those against the output contract only.
  */
 function assertStubAnswerChoosesDeclared(
   node: DagNode,
   condition: Extract<WaitCondition, { kind: 'attention' }>,
-  answer: DryRunStubValue
+  answer: DryRunStubValue,
+  outputs: ReadonlyMap<string, NodeOutput>
 ): void {
-  if (typeof condition.options === 'string') return;
-  const declared = attentionOptions({ form: condition.form, options: condition.options }).map(
-    option => option.id
-  );
+  const options = resolveAttentionOptions(node.id, condition.options, outputs);
+  const declared = attentionOptions({ form: condition.form, options }).map(option => option.id);
   // The output contract already held, so a string stub is one JSON document. A parse
   // failure is an empty decision or decision list, which chooses nothing.
   const parsed = attentionAnswerSchema.safeParse(
@@ -1233,7 +1231,7 @@ async function simulateNode(
           : undefined;
       if (answer !== undefined) {
         if (condition.kind === 'attention')
-          assertStubAnswerChoosesDeclared(node, condition, answer);
+          assertStubAnswerChoosesDeclared(node, condition, answer, outputs);
         const hydrated = completedOutput(node, answer);
         outputs.set(node.id, hydrated);
         ctx.trace.push({

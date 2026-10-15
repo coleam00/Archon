@@ -391,8 +391,7 @@ async function resolveUserProviderEnvForWorkflow(
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
     return { env: {}, protectedValues: [] };
   }
-  // Only vendors preflight connected: a stored credential no node's provider consumes
-  // (a Claude subscription in a Pi-only run) is neither refreshed nor delivered.
+  // Preflight selects only consumed credentials; delivery must not resolve other vendors.
   const vendors = [...connectedVendors];
   if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;

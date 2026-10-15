@@ -300,8 +300,8 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow. A run started outside the web UI resumes on the server and returns **409** with the reason, leaving the run unchanged, when its resource is full: a paused run that is ready to continue keeps its place and a continuation host continues it, and a failed run stays failed until it is resumed again. A run started from a web conversation reports the same wait in that conversation |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, cascade-cancels non-terminal `workflow:` sub-run descendants, and removes the worktrees those runs created, keeping their branches. A cancelled run with a worktree still to remove can be abandoned again to retry. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned |
-| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
-| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
+| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — approve the child) |
+| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
 | POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
 | POST | `/api/workflows/runs/{runId}/signal` | Signal the exact external event occurrence awaited by a paused run |
@@ -410,13 +410,24 @@ Resumes the workflow from where it left off, skipping already-completed nodes. E
 # Approve (optionally with a comment)
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/approve \
   -H "Content-Type: application/json" \
-  -d '{"comment": "Looks good, proceed"}'
+  -d '{"comment": "Looks good, proceed", "expectedGate": {"nodeId": "review", "pauseId": "pause-id"}}'
 
 # Reject (optionally with a reason)
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -H "Content-Type: application/json" \
-  -d '{"reason": "Please add error handling first"}'
+  -d '{"reason": "Please add error handling first", "expectedGate": {"nodeId": "review", "pauseId": "pause-id"}}'
 ```
+
+Both routes accept optional `expectedGate: { nodeId, pauseId }`. For an approval
+gate with a `pauseId`, copy `nodeId` and `pauseId` from `run.metadata.approval`
+in the run detail response. For a legacy gate without `pauseId`, send its node ID
+as a string instead, for example `expectedGate: "review"`. This legacy identity
+can answer only a gate without a pause ID; it cannot answer a later gate with one. For an attention wait, use `run.attention.nodeId` as `nodeId` and
+`run.attention.occurrence` as `pauseId`. When
+the run is no longer paused at that gate occurrence, the request returns **409**
+and leaves the current pause unchanged. The identity is checked atomically with
+the answer write. Omitting `expectedGate` answers the current gate as before;
+`comment` and `reason` remain optional, and a request without a body is supported.
 
 These routes record the decision and return. The server's continuation scheduler then continues the run on the platform that started it, whichever surface answered; a container run, or a gate that was already paused when you upgraded to this version, is the exception and needs `archon workflow resume <run-id>`. The response message says which applies.
 
