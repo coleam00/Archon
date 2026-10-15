@@ -8117,11 +8117,12 @@ export async function resolveFanOutChildDefinition(
     }
   | { unresolved: string }
 > {
+  const sourceRoots = source ?? liveSourceRoots(cwd);
+  let verifiedFiles: ReadonlySet<string> | undefined;
   try {
-    const sourceRoots = source ?? liveSourceRoots(cwd);
     // Verified first, so a capture this host cannot read throws a typed error rather
     // than surfacing as a discovery error string.
-    await assertWorkflowSourceIntegrity(sourceRoots);
+    verifiedFiles = await assertWorkflowSourceIntegrity(sourceRoots);
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
@@ -8142,8 +8143,11 @@ export async function resolveFanOutChildDefinition(
             ? error.workflowName === targetName
             : filename === targetName;
         }) ??
-        errors.find(error => error.workflowName === undefined && isSourceReadFailure(error.cause));
-      if (relevantError !== undefined && isSourceReadFailure(relevantError.cause)) {
+        errors.find(
+          error =>
+            error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)
+        );
+      if (relevantError !== undefined && isSourceReadFailure(relevantError.cause, verifiedFiles)) {
         throw relevantError.cause;
       }
       return {
@@ -8152,13 +8156,19 @@ export async function resolveFanOutChildDefinition(
     }
     const commandContents = await resolveWorkflowCommandContents(sourceRoots, [definition]);
     for (const content of commandContents.values()) {
-      if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause)) {
+      if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {
         throw content.cause;
       }
     }
     return { definition, definitions, commandContents };
   } catch (err) {
     if (err instanceof WorkflowSourceIntegrityError || isSourceReadFailure(err)) throw err;
+    if (isSourceReadFailure(err, verifiedFiles)) {
+      throw new WorkflowSourceUnavailableError(
+        sourceRoots.kind === 'captured' ? sourceRoots.anchor.root : cwd,
+        err
+      );
+    }
     return { unresolved: (err as Error).message };
   }
 }

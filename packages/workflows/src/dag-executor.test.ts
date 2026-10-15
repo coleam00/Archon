@@ -21435,6 +21435,60 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
+      it('source recovery retains expected composed-directory evidence for ENOTDIR', async () => {
+        const deps = createMockDeps();
+        await mkdir(join(testDir, '.archon/workflows'), { recursive: true });
+        await writeFile(
+          join(testDir, '.archon/workflows/block.yaml'),
+          'name: block\ndescription: block\nnodes:\n  - id: work\n    prompt: DONE\n'
+        );
+        const capture = await unreadableCapture(join(testDir, 'ran'));
+        await capture.restore();
+        const dir = join(capture.captureRoot, 'project/.archon/workflows');
+        const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+        let replaced = false;
+        let checks = 0;
+        const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
+          async roots => {
+            const files = await verify(roots);
+            if (++checks === 2) {
+              replaced = true;
+              await sourceFiles.rename(dir, `${dir}.away`);
+              await writeFile(dir, 'wrong local mount');
+            }
+            return files;
+          }
+        );
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              cwd: testDir,
+              workflowSourceRoots: capture.roots,
+              workflowRun: makeWorkflowRun('composed-shape'),
+              workflow: {
+                name: 'composed-shape',
+                nodes: [
+                  {
+                    id: 'fan',
+                    kind: 'compose_fan_out',
+                    include: 'block',
+                    fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                  },
+                ],
+              },
+            })
+          );
+        } finally {
+          verifier.mockRestore();
+          if (replaced) {
+            await rm(dir);
+            await sourceFiles.rename(`${dir}.away`, dir);
+          }
+        }
+        expectReleased(deps.store, 'fan');
+      });
+
       for (const kind of ['script', 'command'] as const) {
         it(`source recovery rejects invalid live source directories (${kind}, ENOTDIR)`, async () => {
           const deps = createMockDeps();
