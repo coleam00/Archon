@@ -820,14 +820,13 @@ describe('expandWorkflowIncludes — with input mapping', () => {
   test('substitutes inputs across every other supported inline node surface', () => {
     const block = wf('parameterized', [
       { id: 'shell', bash: 'echo $INPUTS.value' },
-      { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.value")' },
       {
         id: 'loop',
         loop: {
           prompt: 'Do $INPUTS.value',
           until: 'DONE',
           max_iterations: 1,
-          until_bash: 'test "$INPUTS.value" = done',
+          until_bash: 'test $INPUTS.value = done',
         },
       },
       { id: 'approval', approval: { message: 'Approve $INPUTS.value?' } },
@@ -843,7 +842,7 @@ describe('expandWorkflowIncludes — with input mapping', () => {
         loop_group: {
           until: 'DONE',
           max_iterations: 1,
-          until_bash: 'test "$INPUTS.value" = done',
+          until_bash: 'test $INPUTS.value = done',
           nodes: [{ id: 'body', bash: 'echo $INPUTS.value' }],
         },
       },
@@ -858,13 +857,13 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     const loop = nodeById(expanded, 'review__loop');
     const approval = nodeById(expanded, 'review__approval');
     const group = nodeById(expanded, 'review__group');
+    // Shell slots read the value from the env the executor delivers, never as source.
     expect(nodeById(expanded, 'review__shell')).toMatchObject({
-      script: 'echo done',
+      script: 'echo "${INPUTS_VALUE}"',
       runtime: 'sh',
     });
-    expect(nodeById(expanded, 'review__script')).toMatchObject({ script: 'console.log("done")' });
     expect(loop).toMatchObject({
-      loop: { prompt: 'Do done', until_bash: 'test "done" = done' },
+      loop: { prompt: 'Do done', until_bash: 'test "${INPUTS_VALUE}" = done' },
     });
     expect(approval).toMatchObject({ message: 'Approve done?' });
     expect(nodeById(expanded, 'review__cancel')).toMatchObject({ reason: 'Stop: done' });
@@ -877,10 +876,27 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     });
     expect(group).toMatchObject({
       loop_group: {
-        until_bash: 'test "done" = done',
-        nodes: [{ id: 'body', script: 'echo done', runtime: 'sh' }],
+        until_bash: 'test "${INPUTS_VALUE}" = done',
+        nodes: [{ id: 'body', script: 'echo "${INPUTS_VALUE}"', runtime: 'sh' }],
       },
     });
+  });
+
+  test('rejects the input macro in an inline script body and names the env var', () => {
+    const block = wf('parameterized', [
+      { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.base-branch")' },
+    ]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { 'base-branch': 'main' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+
+    expect(workflows.has('parent')).toBe(false);
+    const error = errors.find(candidate => candidate.filename === 'parent')?.error;
+    expect(error).toContain("included node 'script'");
+    expect(error).toContain('$INPUTS.base-branch');
+    expect(error).toContain('INPUTS_BASE_BRANCH');
   });
 });
 
@@ -2638,10 +2654,9 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
 // ---------------------------------------------------------------------------
 
 describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
-  test('typed literals splice as canonical text into prompt and bash surfaces', () => {
+  test('typed literals splice as canonical text into prompt surfaces', () => {
     const block = wf('typed-blk', [
       { id: 'think', prompt: 'flag=$INPUTS.flag items=$INPUTS.items' },
-      { id: 'run', bash: 'echo "n=$INPUTS.count"', depends_on: ['think'] },
     ]);
     const parent = wf('parent', [
       { id: 'use', include: 'typed-blk', with: { flag: true, items: ['a', 'b'], count: 3 } },
@@ -2651,8 +2666,6 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(errors).toHaveLength(0);
     const think = nodeById(workflows.get('parent')!, 'use__think');
     expect(inlinePrompt(think) ?? '').toBe('flag=true items=["a","b"]');
-    const run = nodeById(workflows.get('parent')!, 'use__run');
-    expect(bashScript(run) ?? '').toBe('echo "n=3"');
   });
 
   test('a whole-$INPUTS with: value position forwards the LOGICAL value; templates splice text', () => {

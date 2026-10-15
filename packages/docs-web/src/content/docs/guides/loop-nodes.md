@@ -290,9 +290,13 @@ let a `bash:` node inside the loop own any mutation.
 :::
 
 This is useful for deterministic completion criteria: test suites, lint checks,
-build success. The bash script supports the same variable substitution as
-`prompt` (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.). Note: `$nodeId.output`
-values are shell-escaped when substituted into `until_bash`. The same
+build success. The bash script supports the workflow variables and node output
+references `prompt` does (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.), but it reads a
+declared input from the environment as `$INPUTS_<UPPER_SNAKE>`, not as `$INPUTS.<name>`.
+Inside an included block `$INPUTS.<name>` is shorthand for that variable; a directly run
+workflow leaves it literal (see
+[Passing values into an included block](/guides/authoring-workflows/#passing-values-into-an-included-block)).
+Note: `$nodeId.output` values are shell-escaped when substituted into `until_bash`. The same
 double-quoting footgun that applies to `bash:` nodes applies here — see
 [Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script)
 for the unquoted idiom to use.

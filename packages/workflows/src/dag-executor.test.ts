@@ -35225,6 +35225,70 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
     }
   }
 
+  it("#4164: an included shell's $INPUTS macro reads the input as data", async () => {
+    const payload = '$(touch injected); "quoted"';
+    const block = buildWf(
+      'macro-blk',
+      [
+        { id: 'echo', bash: "printf '%s' $INPUTS.payload" },
+        {
+          id: 'poll',
+          depends_on: ['echo'],
+          loop: { prompt: 'work', until_bash: '[ $INPUTS.target = done ]', max_iterations: 2 },
+        },
+      ],
+      { inputs: { target: { required: true }, payload: { required: true } } }
+    );
+    const parent = buildWf('macro-parent', [
+      { id: 'inc', include: 'macro-blk', with: { target: 'done', payload } },
+    ]);
+    const store = createMockStore();
+
+    await runExpanded([block, parent], 'macro-parent', createMockDeps(store));
+
+    expect(nodeOutputOf(store, 'inc__echo')).toBe(payload);
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(store.completeWorkflowRun.mock.calls.length).toBe(1);
+    expect(await Bun.file(join(testDir, 'injected')).exists()).toBe(false);
+  });
+
+  it("a script node's own with: binding beats a colliding composed and run input", async () => {
+    const block = buildWf(
+      'collide-blk',
+      [
+        {
+          id: 'emit',
+          runtime: 'bun',
+          script: 'console.log(process.env.INPUTS_TARGET);',
+          with: { target: 'local' },
+        },
+      ],
+      { inputs: { target: { required: true } } }
+    );
+    const parent = buildWf('collide-parent', [
+      { id: 'inc', include: 'collide-blk', with: { target: 'composed' } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['collide-blk', block],
+        ['collide-parent', parent],
+      ])
+    );
+    expect(errors).toEqual([]);
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(workflows.get('collide-parent')!),
+        workflowRun: makeWorkflowRun('collide-run', { metadata: { inputs: { target: 'run' } } }),
+      })
+    );
+
+    expect(nodeOutputOf(store, 'inc__emit')).toBe('local');
+  });
+
   it('AC7 — a composed block entry starts a fresh session even after a same-provider node', async () => {
     const block = buildWf('sess-blk', [
       { id: 'first', prompt: 'block first' },

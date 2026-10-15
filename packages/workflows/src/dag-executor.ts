@@ -297,9 +297,9 @@ export interface ShellInputContext {
  *   - the RUN's own inputs (#2470) — a `workflow:` sub-run child carries them in metadata.
  *   - the node's COMPOSED inputs (#1764) — the contract-resolved `inputs:` of the workflow
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
- *     These win: a node's own file is the nearer contract, and it is the only channel a
- *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
- *     serves inline bodies can never reach it).
+ *     These win: a node's own file is the nearer contract. This bag is their only channel
+ *     into a shell or script: the include `$INPUTS` macro rewrites a bash body to a quoted
+ *     reference to it and refuses an inline script body (#2115).
  *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables

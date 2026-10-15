@@ -1727,9 +1727,9 @@ nodes:
 
 Input names must start with a letter or underscore and may then contain letters, numbers,
 underscores, or hyphens. Values may be any JSON value (string, number, boolean, null, array,
-object) and are inserted verbatim during load-time expansion — they are **never
-expressions**: nothing is evaluated, computed, or interpreted. A string value is spliced in
-as text exactly as written; a non-string value keeps its logical type wherever the channel
+object) and are inserted verbatim into prompt text during load-time expansion — they are
+**never expressions**: nothing is evaluated, computed, or interpreted. A string value is
+spliced in as text exactly as written; a non-string value keeps its logical type wherever the channel
 is typed (a nested `with:` value position, `INPUTS_*` env delivery) and splices as its
 canonical JSON text into text surfaces. An inserted `$node.output` reference
 remains a reference and resolves through the normal runtime output substitution. A missing
@@ -1739,9 +1739,18 @@ depends on whether the block declares `inputs:` (see
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
 
-Substitution applies everywhere the value could reach the model or the shell, including
-inside Markdown code fences and inline code spans — `$INPUTS.<name>` has no
-documentation-only meaning, so a fenced occurrence is still a live parameter.
+Substitution applies everywhere the value could reach the model, including inside Markdown
+code fences and inline code spans — `$INPUTS.<name>` has no documentation-only meaning, so a
+fenced occurrence is still a live parameter.
+
+Executable source never receives the value. In an inline `bash:` body and in `loop.until_bash`
+or `loop_group.until_bash`, the macro becomes a double-quoted reference to the input's
+environment variable: `$INPUTS.base_branch` expands to `"${INPUTS_BASE_BRANCH}"`, so a value
+containing `$(...)` or quotes stays data. Inside single quotes the reference stays literal, and
+inside a heredoc its quotes become part of the text; read `$INPUTS_<UPPER_SNAKE>` directly there. An inline `script:`
+body (`bun` or `uv`) has no language-neutral quoting form, so `$INPUTS.<name>` there is a load
+error naming the variable to read instead (`process.env.INPUTS_BASE_BRANCH`,
+`os.environ["INPUTS_BASE_BRANCH"]`).
 
 #### Command bodies use the same explicit interface
 
@@ -1776,8 +1785,9 @@ echo "reviewing $INPUTS_PLAN against $INPUTS_BASE_BRANCH"
 The names are the ones the node's **own** workflow declared, at any nesting depth: a block
 three files deep still reads its own input names, not the caller's. Values are delivered
 through the environment and never spliced into the source, so a value containing shell
-metacharacters is data, not syntax. The load-time `$INPUTS.<name>` macro still substitutes
-into inline `bash:`/`script:` bodies as before — both channels work.
+metacharacters is data, not syntax. In an included `bash:` or `until_bash` body the
+`$INPUTS.<name>` macro is a shorthand for the same variable (see above); an inline `script:`
+body must read the variable.
 
 `workflow:` sub-runs deliver the same `INPUTS_<UPPER_SNAKE>` variables, from inputs persisted
 in the child's run metadata.
@@ -1902,7 +1912,7 @@ which surfaces can read it:
 
 | Caller | When `$INPUTS` resolves | Reaches `prompt:`/`bash:`/`script:` | Reaches `command:` file bodies |
 |--------|-------------------------|-------------------------------------|--------------------------------|
-| `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | Yes | **Yes** — resolved command bodies receive the same input binding before execution |
+| `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | `prompt:` yes; `bash:` as a quoted `INPUTS_<UPPER_SNAKE>` reference; inline `script:` is a load error | **Yes** — resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become `$INPUTS` variables on the child run) | Yes | **Yes** — every child node flows through runtime substitution |
 | direct run (`--input` / console form) | **Runtime** — the same path as a sub-run; supplied values are persisted to the run's own metadata, so `$INPUTS` reconstitutes on a cold resume | Yes | **Yes** — every node flows through runtime substitution |
 
