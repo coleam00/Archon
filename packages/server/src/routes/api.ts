@@ -10,6 +10,7 @@ import {
   webPushPayloadSchema,
 } from '@archon/core/schemas/web-push';
 import { getAgentProvider } from '@archon/core/services/provider-admission';
+import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
@@ -30,7 +31,7 @@ import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
@@ -90,7 +91,6 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
-  findRepoRoot,
   removeWorktree,
   toRepoPath,
   toWorktreePath,
@@ -130,6 +130,7 @@ import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/work
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
+  continuablePause,
   isApprovalContext,
   isGateResolved,
   runAttention,
@@ -139,10 +140,7 @@ import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
-import {
-  resumeWorkflowRunFromServer,
-  type ServerResumeOutcome,
-} from '../services/workflow-resume-service';
+import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -2749,147 +2747,15 @@ export function registerApiRoutes(
   }
 
   /**
-   * Re-enter the orchestrator after a paused approval gate is resolved, so a
-   * web-dispatched workflow continues (approve) or runs its on_reject prompt
-   * (reject) without the user having to re-run the workflow command. The CLI's
-   * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
-   * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
-   *
-   * Returns `resumed` when a resume dispatch was initiated, `waiting_for_capacity`
-   * when a headless resume was refused because the run's resource is busy, and
-   * `not_resumed` otherwise (no usable path to resume the run — see below — parent
-   * conversation deleted, parent was on a non-web platform, or dispatch threw).
-   * Failures are non-fatal: the gate decision is recorded regardless; when nothing
-   * resumed, the response text says what continues the run.
-   *
-   * **No parent conversation at all** (`parent_conversation_id` is `NULL` —
-   * every CLI-launched run): falls back to `resumeWorkflowRunFromServer`, which
-   * executes the run directly with no conversation involved (#2008).
-   *
-   * **Cross-adapter guard**: a run WITH a parent conversation only
-   * auto-resumes through the web dispatch when that parent is web-sourced.
-   * `dispatchToOrchestrator` is wired to the web adapter + its lock manager,
-   * so a Slack / Telegram / GitHub / Discord run being approved from the
-   * dashboard must not route through it — the Slack thread would never see
-   * the resumed output. Non-web parents skip auto-resume and the originating
-   * platform's own re-run flow applies; this branch is unchanged by #2008.
+   * What happens after a gate answer is recorded. The routes never resume the run:
+   * an answered pause that `continuablePause` admits is a due continuation, which the
+   * server's continuation scheduler (or `workflow wake`) continues on the platform that
+   * started the run. Anything else needs a manual resume.
    */
-  async function tryAutoResumeAfterGate(
-    run: WorkflowRun,
-    action: 'approve' | 'reject' | 'respond',
-    // Identity of the user who approved/rejected the gate. The resumed chat
-    // turn executes as THIS user (sender-first, #1976/#1982) — without it the
-    // dispatch would fall back to the conversation creator's prefs/credentials.
-    actor: RunActor
-  ): Promise<ServerResumeOutcome> {
-    const gateActorUserId = actor.kind === 'user' ? actor.userId : undefined;
-    // Literal event names per action — greppable for ops tooling. Keeping the
-    // branch explicit rather than templating avoids the earlier 3-segment
-    // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
-    const events =
-      action === 'approve'
-        ? {
-            dispatched: 'api.workflow_approve_auto_resume_dispatched' as const,
-            skippedNoPlatformConv:
-              'api.workflow_approve_auto_resume_skipped_no_platform_conv' as const,
-            skippedNonWebParent: 'api.workflow_approve_auto_resume_skipped_non_web_parent' as const,
-            failed: 'api.workflow_approve_auto_resume_failed' as const,
-            headlessDispatched: 'api.workflow_approve_auto_resume_headless_dispatched' as const,
-            headlessSkipped: 'api.workflow_approve_auto_resume_headless_skipped' as const,
-            headlessWaitingForCapacity:
-              'api.workflow_approve_auto_resume_headless_waiting_for_capacity' as const,
-          }
-        : action === 'reject'
-          ? {
-              dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
-              skippedNoPlatformConv:
-                'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
-              skippedNonWebParent:
-                'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
-              failed: 'api.workflow_reject_auto_resume_failed' as const,
-              headlessDispatched: 'api.workflow_reject_auto_resume_headless_dispatched' as const,
-              headlessSkipped: 'api.workflow_reject_auto_resume_headless_skipped' as const,
-              headlessWaitingForCapacity:
-                'api.workflow_reject_auto_resume_headless_waiting_for_capacity' as const,
-            }
-          : {
-              dispatched: 'api.workflow_respond_auto_resume_dispatched' as const,
-              skippedNoPlatformConv:
-                'api.workflow_respond_auto_resume_skipped_no_platform_conv' as const,
-              skippedNonWebParent:
-                'api.workflow_respond_auto_resume_skipped_non_web_parent' as const,
-              failed: 'api.workflow_respond_auto_resume_failed' as const,
-              headlessDispatched: 'api.workflow_respond_auto_resume_headless_dispatched' as const,
-              headlessSkipped: 'api.workflow_respond_auto_resume_headless_skipped' as const,
-              headlessWaitingForCapacity:
-                'api.workflow_respond_auto_resume_headless_waiting_for_capacity' as const,
-            };
-    if (!run.parent_conversation_id) {
-      // No parent conversation to dispatch a chat message through at all —
-      // every CLI-launched run (#2008). Execute directly instead of skipping.
-      const outcome = await resumeWorkflowRunFromServer(
-        createSqlWorkflowHost(),
-        run,
-        gateActorUserId
-      );
-      getLog().info(
-        { runId: run.id, workflowName: run.workflow_name },
-        outcome.kind === 'resumed'
-          ? events.headlessDispatched
-          : outcome.kind === 'waiting_for_capacity'
-            ? events.headlessWaitingForCapacity
-            : events.headlessSkipped
-      );
-      return outcome;
-    }
-    try {
-      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
-      const platformConvId = parentConv?.platform_conversation_id;
-      if (!platformConvId) {
-        // parentConv === null is a data-integrity signal (the parent
-        // conversation was deleted while the run was paused) — worth
-        // surfacing at info level so operators notice. Missing
-        // platform_conversation_id on an existing row shouldn't happen and
-        // stays at debug.
-        const logFn =
-          parentConv === null ? getLog().info.bind(getLog()) : getLog().debug.bind(getLog());
-        logFn(
-          {
-            runId: run.id,
-            parentConversationId: run.parent_conversation_id,
-            parentDeleted: parentConv === null,
-          },
-          events.skippedNoPlatformConv
-        );
-        return { kind: 'not_resumed' };
-      }
-      if (parentConv.platform_type !== 'web') {
-        getLog().debug(
-          {
-            runId: run.id,
-            parentConversationId: run.parent_conversation_id,
-            platformType: parentConv.platform_type,
-          },
-          events.skippedNonWebParent
-        );
-        return { kind: 'not_resumed' };
-      }
-      // Explicit resume targeting: `/workflow resume <id>` routes through the
-      // command handler's resume path, which validates the run and hands the
-      // orchestrator a resume request carrying that run. A bare `/workflow run <name>` would
-      // instead rely on implicit resume detection and collide with the
-      // ambiguity guard for any non-paused resumable state (#2075).
-      const resumeMessage = `/workflow resume ${run.id}`;
-      await dispatchToOrchestrator(platformConvId, resumeMessage, { actor });
-      getLog().info(
-        { runId: run.id, workflowName: run.workflow_name, platformConvId },
-        events.dispatched
-      );
-      return { kind: 'resumed' };
-    } catch (err) {
-      getLog().warn({ err: err as Error, runId: run.id }, events.failed);
-      return { kind: 'not_resumed' };
-    }
+  function continuationNotice(run: WorkflowRun): string {
+    return continuablePause(run) !== undefined
+      ? 'The run continues on its own.'
+      : `Run \`archon workflow resume ${run.id}\` from the CLI to continue it.`;
   }
 
   // ---------------------------------------------------------------------------
@@ -3456,31 +3322,13 @@ export function registerApiRoutes(
         });
       } else {
         const localPath = await canonicalizeProjectPath(body.path);
-        // Detect git-ness. A resolvable repo root → register as a repo project;
-        // a definitive null ("not a git repository") → folder project. A THROW
-        // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
-        // — fall through so registerFolder's own existence check produces the
-        // clean error) and for a genuine git failure (git missing, timeout,
-        // permission) on a path that DOES exist. The latter must NOT register:
-        // it would permanently misclassify a real repo as kind:'folder'.
-        let repoRoot: string | null = null;
-        try {
-          repoRoot = await findRepoRoot(localPath);
-        } catch (err) {
-          getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
-          if (existsSync(localPath)) {
-            return apiError(
-              c,
-              500,
-              'Could not determine whether the path is a git repository (git failed — is git installed and the path readable?). Nothing was registered; retry once the underlying issue is resolved.'
-            );
-          }
-        }
-        result = repoRoot
-          ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
-          : await registerFolder(localPath, undefined, {
-              baseBranch: body.base_branch ?? undefined,
-            });
+        const kind = await detectProjectKind(localPath);
+        result =
+          kind === 'repo'
+            ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+            : await registerFolder(localPath, undefined, {
+                baseBranch: body.base_branch ?? undefined,
+              });
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3491,6 +3339,10 @@ export function registerApiRoutes(
 
       return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
+      if (error instanceof ProjectKindDetectionError) {
+        getLog().warn({ err: error }, 'api.add_codebase_repo_detect_failed');
+        return apiError(c, 500, error.message);
+      }
       if (
         error instanceof ProjectRegistrationError ||
         error instanceof ConfiguredBaseBranchNotFoundError
@@ -3974,12 +3826,12 @@ export function registerApiRoutes(
         }
       }
 
-      // Declared inputs ride the context, never `fullMessage` — encoding them into the
-      // command string would make a supplied value indistinguishable from $ARGUMENTS
-      // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
-      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      // The message and every run option ride typed fields, never a chat command
+      // string: tokenizing the message would rewrite it and let a word in it set
+      // `--force` (#4159), and encoding inputs would invent a chat grammar (#2554/#2555).
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
         actor,
+        workflowName,
         ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
         ...(workflowInputs ? { workflowInputs } : {}),
         ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
@@ -3990,7 +3842,7 @@ export function registerApiRoutes(
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
-        fullMessage,
+        message,
         extraContext,
         filesToCleanup
       );
@@ -4177,7 +4029,6 @@ export function registerApiRoutes(
       // orchestrator a resume request carrying that run. Explicit targeting (not
       // a bare `/workflow run <name>`) so a genuinely-failed run resumes
       // directly instead of hitting the disambiguation prompt (#2075).
-      // Mirrors the approve/reject auto-resume path.
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
@@ -4441,22 +4292,9 @@ export function registerApiRoutes(
       // (#2074, loop_feedback_given).
       await approveWorkflow(runId, body.comment, actor, { via: 'api' });
 
-      // Auto-resume: dispatch to the orchestrator so the workflow continues
-      // without requiring the user to re-run the workflow command. Mirrors
-      // what `workflowApproveCommand` does in the CLI. Requires
-      // `parent_conversation_id` on the run (set by orchestrator-agent for any
-      // web-dispatched workflow — foreground and background via
-      // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResume = await tryAutoResumeAfterGate(run, 'approve', actor);
-
       return c.json({
         success: true,
-        message:
-          autoResume.kind === 'waiting_for_capacity'
-            ? `Workflow approved: ${run.workflow_name}. ${autoResume.message}`
-            : autoResume.kind === 'resumed'
-              ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-              : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
+        message: `Workflow approved: ${run.workflow_name}. ${continuationNotice(run)}`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4519,27 +4357,11 @@ export function registerApiRoutes(
         });
       }
 
-      // Auto-resume: dispatch to the orchestrator so the resolution actually
-      // takes effect (legacy on_reject rework, or #2707 step 1's new-mode
-      // structured resolution) without requiring the user to re-run the
-      // workflow command. Mirrors what `workflowRejectCommand` does in the
-      // CLI. Same cross-adapter guard as approve — only web parents auto-resume.
-      const autoResume = await tryAutoResumeAfterGate(run, 'reject', actor);
-      const autoResumed = autoResume.kind === 'resumed';
-      const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
-
       return c.json({
         success: true,
-        message:
-          autoResume.kind === 'waiting_for_capacity'
-            ? `Workflow rejected: ${run.workflow_name}. ${autoResume.message}`
-            : result.newMode
-              ? autoResumed
-                ? `Workflow rejected: ${run.workflow_name}. Continuing.`
-                : `Workflow rejected: ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`
-              : autoResumed
-                ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-                : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — ${resumeHint}.`,
+        message: result.newMode
+          ? `Workflow rejected: ${run.workflow_name}. ${continuationNotice(run)}`
+          : `Workflow rejected: ${run.workflow_name}. The on-reject prompt runs when the run continues. ${continuationNotice(run)}`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4607,20 +4429,9 @@ export function registerApiRoutes(
         });
       }
 
-      // Auto-resume: dispatch to the orchestrator so the resolution actually takes
-      // effect, mirroring approve/reject. Same cross-adapter guard — only web
-      // parents auto-resume.
-      const autoResume = await tryAutoResumeAfterGate(run, 'respond', actor);
-      const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
-
       return c.json({
         success: true,
-        message:
-          autoResume.kind === 'waiting_for_capacity'
-            ? `Workflow responded '${decision}': ${run.workflow_name}. ${autoResume.message}`
-            : autoResume.kind === 'resumed'
-              ? `Workflow responded '${decision}': ${run.workflow_name}. Continuing.`
-              : `Workflow responded '${decision}': ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`,
+        message: `Workflow responded '${decision}': ${run.workflow_name}. ${continuationNotice(run)}`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
@@ -4632,8 +4443,7 @@ export function registerApiRoutes(
   });
 
   // POST /api/workflows/runs/:runId/answer - Answer a paused attention wait. The answer is
-  // a due continuation; the run continues here when this server can resume it, and
-  // otherwise through any continuation host.
+  // a due continuation, which a continuation host continues.
   registerOpenApiRoute(answerWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     try {
@@ -4658,15 +4468,9 @@ export function registerApiRoutes(
         return apiError(c, 400, (refusal as Error).message);
       }
       await answerWorkflow(runId, request, actor, origin);
-      const autoResume = await tryAutoResumeAfterGate(run, 'respond', actor);
       return c.json({
         success: true,
-        message:
-          autoResume.kind === 'waiting_for_capacity'
-            ? `Workflow answered: ${run.workflow_name}. ${autoResume.message}`
-            : autoResume.kind === 'resumed'
-              ? `Workflow answered: ${run.workflow_name}. Continuing.`
-              : `Workflow answered: ${run.workflow_name}. A continuation host (archon serve or workflow wake) continues it.`,
+        message: `Workflow answered: ${run.workflow_name}. ${continuationNotice(run)}`,
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);

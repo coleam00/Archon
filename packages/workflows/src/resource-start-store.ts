@@ -309,6 +309,11 @@ export interface IResourceStartStore {
     resource: string;
     hostId: string;
   }): Promise<ResourceStartDisposition[]>;
+  /**
+   * Whether this source already holds a receipt for the delivery. Only a gate for checks that
+   * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.
+   */
+  hasStartReceiptForDelivery(sourceInstanceId: string, deliveryId: string): Promise<boolean>;
   acceptStartReceipt(
     input: SourceReceiptAcceptance
   ): Promise<{ receiptId: string; replay: boolean }>;

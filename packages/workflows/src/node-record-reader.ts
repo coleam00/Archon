@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,

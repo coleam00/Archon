@@ -143,6 +143,10 @@ mutates_checkout: false          # Optional: assert this workflow does not write
                                  #   can share one working directory. Defaults to true (take the
                                  #   lock, serialize runs on the same path). See
                                  #   [Running sub-runs side by side](#running-sub-runs-side-by-side).
+budget:                          # Optional: ceiling on the run's TOTAL work and spend (not
+  max_work_units: 20             #   concurrency). The engine refuses to start new work once a
+  max_spend_usd: 5               #   ceiling is reached. Declare either or both. See
+                                 #   [Run budgets](#run-budgets).
 tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overrides the
                                  #   keyword-based tag inference. An empty list (`tags: []`)
                                  #   suppresses inference and shows no tags. Omit to fall
@@ -247,7 +251,7 @@ nodes:
 | `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
-| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
+| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
@@ -1005,6 +1009,68 @@ The vendors' own clients may still retry an individual API request inside one at
 
 ---
 
+## Run budgets
+
+`budget:` caps how much work and money one run may consume in total. It is not a concurrency
+limit: `fan_out.max_parallel` controls how many things run at once, while a budget controls how
+much runs overall. There is no default; a workflow without `budget:` runs exactly as before.
+
+```yaml
+budget:
+  max_work_units: 20   # positive integer
+  max_spend_usd: 5     # positive number, USD
+```
+
+Declare either ceiling or both. A malformed block, including a misspelt key, is a load error,
+so a typo never silently means "no ceiling".
+
+**What counts.** One work unit is one started attempt of a `prompt:`/`command:` node or a
+`bash:`/`script:` node. Each retry is another attempt, and so is each approval `on_reject`
+rework. Approval gates, waits and `cancel:` nodes do no work and consume nothing. Spend is the
+cost the provider reports for each AI attempt; `bash:` and `script:` nodes cost nothing.
+
+**Refusal.** Before an attempt starts, the engine checks the ceilings. Once a ceiling is
+reached, it does not start the attempt: the run fails with exit reason `budget_refused`, a
+`run_budget_refused` event recording the reason, the refused node, the limits and what was
+consumed, and a message naming the node that was not started.
+
+**Bounded overshoot.** The check happens before an attempt, so an attempt already running
+finishes. Work units are exact, even across a parallel layer. Spend can exceed `max_spend_usd`
+by the cost of the attempts that were already running when the ceiling was crossed.
+
+**Unknown cost is not zero.** With `max_spend_usd`, every AI attempt must report a complete
+cost. The run fails as soon as one does not, before later work starts:
+
+- providers that do not report cost (their `costReporting` capability is false);
+- Claude after resuming a session that an earlier process created, which reports no cost for
+  that query;
+- an attempt where only some provider calls reported cost (for example a structured-output
+  retry), recorded on the node as `spend.costUsd.partial: true`;
+- an attempt that started and never finished, such as one interrupted by a crash or Ctrl-C;
+- an attempt that failed with a provider error that reports no cost, such as a Claude rate
+  limit, overload or startup timeout. The failed attempt may already have made billed calls,
+  so the run fails instead of retrying the node.
+
+Use `max_work_units` alone for providers that do not report cost, or when a failed attempt
+should be retried rather than end the run. Unknown cost is still
+recorded, but it does not refuse the run.
+
+**Resume.** The totals are rebuilt from the run's own durable records each time the run
+resumes, so a resumed run continues from what it already consumed. A run refused for
+exhaustion refuses again on resume: the ceiling comes from the run's captured workflow source,
+not from the YAML on disk. Start a new run with a higher ceiling to continue.
+
+**Supported shapes.** A budgeted workflow may not contain `loop:`, `loop_group:`, `workflow:`
+(with or without `fan_out:`), or `include:` with `fan_out:`, including any reached through
+`include:`. The budget does not count their work yet, so the workflow fails to load instead.
+An included workflow's own `budget:` is dropped with the run-owned-field warning; the composing
+run's budget governs every node.
+
+**Node-level `maxBudgetUsd`** is unchanged and applies alongside a run budget: it caps one
+Claude node, while `budget:` caps the whole run.
+
+---
+
 ## DAG Resume on Failure
 
 When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a candidate for resume. Resume is **explicit**: you opt in by flag or button.
@@ -1643,7 +1709,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `worktree`, `container`, `evidence_policy`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
@@ -2728,9 +2794,59 @@ incomplete observations. Cancellation can record pending or running nodes and fi
 that are still changing; terminalization does not make the filesystem snapshot atomic.
 You do not need a new YAML field or collector node to obtain these facts.
 
-Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
-owns typed discovery and failure-cause consumption and completion-only outcome formatting.
-A consumer must still depend on the producers whose artifacts it needs.
+#### Reporting on a failed run
+
+A `returns:` node on the success path is skipped when an upstream node fails, leaving
+`terminal_record.returns` unavailable with reason `node_not_completed`. Keep that success
+composer and add a reporter as `returns:`. With `trigger_rule: all_done`, it runs after the
+composer completes or is skipped; `{ from: "$result.output", if_skipped: null }` lets it
+pass the composer's value through or author a not-done report when the binding is `null`.
+`always_run: true` re-executes the reporter on resume, so a report that reads artifacts
+reflects the current pass instead of replaying a cached completion.
+
+```yaml
+name: failure-report
+description: Preserve an authored report after a node failure
+returns: report
+outcome_field: ok
+nodes:
+  - id: fail
+    bash: exit 1
+  - id: result
+    depends_on: [fail]
+    bash: 'printf ''{"ok":true,"summary":"Done"}'''
+  - id: report
+    depends_on: [result]
+    trigger_rule: all_done
+    always_run: true
+    with:
+      result: { from: "$result.output", if_skipped: null }
+    script: |
+      const result = process.env.INPUTS_RESULT;
+      console.log(result === 'null'
+        ? JSON.stringify({ ok: false, summary: 'Not done: a node failed before the result.' })
+        : result);
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        summary: { type: string }
+      required: [ok, summary]
+```
+
+The run's status stays `failed`; the authored outcome follows the reporter's
+[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The reporter owns the result schema and validates the value it passes through. Bind only
+the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
+so if the composer itself fails, this reporter fails too. Cancellation runs no further
+nodes, and an executor crash can prevent reporting; this pattern covers ordinary node
+failures that skip the composer, not every terminal path.
+
+An `include:` caller waits on the block's sinks. When this reporter is its only sink and
+completes, nodes depending on the block can run even after a node inside it failed. Gate
+success-only work on the returned verdict, for example `when: "$block.output.ok == true"`.
+The enclosing run still fails and its terminal record still names the failed node.
 
 ### A deterministic producer owns the same contract
 
@@ -3418,10 +3534,10 @@ When the workflow reaches `review-gate`, it pauses and notifies you. Approve or 
 - **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
 - **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision; `archon serve` or `archon workflow wake` then continues the run)
 - **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
-- **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
+- **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. The server continues the run on its own, on the platform that started it; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
-Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web UI decisions on runs with Slack, Telegram, or GitHub parents record the decision but do not auto-resume when the gate continues execution. Use `archon workflow resume <run-id>` or resume it from the originating conversation to continue the same run.
+Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Container runs, and gates that were already paused when you upgraded to this version, are the exception: they do not continue on their own, so run `archon workflow resume <run-id>` in the same project.
 
 For gates without authored decisions, rejecting cancels the workflow unless
 `on_reject` is configured, which triggers an AI rework prompt and re-pauses for

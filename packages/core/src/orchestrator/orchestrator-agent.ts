@@ -1,4 +1,5 @@
 import { registerFolder } from '../handlers/sql-registration';
+import { detectProjectKind } from '../services/project-kind';
 import {
   createRunWorktreeSetupExecutor,
   recordSetupRunSource,
@@ -35,6 +36,7 @@ import type {
   Conversation,
   Codebase,
   AttachedFile,
+  CommandResult,
   WorkflowRequest,
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
@@ -54,13 +56,7 @@ import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
-import {
-  findRepoRoot,
-  getDefaultRemote,
-  syncWorkspace,
-  toBranchName,
-  toRepoPath,
-} from '@archon/git';
+import { getDefaultRemote, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -2072,6 +2068,7 @@ export async function handleMessage(
     isolationHints,
     attachedFiles,
     actor,
+    workflowName,
   } = context;
   const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
@@ -2082,9 +2079,10 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
-    const parsed = trimmedMessage.startsWith('/')
-      ? commandHandler.parseCommand(message)
-      : undefined;
+    const parsed =
+      workflowName === undefined && trimmedMessage.startsWith('/')
+        ? commandHandler.parseCommand(message)
+        : undefined;
     if (parsed?.command === 'detach-project') {
       const reply = await handleDetachProject(
         platform,
@@ -2116,7 +2114,36 @@ export async function handleMessage(
       conversationId
     );
 
+    const deliverCommandResult = async (result: CommandResult): Promise<void> => {
+      await platform.sendMessage(conversationId, result.message);
+      if (!result.workflow) return;
+      await handleWorkflowRunCommand(
+        platform,
+        conversationId,
+        conversation,
+        result.workflow,
+        actor,
+        isolationHints,
+        {
+          // Declared inputs (#2554) arrive on the request context, not in the
+          // command text — the run route is the only caller that sets them.
+          inputs: context.workflowInputs,
+          modelOverrides: context.workflowModelOverrides,
+          runConfig: context.workflowRunConfig,
+          // Between-run continuation (#2747), same channel.
+          adoptRunId: context.workflowAdoptRunId,
+          supersedesRunId: context.workflowSupersedesRunId,
+        }
+      );
+    };
+
     // 2. Check for deterministic commands
+    if (workflowName !== undefined) {
+      await deliverCommandResult(
+        await commandHandler.startWorkflow(conversation, workflowName, message, false, platform)
+      );
+      return;
+    }
     if (parsed) {
       const { command } = parsed;
       const deterministicCommands = [
@@ -2166,29 +2193,9 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
-        await platform.sendMessage(conversationId, result.message);
-
-        if (result.workflow) {
-          await handleWorkflowRunCommand(
-            platform,
-            conversationId,
-            conversation,
-            result.workflow,
-            actor,
-            isolationHints,
-            {
-              // Declared inputs (#2554) arrive on the request context, not in the
-              // command text — the run route is the only caller that sets them.
-              inputs: context?.workflowInputs,
-              modelOverrides: context?.workflowModelOverrides,
-              runConfig: context?.workflowRunConfig,
-              // Between-run continuation (#2747), same channel.
-              adoptRunId: context?.workflowAdoptRunId,
-              supersedesRunId: context?.workflowSupersedesRunId,
-            }
-          );
-        }
+        await deliverCommandResult(
+          await commandHandler.handleCommand(conversation, message, actor, platform)
+        );
         return;
       }
     }
@@ -3538,16 +3545,11 @@ async function registerProject({
     return `Project "${projectName}" is already registered as a repo; cannot register it as a folder project.`;
   }
 
-  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
-    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
-    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
-  }
-
-  if (alreadyExists) {
+  if (alreadyExists && isAbsolute(alreadyExists.stored_default_cwd)) {
     return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
-  if (folder) {
+  if (folder && !alreadyExists) {
     try {
       const result = await registerFolder(canonicalPath, projectName);
       return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}
@@ -3559,19 +3561,28 @@ Kind: folder project (runs in place)`;
     }
   }
 
-  // Automatic detection retains the existing fallback on a git error, reported below.
-  let repoRoot: string | null = null;
-  let repoDetectFailed = false;
+  let kind: Codebase['kind'];
   try {
-    repoRoot = await findRepoRoot(canonicalPath);
+    kind = folder ? 'folder' : await detectProjectKind(canonicalPath);
   } catch (err) {
-    repoDetectFailed = true;
     getLog().warn(
       { err: err as Error, projectPath: canonicalPath },
       'project.register_repo_detect_failed'
     );
+    return toError(err).message;
   }
-  const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
+  if (alreadyExists) {
+    try {
+      await codebaseDb.repairCodebaseRegistration(alreadyExists.id, {
+        default_cwd: canonicalPath,
+        kind,
+      });
+    } catch (error) {
+      return `Could not repair project: ${toError(error).message}`;
+    }
+    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
+  }
+
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
@@ -3583,12 +3594,7 @@ Kind: folder project (runs in place)`;
     { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  let kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
-  if (repoDetectFailed) {
-    kindNote +=
-      '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +
-      'If this should be a git repo, resolve the error and re-register.';
-  }
+  const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
 }
 

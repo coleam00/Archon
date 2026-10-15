@@ -540,6 +540,14 @@ describe('codebases', () => {
       );
     });
 
+    test('generic updates ignore kind from a structurally wider input', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const input = { kind: 'folder' as const };
+      const target = { ...mockCodebase, default_branch: 'main', ...input };
+      await updateCodebase(mockCodebase, target);
+      expect(mockQuery.mock.calls[0]?.[0]).not.toContain('kind =');
+    });
+
     test('updates repository_url only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 

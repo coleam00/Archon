@@ -13,6 +13,8 @@ import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { ServerResumeOutcome, WorkflowResumeTarget } from './services/workflow-resume-service';
+import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
+import { clearConfigCache, loadConfig, toSafeConfig } from '@archon/core/config/config-loader';
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
@@ -184,6 +186,9 @@ mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
   getArchonEnvPath: (): string => '/tmp/.archon/.env',
   getPluginsPath: (): string => pluginsDir,
+  getArchonConfigPath: (): string => join(pluginsDir, 'config.yaml'),
+  getArchonWorkspacesPath: (): string => join(pluginsDir, 'workspaces'),
+  getArchonWorktreesPath: (): string => join(pluginsDir, 'worktrees'),
   createLogger: (): typeof logger => logger,
   logArchonPaths: (): void => undefined,
   validateAppDefaultsPaths: async (): Promise<void> => undefined,
@@ -194,32 +199,20 @@ mock.module('@archon/paths', () => ({
   getSourceWebDistDir: (): string => '/tmp/web-dist',
 }));
 
-class MockConversationLockManager {
-  constructor(_maxConcurrent: number) {}
-
-  async acquireLock(_conversationId: string, callback: () => Promise<void>): Promise<void> {
-    await callback();
-  }
-
-  getStats(): { active: number; queuedTotal: number; maxConcurrent: number } {
-    return { active: 0, queuedTotal: 0, maxConcurrent: 10 };
-  }
-}
-
 mock.module('@archon/core', () => ({
   handleMessage: async (): Promise<void> => undefined,
   pool: {
     query: async (): Promise<object> => ({}),
     end: async (): Promise<void> => undefined,
   },
-  ConversationLockManager: MockConversationLockManager,
+  ConversationLockManager,
   classifyAndFormatError: (error: unknown): string => String(error),
   startCleanupScheduler: (): void => {
     expect(retainsWorkspace('telegram')).toBe(true);
   },
   stopCleanupScheduler: (): void => undefined,
   getDbNotificationListener: (): null => null,
-  loadConfig: async (): Promise<{ botName: string }> => {
+  loadConfig: async () => {
     expect(mockRegisterHostProviders).toHaveBeenCalledTimes(1);
     expect(
       getRegisteredPlatformPolicies()
@@ -229,7 +222,7 @@ mock.module('@archon/core', () => ({
     expect(
       getRegisteredPlatformPolicies().find(policy => policy.id === 'slack')?.workspaceRetention
     ).toBe(expectedSlackRetention);
-    return { botName: 'Archon' };
+    return loadConfig();
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
@@ -244,9 +237,6 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
 }));
 mock.module('@archon/core/db/workflows', () => ({ getWorkflowRun: mockGetWorkflowRun }));
-mock.module('@archon/core/db/resource-starts', () => ({
-  hasStartReceiptForDelivery: async (): Promise<boolean> => false,
-}));
 mock.module('@archon/core/config/store-selection', () => ({
   loadStoreSelection: async (): Promise<'database'> => 'database',
 }));
@@ -356,7 +346,10 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
+const mockRegisterApiRoutes = mock(
+  (_app: unknown, _adapter: unknown, _lockManager: ConversationLockManager): void => undefined
+);
+mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
@@ -410,6 +403,8 @@ const envKeys = [
   'ARCHON_WEBHOOK_SOURCES',
   'ARCHON_PORT',
   'PORT',
+  'MAX_CONCURRENT_CONVERSATIONS',
+  'DEFAULT_AI_ASSISTANT',
   'CLAUDE_USE_GLOBAL_AUTH',
   'CODEX_ACCESS_TOKEN',
   'CODEX_ID_TOKEN',
@@ -461,6 +456,87 @@ afterAll(async () => {
       }
     }
   }
+});
+
+describe('server conversation admission configuration', () => {
+  test.each([
+    {
+      name: 'global YAML',
+      yaml: 'concurrency:\n  maxConversations: 3\n',
+      env: undefined,
+      limit: 3,
+    },
+    {
+      name: 'environment overrides YAML',
+      yaml: 'concurrency:\n  maxConversations: 3\n',
+      env: '5',
+      limit: 5,
+    },
+    {
+      name: 'invalid environment preserves YAML',
+      yaml: 'concurrency:\n  maxConversations: 3\n',
+      env: 'abc',
+      limit: 3,
+    },
+    { name: 'default', yaml: '', env: undefined, limit: 10 },
+    { name: 'environment only', yaml: '', env: '4', limit: 4 },
+    { name: 'invalid environment preserves default', yaml: '', env: 'abc', limit: 10 },
+    ...['-1', '1.5', 'abc', 'true', '{}', '[]', '.inf', '0', 'null', '.nan'].map(value => ({
+      name: `invalid global YAML ${value} preserves default`,
+      yaml: `concurrency:\n  maxConversations: ${value}\n`,
+      env: undefined,
+      limit: 10,
+    })),
+  ])('$name admits $limit conversations', async ({ yaml, env, limit }) => {
+    const configPath = join(pluginsDir, 'config.yaml');
+    await writeFile(configPath, yaml);
+    clearConfigCache();
+    if (env === undefined) delete process.env.MAX_CONCURRENT_CONVERSATIONS;
+    else process.env.MAX_CONCURRENT_CONVERSATIONS = env;
+    mockRegisterApiRoutes.mockClear();
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 43210,
+    })) as unknown as typeof Bun.serve);
+    const { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+    try {
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345, skipPlatformAdapters: true });
+      const manager = mockRegisterApiRoutes.mock.calls[0]?.[2];
+      if (!manager) throw new Error('Startup did not pass a lock manager to the API');
+      expect(manager.getStats().maxConcurrent).toBe(limit);
+      expect(manager.getStats().maxConcurrent).toBe(
+        toSafeConfig(await loadConfig()).concurrency.maxConversations
+      );
+      for (let i = 0; i < limit; i++) {
+        expect(await manager.acquireLock(`active-${i}`, () => blocked)).toEqual({
+          status: 'started',
+        });
+      }
+      expect(await manager.acquireLock('overflow', () => blocked)).toEqual({
+        status: 'queued-capacity',
+      });
+    } finally {
+      release();
+      serveSpy.mockRestore();
+      await unlink(configPath);
+      clearConfigCache();
+      delete process.env.MAX_CONCURRENT_CONVERSATIONS;
+    }
+  });
+
+  test('repository config cannot override server-wide conversation admission', async () => {
+    const repoPath = trackTempRoot(await mkdtemp(join(tmpdir(), 'server-conversation-repo-')));
+    await mkdir(join(repoPath, '.archon'));
+    await writeFile(join(repoPath, '.archon/config.yaml'), 'concurrency:\n  maxConversations: 1\n');
+    await writeFile(join(pluginsDir, 'config.yaml'), 'concurrency:\n  maxConversations: 3\n');
+    clearConfigCache();
+    try {
+      expect((await loadConfig(repoPath)).concurrency.maxConversations).toBe(3);
+    } finally {
+      await unlink(join(pluginsDir, 'config.yaml'));
+      clearConfigCache();
+    }
+  });
 });
 
 describe('Slack workflow resume composition', () => {

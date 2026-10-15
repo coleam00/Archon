@@ -7,7 +7,7 @@
  * disagree. Labels are data. The queue filters them by exact match and sorts them as
  * plain strings, and nothing here depends on who is asking.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   getRunArtifactsDirForRoot,
   getRunLogPathForRoot,

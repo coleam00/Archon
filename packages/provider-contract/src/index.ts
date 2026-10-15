@@ -114,6 +114,8 @@ export {
   type ProviderRegistration,
   type ProviderDescriptor,
   type ProviderRegistry,
+  assertProviderRegistrationAllowed,
+  hasValidProviderCapabilities,
   requireProvider,
   parseProviderRunModel,
 } from './registration';

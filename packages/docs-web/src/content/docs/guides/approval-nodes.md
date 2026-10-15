@@ -266,17 +266,15 @@ approval, context, and decision controls. Gates with authored decisions show
 only those decisions with the author's labels, including the label for `approve`
 when declared. Gates without authored decisions show **Continue**, which accepts
 an optional comment. **Reject** opens a feedback field and requires text before submission.
-When the gate continues execution, Web-dispatched and headless CLI runs can
-resume automatically; the gate's rejection rules can instead cancel the run.
+The server then continues the run on its own, on the platform that started it;
+the gate's rejection rules can instead cancel the run.
 
 **Reject with feedback**: the required, trimmed text is passed to the workflow as
 `$REJECTION_REASON`, available in the `on_reject.prompt`.
 
-**Cross-platform caveat**: Web-dispatched and headless CLI runs can auto-resume
-after a Web UI decision. A run with a Slack, Telegram, or GitHub parent records
-the decision but does not auto-resume. Use `archon workflow resume <run-id>` or
-resume it from the originating conversation to continue the same run. Container
-runs require the CLI resume command in the same project.
+**Container runs and gates paused before an upgrade**: a container run, or a gate
+that was already paused when you upgraded to this version, does not continue on its
+own after a Web UI decision. Run `archon workflow resume <run-id>` in the same project.
 
 ### REST API
 

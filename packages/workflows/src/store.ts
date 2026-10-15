@@ -25,6 +25,12 @@ import {
   type SerializedNodeEvent,
 } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
+import {
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
+  RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
+  type RunBudgetUsage,
+  type RunBudgetWorkUnitEvent,
+} from './run-budget';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
@@ -89,6 +95,11 @@ export interface DagResumeSnapshot {
   tokensUnknown?: boolean;
   /** Cumulative USD cost persisted by completed/failed attempts and abandoned deferred segments. */
   costUsd: number;
+  /**
+   * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
+   * from `costUsd`, which is telemetry and cannot tell unknown spend from none.
+   */
+  budget: RunBudgetUsage;
 }
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
@@ -228,9 +239,13 @@ export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   ...WORKTREE_SETUP_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
 ] as const;
 export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];
-export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNodeUsageEvent;
+export type DurableNodeEventInput =
+  | NodeStateEventInput
+  | SerializedDeferredNodeUsageEvent
+  | RunBudgetWorkUnitEvent;
 
 export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',
@@ -302,6 +317,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // conventional `$ARTIFACTS_DIR/evidence.json` marker was absent at completion.
   // Data carries the expected path; the legacy event name is a persisted contract.
   'evidence_validation_failed',
+  // #2814 — the run budget refused new work, or a spend-limited run's spend could
+  // not be measured. `data` carries the reason, refused node, limits and consumption.
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
   // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
   // executor at run start for EVERY run that has them, whatever surface started
   // it, so the record does not depend on a chat/console notification being
