@@ -120,7 +120,7 @@ describe('installCredentialHelper', () => {
     expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
     expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     // Registration still runs — every cloned worktree needs its own config entry.
-    expect(execSpy).toHaveBeenCalledTimes(4);
+    expect(execSpy).toHaveBeenCalledTimes(6);
     expect(execSpy).toHaveBeenCalledWith(
       'git',
       [
@@ -221,6 +221,41 @@ describe('installCredentialHelper', () => {
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') throw new Error('unreachable');
     expect(result.error.message).toBe('path config rejected');
+  });
+
+  test('returns failed when listing remote URLs fails', async () => {
+    execSpy.mockImplementation(async (_file, args) => {
+      if (args.includes('--get-regexp')) {
+        throw Object.assign(new Error('bad config file'), { code: 128 });
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await installCredentialHelper('/tmp/some-worktree');
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error.message).toBe('bad config file');
+  });
+
+  test('returns failed without the token when rewriting a remote URL fails', async () => {
+    const pat = 'ghp_stalePersonalAccessToken';
+    execSpy.mockImplementation(async (_file, args) => {
+      if (args.includes('--get-regexp')) {
+        return {
+          stdout: `remote.origin.url\nhttps://x-access-token:${pat}@github.com/owner/repo.git\0`,
+          stderr: '',
+        };
+      }
+      if (args.includes('--replace-all')) {
+        // Git's failure message repeats the command line.
+        throw new Error(`Command failed: git ${args.join(' ')}`);
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await installCredentialHelper('/tmp/some-worktree');
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error.message).toContain('https://github.com/owner/repo.git');
+    expect(result.error.message).not.toContain(pat);
   });
 
   test.skipIf(process.platform === 'win32' || skipCompiledBinaryTests())(
@@ -366,6 +401,69 @@ describe('installCredentialHelper', () => {
             body: { host: 'github.com', path: 'owner/repo' },
           },
         ]);
+      } finally {
+        server.stop(true);
+      }
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'replaces a PAT embedded in a GitHub remote URL with the installed helper',
+    async () => {
+      execSpy.mockRestore();
+      const repoPath = join(archonHome, 'repo');
+      const pat = 'stale-pat-token';
+      const run = (...args: string[]) =>
+        git.execFileAsync('git', ['-C', repoPath, ...args], { timeout: 5_000 });
+      await git.execFileAsync('git', ['init', repoPath], { timeout: 5_000 });
+      await run(
+        'remote',
+        'add',
+        'origin',
+        `https://x-access-token:${pat}@github.com/owner/repo.git`
+      );
+      await run(
+        'remote',
+        'set-url',
+        '--push',
+        'origin',
+        `https://${pat}@github.com/owner/repo.git`
+      );
+      await run('remote', 'add', 'mirror', 'https://user:other-forge@gitlab.com/owner/repo.git');
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch: () => Response.json({ token: 'loopback-test-token' }),
+      });
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          expect((await installCredentialHelper(repoPath)).kind).toBe('installed');
+          const { stdout: remotes } = await run('remote', '-v');
+          expect(remotes).toBe(
+            'mirror\thttps://user:other-forge@gitlab.com/owner/repo.git (fetch)\n' +
+              'mirror\thttps://user:other-forge@gitlab.com/owner/repo.git (push)\n' +
+              'origin\thttps://github.com/owner/repo.git (fetch)\n' +
+              'origin\thttps://github.com/owner/repo.git (push)\n'
+          );
+          const { stdout: config } = await run('config', '--local', '--list');
+          expect(config).not.toContain(pat);
+          // Git builds the credential request from the remote URL it fetches from.
+          const { stdout: pushUrl } = await run('remote', 'get-url', '--push', 'origin');
+          const { exitCode, stdout, stderr } = await runHelper(
+            ['git', '-C', repoPath, 'credential', 'fill'],
+            `url=${pushUrl.trim()}\n\n`,
+            {
+              ...process.env,
+              ARCHON_PORT: String(server.port),
+              GIT_CONFIG_GLOBAL: '/dev/null',
+              GIT_CONFIG_SYSTEM: '/dev/null',
+              GIT_TERMINAL_PROMPT: '0',
+            }
+          );
+          expect(exitCode, stderr).toBe(0);
+          expect(stdout).toContain('password=loopback-test-token\n');
+          expect(stdout).not.toContain(pat);
+        }
       } finally {
         server.stop(true);
       }

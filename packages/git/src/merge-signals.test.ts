@@ -25,7 +25,13 @@ const silentLogger = {
 };
 mock.module('@archon/paths', () => ({ createLogger: mock(() => silentLogger) }));
 
-import { isBranchMerged, isRevCoveredBy, isPatchEquivalent, localBranchExists } from './branch';
+import {
+  countCommitsMissingFromRemotes,
+  isBranchMerged,
+  isRevCoveredBy,
+  isPatchEquivalent,
+  localBranchExists,
+} from './branch';
 import { toBranchName, toRepoPath, toWorktreePath } from './types';
 
 const trackTempRoot = trackTempRoots();
@@ -167,6 +173,34 @@ describe('merge signals against real git', () => {
     await expect(
       isRevCoveredBy(toRepoPath(local), 'refs/heads/feature', unknown, 'origin')
     ).rejects.toThrow(`Failed to fetch PR head ${unknown} from origin`);
+  });
+
+  test('countCommitsMissingFromRemotes counts only commits no remote-tracking ref reaches', async () => {
+    const { local } = cloneWithRemoteFeature();
+    const repo = toRepoPath(local);
+
+    expect(await countCommitsMissingFromRemotes(repo, ['refs/heads/feature'])).toBe(0);
+    commit(local, 'two.txt', 'two\n');
+    expect(await countCommitsMissingFromRemotes(repo, ['refs/heads/feature'])).toBe(1);
+  });
+
+  test('countCommitsMissingFromRemotes sees a detached worktree HEAD no branch carries', async () => {
+    const { local } = cloneWithRemoteFeature();
+    const worktree = join(local, '..', 'detached');
+    git(local, 'worktree', 'add', '-q', '--detach', worktree, 'feature');
+    commit(worktree, 'detached.txt', 'detached\n');
+
+    expect(
+      await countCommitsMissingFromRemotes(toWorktreePath(worktree), ['HEAD', 'refs/heads/feature'])
+    ).toBe(1);
+  });
+
+  test('countCommitsMissingFromRemotes throws rather than reading an unknown rev as zero', async () => {
+    const { local } = cloneWithRemoteFeature();
+
+    await expect(
+      countCommitsMissingFromRemotes(toRepoPath(local), ['refs/heads/missing'])
+    ).rejects.toThrow('Failed to count unpushed commits');
   });
 });
 

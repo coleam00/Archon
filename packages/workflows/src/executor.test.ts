@@ -392,7 +392,10 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
+    getUserProviderCredentialStatus: mock(async () => ({
+      kind: 'api_key' as const,
+      status: { state: 'usable' as const, source: 'archon' as const },
+    })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,
@@ -6140,10 +6143,13 @@ describe('credential preflight lifecycle', () => {
       const deps = makeDeps(store);
       deps.isPerUserProviderKeysEnabled = () => true;
       const getStatus = mock(
-        async (): Promise<import('@archon/provider-contract').CredentialStatus> => ({
-          state: 'unusable',
-          source: 'archon',
-          evidence: 'stored credential unreadable',
+        async (): Promise<import('./deps').StoredProviderCredential> => ({
+          kind: 'api_key',
+          status: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'stored credential unreadable',
+          },
         })
       );
       deps.getUserProviderCredentialStatus = getStatus;
@@ -6176,6 +6182,40 @@ describe('credential preflight lifecycle', () => {
     }
   );
 
+  it('a Pi-only run with its own login neither refreshes nor delivers a stored Claude subscription', async () => {
+    const deps = makeDeps(makeStore());
+    deps.isPerUserProviderKeysEnabled = () => true;
+    deps.getUserProviderCredentialStatus = mock(
+      async () =>
+        ({
+          kind: 'oauth',
+          status: { state: 'unusable', source: 'archon', evidence: 'refresh token revoked' },
+        }) as const
+    );
+    deps.getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential: mock(async () => ({ state: 'usable', source: 'native' })),
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    const getUserProviderEnv = mock(async (): Promise<never> => {
+      throw new Error('delivery must not be asked for an unconsumed credential');
+    });
+    deps.getUserProviderEnv = getUserProviderEnv;
+    mockExecuteDagWorkflow.mockClear();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv',
+      '/tmp',
+      makeWorkflow({ provider: 'pi', model: 'anthropic/claude-sonnet-4-5' }),
+      'start',
+      { conversationId: 'db', userId: 'origin' },
+      {}
+    );
+    expect(result.success).toBe(true);
+    expect(getUserProviderEnv).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
@@ -6184,8 +6224,8 @@ describe('credential preflight lifecycle', () => {
     deps.getUserProviderCredentialStatus = mock(
       async () =>
         ({
-          state: 'usable',
-          source: 'archon',
+          kind: 'api_key',
+          status: { state: 'usable', source: 'archon' },
         }) as const
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {

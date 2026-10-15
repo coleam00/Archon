@@ -31,7 +31,7 @@ import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import { registerRepository, registerFolder } from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
@@ -1714,6 +1714,24 @@ async function resolveRunCodebase(
 }
 
 /**
+ * A resume continues in the run's own checkout. Cleanup removes a failed run's
+ * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
+ */
+function assertResumeWorkingPathExists(workingPath: string): void {
+  try {
+    statSync(workingPath);
+  } catch (error) {
+    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    throw new Error(
+      `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
+        'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
+    );
+  }
+}
+
+/**
  * Run a specific workflow
  */
 async function runWorkflowWithOwnedSource(
@@ -1764,6 +1782,12 @@ async function runWorkflowWithOwnedSource(
       // answer, and reports the codebase failure first. Nothing executes before it.
       resumeLookupError = error as Error;
     }
+  }
+
+  // Before anything reads the run's checkout: codebase resolution on a removed
+  // worktree fails with a raw git error that reads as a database fault.
+  if (options.resume === true && continuationRun?.working_path) {
+    assertResumeWorkingPathExists(continuationRun.working_path);
   }
 
   let continuation: ResolvedContinuation | undefined;
@@ -2847,15 +2871,8 @@ async function runWorkflowWithOwnedSource(
     // which calls backend.resumeEnv when `resumable.metadata.isolation` is
     // 'container'). Nothing to reject here anymore.
 
-    // Reuse the working path from the resumable run (verify it still exists)
+    // Reuse the working path from the resumable run (checked to exist above).
     if (resumable.working_path) {
-      const { existsSync } = await import('fs');
-      if (!existsSync(resumable.working_path)) {
-        throw new Error(
-          `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
-            'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-        );
-      }
       workingCwd = resumable.working_path;
     }
 
@@ -6132,15 +6149,17 @@ export async function workflowResumeCommand(
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
     await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
-      // The inline path below refuses a run with no recorded working path. Check it
-      // here too, on the run the precheck already holds (message copied verbatim):
-      // otherwise the parent acks success and the child throws where nobody reads it.
+      // The inline path below refuses a run with no recorded working path, or one
+      // whose checkout is gone. Check both here too, on the run the precheck already
+      // holds: otherwise the parent acks success and the child throws where nobody
+      // reads it.
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +
             'Cannot determine where to resume. The run may be too old.'
         );
       }
+      assertResumeWorkingPathExists(run.working_path);
       return run;
     });
     return;
