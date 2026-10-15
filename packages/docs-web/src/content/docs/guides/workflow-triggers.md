@@ -38,6 +38,40 @@ Disable the toggle to unsubscribe this browser. Expired subscriptions are remove
 
 Archon generates VAPID keys once in `ARCHON_HOME/web-push-vapid.json`, with owner-only file permissions. Preserve that file with the install's state: replacing it invalidates existing browser subscriptions. Browser vendors carry the encrypted minimal push payload; Archon needs outbound HTTPS access to their push services.
 
+## Get notified in chat
+
+An installed chat plugin that declares the `attentionNotices` capability can post to a
+channel when a run needs attention. Add a route to `~/.archon/config.yaml`; repository
+config cannot carry routes:
+
+```yaml
+attentionNotices:
+  - platform: slack
+    destination: C0123456789
+```
+
+`destination` is passed to the plugin unchanged; its meaning, such as a channel id, belongs
+to the plugin. Restart the server after changing routes. A route whose platform has no
+installed plugin, or whose plugin lacks the capability, is logged at startup and shows as
+`misconfigured` in `/api/health`; the server still starts.
+
+Each route receives one message per approval gate or `wait: attention` pause occurrence,
+across scans and server restarts, including runs started by the CLI or triggers. The message
+carries the gate's decisions or the wait's form and options, so the plugin can offer them as
+actions. A re-ask of the same gate is a new occurrence and gets a new message. A notified run
+gets one follow-up when it finishes, in the conversation the plugin returned for its notice.
+Runs started from a chat thread whose plugin renders run events are excluded: they already
+show in that thread. Archon sends before recording delivery, so a crash can cause a duplicate.
+
+A route records pauses that are already open as a baseline instead of sending them. Until the
+route has delivered or baselined anything, it baselines again at each startup, so a pause
+that opens while the server is down is not sent for a route that has never had a pause.
+
+Actions from chat go through the plugin's allowlist, its identity resolution and the same
+authorization as every surface: the run's starter or an admin may act. A chat member acts as
+the Archon user their platform identity resolves to; link it to your existing user with
+`archon user link <id> slack:U123` to act on runs you started elsewhere.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:
@@ -405,7 +439,7 @@ The final drain also advances queued work on ticks with no items. On CLI-only ho
 
 `--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
 
-An identical key and inputs reuse the original receipt and still drain the retained receipt's host. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
+An identical key and inputs reuse the original receipt and still drain the retained receipt's host, even if the binding's run-as user has since been removed. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
 
 ### Server host
 

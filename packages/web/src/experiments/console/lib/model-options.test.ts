@@ -24,13 +24,17 @@ import type {
   ProviderInfo,
 } from '../skills';
 
+/** Server-shaped row: a connection is consumed and the row usable unless the override says otherwise. */
 function cred(over: Partial<AgentCredentialStatus> & { vendor: string }): AgentCredentialStatus {
+  const connectionConsumed = over.connectionConsumed ?? (over.connected ?? null) !== null;
   return {
     displayName: over.vendor,
     kinds: ['api_key'],
     connected: null,
+    connectionConsumed,
     subscriptionAvailable: false,
     installEnv: false,
+    usable: connectionConsumed || over.installEnv === true || over.ambientConfigured === true,
     ...over,
   };
 }

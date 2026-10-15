@@ -2,12 +2,16 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
 
-export interface PackageManifest {
+const dependencySections = [
+  'dependencies',
+  'peerDependencies',
+  'devDependencies',
+  'optionalDependencies',
+] as const;
+
+export type PackageManifest = {
   path: string;
-  dependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-}
+} & Partial<Record<(typeof dependencySections)[number], Record<string, string>>>;
 
 export interface SourceFile {
   path: string;
@@ -42,20 +46,17 @@ function isTestFile(path: string): boolean {
   );
 }
 
-function importedPackages(file: SourceFile): { target: string; line: number }[] {
+function importedPackages(file: SourceFile): { specifier: string; line: number }[] {
   const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, true);
-  const imports: { target: string; line: number }[] = [];
+  const imports: { specifier: string; line: number }[] = [];
   const add = (specifier: ts.Node | undefined): void => {
     // Only literal specifiers name packages. Non-literal specifiers in this repo load
     // file paths (webhook plugins, deep SDK files), so they are not package edges.
     if (!specifier || !ts.isStringLiteralLike(specifier)) return;
-    const target = packageTarget(specifier.text);
-    if (target !== undefined) {
-      imports.push({
-        target,
-        line: source.getLineAndCharacterOfPosition(specifier.getStart(source)).line + 1,
-      });
-    }
+    imports.push({
+      specifier: specifier.text,
+      line: source.getLineAndCharacterOfPosition(specifier.getStart(source)).line + 1,
+    });
   };
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier);
@@ -92,6 +93,15 @@ export function findEdgeViolations(input: {
   const packages = new Map(
     input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
   );
+  const workflows = packages.get('workflows');
+  for (const field of dependencySections) {
+    if (workflows && '@hono/zod-openapi' in (workflows[field] ?? {})) {
+      violations.push({
+        file: workflows.path,
+        message: `workflows must not declare @hono/zod-openapi in ${field}; engine schemas use plain zod`,
+      });
+    }
+  }
   for (const file of input.files) {
     const path = normalizePath(file.path);
     const name = packageDirectory(path);
@@ -99,18 +109,30 @@ export function findEdgeViolations(input: {
     const manifest = packages.get(name);
     if (!manifest) continue;
     const test = isTestFile(path);
-    for (const { target, line } of importedPackages({ ...file, path })) {
-      if (target === name) continue;
-      const specifier = `@archon/${target}`;
+    for (const { specifier, line } of importedPackages({ ...file, path })) {
       if (
-        !(specifier in (manifest.dependencies ?? {})) &&
-        !(specifier in (manifest.peerDependencies ?? {})) &&
-        !(test && specifier in (manifest.devDependencies ?? {}))
+        (path.startsWith('packages/workflows/src/') ||
+          path === 'packages/core/src/schemas/user.ts') &&
+        (specifier === '@hono/zod-openapi' || specifier.startsWith('@hono/zod-openapi/'))
       ) {
         violations.push({
           file: file.path,
           line,
-          message: `${name} → ${specifier} is undeclared in ${test ? 'dependencies, peerDependencies or devDependencies' : 'dependencies or peerDependencies'}`,
+          message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
+        });
+      }
+      const target = packageTarget(specifier);
+      if (target === undefined || target === name) continue;
+      const workspaceSpecifier = `@archon/${target}`;
+      if (
+        !(workspaceSpecifier in (manifest.dependencies ?? {})) &&
+        !(workspaceSpecifier in (manifest.peerDependencies ?? {})) &&
+        !(test && workspaceSpecifier in (manifest.devDependencies ?? {}))
+      ) {
+        violations.push({
+          file: file.path,
+          line,
+          message: `${name} → ${workspaceSpecifier} is undeclared in ${test ? 'dependencies, peerDependencies or devDependencies' : 'dependencies or peerDependencies'}`,
         });
       }
     }

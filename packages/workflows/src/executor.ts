@@ -19,7 +19,7 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { hostname } from 'os';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import {
   MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   attentionAnswerLines,
@@ -96,7 +96,7 @@ import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
-import { validateWorkflowOutcomeDeclaration } from './loader';
+import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
 import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
 import { formatDeprecationNotice } from './deprecation';
 import { resolveWorkflowName } from './router';
@@ -111,6 +111,9 @@ import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
 export {
+  resolveRunSourceCapture,
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   recordSelectedWorkflow,
   capturedSourceRoots,
   loadWorkflowSource,
@@ -235,8 +238,10 @@ function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null
 
 type WorkflowGithubDeps = Pick<
   WorkflowDeps,
-  'resolveBotGitHubToken' | 'isPerUserGitHubEnabled' | 'getUserGithubToken' | 'getUserGithubAuthor'
+  'githubApp' | 'isPerUserGitHubEnabled' | 'getUserGithubToken' | 'getUserGithubAuthor'
 > & { store: Pick<WorkflowDeps['store'], 'getCodebase'> };
+
+type GithubApp = NonNullable<WorkflowDeps['githubApp']>;
 
 export async function resolveWorkflowGithubEnvironment(
   deps: WorkflowGithubDeps,
@@ -244,11 +249,19 @@ export async function resolveWorkflowGithubEnvironment(
   userId: string | undefined,
   environment: WorkflowEnvironment
 ): Promise<WorkflowEnvironment> {
-  const bot = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+  const installation = await resolveAppInstallationForWorkflow(deps, codebaseId);
+  const bot: Record<string, string> = installation
+    ? { GH_TOKEN: installation.token, GITHUB_TOKEN: installation.token }
+    : {};
   const user = await resolveUserGithubEnvForWorkflow(deps, userId);
+  // Only the App token is refreshed; a per-user token or scrub replaces it.
+  const ghShim =
+    installation && user.GH_TOKEN === undefined
+      ? resolveGithubCliShimEnv(installation, environment.envVars?.PATH)
+      : {};
   return {
     ...environment,
-    envVars: { ...environment.envVars, ...bot, ...user },
+    envVars: { ...environment.envVars, ...bot, ...ghShim, ...user },
     protectedEnvKeys: [
       ...new Set([
         ...(environment.protectedEnvKeys ?? []),
@@ -259,19 +272,54 @@ export async function resolveWorkflowGithubEnvironment(
   };
 }
 
-async function resolveBotGitHubEnvForWorkflow(
+async function resolveAppInstallationForWorkflow(
   deps: WorkflowGithubDeps,
   codebaseId: string | undefined
-): Promise<Record<string, string>> {
-  if (!codebaseId || !deps.resolveBotGitHubToken) return {};
+): Promise<{ token: string; repo: string; app: GithubApp } | undefined> {
+  const app = deps.githubApp;
+  if (!codebaseId || !app) return undefined;
   const codebase = await deps.store.getCodebase(codebaseId);
-  if (!codebase?.repository_url) return {};
+  if (!codebase?.repository_url) return undefined;
   const parsed = parseGithubRepoUrl(codebase.repository_url);
-  if (!parsed) return {};
-  const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+  if (!parsed) return undefined;
+  const token = await app.resolveInstallationToken(parsed.owner, parsed.repo);
   if (!token) throw new Error('GitHub App token resolution returned no installation token');
   getLog().debug({ owner: parsed.owner, repo: parsed.repo }, 'workflow.bot_github_token_injected');
-  return { GH_TOKEN: token, GITHUB_TOKEN: token };
+  return { token, repo: `${parsed.owner}/${parsed.repo}`, app };
+}
+
+/**
+ * Put the `gh` shim first on the run's PATH so each `gh` call gets a current
+ * installation token instead of the dispatch-time one, which can expire
+ * mid-run. The shim's only token source is the App-mode server's loopback
+ * endpoint, so a process without ARCHON_PORT (a standalone CLI run) keeps the
+ * dispatch token. Codex shells also keep it: Codex's shell snapshot restores a
+ * fixed PATH, and Archon does not override that provider setting. Windows keeps
+ * it too: the shim is a POSIX script, and Windows env keys are case-insensitive,
+ * so a PATH key here would sit beside the inherited `Path`.
+ */
+function resolveGithubCliShimEnv(
+  installation: { repo: string; app: GithubApp },
+  runPath: string | undefined
+): Record<string, string> {
+  const port = process.env.ARCHON_PORT;
+  if (process.platform === 'win32' || !port) {
+    getLog().warn(
+      {
+        repo: installation.repo,
+        reason: process.platform === 'win32' ? 'windows_unsupported' : 'archon_port_unset',
+      },
+      'workflow.gh_token_refresh_unavailable'
+    );
+    return {};
+  }
+  const basePath = runPath ?? process.env.PATH;
+  const shimDir = installation.app.installCliShim();
+  return {
+    PATH: basePath ? `${shimDir}${delimiter}${basePath}` : shimDir,
+    ARCHON_PORT: port,
+    ARCHON_GITHUB_APP_REPO: installation.repo,
+  };
 }
 
 /**
@@ -324,7 +372,7 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
  * bags when per-user provider keys are disabled, no userId is present, the
- * deps adapter is absent, or no vendor is required. Delivery and file-write
+ * deps adapter is absent, or preflight connected no vendor. Delivery and file-write
  * failures stop execution rather than falling back to ambient credentials.
  */
 async function resolveUserProviderEnvForWorkflow(
@@ -338,11 +386,13 @@ async function resolveUserProviderEnvForWorkflow(
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
     return { env: {}, protectedValues: [] };
   }
-  const vendors = [...new Set(requirements.flatMap(r => (r.vendor ? [r.vendor] : [])))];
+  // Only vendors preflight connected: a stored credential no node's provider consumes
+  // (a Claude subscription in a Pi-only run) is neither refreshed nor delivered.
+  const vendors = [...connectedVendors];
   if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;
   try {
-    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, [...connectedVendors]);
+    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, vendors);
   } catch (error) {
     if (error instanceof StoredCredentialDeliveryError) {
       const requirement = requirements.find(r => r.vendor === error.vendor);
@@ -923,14 +973,21 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    run.workflow_name,
-    workflows.map(w => w.workflow)
-  );
+  const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
+    const readErrors = errors.filter(error => error.errorType === 'read_error');
+    // Incomplete discovery cannot prove that the verified capture lacks the workflow.
+    if (readErrors.length > 0) {
+      throw new Error(
+        `Cannot continue run of '${run.workflow_name}': captured source discovery at ` +
+          `${capture.anchor.root} could not finish reading its workflows.`,
+        { cause: readErrors }
+      );
+    }
     throw new WorkflowSourceIntegrityError(
       `Cannot continue run of '${run.workflow_name}': its captured source at ` +
-        `${capture.anchor.root} no longer contains that workflow.`
+        `${capture.anchor.root} no longer contains that workflow.`,
+      capture.anchor.root
     );
   }
   return { workflow, roots, workflows, errors };
@@ -1929,6 +1986,10 @@ export async function executeWorkflow(
   const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
   if (outcomeDeclarationError !== null) {
     throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
+  }
+  const runBudgetShapeError = validateRunBudgetShape(workflow);
+  if (runBudgetShapeError !== null) {
+    throw new Error(`Invalid workflow '${workflow.name}': ${runBudgetShapeError}`);
   }
 
   const {

@@ -80,6 +80,8 @@ const receiptSchema = sourceReceiptInputSchema.extend({
 type Request = z.infer<typeof requestSchema>;
 const pathFor = (kind: string, key: string): string =>
   `resource/${kind}/${createHash('sha256').update(key).digest('hex')}.json`;
+const deliveryPathFor = (sourceInstanceId: string, deliveryId: string): string =>
+  pathFor('deliveries', JSON.stringify([sourceInstanceId, deliveryId]));
 function disposition(row: Request): ResourceStartDisposition {
   if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
   if ((row.status === 'queued' || row.status === 'skipped') && row.blocker)
@@ -352,10 +354,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
         const deliveryPath =
           input.receipt.deliveryId === null
             ? null
-            : pathFor(
-                'deliveries',
-                JSON.stringify([input.receipt.sourceInstanceId, input.receipt.deliveryId])
-              );
+            : deliveryPathFor(input.receipt.sourceInstanceId, input.receipt.deliveryId);
         const previousId = deliveryPath ? await tx.read(deliveryPath, z.string()) : null;
         const existing = await tx.receipt(input.receipt.id);
         if (existing || previousId) {
@@ -402,6 +401,11 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
         if (deliveryPath) tx.documents[deliveryPath] = row.id;
         return { receiptId: row.id, replay: false };
       }),
+    hasStartReceiptForDelivery: (sourceInstanceId, deliveryId) =>
+      query(
+        async tx =>
+          (await tx.read(deliveryPathFor(sourceInstanceId, deliveryId), z.string())) !== null
+      ),
     getStartReceipt: id =>
       query(async tx => {
         const row = await tx.receipt(id);

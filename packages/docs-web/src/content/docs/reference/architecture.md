@@ -429,9 +429,6 @@ export class YourAssistantProvider implements IAgentProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    // Declare only what you've actually wired. Under-declaration is honest;
-    // the dag-executor warns users if a workflow node uses a feature you
-    // declared unsupported.
     return YOUR_ASSISTANT_CAPABILITIES;
   }
 }
@@ -458,6 +455,8 @@ export function registerBuiltinProviders(): void {
   }
 }
 ```
+
+The registration's `capabilities` descriptor owns engine capability decisions. Declare only support the provider implements, and use the same capability constant for the registration and the provider's native `getCapabilities()` method. Registered factories return an adapter whose `getCapabilities()` reads the registration descriptor; changing only the native method does not change engine decisions. The adapter leaves the factory-owned object untouched and calls its execution and optional methods with their original receiver. Metadata reads do not instantiate providers.
 
 CLI and server call `registerHostProviders()` before loading config or workflows. It registers maintained providers over the process transport from their source plugin entries in source checkouts and Docker, loads them in release binaries only from installed provider receipts, admits installed provider receipts, registers OpenCode and Copilot in process, and initializes the credential catalog. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
 
@@ -922,7 +921,7 @@ supported.
 - `$BASE_BRANCH` - Base branch (from config or auto-detected)
 - `$DOCS_DIR` - Documentation directory path (configured, default `docs/`)
 - `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT` - GitHub issue/PR context (empty when unavailable)
-- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context (see the [Variables reference](/reference/variables/))
+- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context; the first two are deprecated with legacy gates (see the [Variables reference](/reference/variables/))
 
 **Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 

@@ -42,7 +42,11 @@ import type {
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { platformStreamingSchema, workflowContinuationConfigSchema } from './config-types';
+import {
+  attentionNoticeRoutesSchema,
+  platformStreamingSchema,
+  workflowContinuationConfigSchema,
+} from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -380,11 +384,44 @@ function validateStreamingConfig(parsed: unknown, configPath: string): void {
   parsed.streaming = result.data;
 }
 
+function validateAttentionNoticesConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.attentionNotices === undefined) return;
+  const result = attentionNoticeRoutesSchema.safeParse(parsed.attentionNotices);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `attentionNotices.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid attentionNotices config', configPath, issues);
+  }
+  parsed.attentionNotices = result.data;
+}
+
+function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
+  if (!isConfigRecord(parsed.concurrency)) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency' must be an object."
+    );
+  }
+  const limit = parsed.concurrency.maxConversations;
+  if (limit === undefined) return;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency.maxConversations' must be a finite positive integer."
+    );
+  }
+}
+
 /**
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
  * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
- * `streaming` or `workflows` block — is logged and the install falls back to defaults.
+ * `streaming`, `attentionNotices`, `concurrency` or `workflows` block — is logged and the
+ * install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -393,6 +430,8 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
     validateStreamingConfig(parsed, configPath);
+    validateAttentionNoticesConfig(parsed, configPath);
+    validateConversationConcurrencyConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
     const err = error as { code?: string };
@@ -451,11 +490,14 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
   return cleaned;
 }
 
-/** Read .archon/config.yaml, degrading to an empty config when it is missing or unreadable. */
-async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> {
+/** Missing config uses defaults; strict reads propagate all other failures. */
+async function readRepoConfig(configPath: string, strict = false): Promise<RepoConfig> {
   try {
     const content = await readConfigFile(configPath);
     const raw = parseYaml(content);
+    if (strict && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+      throw new Error(`Repository config must be a mapping: ${configPath}`);
+    }
     validateWorkflowContinuationConfig(raw, configPath);
     validateModelBindingConfig(raw, configPath);
     const parsed = (raw as RepoConfig | null) ?? {};
@@ -475,6 +517,7 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
       // File doesn't exist - expected, use defaults
       return {};
     }
+    if (strict) throw error;
     // Log specific error message based on error type
     logConfigError(configPath, error);
     return {};
@@ -486,11 +529,14 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
  * Returns empty object if no config found
  *
  * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults.
+ * other failure degrades to defaults unless `strict` is requested for a location check.
  */
-export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
+export async function loadRepoConfig(
+  repoPath: string,
+  options: { strict?: boolean } = {}
+): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
-  const parsed = await readRepoConfigOrDegrade(configPath);
+  const parsed = await readRepoConfig(configPath, options.strict);
   validateWorktreePostCreate(parsed.worktree);
   validateAssistantDefaults(parsed, configPath);
   return parsed;
@@ -519,6 +565,7 @@ function getDefaults(): MergedConfig {
     assistant: installed.length === 1 ? installed[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
+    attentionNotices: [],
     paths: {
       workspaces: getArchonWorkspacesPath(),
       worktrees: getArchonWorktreesPath(),
@@ -637,6 +684,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   if (global.streaming) {
     result.streaming = { ...result.streaming, ...global.streaming };
   }
+
+  if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
 
   // Path preferences
   if (global.paths) {
@@ -919,6 +968,8 @@ export async function updateGlobalConfig(
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateStreamingConfig(merged, configPath);
+    validateAttentionNoticesConfig(merged, configPath);
+    validateConversationConcurrencyConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write

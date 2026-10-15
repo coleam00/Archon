@@ -107,6 +107,9 @@
       "src/utils/detached-resume-receipt.test.ts"
     ],
     [
+      "src/utils/owned-run-termination.test.ts"
+    ],
+    [
       "src/telemetry-exit.integration.spec.ts"
     ],
     [
@@ -154,6 +157,9 @@
     ],
     [
       "src/commands/workflow-continuations.test.ts"
+    ],
+    [
+      "src/commands/workflow-continuation-source.test.ts"
     ],
     [
       "src/commands/workflow-wake.integration.spec.ts"

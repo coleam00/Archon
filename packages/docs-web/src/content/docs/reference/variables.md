@@ -29,8 +29,8 @@ They are also substituted in a node's **AI-configuration text** â€” `systemPromp
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
-| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
-| `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
+| `$LOOP_USER_INPUT` | **Deprecated.** Feedback from a deprecated interactive loop gate. Replacement: end a `loop_group` body in a `wait: attention` node and read `$LOOP_PREV.<wait-id>.output.text`; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
+| `$REJECTION_REASON` | **Deprecated.** The reason given when rejecting a deprecated `approval:` node. Replacement: a node with `when: "$<wait-id>.output.decision == 'reject'"` that reads `$<wait-id>.output.text`; see [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 | `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. In a body `when:`, it is a typed condition reference rather than text substitution. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 
@@ -319,8 +319,8 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context â€
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |
 | `$CONTEXT` / aliases | Yes | No | No |
-| `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No |
-| `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
+| `$LOOP_USER_INPUT` (deprecated) | Yes (loop nodes) | No | No |
+| `$REJECTION_REASON` (deprecated) | Yes (`on_reject` only) | No | No |
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | Yes (loop_group body nodes) |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
@@ -334,5 +334,10 @@ These are standard environment variables read from `process.env` at clone time. 
 | Variable | Description |
 |----------|-------------|
 | `GH_TOKEN` | GitHub personal access token for authenticated clone operations |
-| `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated GitLab clones |
-| `GITEA_TOKEN` | Gitea API token for authenticated Gitea/Forgejo clones |
+| `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated clones from `gitlab.com` or the `GITLAB_URL` host |
+| `GITEA_TOKEN` | Gitea API token for authenticated clones from `gitea.com` or the `GITEA_URL` or `FORGEJO_URL` host |
+| `GITLAB_URL` | Base URL of a self-hosted GitLab (e.g. `https://gitlab.example.com`). Clones from this exact host and port use `GITLAB_TOKEN` |
+| `GITEA_URL` | Base URL of a self-hosted Gitea. Clones from this exact host and port use `GITEA_TOKEN` |
+| `FORGEJO_URL` | Base URL of a self-hosted Forgejo. Clones from this exact host and port use `GITEA_TOKEN` |
+
+A forge token is sent only to the host it is configured for. A hostname that merely contains `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.

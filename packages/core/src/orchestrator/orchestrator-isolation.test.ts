@@ -603,9 +603,8 @@ describe('dispatchBackgroundWorkflow', () => {
       ...original,
       isPerUserProviderKeysEnabled: () => true,
       getUserProviderCredentialStatus: async () => ({
-        state: 'unusable',
-        source: 'archon',
-        evidence: 'cannot read',
+        kind: 'api_key',
+        status: { state: 'unusable', source: 'archon', evidence: 'cannot read' },
       }),
     }));
     try {

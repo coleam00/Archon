@@ -7,7 +7,11 @@ import type { ResolvedWorkflowPolicy } from './schemas/run-config';
  *
  * Provider types are imported directly from @archon/provider-contract.
  */
-import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
+import type {
+  CredentialStatus,
+  ProviderRegistry,
+  StoredCredentialKind,
+} from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type { AttentionOption } from './schemas/dag-node';
@@ -207,6 +211,12 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // WorkflowDeps — the single injection point
 // ---------------------------------------------------------------------------
 
+/** A stored credential: how it was connected, and whether it can be used now. */
+export interface StoredProviderCredential {
+  kind: StoredCredentialKind;
+  status: CredentialStatus;
+}
+
 export interface WorkflowDeps {
   providers: ProviderRegistry;
   store: IWorkflowStore;
@@ -220,21 +230,25 @@ export interface WorkflowDeps {
   /** Restore a previously sealed run-owned config layer during continuation. */
   unsealRunConfig?: (metadata: WorkflowRunConfigMetadata) => WorkflowRunConfigLayer;
   /**
-   * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
-   * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so
-   * AI-driven `gh` and `git push` operations inside worktrees authenticate
-   * correctly.
-   *
-   *  - App mode (host registered a provider): returns a fresh
-   *    installation access token, refreshed transparently from the cache.
-   *  - PAT mode / not configured: this resolver is absent. The subprocess inherits
-   *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
-   *    behaviour), so solo installs see zero functional change.
-   *
-   * A registered App provider must throw on resolution failure so execution
-   * fails before a node can use another credential.
+   * Optional: GitHub App mode. Absent in PAT mode / when not configured: the
+   * subprocess inherits whatever GITHUB_TOKEN already lives on `process.env`
+   * (the legacy behaviour), so solo installs see zero functional change.
    */
-  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string>;
+  githubApp?: {
+    /**
+     * Resolve an installation token for (owner, repo), refreshed transparently
+     * from the cache. Injected as GH_TOKEN/GITHUB_TOKEN so `gh` and `git push`
+     * inside worktrees authenticate. Must throw on resolution failure so
+     * execution fails before a node can use another credential.
+     */
+    resolveInstallationToken: (owner: string, repo: string) => Promise<string>;
+    /**
+     * Install the `gh` shim that fetches a current installation token per call
+     * from the server's loopback endpoint; returns the directory to put first
+     * on PATH. Throws when installation fails.
+     */
+    installCliShim: () => string;
+  };
   /**
    * Optional: resolve the originating user's personal GitHub token (decrypted,
    * refreshed on read). Used by the per-user token policy to route a run's
@@ -260,6 +274,11 @@ export interface WorkflowDeps {
   isPerUserProviderKeysEnabled?: () => boolean;
   /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
   credentialStore?: WorkflowStoreKind;
+  /** The user's stored credential for `vendor`, or `undefined` when none is stored. */
+  getUserProviderCredentialStatus?: (
+    userId: string,
+    vendor: string
+  ) => Promise<StoredProviderCredential | undefined>;
   /**
    * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the
@@ -271,7 +290,6 @@ export interface WorkflowDeps {
    * Vendors selected as connected during preflight must remain connected at
    * delivery. Failures must throw to prevent fallback to another account.
    */
-  getUserProviderCredentialStatus?: (userId: string, vendor: string) => Promise<CredentialStatus>;
   getUserProviderEnv?: (
     userId: string,
     artifactsDir: string,

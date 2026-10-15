@@ -5,6 +5,7 @@ import { descriptor } from './descriptor';
 
 const [mode, file] = process.argv.slice(2);
 if (file) appendFileSync(file, `${String(process.pid)}\n`);
+let notices = 0;
 if (mode === 'slow-bootstrap') await new Promise(resolve => setTimeout(resolve, 600));
 await serveChat({
   descriptor: mode === 'mismatch' ? { ...descriptor, version: '2' } : descriptor,
@@ -42,5 +43,9 @@ await serveChat({
   },
   async onRunEvent(): Promise<void> {
     return undefined;
+  },
+  async attentionNotice(params) {
+    if (mode === 'attention') appendFileSync(file, `${JSON.stringify(params)}\n`);
+    return { conversationId: `thread-${String(++notices)}` };
   },
 });
