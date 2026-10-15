@@ -10,7 +10,6 @@ import { join } from 'path';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
-  parseQualifiedPr,
   type PrRecord,
   type QualifiedPr,
   type MergeRequest,
@@ -25,6 +24,7 @@ import {
   forgePrRecordSchema,
   type ForgePrRecord,
 } from '../../../packages/forge/src/lifecycle';
+import { parseReviewTarget } from '../../workflows/sdlc/.shared/review-target';
 import { CLOSE_REASONS } from '../../workflows/sdlc/.shared/issue';
 
 // The pack is standalone and cannot import runtime packages. These assignments
@@ -62,52 +62,50 @@ test('every reason the pack closes an issue with is a forge close reason', () =>
   for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
 });
 
-// head-check's output schema must admit exactly what publish's parseQualifiedPr
-// accepts, so a PR head-check certifies is one publication can write to.
-test("archon-review's head-check pr schema admits exactly what parseQualifiedPr accepts", () => {
+test('review target schema conforms to the pack parser', () => {
   const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
   const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
-  const check = parsed.workflow.nodes.find(node => node.id === 'head-check');
-  if (check === undefined || !('output_format' in check) || check.output_format === undefined) {
-    throw new Error('archon-review has no head-check node with an output_format');
-  }
-  const schema = check.output_format;
-
-  const repo = { host: 'github.com', path: 'coleam00/Archon' };
-  const candidates = [
-    { repo, number: 1 },
-    { repo, number: 0 },
-    { repo, number: -3 },
-    { repo: { ...repo, host: '' }, number: 1 },
-    { repo: { ...repo, host: '  ' }, number: 1 },
-    { repo: { ...repo, path: '' }, number: 1 },
-    { repo: { ...repo, path: '\t' }, number: 1 },
-  ];
-  const base = 'dev';
-  expect(
-    validateStructuredOutput({ pr: null, base: null, head: 'head', merge_base: null }, schema).valid
-  ).toBe(true);
-  const verdicts = candidates.map(pr => {
-    let parserAccepts = true;
-    try {
-      parseQualifiedPr(JSON.stringify(pr));
-    } catch {
-      parserAccepts = false;
+  const node = parsed.workflow.nodes.find(node => node.id === 'head-check');
+  if (node?.kind !== 'exec' || !node.output_format) throw new Error('missing target schema');
+  const pr = { repo: { host: 'github.com', path: 'owner/repo' }, number: 1 };
+  const sha = 'a'.repeat(40);
+  const valid = { pr, base: 'dev', head: sha, merge_base: sha };
+  const cases: unknown[] = [];
+  for (const identity of [null, pr]) {
+    for (const base of [null, 'dev']) {
+      for (const merge_base of [null, sha]) {
+        cases.push({ pr: identity, base, head: sha, merge_base });
+      }
     }
-    return {
-      pr,
-      parserAccepts,
-      schemaAccepts: validateStructuredOutput(
-        { pr, base, head: 'head', merge_base: 'a'.repeat(40) },
-        schema
-      ).valid,
-    };
-  });
-
-  expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
-  // Guard against a vacuous match: the parser must accept the qualified PR.
-  expect(verdicts[0].parserAccepts).toBe(true);
+  }
+  cases.push(
+    { ...valid, head: '   ' },
+    { ...valid, base: '   ' },
+    { ...valid, merge_base: 'invalid' },
+    { ...valid, merge_base: 'a'.repeat(64) },
+    { ...valid, pr: { ...pr, number: 0 } },
+    { ...valid, pr: { ...pr, number: -3 } },
+    { ...valid, pr: { ...pr, repo: { host: '', path: 'owner/repo' } } },
+    { ...valid, pr: { ...pr, repo: { host: 'github.com', path: '' } } },
+    { ...valid, pr: { ...pr, repo: { host: ' ', path: 'owner/repo' } } },
+    { ...valid, pr: { ...pr, repo: { host: 'github.com', path: ' ' } } },
+    { head: sha },
+    null
+  );
+  expect(parseReviewTarget(JSON.stringify(valid))).toEqual(valid);
+  for (const target of cases) {
+    let accepted = true;
+    try {
+      parseReviewTarget(JSON.stringify(target));
+    } catch {
+      accepted = false;
+    }
+    expect({
+      target,
+      valid: validateStructuredOutput({ target }, node.output_format).valid,
+    }).toEqual({ target, valid: accepted });
+  }
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {
