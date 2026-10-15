@@ -9,6 +9,10 @@ const dependencySections = [
   'optionalDependencies',
 ] as const;
 
+const runtimeDependencySections = dependencySections.filter(
+  section => section !== 'devDependencies'
+);
+
 export type PackageManifest = {
   path: string;
 } & Partial<Record<(typeof dependencySections)[number], Record<string, string>>>;
@@ -23,6 +27,75 @@ export interface Violation {
   line?: number;
   message: string;
 }
+
+export type Layering = Readonly<
+  Record<string, { runtime: readonly string[]; test?: readonly string[] }>
+>;
+
+/**
+ * The allowed `@archon/*` edges between workspace packages. `runtime` must equal the declared
+ * `dependencies`, `peerDependencies` and `optionalDependencies`; `test` lists the extra
+ * `devDependencies` only tests may import. Adding an edge means editing this table.
+ */
+export const PACKAGE_LAYERING: Layering = {
+  paths: { runtime: [] },
+  'provider-contract': { runtime: [] },
+  'chat-contract': { runtime: ['provider-contract'] },
+  'plugin-manifest': { runtime: ['chat-contract', 'paths', 'provider-contract'] },
+  git: { runtime: ['paths'] },
+  forge: { runtime: ['paths'] },
+  providers: { runtime: ['paths', 'provider-contract'] },
+  workflows: {
+    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract'],
+    test: ['providers'],
+  },
+  isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },
+  core: {
+    runtime: [
+      'chat-contract',
+      'git',
+      'isolation',
+      'paths',
+      'plugin-manifest',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
+  adapters: {
+    runtime: ['core', 'forge', 'git', 'isolation', 'paths', 'providers', 'workflows'],
+  },
+  'chat-slack': { runtime: ['chat-contract'] },
+  server: {
+    runtime: [
+      'adapters',
+      'chat-contract',
+      'core',
+      'git',
+      'paths',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
+  cli: {
+    runtime: [
+      'adapters',
+      'chat-contract',
+      'core',
+      'forge',
+      'git',
+      'isolation',
+      'paths',
+      'plugin-manifest',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
+  web: { runtime: [] },
+  'docs-web': { runtime: ['plugin-manifest'] },
+};
 
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/');
@@ -109,6 +182,10 @@ export function findEdgeViolations(input: {
     const manifest = packages.get(name);
     if (!manifest) continue;
     const test = isTestFile(path);
+    const declared = declaredArchonPackages(
+      manifest,
+      test ? dependencySections : runtimeDependencySections
+    );
     for (const { specifier, line } of importedPackages({ ...file, path })) {
       if (
         (path.startsWith('packages/workflows/src/') ||
@@ -124,17 +201,84 @@ export function findEdgeViolations(input: {
       const target = packageTarget(specifier);
       if (target === undefined || target === name) continue;
       const workspaceSpecifier = `@archon/${target}`;
-      if (
-        !(workspaceSpecifier in (manifest.dependencies ?? {})) &&
-        !(workspaceSpecifier in (manifest.peerDependencies ?? {})) &&
-        !(test && workspaceSpecifier in (manifest.devDependencies ?? {}))
-      ) {
+      if (!declared.has(target)) {
         violations.push({
           file: file.path,
           line,
-          message: `${name} → ${workspaceSpecifier} is undeclared in ${test ? 'dependencies, peerDependencies or devDependencies' : 'dependencies or peerDependencies'}`,
+          message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
         });
       }
+    }
+  }
+  return violations;
+}
+
+function declaredArchonPackages(
+  manifest: PackageManifest,
+  sections: readonly (typeof dependencySections)[number][]
+): Set<string> {
+  const names = new Set<string>();
+  for (const section of sections) {
+    for (const specifier of Object.keys(manifest[section] ?? {})) {
+      const target = packageTarget(specifier);
+      if (target !== undefined) names.add(target);
+    }
+  }
+  return names;
+}
+
+function sameNames(declared: ReadonlySet<string>, allowed: readonly string[]): boolean {
+  return declared.size === allowed.length && allowed.every(name => declared.has(name));
+}
+
+function listNames(names: Iterable<string>): string {
+  const sorted = [...names].sort();
+  return sorted.length === 0 ? 'none' : sorted.join(', ');
+}
+
+/** Every workspace package declares exactly the `@archon/*` edges its layering row allows. */
+export function findLayeringViolations(
+  packages: readonly PackageManifest[],
+  layering: Layering = PACKAGE_LAYERING
+): Violation[] {
+  const violations: Violation[] = [];
+  const present = new Set<string>();
+  for (const manifest of packages) {
+    const name = packageDirectory(manifest.path);
+    if (name === undefined) continue;
+    present.add(name);
+    const row = Object.hasOwn(layering, name) ? layering[name] : undefined;
+    if (row === undefined) {
+      violations.push({
+        file: manifest.path,
+        message: `${name} has no row in PACKAGE_LAYERING (scripts/check-package-edges.ts)`,
+      });
+      continue;
+    }
+    const runtime = declaredArchonPackages(manifest, runtimeDependencySections);
+    if (!sameNames(runtime, row.runtime)) {
+      violations.push({
+        file: manifest.path,
+        message: `${name} declares @archon runtime dependencies [${listNames(runtime)}]; the layering allows [${listNames(row.runtime)}]`,
+      });
+    }
+    const testOnly = new Set(
+      [...declaredArchonPackages(manifest, ['devDependencies'])].filter(dep => !runtime.has(dep))
+    );
+    const allowedTest = row.test ?? [];
+    if (!sameNames(testOnly, allowedTest)) {
+      violations.push({
+        file: manifest.path,
+        message: `${name} declares test-only @archon devDependencies [${listNames(testOnly)}]; the layering allows [${listNames(allowedTest)}]`,
+      });
+    }
+  }
+  for (const name of Object.keys(layering)) {
+    if (!present.has(name)) {
+      violations.push({
+        file: 'scripts/check-package-edges.ts',
+        message: `PACKAGE_LAYERING has a row for ${name}, which is not a workspace package`,
+      });
     }
   }
   return violations;
@@ -176,7 +320,11 @@ export function loadRepository(root = resolve(import.meta.dir, '..')): {
 }
 
 if (import.meta.main) {
-  const violations = findEdgeViolations(loadRepository());
+  const repository = loadRepository();
+  const violations = [
+    ...findLayeringViolations(repository.packages),
+    ...findEdgeViolations(repository),
+  ];
   for (const violation of violations) {
     console.error(
       `${violation.file}${violation.line === undefined ? '' : `:${String(violation.line)}`}: ${violation.message}`
