@@ -1,0 +1,11 @@
+# The review rejects the draft: the run cancels and nothing is posted. `post`
+# has no stub, so the fixture fails if it is reached.
+classify: { route: investigate, reason: "stub: regression with a stack trace" }
+investigate: { comment: "stub: the cause is the null check in parser.ts" }
+review: { decision: reject, text: "wrong file" }
+fixture:
+  expect: cancelled
+  reached: [review, drop]
+  inputs:
+    repository: acme/widgets
+    issue_number: "44"

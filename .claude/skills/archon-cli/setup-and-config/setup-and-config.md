@@ -64,7 +64,7 @@ The wizard composes these, which also work standalone:
 ```bash
 archon ai list                      # which providers are connected
 archon ai key set anthropic        # API key (prompt/stdin) — anthropic, openai, ...
-archon ai login anthropic          # Claude Pro/Max subscription
+archon ai login anthropic          # Claude Pro/Max subscription (Claude provider only)
 archon ai login openai             # ChatGPT/Codex subscription
 archon ai login github-copilot     # GitHub Copilot subscription
 archon auth github                  # GitHub identity via device flow

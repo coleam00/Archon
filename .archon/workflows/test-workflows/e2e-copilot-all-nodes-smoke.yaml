@@ -3,7 +3,7 @@
 #   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
 #   (DAG features) + Copilot-specific options: effort, allowed_tools,
 #   output_format (best-effort JSON via prompt augment + 2-tier parser).
-# Skipped: `approval:` — pauses for human input, incompatible with CI.
+# Skipped: `wait: attention` — pauses until answered, incompatible with CI.
 # Auth: `gh auth login` OR `COPILOT_GITHUB_TOKEN`.
 #   To use `GH_TOKEN` / `GITHUB_TOKEN`, also set `assistantConfig.useLoggedInUser: false`.
 #   Requires an active GitHub Copilot subscription.

@@ -41,6 +41,8 @@ nodes:
   - id: prepare
     command: pr
     depends_on: [forge]
+    with:
+      source: "$forge.output.source"
     output_type: pull-request-intent
     output_format:
       type: object

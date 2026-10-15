@@ -262,7 +262,7 @@ When you send a message, an AI "router" decides what to do:
 │                                       │                                 │
 │                                       ▼                                 │
 │                    ┌─────────────────────────────────────┐             │
-│                    │ /invoke-workflow archon-ship        │             │
+│                    │ invoke_workflow: archon-ship        │             │
 │                    └─────────────────────────────────────┘             │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
