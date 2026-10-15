@@ -35,7 +35,17 @@ import type { WebAdapter } from '../adapters/web';
 import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
-import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
+import {
+  rm,
+  rmdir,
+  readFile,
+  writeFile,
+  unlink,
+  mkdir,
+  readdir,
+  realpath,
+  stat,
+} from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -2867,17 +2877,15 @@ export function registerApiRoutes(
               }
             });
           }
-          // Remove the now-empty upload directory for this conversation.
-          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                  'upload.dir_cleanup_failed'
-                );
-              }
+          // Other requests can already have uploads here while waiting for this lock.
+          await rmdir(filesToCleanup.uploadDir).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT' && err.code !== 'ENOTEMPTY' && err.code !== 'EEXIST') {
+              getLog().warn(
+                { err, uploadDir: filesToCleanup.uploadDir, conversationId },
+                'upload.dir_cleanup_failed'
+              );
             }
-          );
+          });
         }
       }
     });

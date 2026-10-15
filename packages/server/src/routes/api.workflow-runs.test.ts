@@ -24,7 +24,8 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import type { ConversationLockManager, RunActor, User } from '@archon/core';
+import type { RunActor, User } from '@archon/core';
+import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
@@ -662,7 +663,10 @@ const MOCK_CONV = {
   codebase_id: null,
 };
 
-function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(lockManager?: ConversationLockManager): {
+  app: OpenAPIHono;
+  mockWebAdapter: WebAdapter;
+} {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
@@ -676,7 +680,7 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager);
   return { app, mockWebAdapter };
 }
 
@@ -870,6 +874,79 @@ describe('POST /api/workflows/:name/run', () => {
       await removeTempTree(home);
     }
   });
+
+  for (const firstIngress of ['message', 'workflow'] as const) {
+    for (const queuedIngress of ['message', 'workflow'] as const) {
+      test(`preserves queued ${queuedIngress} uploads after ${firstIngress} cleanup`, async () => {
+        const originalHome = mockArchonHome;
+        const home = await mkdtemp(join(tmpdir(), 'archon-queued-uploads-'));
+        mockArchonHome = home;
+        const lockManager = new ConversationLockManager();
+        const waitForIdle = async () => {
+          const deadline = Date.now() + 5000;
+          while (lockManager.getStats().active > 0 && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+          }
+          expect(lockManager.getStats().active).toBe(0);
+        };
+        const releaseFirst = Promise.withResolvers<void>();
+        const releaseQueued = Promise.withResolvers<void>();
+        const queuedRead = Promise.withResolvers<string>();
+        const paths: string[] = [];
+        mockFindConversationByPlatformId.mockResolvedValue(MOCK_CONV);
+        mockHandleMessage.mockImplementation(async (_adapter, _id, message, context) => {
+          const file = context.attachedFiles?.[0];
+          if (!file) throw new Error('Expected an attachment');
+          paths.push(file.path);
+          if (message === 'first') {
+            await releaseFirst.promise;
+          } else {
+            try {
+              queuedRead.resolve(await fsPromises.readFile(file.path, 'utf8'));
+            } catch (error) {
+              queuedRead.reject(error);
+            }
+            await releaseQueued.promise;
+          }
+        });
+        try {
+          const { app } = makeApp(lockManager);
+          const send = (ingress: 'message' | 'workflow', message: string) => {
+            const form = new FormData();
+            form.set('conversationId', 'web-test-abc');
+            form.set('message', message);
+            form.set('files', new File([message], 'request.txt', { type: 'text/plain' }));
+            return app.request(
+              ingress === 'message'
+                ? '/api/conversations/web-test-abc/message'
+                : '/api/workflows/deploy/run',
+              { method: 'POST', body: form }
+            );
+          };
+          const first = await send(firstIngress, 'first');
+          expect(await first.json()).toEqual({ accepted: true, status: 'started' });
+          const queued = await send(queuedIngress, 'queued');
+          expect(await queued.json()).toEqual({ accepted: true, status: 'queued-conversation' });
+          const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
+          expect(await fsPromises.readdir(uploadDir)).toHaveLength(2);
+          releaseFirst.resolve();
+          expect(await queuedRead.promise).toBe('queued');
+          expect(paths).toHaveLength(2);
+          expect(await Bun.file(paths[0] ?? '').exists()).toBe(false);
+          expect(await fsPromises.readdir(uploadDir)).toHaveLength(1);
+          releaseQueued.resolve();
+          await waitForIdle();
+          expect(await fsPromises.stat(uploadDir).catch(error => error.code)).toBe('ENOENT');
+        } finally {
+          releaseFirst.resolve();
+          releaseQueued.resolve();
+          await waitForIdle();
+          mockArchonHome = originalHome;
+          await removeTempTree(home);
+        }
+      });
+    }
+  }
 
   test('fires title generation for conversations without title', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
