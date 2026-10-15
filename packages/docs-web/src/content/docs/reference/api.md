@@ -305,7 +305,6 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
 | POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
 | POST | `/api/workflows/runs/{runId}/signal` | Signal the exact external event occurrence awaited by a paused run |
-
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
@@ -431,7 +430,6 @@ the answer write. Omitting `expectedGate` answers the current gate as before;
 `comment` and `reason` remain optional, and a request without a body is supported.
 
 These routes record the decision and return. The server's continuation scheduler then continues the run on the platform that started it, whichever surface answered; a container run, or a gate that was already paused when you upgraded to this version, is the exception and needs `archon workflow resume <run-id>`. The response message says which applies.
-
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id (a fan-out parent's error names every child it waits on). `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
 
