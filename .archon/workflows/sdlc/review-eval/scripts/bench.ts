@@ -673,8 +673,6 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion, judgin
         const itemDir = join(outDir, 'items', runId);
         const item = collectItem(run, itemDir);
         writeItem(itemDir, {
-          case: bench.id,
-          variant,
           defects: bench.variants.find(entry => entry.id === variant)?.defects ?? [],
           known_defects: bench.known_defects,
           lenses: Object.fromEntries(item.lenses.map(lens => [lens, lensFile(lens)])),
@@ -725,7 +723,6 @@ export interface JudgedDefect {
   readonly id: string;
   readonly caught_by: readonly string[];
   readonly finding: string | null;
-  readonly excerpt: string | null;
   readonly evidence: string;
 }
 
@@ -757,10 +754,9 @@ export function validateJudgement(value: unknown, item: ItemRecord, findings: re
       typeof entry.id !== 'string' ||
       !textList(entry.caught_by) ||
       !nullableText(entry.finding) ||
-      !nullableText(entry.excerpt) ||
       typeof entry.evidence !== 'string'
     ) {
-      problems.push('an entry is not {id, caught_by, finding, excerpt, evidence}');
+      problems.push('an entry is not {id, caught_by, finding, evidence}');
       continue;
     }
     const { id, caught_by: caughtBy, finding } = entry;
@@ -768,7 +764,7 @@ export function validateJudgement(value: unknown, item: ItemRecord, findings: re
     else if (judged.some(defect => defect.id === id)) problems.push(`defect ${id} is judged twice`);
     for (const lens of caughtBy) if (!lenses.includes(lens)) problems.push(`defect ${id}: lens ${lens} left no output in this sample`);
     if (finding !== null && !findingIds.has(finding)) problems.push(`defect ${id}: ${FINDINGS_FILE} has no finding ${finding}`);
-    judged.push({ id, caught_by: caughtBy, finding, excerpt: entry.excerpt, evidence: entry.evidence });
+    judged.push({ id, caught_by: caughtBy, finding, evidence: entry.evidence });
   }
   const missing = expected.filter(id => !judged.some(defect => defect.id === id));
   if (missing.length > 0) problems.push(`not judged: ${missing.join(', ')}`);
@@ -968,7 +964,6 @@ function defectRows(id: string): [string, (sample: BatchSample) => string][] {
   return [
     ['Caught by', ifJudged((_, defect) => defect.caught_by.join(', ') || 'none')],
     ['Finding', ifJudged(finding)],
-    ['Lens excerpt', ifJudged((_, defect) => defect.excerpt ?? '')],
     ['Evidence', ifJudged((_, defect) => defect.evidence)],
   ];
 }

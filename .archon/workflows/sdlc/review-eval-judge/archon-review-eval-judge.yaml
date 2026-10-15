@@ -49,8 +49,6 @@ nodes:
         lens caught the defect.
       - `finding` is the `id` of the findings.json record that states the defect, or
         null when none does.
-      - `excerpt` quotes, word for word, the sentence of a catching lens that states the
-        mechanism; null when no lens caught it.
       - `evidence` is one sentence saying why. For a borderline case, say what made it
         borderline and which way you decided.
       - Judge every planted and known defect exactly once, by its `id`.
@@ -69,8 +67,7 @@ nodes:
               id: { type: string }
               caught_by: { type: array, items: { type: string } }
               finding: { type: [string, 'null'] }
-              excerpt: { type: [string, 'null'] }
               evidence: { type: string }
-            required: [id, caught_by, finding, excerpt, evidence]
+            required: [id, caught_by, finding, evidence]
         shape_unmatched: { type: integer, minimum: 0 }
       required: [defects, shape_unmatched]

@@ -524,7 +524,6 @@ describe('saved review evidence', () => {
   function savedItem() {
     const dir = track(mkdtempSync(join(tmpdir(), 'archon-reader-')));
     const item: ItemRecord = {
-      case: 'counting', variant: 'v1',
       defects: [{ id: 'D1', class: 'wrong_behaviour', owner: 'code', claim: 'Counts down.', location: 'a.ts:2' }],
       known_defects: [{ id: 'K1', claim: 'Never stops.' }],
       lenses: { code: 'review/code.md', simplify: 'shape.md' },
@@ -594,13 +593,13 @@ describe('the batch page and marks', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-clean-page-')));
     const dir = join(out, 'items', 'run-1');
     mkdirSync(dir, { recursive: true });
-    writeItem(dir, { case: 'counting', variant: 'clean', defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } });
+    writeItem(dir, { defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } });
     write(dir, 'review/findings.json', JSON.stringify([
       { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Never stops.', status: 'open', round: 1 },
       { id: 'R2', severity: 'note', sources: ['code'], claim: 'Unlinked problem.', status: 'open', round: 1 },
     ]));
     appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'clean', sample: 1, run_id: 'run-1', version: { label: 'v' }, passed: true, item: join('items', 'run-1') });
-    appendLine(join(out, 'judgements.jsonl'), { run_id: 'run-1', judge: testJudge, valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', excerpt: null, evidence: 'States the mechanism.' }], shape_unmatched: 0 });
+    appendLine(join(out, 'judgements.jsonl'), { run_id: 'run-1', judge: testJudge, valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', evidence: 'States the mechanism.' }], shape_unmatched: 0 });
     writeBatch(out, 'counting', testJudge);
     const batch = join(out, 'batches', 'counting');
     const page = readFileSync(join(batch, 'page.md'), 'utf8');
@@ -619,7 +618,7 @@ describe('the batch page and marks', () => {
       for (const runId of ['old', 'current']) {
         const dir = join(out, 'items', runId);
         mkdirSync(dir, { recursive: true });
-        writeItem(dir, { case: 'counting', variant: 'clean', defects: [], known_defects: [], lenses: {} });
+        writeItem(dir, { defects: [], known_defects: [], lenses: {} });
         write(dir, 'review/findings.json', '[]');
         appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'clean', sample: 1, run_id: runId, version: { label: runId }, passed: true, item: join('items', runId) });
         appendLine(join(out, 'judgements.jsonl'), { run_id: runId, judge: runId === 'old' ? changed : current, valid: true, defects: [], shape_unmatched: 0 });
@@ -694,8 +693,6 @@ describe('saved sample validation', () => {
 
 describe('judgement validation', () => {
   const item: ItemRecord = {
-    case: 'counting',
-    variant: 'v1',
     defects: [{ id: 'D1', class: 'wrong_behaviour', owner: 'code', claim: 'Counts the wrong way.', location: 'a.txt:2' }],
     known_defects: [{ id: 'K1', claim: 'It never stops.' }],
     lenses: { code: 'review/code.md', simplify: 'shape.md' },
@@ -705,7 +702,6 @@ describe('judgement validation', () => {
     id,
     caught_by: caughtBy,
     finding,
-    excerpt: null,
     evidence: 'Why.',
   });
   const judge = (...defects: unknown[]) => validateJudgement({ defects, shape_unmatched: 0 }, item, findings);
@@ -835,7 +831,7 @@ describe('bench run', () => {
 
   it('launches a sealed checkout with the work order and records a completed sample', () => {
     const { out, run, argv, packSha, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, excerpt: null, evidence: 'Missed.' }], shape_unmatched: 0 });
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 });
     const { status, lines } = run('--variant', 'v1');
     expect(status).toBe(0);
 
@@ -946,7 +942,7 @@ describe('bench run', () => {
   });
   it('judges a passed sample from this checkout, and writes its page and unmarked marks', () => {
     const { repo, out, run, argv, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    const caught = { id: 'D1', caught_by: ['code'], finding: null, excerpt: 'Counts down, not up.', evidence: 'The code lens states it.' };
+    const caught = { id: 'D1', caught_by: ['code'], finding: null, evidence: 'The code lens states it.' };
     judgeReturns('run-2', { defects: [caught], shape_unmatched: 1 });
     expect(run('--variant', 'v1').status).toBe(0);
 
@@ -969,8 +965,6 @@ describe('bench run', () => {
       'Judge which lenses caught each listed defect in this review sample.',
     ]);
     expect(JSON.parse(readFileSync(join(itemDir, 'item.json'), 'utf8'))).toEqual({
-      case: 'counting',
-      variant: 'v1',
       defects: [{ id: 'D1', class: 'wrong_behaviour', owner: 'code', claim: 'Counts the wrong way.', location: 'a.txt:2' }],
       known_defects: [],
       lenses: { code: 'review/code.md', simplify: 'shape.md' },
@@ -983,7 +977,7 @@ describe('bench run', () => {
     const page = readFileSync(join(batch, 'page.md'), 'utf8');
     expect(page.startsWith('# Review-lens batch `counting`')).toBe(true);
     expect(page).toContain('| Caught by | code |');
-    expect(page).toContain('| Lens excerpt | Counts down, not up. |');
+    expect(page).toContain('| Evidence | The code lens states it. |');
     expect(page).toContain('| Cost | $1.75 |');
     expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toEqual([
       { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: judgement.judge, defect: 'D1', judge: { caught_by: ['code'], finding: null }, mark: null, note: null },
@@ -993,7 +987,7 @@ describe('bench run', () => {
   it('judges a spilled return and records an unavailable return as invalid', () => {
     const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
     const spill = join(out, 'judge-return.json');
-    writeFileSync(spill, JSON.stringify({ defects: [{ id: 'D1', caught_by: [], finding: null, excerpt: null, evidence: 'Missed.' }], shape_unmatched: 0 }));
+    writeFileSync(spill, JSON.stringify({ defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 }));
     const returned = (runId: string, returns: unknown) => writeFileSync(join(cli, `detail-${runId}.json`), JSON.stringify({ terminal_record: { returns } }));
     returned('run-2', { availability: 'truncated', spill_path: spill });
     expect(run('--variant', 'v1').status).toBe(0);
@@ -1006,7 +1000,7 @@ describe('bench run', () => {
 
   it('re-judges recorded samples without touching a marked entry, and lists a clean finding to mark', () => {
     const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['code'], finding: 'R1', excerpt: null, evidence: 'Stated.' }], shape_unmatched: 0 });
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['code'], finding: 'R1', evidence: 'Stated.' }], shape_unmatched: 0 });
     expect(run('--variant', 'v1').status).toBe(0);
     // The same run detail answers for the clean sample, which has nothing planted to judge.
     judgeReturns('run-4', { defects: [], shape_unmatched: 0 });
@@ -1018,7 +1012,7 @@ describe('bench run', () => {
     const marked = { ...defect, mark: 'wrong', caught_by: [], note: 'R1 is about another line.' };
     writeFileSync(marks, Bun.YAML.stringify([marked, finding], null, 2));
 
-    judgeReturns('run-5', { defects: [{ id: 'D1', caught_by: [], finding: null, excerpt: null, evidence: 'Not stated.' }], shape_unmatched: 0 });
+    judgeReturns('run-5', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Not stated.' }], shape_unmatched: 0 });
     judgeReturns('run-6', { defects: [], shape_unmatched: 0 });
     expect(judge('--batch', 'counting').status).toBe(0);
     const judged = readLines(join(out, 'judgements.jsonl')).map(line => `${String(line.run_id)} by ${String(line.judge_run)}`);
@@ -1044,7 +1038,7 @@ describe('bench run', () => {
     const { version } = resolveVersion(join(out, 'v.yaml'), repo, out, { workflow: 'archon-review-eval', promptDirs: [] });
     appendLine(join(out, 'samples.jsonl'), { case: 'damaged', version: {} });
     appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'v1', sample: 3, run_id: 'old', version, passed: false });
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, excerpt: null, evidence: 'Missed.' }], shape_unmatched: 0 });
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 });
     const result = run('--variant', 'v1');
     expect(result.status).toBe(0);
     expect(result.lines.at(-1)).toMatchObject({ case: 'counting', sample: 4, passed: true });
@@ -1055,7 +1049,7 @@ describe('bench run', () => {
     const { out, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
     appendLine(join(out, 'samples.jsonl'), { case: 'damaged', version: {} });
     mkdirSync(join(out, 'items/good'), { recursive: true });
-    writeItem(join(out, 'items/good'), { case: 'healthy', variant: 'clean', defects: [], known_defects: [], lenses: {} });
+    writeItem(join(out, 'items/good'), { defects: [], known_defects: [], lenses: {} });
     write(out, 'items/good/review/findings.json', '[]');
     appendLine(join(out, 'samples.jsonl'), { case: 'healthy', variant: 'clean', sample: 1, run_id: 'good', version: { label: 'v' }, passed: true, item: 'items/good' });
     judgeReturns('run-1', { defects: [], shape_unmatched: 0 });
@@ -1084,7 +1078,7 @@ describe('bench run', () => {
     for (const caseId of ['damaged', 'healthy']) {
       const dir = join(out, 'items', caseId);
       mkdirSync(dir, { recursive: true });
-      writeItem(dir, { case: caseId, variant: 'clean', defects: [], known_defects: [], lenses: {} });
+      writeItem(dir, { defects: [], known_defects: [], lenses: {} });
       write(dir, 'review/findings.json', '[]');
       appendLine(join(out, 'samples.jsonl'), { case: caseId, variant: 'clean', sample: 1, run_id: caseId, version: { label: 'v' }, passed: true, item: join('items', caseId) });
     }
@@ -1104,7 +1098,7 @@ describe('bench run', () => {
     const { out, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
     for (const [caseId, runId] of [['damaged', 'bad-run'], ['healthy', 'good-run']]) {
       const dir = join(out, 'items', runId);
-      write(dir, 'item.json', caseId === 'damaged' ? '{' : JSON.stringify({ case: caseId, variant: 'clean', defects: [], known_defects: [], lenses: {} }));
+      write(dir, 'item.json', caseId === 'damaged' ? '{' : JSON.stringify({ defects: [], known_defects: [], lenses: {} }));
       write(dir, 'review/findings.json', '[]');
       appendLine(join(out, 'samples.jsonl'), { case: caseId, variant: 'clean', sample: 1, run_id: runId, version: { label: 'v' }, passed: true, item: join('items', runId) });
     }
@@ -1138,7 +1132,7 @@ describe('bench run', () => {
 
   it('records a judgement that credits a lens with no output as invalid, and leaves nothing to mark', () => {
     const { out, run, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['docs'], finding: null, excerpt: null, evidence: 'Docs.' }], shape_unmatched: 0 });
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['docs'], finding: null, evidence: 'Docs.' }], shape_unmatched: 0 });
     const { status, stderr } = run('--variant', 'v1');
     expect(status).toBe(1);
     expect(stderr).toContain('judgement invalid: defect D1: lens docs left no output in this sample');

@@ -21,7 +21,6 @@ it('sends saved defects and named lens mechanisms to the judge provider', async 
   const item = join(root, 'item');
   mkdirSync(join(item, 'review'), { recursive: true });
   writeItem(item, {
-    case: 'counting', variant: 'natural',
     defects: [{ id: 'PLANTED-123', class: 'wrong_behaviour', owner: 'code', claim: 'Counts down.', location: 'a.ts:2' }],
     known_defects: [], lenses: { code: 'review/code.md' },
   });
@@ -45,7 +44,7 @@ it('sends saved defects and named lens mechanisms to the judge provider', async 
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     async *sendQuery(prompt): AsyncGenerator<MessageChunk> {
       prompts.push(prompt);
-      yield { type: 'result', structuredOutput: { defects: [{ id: 'PLANTED-123', caught_by: ['code'], finding: null, excerpt: mechanism, evidence: 'States the mechanism.' }], shape_unmatched: 0 } };
+      yield { type: 'result', structuredOutput: { defects: [{ id: 'PLANTED-123', caught_by: ['code'], finding: null, evidence: 'States the mechanism.' }], shape_unmatched: 0 } };
       yield { type: 'settled' };
     },
   };

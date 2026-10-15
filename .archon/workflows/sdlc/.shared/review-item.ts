@@ -29,8 +29,6 @@ export interface KnownDefect {
 }
 
 export interface ItemRecord {
-  readonly case: string;
-  readonly variant: string;
   readonly defects: readonly ItemDefect[];
   readonly known_defects: readonly KnownDefect[];
   /** Each lens that left output, to its file relative to the item directory. */
@@ -63,7 +61,7 @@ export function readItem(dir: string): ItemRecord {
   const file = join(dir, ITEM_FILE);
   const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
   if (
-    !texts(raw, 'case', 'variant') ||
+    !isObject(raw) ||
     !Array.isArray(raw.defects) ||
     !raw.defects.every(defect => texts(defect, ...Object.keys(ITEM_DEFECT_KEYS))) ||
     !Array.isArray(raw.known_defects) ||

@@ -5,7 +5,6 @@ judge:
     - id: D1
       caught_by: [code]
       finding: R1
-      excerpt: "The count stops at the wrong number."
       evidence: "The code lens names the wrong count at a.txt:2."
   shape_unmatched: 0
 fixture:
