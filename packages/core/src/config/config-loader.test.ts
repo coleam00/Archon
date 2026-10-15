@@ -1185,10 +1185,8 @@ assistants:
       });
     });
 
-    // OpencodeProvider.sendQuery refuses any baseUrl, so accepting one here
-    // would reopen the defect this validation exists to close: a config that
-    // loads, then crashes every OpenCode run.
-    test('rejects an OpenCode server URL the provider would refuse to use', async () => {
+    // Archon owns the embedded OpenCode runtime, so a server URL has no consumer.
+    test('rejects an OpenCode server URL as an unknown setting', async () => {
       mockFsReadFile.mockResolvedValue(`
 assistants:
   opencode:
@@ -1197,7 +1195,7 @@ assistants:
 `);
 
       await expect(loadGlobalConfig()).rejects.toThrow(
-        /assistants\.opencode\.baseUrl.*external OpenCode runtimes are not supported/
+        /assistants\.opencode\.baseUrl.*unknown provider setting/
       );
     });
 
@@ -1227,9 +1225,10 @@ assistants:
     test('refuses to persist assistant defaults the loaders would then reject', async () => {
       mockFsReadFile.mockResolvedValue('');
 
-      await expect(
-        updateGlobalConfig({ assistants: { codex: { modelReasoningEfort: 'high' } } })
-      ).rejects.toThrow(/assistants\.codex\.modelReasoningEfort.*unknown provider setting/);
+      const misspelled: Record<string, unknown> = { modelReasoningEfort: 'high' };
+      await expect(updateGlobalConfig({ assistants: { codex: misspelled } })).rejects.toThrow(
+        /assistants\.codex\.modelReasoningEfort.*unknown provider setting/
+      );
       expect(mockFsWriteFile).not.toHaveBeenCalled();
     });
 

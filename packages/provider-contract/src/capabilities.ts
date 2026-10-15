@@ -104,8 +104,8 @@ export const providerCapabilitiesSchema = z.object({
   /**
    * Whether the provider honors the per-node `settingSources` override (which
    * filesystem setting sources the agent loads: CLAUDE.md, skills, commands,
-   * agents). `true` for Claude only — the Claude Agent SDK's `settingSources`
-   * option; other providers have no equivalent knob.
+   * agents). Its install-level default is `assistants.<id>.settingSources`, and
+   * the `project` and `user` sources gate the provider's declared skill roots.
    */
   settingSources: z.boolean(),
   /** Whether the provider can register in-process `NativeTool`s for a turn. */

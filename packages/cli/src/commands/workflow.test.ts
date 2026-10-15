@@ -841,7 +841,7 @@ function createDetachedChildFixture(pid: number | null = 12345): {
  * window altogether. Both suites go through here so neither can pass by accident.
  */
 async function finishStartupWindow(
-  commandPromise: Promise<void>,
+  commandPromise: Promise<unknown>,
   spawnSpy: ReturnType<typeof spyOn>,
   expectedSpawnCount = 1
 ): Promise<void> {

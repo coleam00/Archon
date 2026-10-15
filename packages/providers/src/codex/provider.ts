@@ -319,9 +319,8 @@ function buildOutputSchema(requestOptions?: SendQueryOptions): {
  * same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
  *
  * Precedence mirrors the Pi provider: request-level systemPrompt wins over
- * node-level. Only string / string[] are supported; SystemPromptPreset
- * objects are Claude-specific and dropped with a WARN (the orchestrator
- * already sends non-Claude providers a plain string).
+ * node-level, which wins over `appendSystemPrompt`. Codex cannot extend its
+ * own system prompt, so appended instructions are folded in the same way.
  *
  * The prepend intentionally repeats on EVERY turn, including resumed
  * threads: the provider cannot know whether a resumed session's earlier
@@ -329,20 +328,14 @@ function buildOutputSchema(requestOptions?: SendQueryOptions): {
  * systemPrompt on every query.
  */
 function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions): string {
-  const raw = requestOptions?.systemPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
+  const raw =
+    requestOptions?.systemPrompt ??
+    requestOptions?.nodeConfig?.systemPrompt ??
+    requestOptions?.appendSystemPrompt;
   if (raw === undefined) {
     return prompt;
   }
-  let systemText: string | undefined;
-  if (typeof raw === 'string') {
-    systemText = raw;
-  } else if (Array.isArray(raw)) {
-    systemText = raw.join('\n\n');
-  }
-  if (systemText === undefined) {
-    getLog().warn({ systemPromptType: typeof raw }, 'codex.system_prompt_dropped_preset');
-    return prompt;
-  }
+  const systemText = Array.isArray(raw) ? raw.join('\n\n') : raw;
   if (systemText.trim() === '') {
     return prompt;
   }

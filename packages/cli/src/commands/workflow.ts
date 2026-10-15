@@ -5949,11 +5949,6 @@ async function spelledForCli<T>(op: () => Promise<T>): Promise<T> {
   }
 }
 
-/**
- * Emit the standard `{ ok: false }` error line for a `--json` write command
- * (approve/reject/abandon/resume). Centralizes the envelope so all four stay in
- * lockstep; never throws — in --json mode the JSON line IS the error surface.
- */
 function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
   return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
 }
@@ -6044,7 +6039,7 @@ async function runDetachedControlCommand(
   json: boolean | undefined,
   cwd: string | undefined,
   precheck: () => Promise<WorkflowRun>
-): Promise<void> {
+): Promise<number> {
   try {
     const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
@@ -6080,7 +6075,7 @@ async function runDetachedControlCommand(
         // its output is discarded. Same contract as `run --detach`.
         logPath,
       });
-      return;
+      return 0;
     }
     console.log(`Started '${action}' for run ${runId} in the background.`);
     console.log(`Track it with: archon workflow get ${runId}`);
@@ -6096,10 +6091,11 @@ async function runDetachedControlCommand(
     // standard { ok: false } line; human mode throws like the inline path.
     if (json) {
       await printJsonWriteError(runId, action, error);
-      return;
+      return 1;
     }
     throw error;
   }
+  return 0;
 }
 
 async function resolveDiscoveryCwdForCodebase(
@@ -6150,7 +6146,7 @@ export async function workflowResumeCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean
-): Promise<void> {
+): Promise<number> {
   const { resumeWorkflow: resumeWorkflowOp } = host.operations;
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
@@ -6159,7 +6155,7 @@ export async function workflowResumeCommand(
   // Composes with --json (structured ack; nothing executes here).
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       // The inline path below refuses a run with no recorded working path, or one
       // whose checkout is gone. Check both here too, on the run the precheck already
@@ -6174,7 +6170,6 @@ export async function workflowResumeCommand(
       assertResumeWorkingPathExists(run.working_path);
       return run;
     });
-    return;
   }
 
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
@@ -6201,7 +6196,7 @@ export async function workflowResumeCommand(
     } catch (error) {
       await printJsonWriteError(runId, 'resume', error);
     }
-    return;
+    return 0;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6244,6 +6239,7 @@ export async function workflowResumeCommand(
       cause: err,
     });
   }
+  return 0;
 }
 
 /**
@@ -6483,6 +6479,17 @@ async function continueAnsweredRun(
       discoveryCwd,
     });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.cause instanceof WorkflowResourceBusyError &&
+      error.cause.refusal === 'waiting'
+    ) {
+      console.log(
+        `The answer was recorded. Workflow '${result.workflowName}' is waiting for capacity and continues when a slot frees.\n` +
+          error.cause.message
+      );
+      return;
+    }
     const err = error as Error;
     getLog().error(
       { err, runId: resolvedId, workflowName: result.workflowName },
@@ -6583,7 +6590,7 @@ export async function workflowApproveCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { approveWorkflow } = host.operations;
 
   // --detach: hand the approve AND its inline auto-resume to a detached child
@@ -6592,7 +6599,7 @@ export async function workflowApproveCommand(
   // in the child. Composes with --json (structured ack; nothing executes here).
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'approve', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'approve', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6612,7 +6619,6 @@ export async function workflowApproveCommand(
       }
       return run;
     });
-    return;
   }
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
@@ -6636,10 +6642,11 @@ export async function workflowApproveCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'approve', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6669,6 +6676,7 @@ export async function workflowApproveCommand(
     failurePrefix: 'Approved but',
     recorded: 'approval',
   });
+  return 0;
 }
 
 /**
@@ -6686,7 +6694,7 @@ export async function workflowRejectCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { rejectWorkflow } = host.operations;
 
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
@@ -6695,7 +6703,7 @@ export async function workflowRejectCommand(
   // mid-rework. The parent only validates read-only. Composes with --json.
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'reject', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'reject', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6706,7 +6714,6 @@ export async function workflowRejectCommand(
       assertResponseAccepted(run, 'reject', reason);
       return run;
     });
-    return;
   }
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
@@ -6732,10 +6739,11 @@ export async function workflowRejectCommand(
         workflowName: result.workflowName,
         resumable: !result.cancelled,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'reject', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6751,7 +6759,7 @@ export async function workflowRejectCommand(
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
     console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
-    return;
+    return 0;
   }
 
   // Not cancelled = a legacy on_reject rework, a #2707 step-1 new-mode
@@ -6777,6 +6785,7 @@ export async function workflowRejectCommand(
     failurePrefix: 'Rejected but',
     recorded: 'rejection',
   });
+  return 0;
 }
 
 /**
@@ -6797,7 +6806,7 @@ export async function workflowRespondCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { respondToWorkflow } = host.operations;
 
   if (decision === 'approve')
@@ -6810,7 +6819,7 @@ export async function workflowRespondCommand(
   // child. See runDetachedControlCommand's doc comment.
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'respond', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'respond', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6825,7 +6834,6 @@ export async function workflowRespondCommand(
       }
       return run;
     });
-    return;
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
@@ -6848,10 +6856,11 @@ export async function workflowRespondCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'respond', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6880,6 +6889,7 @@ export async function workflowRespondCommand(
     failurePrefix: 'Response recorded but',
     recorded: 'response',
   });
+  return 0;
 }
 
 /**

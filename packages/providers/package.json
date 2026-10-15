@@ -168,6 +168,12 @@
       "src/community/copilot/config.test.ts"
     ],
     [
+      "src/community/opencode/config.test.ts"
+    ],
+    [
+      "src/shared/run-config.test.ts"
+    ],
+    [
       "src/community/copilot/event-bridge.test.ts"
     ],
     [
@@ -193,6 +199,9 @@
     ],
     [
       "src/community/opencode/runtime.test.ts"
+    ],
+    [
+      "src/community/opencode/session.test.ts"
     ],
     [
       "src/shared/structured-output.test.ts"

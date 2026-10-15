@@ -18,7 +18,7 @@ test('descriptors support native tools and refuse unsupported contracts', () => 
   expect(() =>
     providerPluginDescriptorSchema.parse({ ...descriptor, credentials: { kind: 'dynamic' } })
   ).toThrow('kind');
-  expect(() => providerPluginDescriptorSchema.parse({ ...descriptor, protocol: 2 })).toThrow(
+  expect(() => providerPluginDescriptorSchema.parse({ ...descriptor, protocol: 1 })).toThrow(
     'protocol'
   );
   expect(() =>
