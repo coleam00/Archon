@@ -161,6 +161,10 @@ nodes:
     depends_on: [decide]
     bash: |
       answers=$decide.output.answers
+      items=$(printf '%s' "$answers" | jq -c '.[]') || exit 1
+      if [ -z "$items" ]; then
+        exit 0
+      fi
       failed=0
       while read -r item; do
         if ! result=$(archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
@@ -173,7 +177,7 @@ nodes:
           printf '%s\n' "$result" >&2
           failed=1
         fi
-      done < <(printf '%s' "$answers" | jq -c '.[]')
+      done <<<"$items"
       exit "$failed"
 ```
 
