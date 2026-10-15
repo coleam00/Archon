@@ -262,8 +262,8 @@ async function runForgeCommand(op: string, data: unknown): Promise<ForgeResponse
 
 /**
  * Whether the SDLC workflows' default forge path works: the GitHub forge plugin is
- * installed and accepts the configured token. A missing step is a warning, since an
- * install that never runs the SDLC workflows needs neither.
+ * installed and accepts the configured token. A missing plugin is skipped and a missing
+ * token warns, since an install that never runs the SDLC workflows needs neither.
  */
 export async function checkGithubForge(
   env: NodeJS.ProcessEnv,
