@@ -6034,6 +6034,20 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
+  test('no failed credential means no registry lookup, so title generation keeps its own fallback', async () => {
+    // A `small` tier naming an unregistered provider used to fall back to a truncated
+    // title inside title generation; the credential check must not throw first.
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockChatVendor).not.toHaveBeenCalled();
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
   test('runs on the host login when the user connected nothing for the turn vendor', async () => {
     mockStoredProviderCredentials.mockResolvedValue([
       {

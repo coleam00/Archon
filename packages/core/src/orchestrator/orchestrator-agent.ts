@@ -15,7 +15,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
-import { getRegistration, providerRegistry } from '@archon/providers';
+import { getRegistration, isRegisteredProvider, providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
@@ -2644,23 +2644,29 @@ export async function handleMessage(
     // would authenticate with the host's login. A provider whose credentials have no
     // static vendor for the model (OpenCode, an unparsed Pi model) consumes no stored
     // credential, so it is not checked, as in workflow preflight.
-    let userProviderEnv: Record<string, string> = {};
-    let failedVendors = new Map<string, CredentialFailure>();
+    const delivery =
+      isPerUserProviderKeysEnabled() && executionUserId
+        ? await resolveUserProviderEnvForChat(executionUserId)
+        : { env: {}, failed: new Map<string, CredentialFailure>() };
     const failedVendorFor = (
       provider: string,
       model: string | undefined
     ): { vendor: string; failure: CredentialFailure } | undefined => {
+      // An unregistered provider fails where it is used (title generation falls back
+      // to a truncated title); this check must not turn that into a failed turn.
+      if (delivery.failed.size === 0 || !isRegisteredProvider(provider)) return undefined;
       const vendor = getRegistration(provider).credentials.vendorFor(model);
-      const failure = vendor !== undefined ? failedVendors.get(vendor) : undefined;
+      const failure = vendor !== undefined ? delivery.failed.get(vendor) : undefined;
       return vendor !== undefined && failure !== undefined ? { vendor, failure } : undefined;
     };
-    if (isPerUserProviderKeysEnabled() && executionUserId) {
-      const delivery = await resolveUserProviderEnvForChat(executionUserId);
-      failedVendors = delivery.failed;
-      const failed = failedVendorFor(providerKey, chatRequest.model);
-      if (failed) throw new ConnectedCredentialUnavailableError(failed.vendor, failed.failure);
-      userProviderEnv = delivery.env;
+    const failedTurnVendor = failedVendorFor(providerKey, chatRequest.model);
+    if (failedTurnVendor) {
+      throw new ConnectedCredentialUnavailableError(
+        failedTurnVendor.vendor,
+        failedTurnVendor.failure
+      );
     }
+    const userProviderEnv: Record<string, string> = delivery.env;
     const protectedEnvKeys = Object.keys(userProviderEnv);
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 

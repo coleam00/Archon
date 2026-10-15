@@ -44,6 +44,7 @@ import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '..
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 import { Semaphore } from './semaphore';
 import { PI_AUTH_PATH_ENV } from './auth-path-env';
+import { normalizeCredentialVendor } from '../../credential-catalog';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -479,6 +480,29 @@ function piNotConnectedMessage(providerId: string): string {
 }
 
 /**
+ * The auth store a Pi call for `provider` reads: Archon's per-run file when it holds a
+ * delivered credential for that provider, otherwise none (Pi's own auth.json).
+ *
+ * Pi reads exactly one store, and the per-run file holds only Archon's deliveries, so
+ * using it for every provider would hide the user's `pi /login` for the others. Core
+ * keys the file by vendor (`azure`), which can differ from Pi's provider id
+ * (`azure-openai-responses`); either key counts as delivered, so a delivered credential
+ * never silently gives way to another login.
+ */
+export function deliveredAuthPathFor(
+  provider: string,
+  deliveredAuthPath: string | undefined,
+  readStoredCredential: (providerId: string, authPath: string) => unknown
+): string | undefined {
+  if (deliveredAuthPath === undefined) return undefined;
+  return [provider, normalizeCredentialVendor(provider)].some(
+    id => readStoredCredential(id, deliveredAuthPath) !== undefined
+  )
+    ? deliveredAuthPath
+    : undefined;
+}
+
+/**
  * The ModelRuntime a Pi turn authenticates with. The login check builds the same one, so
  * both read the same auth file and models config and see the same model catalog.
  *
@@ -514,12 +538,11 @@ async function createPiModelRuntime(
   // credentials, so it is used only when it holds one for this provider; otherwise Pi
   // reads the user's own auth.json, with its own locking and refresh write-back, so a
   // `pi /login` for this backend keeps working beside a credential delivered for another.
-  const deliveredAuthPath = authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined;
-  const authPath =
-    deliveredAuthPath !== undefined &&
-    piCodingAgent.readStoredCredential(provider, deliveredAuthPath) !== undefined
-      ? deliveredAuthPath
-      : undefined;
+  const authPath = deliveredAuthPathFor(
+    provider,
+    authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
+    piCodingAgent.readStoredCredential
+  );
   return createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
     authPath,

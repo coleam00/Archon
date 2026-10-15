@@ -77,11 +77,13 @@ export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env):
  */
 function scrubbedGithubEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const gitParameters = env.GIT_CONFIG_PARAMETERS?.trim();
-  return {
-    ...clearedTokens(),
+  // Typed by STORED_LOGIN_KEYS, so the redirects and the list `loadCliEnv` protects
+  // cannot drift apart: a missing or extra key fails to compile.
+  const redirects: Record<(typeof STORED_LOGIN_KEYS)[number], string> = {
     GH_CONFIG_DIR: join(tmpdir(), `archon-gh-scrubbed-${randomUUID()}`),
     GIT_CONFIG_PARAMETERS: `${gitParameters ? `${gitParameters} ` : ''}'credential.helper='`,
   };
+  return { ...clearedTokens(), ...redirects };
 }
 
 /**

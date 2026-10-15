@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
-import { PiProvider, resolvePiAuth } from './provider';
-import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { deliveredAuthPathFor, PiProvider, resolvePiAuth } from './provider';
+import { ModelRuntime, readStoredCredential } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
 
 const trackTempRoot = trackTempRoots();
@@ -169,6 +169,17 @@ describe('Pi native credentials', () => {
     });
     // Preflight checks without the per-run path; it reaches the same answer.
     expect(await check()).toEqual({ state: 'usable', source: 'native' });
+  });
+  test('a credential delivered under the vendor id still selects the per-run file', () => {
+    // Core writes `azure`; Pi's provider id is `azure-openai-responses`. Missing the alias
+    // would hand the turn to the user's native Azure login without a word.
+    const authPath = join(root, 'delivered-auth.json');
+    writeFileSync(authPath, JSON.stringify({ azure: { type: 'api_key', key: 'delivered-key' } }));
+    expect(deliveredAuthPathFor('azure-openai-responses', authPath, readStoredCredential)).toBe(
+      authPath
+    );
+    expect(deliveredAuthPathFor('anthropic', authPath, readStoredCredential)).toBeUndefined();
+    expect(deliveredAuthPathFor('anthropic', undefined, readStoredCredential)).toBeUndefined();
   });
   test('a delivered credential wins over the native login for the provider it covers', async () => {
     // The native grant is expired with a dead refresh token: reading it would fail.
