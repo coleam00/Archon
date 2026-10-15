@@ -92,6 +92,7 @@ test('unusable receipts warn without blocking a healthy provider', async () => {
       expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
       expect(await readFile(file, 'utf8')).toBe(contents);
     }
+    expect(JSON.stringify(warning.mock.calls)).toContain('no credential delivery rule for unknown');
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();

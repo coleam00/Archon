@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { ZodError } from 'zod';
 import { isMaintainedProviderPlugin, isProviderReceipt } from '@archon/plugin-manifest';
 import { receiptPath } from '@archon/plugin-manifest/store';
 import {
@@ -60,9 +61,13 @@ export async function loadProviderPlugins(
       registrations.push(
         processProviderRegistration(descriptor, [join(pluginsDir, executable.path)])
       );
-    } catch {
-      // Schema diagnostics can contain configured values. Keep runtime warnings value-free.
-      warn('provider descriptor could not be registered');
+    } catch (error) {
+      // Zod diagnostics can contain configured values. Keep runtime warnings value-free.
+      warn(
+        error instanceof ZodError
+          ? 'provider descriptor failed schema validation'
+          : `provider descriptor could not be registered: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
   return registrations;
