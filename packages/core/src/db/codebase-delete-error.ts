@@ -18,3 +18,10 @@ export class ActiveWorktreeEnvironmentsError extends Error {
     this.name = 'ActiveWorktreeEnvironmentsError';
   }
 }
+
+export class WorktreeRegistrationChangedError extends Error {
+  constructor(readonly environmentId: string) {
+    super(`Worktree ${environmentId} changed during cleanup; inspect it and retry deletion`);
+    this.name = 'WorktreeRegistrationChangedError';
+  }
+}

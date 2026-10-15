@@ -1,6 +1,7 @@
 import {
   ActiveContainerEnvironmentsError,
   ActiveWorktreeEnvironmentsError,
+  WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
@@ -3427,6 +3428,9 @@ export function registerApiRoutes(
           await isolationEnvDb.markWorktreeDestroyed(env);
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
+          if (wtErr instanceof WorktreeRegistrationChangedError) {
+            return apiError(c, 409, wtErr.message);
+          }
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
           return apiError(
             c,

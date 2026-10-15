@@ -639,7 +639,8 @@ async function resolveThroughExistingAncestor(path: string): Promise<string> {
     return await realpath(absolute);
   } catch (error) {
     const parent = dirname(absolute);
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === absolute) throw error;
+    const { code } = error as NodeJS.ErrnoException;
+    if ((code !== 'ENOENT' && code !== 'ENOTDIR') || parent === absolute) throw error;
     return join(await resolveThroughExistingAncestor(parent), basename(absolute));
   }
 }
