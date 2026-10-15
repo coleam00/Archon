@@ -923,8 +923,9 @@ inspect the run normally with `workflow get <run-id>`.
 
 ### `workflow attention`
 
-List, count or read the [attention queue](/guides/attention-queue/): every paused run that
-needs someone, as typed items an answerer can act on without parsing prose. Read-only.
+List, count, stream or read the [attention queue](/guides/attention-queue/): every paused
+run that needs someone, as typed items an answerer can act on without parsing prose.
+Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project
@@ -933,6 +934,8 @@ archon workflow attention --json --project acme/web --label ci=other
 archon workflow attention --json --sort label:urgency
 archon workflow attention --json --all --count-by label:class
 archon workflow attention <run-id> --json                          # one item
+archon workflow attention --watch --json --all                     # every change, as lines
+archon workflow attention --watch --json --after <cursor>          # resume a stream
 ```
 
 - **Scope.** The default is the current project, resolved from the working directory as
@@ -952,6 +955,18 @@ archon workflow attention <run-id> --json                          # one item
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
+
+**`--watch`** streams the queue instead of reading it once: one `attention` line per open
+item in scope, then `ready`, then a line for every change any process commits, as
+`attention`, `resolved`, `unmatched`, `terminal`, `owner_lost` and idle `bookmark` lines.
+With `--json` each line is one compact JSON object; without it, a short sentence per
+change. Scope and `--label` work as for the list; `--sort`, `--count-by` and a run id are
+refused. **`--after <cursor>`** takes the `cursor` of an earlier line and, after the
+snapshot, replays every change since it. The line shapes and the consumer contract are in
+the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
+closed stdout stops the stream, `1` when it cannot start, `4` when the `--after` cursor
+was not issued by this install (with `--json`, the line `{"type":"error","error":"cursor_invalid"}`;
+rerun without `--after`).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
 `countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has
@@ -1570,7 +1585,8 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
-| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, `attention`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--after <cursor>` | For `workflow attention --watch`: replay the stream after the line that carried this cursor. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
