@@ -13,7 +13,7 @@ export class ChatPluginUnavailableError extends Error {
 }
 
 export interface ChatConnection {
-  request(operation: (connection: ConnectedChat) => Promise<void>): Promise<void>;
+  request<T>(operation: (connection: ConnectedChat) => Promise<T>): Promise<T>;
 }
 
 export class ChatPluginPlatform implements IPlatformAdapter {

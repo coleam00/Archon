@@ -524,6 +524,9 @@ export function resolutionNote(result: RunActionResult): string | undefined {
             : result.newMode
               ? 'recorded — workflow resumed'
               : 'recorded — workflow resumed and will retry with feedback';
+    case 'answered':
+    case 'resumed':
+      return result.resumed ? 'workflow resumed' : RESUME_NOT_ACCEPTED_NOTE;
     case 'cooperative':
     case 'stopped':
       return undefined;
