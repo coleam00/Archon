@@ -45,6 +45,7 @@ let repo: string;
 let hookLog: string;
 let stub: ReturnType<typeof Bun.serve>;
 let modelRequests: string[] = [];
+let modelReply: (() => Response) | undefined;
 /** The request an unscoped turn sends: the control a scoped request is compared against. */
 let unscopedRequest: string;
 
@@ -169,7 +170,10 @@ beforeAll(async () => {
     port: 0,
     hostname: '127.0.0.1',
     async fetch(request) {
-      if (request.method === 'POST') modelRequests.push(await request.text());
+      if (request.method === 'POST') {
+        modelRequests.push(await request.text());
+        if (modelReply) return modelReply();
+      }
       return Response.json(
         { error: { message: 'stub model', type: 'invalid_request_error' } },
         { status: 400 }
@@ -215,6 +219,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   modelRequests = [];
+  modelReply = undefined;
   await rm(hookLog, { force: true });
 });
 
@@ -313,6 +318,93 @@ async function writeMcp(file: string, servers: Record<string, string>): Promise<
 const ALPHA_ONLY: Seen = { tools: [], skills: ['alpha'], hooks: ['alpha', 'user'], guidance: true };
 
 describe('Codex capability scope on the real binary', () => {
+  test(
+    'chat tools round-trip through the real binary and survive resume with native guidance',
+    async () => {
+      const prompt = 'Fix the "login" bug and add tests';
+      let responses = 0;
+      modelReply = () => {
+        const index = responses++;
+        const item =
+          index % 2 === 0
+            ? {
+                type: 'function_call',
+                id: `fc_${String(index)}`,
+                call_id: `call_${String(index)}`,
+                name: 'invoke_workflow',
+                arguments: JSON.stringify({ prompt }),
+              }
+            : {
+                type: 'message',
+                id: `msg_${String(index)}`,
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Queued.', annotations: [] }],
+              };
+        const events = [
+          { type: 'response.output_item.done', output_index: 0, item },
+          {
+            type: 'response.completed',
+            response: {
+              id: `resp_${String(index)}`,
+              status: 'completed',
+              output: [item],
+              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+            },
+          },
+        ];
+        return new Response(
+          events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+          { headers: { 'content-type': 'text/event-stream' } }
+        );
+      };
+      const calls: Record<string, unknown>[] = [];
+      const nativeTools = [
+        {
+          name: 'invoke_workflow',
+          description: 'Launch the workflow',
+          inputSchema: {
+            properties: { prompt: { kind: 'string' as const } },
+            required: ['prompt'],
+          },
+          handler: async (input: Record<string, unknown>) => {
+            calls.push(input);
+            return `queued-${String(calls.length)}`;
+          },
+        },
+      ];
+      const chunks = await runRequest({ nativeTools });
+      const first = resultOf(chunks);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          name: 'invoke_workflow',
+          rawInput: { prompt },
+        })
+      );
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call_update',
+          status: 'completed',
+          output: 'queued-1',
+        })
+      );
+      expect(first.isError).not.toBe(true);
+      expect(first.sessionId).toBeDefined();
+      expect(calls).toEqual([{ prompt }]);
+      expect(modelRequests[0]).toContain('invoke_workflow');
+      expect(modelRequests[0]).toContain('USER-GUIDANCE-MARKER');
+      expect(modelRequests[0]).toContain('PROJECT-GUIDANCE-MARKER');
+      expect(modelRequests[0]).toContain('AMBIENT-CATALOGUE-MARKER');
+      expect(modelRequests[1]).toContain('queued-1');
+      const resumed = resultOf(await runRequest({ nativeTools }, first.sessionId));
+      expect(resumed.isError).not.toBe(true);
+      expect(resumed.sessionId).toBe(first.sessionId);
+      expect(calls).toEqual([{ prompt }, { prompt }]);
+      expect(modelRequests[3]).toContain('queued-2');
+    },
+    testTimeout(20_000)
+  );
+
   test(
     'a title keeps native guidance and hooks but has no ambient capabilities and a read-only rollout',
     async () => {

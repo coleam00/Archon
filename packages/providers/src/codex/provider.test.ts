@@ -6,7 +6,7 @@ import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'b
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { MessageChunk, SendQueryOptions } from '../types';
+import type { NativeTool, MessageChunk, SendQueryOptions } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -192,8 +192,126 @@ describe('CodexProvider', () => {
       fallbackModel: false,
       sandbox: false,
       settingSources: false,
-      nativeTools: false,
+      nativeTools: true,
       containerExec: false,
+    });
+  });
+
+  describe('native tools', () => {
+    const input = { prompt: 'Fix the "login" bug in C:\\Users\\me' };
+    const call = {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      callId: 'call-1',
+      namespace: null,
+      tool: 'invoke_workflow',
+      arguments: input,
+    };
+    const tool = (handler: NativeTool['handler']): NativeTool => ({
+      name: 'invoke_workflow',
+      description: 'Launch a workflow',
+      inputSchema: { properties: { prompt: { kind: 'string' } }, required: ['prompt'] },
+      handler,
+    });
+
+    test('registers tools, returns asynchronous results on the server request id and preserves user config', async () => {
+      const handler = mock<NativeTool['handler']>(async () => {
+        await Promise.resolve();
+        return 'Queued';
+      });
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      expect(
+        resultOf(
+          await run(provider, {
+            nativeTools: [tool(handler)],
+            assistantConfig: {
+              model: 'gpt-user',
+              webSearchMode: 'cached',
+              additionalDirectories: ['/extra'],
+            },
+          })
+        ).isError
+      ).not.toBe(true);
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(paramsOf(server, 'initialize')?.capabilities).toMatchObject({ experimentalApi: true });
+      expect(paramsOf(server, 'thread/start')).toMatchObject({
+        model: 'gpt-user',
+        config: {
+          web_search: 'cached',
+          sandbox_workspace_write: { network_access: true, writable_roots: ['/extra'] },
+        },
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'invoke_workflow',
+            inputSchema: { type: 'object', required: ['prompt'] },
+          },
+        ],
+      });
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('skills');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('mcp_servers');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('developer_instructions');
+      expect(server.processes[0].env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+      expect(server.processes[0].toolResponses).toEqual([
+        {
+          id: 'host-tool-0',
+          result: { contentItems: [{ type: 'inputText', text: 'Queued' }], success: true },
+        },
+      ]);
+    });
+
+    test('resumed tool-enabled threads use this turn’s handlers without registering a new catalog', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const oldHandler = mock(() => Promise.resolve('first'));
+      const currentHandler = mock(() => Promise.resolve('resumed'));
+      await run(provider, { nativeTools: [tool(oldHandler)] });
+      await run(provider, { nativeTools: [tool(currentHandler)] }, THREAD_ID);
+      expect(oldHandler).toHaveBeenCalledTimes(1);
+      expect(currentHandler).toHaveBeenCalledTimes(1);
+      expect(paramsOf(server, 'thread/resume')).not.toHaveProperty('dynamicTools');
+      expect(server.processes[1].toolResponses[0].result).toMatchObject({
+        success: true,
+        contentItems: [{ text: 'resumed' }],
+      });
+    });
+
+    test.each([
+      { ...call, tool: 'unknown' },
+      { ...call, arguments: {} },
+      { ...call, arguments: { prompt: false } },
+      { ...call, threadId: 'another-thread' },
+      { ...call, turnId: 'another-turn' },
+      { ...call, namespace: 'another-server' },
+    ])('rejects undeclared tools, invalid arguments and foreign calls: %j', async rejected => {
+      const handler = mock(() => Promise.resolve('should not run'));
+      const { provider, server } = providerWith({ toolCalls: [rejected] });
+      await run(provider, { nativeTools: [tool(handler)] });
+      expect(handler).not.toHaveBeenCalled();
+      expect(server.processes[0].toolResponses[0].result.success).toBe(false);
+    });
+
+    test('handler exceptions return a failed result with the original error', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      await run(provider, {
+        nativeTools: [tool(() => Promise.reject(new Error('dispatch unavailable')))],
+      });
+      expect(server.processes[0].toolResponses[0].result).toMatchObject({
+        success: false,
+        contentItems: [{ text: 'invoke_workflow failed: dispatch unavailable' }],
+      });
+    });
+
+    test('tools are absent and experimental API stays off for workflow nodes and titles without tools', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { nodeConfig: { nodeId: 'node' } });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+      await run(provider, {
+        purpose: 'title-generation',
+        nativeTools: [tool(() => Promise.resolve('no'))],
+      });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
     });
   });
 

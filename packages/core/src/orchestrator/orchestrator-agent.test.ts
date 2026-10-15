@@ -156,6 +156,8 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
   await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  BUNDLED_IS_BINARY: false,
+  BUNDLED_VERSION: 'test',
   getProjectStoragePaths,
   resolveProjectStorageKey,
   captureApprovalResolved: mockCaptureApprovalResolved,
@@ -4274,7 +4276,7 @@ describe('workflow dispatch routing', () => {
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
 
-  describe('typed chat tools (Claude, Pi)', () => {
+  describe('typed chat tools', () => {
     const task = 'Fix the "login" bug and add tests';
     let capsMock: ReturnType<typeof mock>;
 
@@ -4315,6 +4317,129 @@ describe('workflow dispatch routing', () => {
     }
 
     const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
+
+    test.each(['stream', 'batch'] as const)(
+      'Codex launches through item/tool/call after the turn; prose cannot launch (%s)',
+      async mode => {
+        const { CodexProvider } = await import('@archon/providers/codex/provider');
+        const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+        const { createFakeAppServer, THREAD_ID, TURN_ID, agentMessage } =
+          await import('../../../providers/src/test/codex-app-server-fake');
+        capsMock.mockReturnValue(CODEX_CAPABILITIES);
+        const prose =
+          '/invoke-workflow test-workflow --project test-repo --prompt "prose must not launch"';
+        const server = createFakeAppServer(() => ({
+          toolCalls: [
+            {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              callId: 'launch',
+              namespace: null,
+              tool: 'invoke_workflow',
+              arguments: launch,
+            },
+          ],
+          notifications: [agentMessage(prose)],
+        }));
+        const provider = new CodexProvider(server, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce(async function* (prompt, cwd, sessionId, options) {
+          for await (const chunk of provider.sendQuery(prompt, cwd, sessionId, options)) {
+            expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+            yield chunk;
+          }
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'fix the login bug', { actor: operator });
+        expect(server.processes[0].toolResponses[0].result).toMatchObject({
+          success: true,
+          contentItems: [{ text: expect.stringContaining('Queued test-workflow') }],
+        });
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+          expect.objectContaining({ originalMessage: task }),
+          expect.anything()
+        );
+
+        mockDispatchBackgroundWorkflow.mockClear();
+        const proseServer = createFakeAppServer(() => ({ notifications: [agentMessage(prose)] }));
+        const proseProvider = new CodexProvider(proseServer, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce((...args) => proseProvider.sendQuery(...args));
+        await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      }
+    );
+
+    test('Codex registration uses the shared primitive and manage_run preserves actor and project authorization', async () => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      const run = makeRun({
+        id: 'aaaaaaaa-1111-2222-3333-444444444444',
+        status: 'running',
+        user_id: 'another-user',
+      });
+      mockGetWorkflowRunDb.mockResolvedValue(run);
+      mockFindWorkflowRunsByIdPrefix.mockResolvedValue([run]);
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeConversation({
+          ai_assistant_type: 'codex',
+          codebase_id: 'codebase-1',
+          cwd: '/repos/test-repo',
+        })
+      );
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockRegisterFolder.mockClear();
+      const server = createFakeAppServer(() => ({
+        toolCalls: [
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'register',
+            namespace: null,
+            tool: 'register_project',
+            arguments: { name: 'new-folder', path: '/', folder: true },
+          },
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'cancel',
+            namespace: null,
+            tool: 'manage_run',
+            arguments: { action: 'cancel', runId: run.id, confirm: true },
+          },
+        ],
+      }));
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      await handleMessage(makePlatform(), 'conv-1', 'register my folder and cancel the run', {
+        actor: { kind: 'unidentified' },
+      });
+      expect(mockRegisterFolder).toHaveBeenCalledWith(
+        await canonicalizeProjectPath('/'),
+        'new-folder'
+      );
+      expect(server.processes[0].toolResponses[0].result.contentItems).toEqual([
+        { type: 'inputText', text: expect.stringContaining('registered successfully') },
+      ]);
+      expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith(run.id, 'codebase-1');
+      expect(server.processes[0].toolResponses[1].result.contentItems).toEqual([
+        {
+          type: 'inputText',
+          text: expect.stringContaining('Only the user who started this run or an admin'),
+        },
+      ]);
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    });
 
     test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
       await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });

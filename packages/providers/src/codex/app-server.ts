@@ -16,8 +16,13 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
+import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallResponse';
+import { toolResponse } from './native-tools';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
+import type { ServerRequest } from './protocol/ServerRequest';
+
+const TOOL_CALL_METHOD = 'item/tool/call' satisfies ServerRequest['method'];
 import type { CodexBinary } from './binary-resolver';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -127,6 +132,12 @@ function pathKey(env: Record<string, string>): string {
 }
 
 export class AppServerConnection {
+  private toolCallHandler: ((params: unknown) => Promise<DynamicToolCallResponse>) | undefined;
+
+  handleToolCalls(handler: (params: unknown) => Promise<DynamicToolCallResponse>): void {
+    this.toolCallHandler = handler;
+  }
+
   private nextId = 1;
   private readonly pending = new Map<
     number,
@@ -287,6 +298,22 @@ export class AppServerConnection {
     }
     if (typeof method !== 'string') return;
     if (id !== undefined) {
+      if (method === TOOL_CALL_METHOD && this.toolCallHandler) {
+        const handler = this.toolCallHandler;
+        void Promise.resolve()
+          .then(() => handler(message.params))
+          .then(
+            result => this.send({ id, result }),
+            (error: unknown) => {
+              getLog().error({ err: error }, 'codex.tool_call_failed');
+              this.send({
+                id,
+                result: toolResponse('Archon could not execute the tool call.', false),
+              });
+            }
+          );
+        return;
+      }
       // A request from Codex: approval, user input, elicitation, token refresh. Archon
       // runs with approvals off and handles none of them, and an unanswered request
       // stalls the turn, so each gets an error reply at once.

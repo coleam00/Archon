@@ -32,6 +32,7 @@ import { diagnoseBinary } from '../shared/binary-diagnostics';
 import { readCodexSetupEnv, formatCodexSetupDeprecation } from './setup-env';
 import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
+import { buildCodexNativeTools, toolResponse } from './native-tools';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinary, resolveCodexBinaryWithSource } from './binary-resolver';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
@@ -348,7 +349,7 @@ type ToolCallEvent = Extract<ProviderEvent, { type: 'tool_call' }>;
 type ToolCallUpdateEvent = Extract<ProviderEvent, { type: 'tool_call_update' }>;
 type ToolItem = Extract<
   ThreadItem,
-  { type: 'commandExecution' | 'webSearch' | 'mcpToolCall' | 'fileChange' }
+  { type: 'commandExecution' | 'webSearch' | 'mcpToolCall' | 'fileChange' | 'dynamicToolCall' }
 >;
 
 function isToolItem(item: ThreadItem): item is ToolItem {
@@ -356,6 +357,7 @@ function isToolItem(item: ThreadItem): item is ToolItem {
     item.type === 'commandExecution' ||
     item.type === 'webSearch' ||
     item.type === 'mcpToolCall' ||
+    item.type === 'dynamicToolCall' ||
     item.type === 'fileChange'
   );
 }
@@ -382,6 +384,14 @@ function toolCallOf(item: ToolItem): ToolCallEvent {
         title: item.query,
         rawInput: { query: item.query },
       };
+    case 'dynamicToolCall':
+      return {
+        type: 'tool_call',
+        toolCallId: item.id,
+        name: item.tool,
+        title: item.namespace ? `${item.namespace}/${item.tool}` : item.tool,
+        rawInput: toolCallSchema.shape.rawInput.parse(item.arguments),
+      };
     case 'mcpToolCall': {
       const call: ToolCallEvent = {
         type: 'tool_call',
@@ -407,6 +417,7 @@ function toolCallOf(item: ToolItem): ToolCallEvent {
 /** A tool item that ran and failed, or that Codex refused to run. */
 function itemFailed(item: ToolItem): boolean {
   if (item.type === 'webSearch') return false;
+  if (item.type === 'dynamicToolCall') return item.status === 'failed' || item.success === false;
   if (item.status === 'failed' || item.status === 'declined') return true;
   return item.type === 'commandExecution' && item.exitCode !== null && item.exitCode !== 0;
 }
@@ -422,6 +433,16 @@ function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
     case 'commandExecution':
       if (item.exitCode !== null) update.exitCode = item.exitCode;
       return { ...update, ...truncateToolOutput(item.aggregatedOutput ?? '') };
+    case 'dynamicToolCall':
+      return {
+        ...update,
+        ...truncateToolOutput(
+          (item.contentItems ?? [])
+            .filter(item => item.type === 'inputText')
+            .map(item => item.text)
+            .join('\n')
+        ),
+      };
     case 'mcpToolCall':
       if (item.status === 'failed') {
         return { ...update, ...truncateToolOutput(item.error?.message ?? 'MCP tool failed') };
@@ -511,6 +532,7 @@ function codexHomeOf(initializeResponse: unknown): string {
 }
 
 interface TurnRequest {
+  nativeTools?: SendQueryOptions['nativeTools'];
   connection: AppServerConnection;
   apiKey: string | undefined;
   cwd: string;
@@ -541,9 +563,12 @@ interface TurnRequest {
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection, nodePlugins } = request;
+  const tools = buildCodexNativeTools(request.nativeTools ?? []);
   const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
-    capabilities: null,
+    capabilities: request.nativeTools?.length
+      ? { experimentalApi: true, requestAttestation: false }
+      : null,
   });
   connection.notify('initialized');
   if (request.apiKey) {
@@ -573,7 +598,11 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         ...threadParams,
         excludeTurns: true,
       })
-    : await connection.request('thread/start', { cwd: request.cwd, ...threadParams });
+    : await connection.request('thread/start', {
+        cwd: request.cwd,
+        ...threadParams,
+        ...(request.nativeTools?.length ? { dynamicTools: tools.specs } : {}),
+      });
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
@@ -587,18 +616,31 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     'codex.thread_ready'
   );
 
-  const turnResponse = await connection.request('turn/start', {
-    threadId,
-    ...request.turnParams,
+  // Codex can request a tool before turn/start's response has reached the caller.
+  const activeTurn = Promise.withResolvers<string | undefined>();
+  let parentCompleted = false;
+  connection.handleToolCalls(async params => {
+    const turnId = await activeTurn.promise;
+    return !parentCompleted
+      ? tools.call(params, threadId, turnId)
+      : toolResponse('The Archon turn has ended.', false);
   });
-  const turnId = idAt(turnResponse, 'turn');
-  if (!turnId) throw new Error('Codex app-server returned a turn without an id');
+  let turnId: string | undefined;
+  try {
+    const turnResponse = await connection.request('turn/start', {
+      threadId,
+      ...request.turnParams,
+    });
+    turnId = idAt(turnResponse, 'turn');
+    if (!turnId) throw new Error('Codex app-server returned a turn without an id');
+  } finally {
+    activeTurn.resolve(turnId);
+  }
   request.onTurn(turnId);
 
   const startedToolIds = new Set<string>();
   const liveTasks = new Set<string>();
   const agentThreads = new Set<string>();
-  let parentCompleted = false;
   let pendingFailure: ResultChunk | undefined;
   const errors: string[] = [];
   let lastAgentMessage = '';
@@ -1090,6 +1132,7 @@ export class CodexProvider implements IAgentProvider {
 
       const stream = streamTurn({
         connection,
+        nativeTools: titleRequest ? undefined : requestOptions?.nativeTools,
         apiKey,
         cwd,
         resumeSessionId,

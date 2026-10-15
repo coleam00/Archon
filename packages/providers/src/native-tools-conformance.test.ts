@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { buildCodexNativeTools } from './codex/native-tools';
 import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020';
 import { z } from 'zod';
-import { buildArchonMcpServer, nativeToolInputToZodShape } from './claude/native-tools';
+import { buildArchonMcpServer } from './claude/native-tools';
+import { nativeToolInputToZodShape } from './shared/native-tools';
 import {
   buildPiNativeToolDefinitions,
   nativeToolInputToTypeBox,
@@ -18,7 +21,7 @@ const SCHEMA: NativeToolInputSchema = defineNativeToolInputSchema({
 });
 
 /**
- * Value-level cases both converters' emitted schemas must agree on: enum
+ * Value-level cases the converters' emitted schemas must agree on: enum
  * membership, required vs optional, primitive kind, and top-level object-ness.
  * Unsupported field kinds are no longer representable, so they are a compile
  * error rather than a runtime rejection case.
@@ -41,15 +44,45 @@ const CASES: { label: string; input: unknown; accept: boolean }[] = [
 ];
 
 describe('native tool input schema conformance', () => {
-  test('Claude (Zod) and Pi (TypeBox) accept and reject the same inputs', () => {
+  test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = z.object(nativeToolInputToZodShape(SCHEMA));
     const validatePi = new Ajv({ strict: false }).compile(nativeToolInputToTypeBox(SCHEMA));
+    const codex = buildCodexNativeTools([
+      {
+        name: 'manage_run',
+        description: 'fixture',
+        inputSchema: SCHEMA,
+        handler: () => Promise.resolve('ok'),
+      },
+    ]);
+    const spec = codex.specs[0];
+    if (
+      spec.type !== 'function' ||
+      typeof spec.inputSchema !== 'object' ||
+      spec.inputSchema === null
+    )
+      throw new Error('Expected a function input schema');
+    const validateCodex = new Ajv2020({ strict: false }).compile(spec.inputSchema);
     for (const { label, input, accept } of CASES) {
+      const response = await codex.call(
+        {
+          threadId: 't',
+          turnId: 'u',
+          callId: 'c',
+          namespace: null,
+          tool: 'manage_run',
+          arguments: input,
+        },
+        't',
+        'u'
+      );
       expect({
         label,
         claude: zodObject.safeParse(input).success,
         pi: validatePi(input) === true,
-      }).toEqual({ label, claude: accept, pi: accept });
+        codexSchema: validateCodex(input) === true,
+        codexHandler: response.success,
+      }).toEqual({ label, claude: accept, pi: accept, codexSchema: accept, codexHandler: accept });
     }
   });
 
