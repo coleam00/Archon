@@ -47,6 +47,7 @@ const mockLogger = {
  * this file leaves it on the unreachable default, where no pointer can validate.
  */
 let mockArtifactHome = '/nonexistent/home';
+let mockWorkflowHome = '/nonexistent/home/workflows';
 // Captured before the module mock below replaces the re-export.
 const { isPathInside } = await import('@archon/paths/archon-paths');
 mock.module('@archon/paths', () => ({
@@ -58,7 +59,7 @@ mock.module('@archon/paths', () => ({
   },
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
-  getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
+  getHomeWorkflowsPath: () => mockWorkflowHome,
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
@@ -124,6 +125,7 @@ import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import { providerEventEnvelopeSchema, providerEventLineSchema } from './schemas/provider-event';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
+import { missingMcpConfigMessage } from './mcp-path';
 import type {
   DagNode,
   AgentNode,
@@ -150,6 +152,7 @@ import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import {
   COMPILED_LOOP_COMMAND,
+  readHomeMcpDirectory,
   type CompiledLoopCommand,
   type LoopWithCompiledCommand,
 } from './compiled-command';
@@ -22277,9 +22280,10 @@ describe('resolveNodeMcp', () => {
   it('hands a required path to the provider even when the file is missing', async () => {
     const { resolveNodeMcp } = await import('./dag-executor');
     expect(await resolveNodeMcp('missing.json', claude, testDir)).toEqual({
-      kind: 'load',
-      path: 'missing.json',
+      kind: 'missing',
+      path: join(testDir, 'missing.json'),
       servers: new Set(),
+      diagnostic: missingMcpConfigMessage('missing.json', [join(testDir, 'missing.json')]),
     });
   });
 
@@ -22295,6 +22299,34 @@ describe('resolveNodeMcp', () => {
     expect(result).toEqual({ kind: 'load', path: absolutePath, servers: new Set(['foo', 'bar']) });
   });
 
+  it('loads an optional home config beside its YAML when the checkout has none', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    const cwd = join(testDir, 'checkout');
+    const yamlDir = join(testDir, 'home', 'workflows', 'nested');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      'name: home-mcp\nnodes:\n  - id: check\n    prompt: Check\n    mcp:\n      path: servers.json\n      optional: true\n'
+    );
+    await writeFile(join(yamlDir, 'servers.json'), '{"home-server":{"command":"example"}}');
+
+    const result = await resolveNodeMcp(
+      { path: 'servers.json', optional: true },
+      claude,
+      cwd,
+      yamlDir
+    );
+
+    expect(result).toEqual({
+      kind: 'load',
+      path: join(yamlDir, 'servers.json'),
+      servers: new Set(['home-server']),
+    });
+    if (result.kind !== 'load') throw new Error('Missing optional home MCP config');
+    expect((await loadMcpConfig(result.path, cwd)).serverNames).toEqual(['home-server']);
+  });
+
   it('withholds an optional declaration whose file does not exist', async () => {
     const { resolveNodeMcp } = await import('./dag-executor');
     expect(await resolveNodeMcp({ path: 'missing.json', optional: true }, claude, testDir)).toEqual(
@@ -22302,6 +22334,7 @@ describe('resolveNodeMcp', () => {
         kind: 'unavailable',
         fullPath: join(testDir, 'missing.json'),
         record: { path: 'missing.json', reason: 'config_missing' },
+        diagnostic: missingMcpConfigMessage('missing.json', [join(testDir, 'missing.json')]),
       }
     );
   });
@@ -22321,7 +22354,7 @@ describe('resolveNodeMcp', () => {
     await writeFile(join(testDir, 'broken.json'), '{ not-json');
     expect(await resolveNodeMcp({ path: 'broken.json', optional: true }, claude, testDir)).toEqual({
       kind: 'load',
-      path: 'broken.json',
+      path: join(testDir, 'broken.json'),
       servers: new Set(),
     });
   });
@@ -22330,6 +22363,245 @@ describe('resolveNodeMcp', () => {
 // ---------------------------------------------------------------------------
 // MCP plugin-noise filtering — end-to-end through executeDagWorkflow
 // ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- home MCP paths', () => {
+  let testDir: string;
+  let yamlDir: string;
+  beforeEach(async () => {
+    testDir = await mkdtemp(join(tmpdir(), 'dag-home-mcp-'));
+    yamlDir = join(testDir, 'home', 'workflows', 'nested');
+    mockWorkflowHome = join(testDir, 'home', 'workflows');
+    await mkdir(yamlDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+  afterEach(async () => {
+    mockWorkflowHome = '/nonexistent/home/workflows';
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  async function discoverHome(
+    provider: string,
+    sourceRoots?: ExecuteDagWorkflowOptions['workflowSourceRoots']
+  ) {
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      `name: home-mcp
+description: Home MCP
+provider: ${provider}
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+    );
+    const catalog = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+      sourceRoots,
+    });
+    expect(catalog.errors).toEqual([]);
+    const entry = catalog.workflows.find(e => e.workflow.name === 'home-mcp');
+    if (!entry) throw new Error('Missing home workflow');
+    return entry.workflow;
+  }
+
+  it.each([
+    ['claude', ''],
+    ['claude', 'nested'],
+    ['claude', 'pack/flow'],
+    ['codex', 'nested'],
+  ])('hands the selected home config to the real loader for %s in %s', async (provider, subdir) => {
+    yamlDir = join(mockWorkflowHome, subdir);
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(join(yamlDir, 'servers.json'), '{"home-server":{"command":"example"}}');
+    const workflow = await discoverHome(provider);
+    const loaded: string[][] = [];
+    mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+      const path = options?.nodeConfig?.mcp;
+      expect(path).toBe(join(yamlDir, 'servers.json'));
+      if (!path) throw new Error('Missing provider MCP path');
+      loaded.push((await loadMcpConfig(path, cwd)).serverNames);
+      yield {
+        type: 'mcp_server_status',
+        server: 'home-server',
+        status: 'failed',
+        error: 'timeout',
+      };
+      yield { type: 'mcp_server_status', server: 'ambient', status: 'failed' };
+      yield { type: 'agent_message_chunk', text: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+    const platform = createMockPlatform();
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(loaded).toEqual([['home-server']]);
+    const sent = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls.map(
+      c => c[1]
+    );
+    expect(sent).toContain('MCP server connection failed: home-server (failed): timeout');
+    expect(sent.some(text => text.includes('ambient'))).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each(['home', 'project'] as const)(
+    'keeps required missing %s MCP classified and unretried, with all candidates',
+    async source => {
+      const homeWorkflow = await discoverHome('claude');
+      const workflow =
+        source === 'home'
+          ? homeWorkflow
+          : ({
+              name: 'project',
+              description: 'Project declaration',
+              nodes: [
+                {
+                  id: 'check',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Check' },
+                  mcp: 'servers.json',
+                },
+              ],
+            } satisfies WorkflowDefinition);
+      let evidence: string | undefined;
+      mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+        try {
+          await loadMcpConfig(options!.nodeConfig!.mcp!, cwd);
+          throw new Error('Expected missing config');
+        } catch (error) {
+          if (!(error instanceof Error) || !('failureClass' in error)) throw error;
+          expect(error.failureClass).toBe('misconfigured');
+          evidence = error.message;
+          yield {
+            type: 'result',
+            isError: true,
+            errors: [error.message],
+            failure: { class: 'misconfigured', evidence: error.message },
+          };
+        }
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      const failed = store.createWorkflowEvent.mock.calls
+        .map(([e]) => e)
+        .find(e => e.event_type === 'node_failed');
+      expect(failed?.data?.provider_failure).toEqual({ class: 'misconfigured', evidence });
+      expect(failed?.data?.failure_kind).toBe('fatal');
+      const candidates = [
+        join(testDir, 'servers.json'),
+        ...(source === 'home' ? [join(yamlDir, 'servers.json')] : []),
+      ];
+      expect(failed?.data?.error).toContain(missingMcpConfigMessage('servers.json', candidates));
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    }
+  );
+
+  it('runs rediscovered captured home MCP after live removal, with checkout still first', async () => {
+    await writeFile(join(yamlDir, 'servers.json'), '{"captured":{"command":"example"}}');
+    await discoverHome('claude');
+    const capture = await captureWorkflowSource({
+      sourceRoot: testDir,
+      captureRoot: join(testDir, 'capture'),
+    });
+    const roots = capturedSourceRoots(capture.anchor);
+    await removeTempTree(join(testDir, 'home'));
+    for (const checkoutWins of [false, false, true]) {
+      if (checkoutWins)
+        await writeFile(join(testDir, 'servers.json'), '{"checkout":{"command":"example"}}');
+      const catalog = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+        sourceRoots: roots,
+      });
+      expect(catalog.errors).toEqual([]);
+      const entry = catalog.workflows.find(e => e.workflow.name === 'home-mcp');
+      if (!entry) throw new Error('Missing captured workflow');
+      const loaded: string[][] = [];
+      mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+        const path = options?.nodeConfig?.mcp;
+        expect(path).toBe(
+          checkoutWins
+            ? join(testDir, 'servers.json')
+            : join(roots.globalWorkflows, 'nested', 'servers.json')
+        );
+        if (!path) throw new Error('Missing provider MCP path');
+        loaded.push((await loadMcpConfig(path, cwd)).serverNames);
+        yield { type: 'agent_message_chunk', text: 'ok' };
+        yield { type: 'result', sessionId: 'sess' };
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: entry.workflow,
+          workflowRun: makeWorkflowRun(),
+          workflowSourceRoots: roots,
+        })
+      );
+      expect(loaded).toEqual([[checkoutWins ? 'checkout' : 'captured']]);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    }
+  });
+
+  it('refuses home config capture tampering before a later node reads it', async () => {
+    await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+    await discoverHome('claude');
+    const capture = await captureWorkflowSource({
+      sourceRoot: testDir,
+      captureRoot: join(testDir, 'capture'),
+    });
+    const roots = capturedSourceRoots(capture.anchor);
+    const workflow = await discoverHome('claude', roots);
+    const homeNode = workflow.nodes[0];
+    const capturedDir = readHomeMcpDirectory(homeNode);
+    if (!capturedDir) throw new Error('Missing captured YAML directory');
+    const nodes: DagNode[] = [
+      {
+        id: 'tamper',
+        kind: 'exec',
+        runtime: 'bun',
+        script: `Bun.write(${JSON.stringify(join(capturedDir, 'servers.json'))}, '{}')`,
+      },
+      { ...homeNode, depends_on: ['tamper'] },
+    ];
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: { ...workflow, nodes },
+        workflowRun: makeWorkflowRun(),
+        workflowSourceRoots: roots,
+      })
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([e]) => e)
+      .filter(e => e.event_type === 'node_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].data?.error).toContain('captured source has changed');
+  });
+});
 
 describe('executeDagWorkflow -- MCP failure filtering', () => {
   let testDir: string;
@@ -22437,7 +22709,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     const store = createMockStore();
     await runWithEvents([], mcp, store);
 
-    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe('mcp.json');
+    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe(join(testDir, 'mcp.json'));
     expect(nodeRows(store).every(row => row.data?.mcp_unavailable === undefined)).toBe(true);
   });
 
@@ -22455,7 +22727,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
       c => c[1] as string
     );
     expect(sent).toContain(
-      `Node 'review' runs without its optional MCP servers (absent.json): config file not found at ${join(testDir, 'absent.json')}.`
+      `Node 'review' runs without its optional MCP servers (absent.json): ${missingMcpConfigMessage('absent.json', [join(testDir, 'absent.json')])}.`
     );
   });
 
