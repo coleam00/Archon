@@ -132,6 +132,7 @@ test('the verdict output admits exactly the closures the triage decision does', 
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {
   const run = runPackScript('triage/scripts/verdict', {
+    source: 'gh',
     inputs: {
       ...inputs,
       INPUTS_DECISION: JSON.stringify({ contract: 'NO_ACTION', closure: DELIVERED }),
