@@ -239,8 +239,11 @@ export async function triggerCommand(
       }
       // Other pending work on the host can fail in the same drain; only this receipt's
       // failures are this command's failure.
-      const own = error.failures.filter(failure => failure.receiptId === receipt.receiptId);
-      const others = error.failures.filter(failure => failure.receiptId !== receipt.receiptId);
+      // A failure with no receipt id could be this one, so it counts as ours.
+      const others = error.failures.filter(
+        failure => failure.receiptId !== undefined && failure.receiptId !== receipt.receiptId
+      );
+      const own = error.failures.filter(failure => !others.includes(failure));
       if (own.length > 0)
         throw new Error(
           `Receipt ${receipt.receiptId} is retained, but its host drain failed: ${drainFailureReasons(own.map(failure => failure.error))}. Inspect that receipt before recovery.`,

@@ -315,6 +315,12 @@ export class ResourceStartDrainError extends AggregateError {
   }
 }
 
+function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string | undefined {
+  const origin = launch?.run.metadata?.[RESOURCE_START_METADATA_KEY];
+  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
+  return typeof origin.receiptId === 'string' ? origin.receiptId : undefined;
+}
+
 /**
  * One host pass: prepare this host's pending receipt bindings, then admit its queued
  * requests while their slots have capacity. Every admitted request is handed to the
@@ -355,7 +361,11 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       hostId: host.hostId,
       resource,
     })) {
-      if (decision.status === 'admitted') await start(decision.requestId);
+      if (decision.status === 'admitted') {
+        // A queued request names its receipt in the run metadata written at preparation.
+        const request = queued.find(item => item.id === decision.requestId);
+        await start(decision.requestId, receiptIdOfLaunch(request?.launch));
+      }
     }
   }
 

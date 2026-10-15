@@ -14,6 +14,7 @@ import { PostgresAdapter } from '@archon/core/db/adapters/postgres';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import {
   drainResourceStartHost,
+  ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -22,6 +23,7 @@ import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import type {
   ResourceStartBindingIntent,
+  ResourceStartIntent,
   SourceReceiptAcceptance,
   PreparedWorkflowLaunch,
 } from '@archon/workflows/schemas/resource-start';
@@ -659,6 +661,45 @@ test("fire does not blame its receipt for another binding's preparation failure"
     stdout.mockRestore();
     restore();
   }
+});
+
+test('a queued start that fails is attributed to the receipt that requested it', async () => {
+  const host = hostForTest();
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'portable',
+    default_cwd: '/portable',
+  });
+  const holder = launch(codebase.id);
+  const queued = launch(codebase.id);
+  queued.run.metadata = { resource_start: { receiptId: 'receipt-of-queued', bindingId: 'b' } };
+  const intent = (prepared: PreparedWorkflowLaunch): ResourceStartIntent => ({
+    resource: 'one',
+    capacity: 1,
+    hostId: 'host',
+    overlap: 'queue',
+    launch: prepared,
+  });
+  expect((await store.admitResourceStart(intent(holder))).status).toBe('admitted');
+  expect((await store.admitResourceStart(intent(queued))).status).toBe('queued');
+  await store.claimPendingWorkflowRun(holder.run.id);
+  await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+
+  const error = await drainResourceStartHost({
+    ...host,
+    hostId: 'host',
+    startAdmitted: async () => {
+      throw new Error('start refused');
+    },
+  }).then(
+    () => undefined,
+    (caught: unknown) => caught
+  );
+
+  expect(error).toBeInstanceOf(ResourceStartDrainError);
+  expect((error as ResourceStartDrainError).failures).toMatchObject([
+    { receiptId: 'receipt-of-queued' },
+  ]);
 });
 
 test('preparation preserves both failures when rejection cannot be persisted', async () => {
