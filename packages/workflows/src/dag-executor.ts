@@ -308,9 +308,16 @@ export interface ShellInputContext {
  * `$ARTIFACTS_DIR` or a ref that only exists at run time. Values are never shell-escaped:
  * the env bag is itself the injection-safe channel (#2115), which is why they never touch
  * the script source.
+ *
+ * `runInputs` is explicit for the same reason as in {@link resolveNodeBindings}: the
+ * dry-run simulator builds the bag with this function and passes its effective input map,
+ * so the preview cannot drift from the real run.
  */
-function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv {
-  const runInputs = resolveRunInputs(ctx.workflowRun);
+export function inputEnvVars(
+  node: DagNode,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined = resolveRunInputs(ctx.workflowRun)
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(runInputs ?? {})) {
     // Canonical text (#2637): env vars are text, so a typed input rides its one

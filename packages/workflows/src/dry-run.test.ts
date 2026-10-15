@@ -2559,6 +2559,34 @@ describe('dryRunWorkflow — declared inputs (#2610)', () => {
 
     expect(result.trace[0]).toMatchObject({ state: 'completed', output: 'v=W' });
   });
+
+  test("delivers an included block's own inputs to its bash body under --exec-code", async () => {
+    const block = makeTestWorkflow({
+      name: 'blk',
+      inputs: { work: { required: true } },
+      nodes: [{ id: 'code', bash: 'set -u; printf "v=%s" $INPUTS.work' }],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'inc', include: 'blk', with: { work: 'two words' } }],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['blk', block],
+        ['parent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+
+    const result = await dryRunWorkflow({
+      workflow: workflows.get('parent')!,
+      userMessage: '',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+
+    expect(result.trace[0]).toMatchObject({ state: 'completed', output: 'v=two words' });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import {
   checkComposedBlockBoundaries,
   checkTriggerRule,
   loopBodyScope,
+  inputEnvVars,
   nodeTemplateReferences,
   resolveNodeBindings,
   substituteLoopBodyText,
@@ -25,7 +26,7 @@ import {
   resolveIncludeOutputAliases,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import { canonicalValueText, parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
+import { parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
   describeUnmetCompletion,
@@ -53,7 +54,6 @@ import { observeCheckout } from './checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from './node-execution';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
-  inputEnvKey,
   isGateNode,
   isExecNode,
   isHaltNode,
@@ -745,9 +745,8 @@ async function executeCodeNode(
   node: DagNode,
   code: string,
   ctx: DryRunContext,
-  /** Resolved node-local `with:` bindings (#2637) — the nearest env source, layered
-   *  over run inputs exactly like the executor's `inputEnvVars` third tier. */
-  nodeBindings?: Record<string, JsonValue>,
+  /** The executor's own `INPUTS_<UPPER_SNAKE>` bag: run, composed and node-local inputs. */
+  inputEnv: NodeJS.ProcessEnv,
   execution?: NodeExecutionMetadata
 ): Promise<{ output: string } | { error: string }> {
   try {
@@ -775,23 +774,6 @@ async function executeCodeNode(
         script.runtime === 'bun'
           ? ['--no-env-file', 'run', script.path]
           : ['run', ...(node.deps ?? []).flatMap(dep => ['--with', dep]), script.path];
-    }
-    // Run-level inputs and node-local bindings ride the env bag as
-    // `INPUTS_<UPPER_SNAKE>`, never text substitution — the outer tiers of a real
-    // run's `inputEnvVars` (dag-executor.ts), bindings layered over run inputs in
-    // the same nearest-wins order. Composed include-block inputs for named scripts
-    // remain a real-run-only channel the dry run does not deliver.
-    // That applies to EVERY composed exec node, not just named scripts: a
-    // `bash:` body inlined through `include:` sees none of the caller's `with:`
-    // values here, so one reading `$INPUTS_FOO` under `set -u` dies on an
-    // unbound variable. Such a node can only be stubbed in a fixture — its real
-    // behaviour is not reachable from `workflow test`.
-    const inputEnv: Record<string, string> = {};
-    for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
-      inputEnv[inputEnvKey(name)] = canonicalValueText(value);
-    }
-    for (const [name, value] of Object.entries(nodeBindings ?? {})) {
-      inputEnv[inputEnvKey(name)] = canonicalValueText(value);
     }
     // The executor pre-creates the artifacts dir it advertises; the simulator honors
     // the same contract (#2617). Idempotent, and only reached when code executes, so
@@ -1339,7 +1321,13 @@ async function simulateNode(
     );
     const stub = stubFor(node, ctx);
     if (stub === undefined && isExecNode(node) && ctx.execCode) {
-      const executed = await executeCodeNode(node, resolvedText, ctx, nodeBindings, execution);
+      const executed = await executeCodeNode(
+        node,
+        resolvedText,
+        ctx,
+        inputEnvVars(node, bindingShellContext(ctx, outputs), ctx.inputs),
+        execution
+      );
       if ('error' in executed) {
         recordFailed(node, outputs, ctx, executed.error, resolvedText, iteration);
       } else {
