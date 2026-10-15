@@ -34,6 +34,12 @@ export interface FakeConfig {
   readonly outsideAgentRuns?: boolean;
   /** archon-triage's agent node records no execution, so no binding. */
   readonly unboundTriage?: boolean;
+  /** archon-triage's agent node ran on this binding, whatever the launch pinned. */
+  readonly triageRanAs?: { provider: string; model: string };
+  /** After a launched run, every issue read fails, as a lost tracker would. */
+  readonly issueReadsFailAfterRun?: boolean;
+  /** A run's transcript path names a directory, so reading it fails. */
+  readonly unreadableTranscript?: boolean;
   /** The project key `archon state list` names. */
   readonly projectKey: string;
   /** Issue numbers a tracker search answers, by a fragment of its query. */
@@ -118,6 +124,10 @@ function answer(dir: string, args: readonly string[]): string {
     writeFileSync(count, String(n));
     writeFileSync(join(dir, `argv-${n}.json`), JSON.stringify(args));
     const given = inputs(args);
+    if (config.issueReadsFailAfterRun === true) {
+      config.issues.length = 0;
+      save();
+    }
     if (config.writeLabel !== undefined && given.number !== undefined) {
       config.issues.find(issue => issue.number === Number(given.number))?.labels.push(config.writeLabel);
       save();
@@ -142,7 +152,7 @@ function answer(dir: string, args: readonly string[]): string {
       output_root: join(dir, 'root'),
       started_at: '2026-10-15T10:00:00Z',
       completed_at: '2026-10-15T10:01:00Z',
-      transcript_path: null,
+      transcript_path: config.unreadableTranscript === true ? dir : null,
       terminal_record: {
         returns: {
           availability: 'available',
@@ -158,7 +168,7 @@ function answer(dir: string, args: readonly string[]): string {
             agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
             { nodeId: 'outcome', state: 'completed', execution: { node: { kind: 'exec' } } },
           ]
-        : [config.unboundTriage === true ? { nodeId: 'triage', state: 'completed' } : agent('triage', 'completed', bound)],
+        : [config.unboundTriage === true ? { nodeId: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)],
     };
     writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(detail));
     return JSON.stringify({ runId: `run-${n}` });

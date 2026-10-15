@@ -331,6 +331,36 @@ describe('bench run', () => {
     });
   });
 
+  it('does not pass a run whose judging node ran on another model than its version pins', () => {
+    const { run } = bench({ triageRanAs: { provider: 'codex', model: 'other' } });
+    const { lines } = run('base');
+    expect(lines.find(line => line.row === '11')).toMatchObject({
+      passed: false,
+      problems: ['triage ran codex/other, not codex/gpt-x'],
+    });
+  });
+
+  it('fails the batch with a checks record when the after-read fails', () => {
+    const { run } = bench({ issueReadsFailAfterRun: true });
+    const { status, checks } = run('base');
+    expect(status).toBe(1);
+    expect(checks).toHaveLength(1);
+    expect(checks[0].passed).toBe(false);
+    for (const check of [checks[0].checks.writes, checks[0].checks.posted_text]) {
+      expect(check.problems).toEqual([expect.stringContaining('the after-read failed, so the batch is unproven')]);
+    }
+  });
+
+  it('records a failed transcript read as the row problem, not a lost line', () => {
+    const { run } = bench({ unreadableTranscript: true });
+    const { lines } = run('base');
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line.passed).toBe(false);
+      expect(line.problems).toEqual([expect.stringContaining('EISDIR')]);
+    }
+  });
+
   it('fails the batch when an eval run writes to an issue', () => {
     const { run } = bench({ writeLabel: 'archon-ready' });
     const { status, stderr, checks } = run('base');
