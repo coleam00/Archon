@@ -7,6 +7,7 @@
  * the queue reports for that run changed. Out-of-process runs are covered because the
  * feed is the persisted store, not an in-process emitter. The watch reads only.
  */
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
@@ -79,7 +80,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     z.object({
       type: z.literal('resolved'),
       ...lineBase,
-      /** Null for an `unreadable` item, which has no occurrence. */
+      /** Null for `usage_limit` and `unreadable` items, which have no occurrence. */
       occurrence: z.string().nullable(),
       reason: z.literal('answered'),
       answeredVia: recordSurfaceSchema.nullable(),
@@ -151,13 +152,6 @@ const TERMINAL_EVENT_STATUS = {
 
 function isTerminalEventType(type: string): type is keyof typeof TERMINAL_EVENT_STATUS {
   return Object.hasOwn(TERMINAL_EVENT_STATUS, type);
-}
-
-/** An item this connection last sent as `attention`. */
-interface OpenItem {
-  occurrence: string | null;
-  revision: number;
-  project: ProjectRef | null;
 }
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
@@ -259,7 +253,7 @@ export async function watchAttentionQueue(
   const start = options.after ?? (await store.getWorkflowEventHead());
   if (options.after !== undefined) await store.readWorkflowEventsAfter(options.after, { limit: 1 });
 
-  const open = new Map<string, OpenItem>();
+  const open = new Map<string, AttentionQueueItem>();
   let follower: WorkflowEventFeedFollower | undefined;
   let closed = false;
   let chain: Promise<void> = Promise.resolve();
@@ -354,11 +348,7 @@ export async function watchAttentionQueue(
     order: { by: 'age' },
   });
   for (const item of snapshot) {
-    open.set(item.runId, {
-      occurrence: occurrenceOf(item),
-      revision: item.revision,
-      project: item.project,
-    });
+    open.set(item.runId, item);
     emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
   }
   emit({ type: 'ready', cursor: start });
@@ -405,13 +395,13 @@ export async function watchAttentionQueue(
 
   const resolve = (
     runId: string,
-    prev: OpenItem,
+    prev: AttentionQueueItem,
     cursor: WorkflowEventCursor,
     run: WorkflowRun | null
   ): void => {
-    const fromRow = run === null ? undefined : rowResolution(run, prev.occurrence);
-    const via =
-      prev.occurrence === null ? undefined : answers.get(answerKey(runId, prev.occurrence));
+    const occurrence = occurrenceOf(prev);
+    const fromRow = run === null ? undefined : rowResolution(run, occurrence);
+    const via = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const resolution: Resolution =
       fromRow ??
       (via !== undefined
@@ -422,7 +412,7 @@ export async function watchAttentionQueue(
       cursor,
       project: prev.project,
       runId,
-      occurrence: prev.occurrence,
+      occurrence,
       ...resolution,
     });
   };
@@ -432,18 +422,18 @@ export async function watchAttentionQueue(
     const item = view?.item ?? null;
     if (item !== null && inQuery(item)) {
       const occurrence = occurrenceOf(item);
-      const replaced = prev !== undefined && prev.occurrence !== occurrence;
+      const replaced = prev !== undefined && occurrenceOf(prev) !== occurrence;
       if (replaced) resolve(runId, prev, cursor, view?.run ?? null);
-      if (prev === undefined || replaced || prev.revision !== item.revision)
+      if (prev === undefined || !isDeepStrictEqual(prev, item))
         emit({ type: 'attention', cursor, snapshot: false, project: item.project, item });
-      open.set(runId, { occurrence, revision: item.revision, project: item.project });
+      open.set(runId, item);
       return;
     }
     if (prev === undefined) return;
     open.delete(runId);
     // Still open at the same occurrence but no longer matching the labels: the stream
     // stops tracking it, and `unmatched` tells the consumer.
-    if (item !== null && occurrenceOf(item) === prev.occurrence) return;
+    if (item !== null && occurrenceOf(item) === occurrenceOf(prev)) return;
     resolve(runId, prev, cursor, view?.run ?? null);
   };
 
