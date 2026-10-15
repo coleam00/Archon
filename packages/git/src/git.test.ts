@@ -3254,6 +3254,82 @@ branch refs/heads/feature/auth
         { timeout: 10000 }
       );
     });
+    test.each([false, true])(
+      'reset repair preserves accepted trust (write fails: %s)',
+      async fail => {
+        execSpy.mockRestore();
+        const realExec = git.execFileAsync;
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-atomic-')));
+        const config = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = config;
+        try {
+          await realExec('git', ['init', root]);
+          await writeFile(config, `[safe]\n directory = ${root}\n directory = \n`);
+          const checkTrust = async (): Promise<void> => {
+            await realExec('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
+          };
+          let checkedIntermediate = false;
+          execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
+            if (args?.includes('--get-all')) {
+              const snapshot = await realExec(file, args, options);
+              // Another setup completes after this reader took its snapshot.
+              await realExec('git', [
+                'config',
+                '--global',
+                '--fixed-value',
+                '--unset-all',
+                'safe.directory',
+                root,
+              ]);
+              await realExec('git', [
+                'config',
+                '--global',
+                '--fixed-value',
+                '--replace-all',
+                'safe.directory',
+                root,
+                root,
+              ]);
+              await realExec('git', ['config', '--global', 'test.concurrent', 'retained']);
+              await checkTrust();
+              return snapshot;
+            }
+            if (args?.includes('--unset-all')) {
+              const result = await realExec(file, args, options);
+              await checkTrust();
+              checkedIntermediate = true;
+              return result;
+            }
+            if (fail && args?.includes('--replace-all'))
+              throw new Error('injected replacement failure');
+            return realExec(file, args, options);
+          });
+          if (fail)
+            await expect(git.addSafeDirectory(repo(root))).rejects.toThrow(
+              'injected replacement failure'
+            );
+          else await git.addSafeDirectory(repo(root));
+          expect(checkedIntermediate).toBe(true);
+          await checkTrust();
+          expect(
+            (await realExec('git', ['config', '--global', '--null', '--get-all', 'safe.directory']))
+              .stdout
+          ).toBe(`\0${root}\0`);
+          expect(
+            (await realExec('git', ['config', '--global', 'test.concurrent'])).stdout.trim()
+          ).toBe('retained');
+          expect(await Bun.file(`${config}.lock`).exists()).toBe(false);
+        } finally {
+          execSpy.mockRestore();
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
+
     test('repeated setup keeps one exact safe-directory entry and preserves other paths', async () => {
       execSpy.mockRestore();
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-directory-')));

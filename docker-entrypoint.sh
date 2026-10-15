@@ -90,14 +90,30 @@ find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
       fi
     done
     if [ "$count" -ne 1 ] || [ "$effective" -ne 1 ]; then
-      # Replace-all keeps the first match's position, including before a reset.
       if [ "$count" -ne "$effective" ]; then
-        $RUNNER git config --global --fixed-value --unset-all safe.directory "$repo_dir" || {
-          status=$?
-          if [ "$status" -ne 5 ]; then exit "$status"; fi
-        }
+        $RUNNER bash -e -c '
+          config=${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}
+          if [ -z "${GIT_CONFIG_GLOBAL+x}" ] && [ ! -e "$config" ]; then
+            config=${XDG_CONFIG_HOME:-$HOME/.config}/git/config
+          fi
+          config=$(readlink -f -- "$config")
+          lock=$config.lock
+          # Share the Git writer lock; never publish the intermediate unset.
+          (set -o noclobber; : > "$lock")
+          cleanup() { rm -f -- "$lock"; }
+          trap cleanup EXIT
+          cp -p -- "$config" "$lock"
+          git config --file "$lock" --fixed-value --unset-all safe.directory "$1" || {
+            status=$?
+            if [ "$status" -ne 5 ]; then exit "$status"; fi
+          }
+          git config --file "$lock" --fixed-value --replace-all safe.directory "$1" "$1"
+          mv -f -- "$lock" "$config"
+          trap - EXIT
+        ' bash "$repo_dir"
+      else
+        $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
       fi
-      $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
     fi
   }
 done

@@ -16,7 +16,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
     const scripts = {
       id: 'echo 1001',
       mkdir: 'exit 0',
-      find: 'printf "%s/.git\\0" "$ARCHON_TEST_REPO"',
+      find: 'for arg do if [ "$arg" = -print0 ]; then printf "%s/.git\\0" "$ARCHON_TEST_REPO"; exit; fi; done; printf "%s/.git\\n" "$ARCHON_TEST_REPO"',
       bun: 'exit 0',
     };
     for (const [name, body] of Object.entries(scripts)) {
@@ -56,6 +56,52 @@ test.skipIf(process.platform === 'win32').each([false, true])(
         .split('\0')
         .slice(0, -1)
     ).toEqual(['/workspace/other', '', repo]);
+    await mkdir(repo);
+    git('init', '--quiet', repo);
+    const realGit = Bun.which('git');
+    if (!realGit) throw new Error('Git is required');
+    const wrapper = `#!/bin/sh
+if [ "$1" = config ] && [ "$2" = --global ] && [ "$3" = --null ] && [ "$4" = --get-all ]; then
+  "$ARCHON_TEST_GIT" "$@" || exit $?
+  "$ARCHON_TEST_GIT" config --global --fixed-value --unset-all safe.directory "$ARCHON_TEST_REPO"
+  "$ARCHON_TEST_GIT" config --global --fixed-value --replace-all safe.directory "$ARCHON_TEST_REPO" "$ARCHON_TEST_REPO"
+  "$ARCHON_TEST_GIT" config --global test.concurrent retained
+elif [ "$5" = --unset-all ]; then
+  "$ARCHON_TEST_GIT" "$@" || exit $?
+  GIT_TEST_ASSUME_DIFFERENT_OWNER=1 "$ARCHON_TEST_GIT" -C "$ARCHON_TEST_REPO" status --porcelain || exit $?
+  if "$ARCHON_TEST_GIT" config --global test.blocked must-not-write; then exit 88; fi
+  touch "$ARCHON_TEST_MARKER"
+elif [ "$5" = --replace-all ] && [ "$ARCHON_TEST_FAIL" = 1 ]; then
+  echo injected-replacement-failure >&2
+  exit 9
+else
+  exec "$ARCHON_TEST_GIT" "$@"
+fi
+`;
+    for (const fail of [false, true]) {
+      git('config', '--global', '--add', 'safe.directory', '');
+      await writeFile(join(bin, 'git'), wrapper, { mode: 0o755 });
+      const marker = join(home, 'checked');
+      const repair = Bun.spawnSync(['bash', resolve(import.meta.dir, '../docker-entrypoint.sh')], {
+        env: {
+          ...env,
+          ARCHON_TEST_GIT: realGit,
+          ARCHON_TEST_MARKER: marker,
+          ARCHON_TEST_FAIL: fail ? '1' : '0',
+        },
+      });
+      await unlink(join(bin, 'git'));
+      expect(repair.exitCode).toBe(fail ? 9 : 0);
+      if (fail) expect(repair.stderr.toString()).toContain('injected-replacement-failure');
+      expect(await Bun.file(marker).exists()).toBe(true);
+      await unlink(marker);
+      execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], {
+        env: { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+      });
+      expect(git('config', '--global', 'test.concurrent')).toBe('retained');
+      expect(await Bun.file(join(home, '.gitconfig.lock')).exists()).toBe(false);
+    }
+    execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
     await writeFile(join(home, '.gitconfig.lock'), '');
     execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
     await unlink(join(home, '.gitconfig.lock'));

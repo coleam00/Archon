@@ -1,7 +1,8 @@
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
+import { readdir, open, readFile, realpath, rename, stat, unlink } from 'fs/promises';
+import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
@@ -599,6 +600,52 @@ export async function syncRepository(
   return { ok: true, value: undefined };
 }
 
+async function relocateSafeDirectory(path: RepoPath): Promise<void> {
+  const home = process.env.HOME || homedir();
+  const homeConfig = join(home, '.gitconfig');
+  const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
+  const config = await realpath(
+    process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
+  );
+  const lockPath = `${config}.lock`;
+  // Use Git's writer lock and publish only the finished edit. Readers retain
+  // their accepted trust even if a repair fails after removing the old entry.
+  const lock = await open(lockPath, 'wx', (await stat(config)).mode);
+  let published = false;
+  try {
+    await lock.writeFile(await readFile(config));
+    await lock.close();
+    try {
+      await execFileAsync(
+        'git',
+        ['config', '--file', lockPath, '--fixed-value', '--unset-all', 'safe.directory', path],
+        { timeout: 10000 }
+      );
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
+    }
+    await execFileAsync(
+      'git',
+      [
+        'config',
+        '--file',
+        lockPath,
+        '--fixed-value',
+        '--replace-all',
+        'safe.directory',
+        path,
+        path,
+      ],
+      { timeout: 10000 }
+    );
+    await rename(lockPath, config);
+    published = true;
+  } finally {
+    await lock.close();
+    if (!published) await unlink(lockPath);
+  }
+}
+
 /**
  * Add a directory to git's global safe.directory config.
  * Grants persist after setup failure: revocation could remove trust that a
@@ -622,16 +669,8 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     const firstGrant = values.indexOf(path);
     // Git's empty value resets prior grants; replace-all retains their position.
     if (firstGrant !== -1 && firstGrant < values.lastIndexOf('')) {
-      try {
-        await execFileAsync(
-          'git',
-          ['config', '--global', '--fixed-value', '--unset-all', 'safe.directory', path],
-          { timeout: 10000 }
-        );
-      } catch (error) {
-        // Another setup may already have removed the ineffective entry.
-        if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
-      }
+      await relocateSafeDirectory(path);
+      return;
     }
     await execFileAsync(
       'git',
