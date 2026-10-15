@@ -2,7 +2,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 import type {
   ContinuationWakeOutcome,
   ContinuationAdmission,
-} from '@archon/core/workflows/continuation-host';
+} from '@archon/core/workflows/continuation-resume';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -38,8 +38,10 @@ const signal = mock(async () => ({ signaled: true }));
 const install = mock(async (_config: NativeScheduleConfig) => 'installed');
 const remove = mock(async (_id: string) => true);
 mock.module('@archon/core/workflows/continuation-host', () => ({
-  wakeDueWorkflowContinuations: scan,
   resumeWorkflowContinuation: resume,
+}));
+mock.module('@archon/core/workflows/continuation-resume', () => ({
+  wakeDueWorkflowContinuations: scan,
 }));
 const host = {
   deps: { store: { getWorkflowRun: getRun } },
@@ -248,39 +250,71 @@ test('schedule management uses no persistence or engine capability', async () =>
   expect(resume).not.toHaveBeenCalled();
 });
 
-test('signal passes the exact event cursor to the host operation as the local operator and rejects a CAS loser', async () => {
+test.each(['occurrence', 'deadline', 'both'])(
+  'signal with %s passes its selectors as the local operator and rejects a CAS loser',
+  async selector => {
+    const wait = {
+      owner: 'node' as const,
+      nodeId: 'hold',
+      kind: 'event' as const,
+      pauseId: 'event-occurrence',
+      event: 'ready',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2099-08-24T11:00:00.000Z',
+    };
+    getRun.mockResolvedValue(makeTestWorkflowRun({ metadata: { wait } }));
+    signal.mockResolvedValueOnce({ signaled: false });
+    const values = {
+      json: true,
+      event: wait.event,
+      ...(selector !== 'deadline' ? { occurrence: wait.pauseId } : {}),
+      ...(selector !== 'occurrence' ? { 'resume-at': wait.resumeAt } : {}),
+      data: '{"ready":true}',
+    };
+    expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(1);
+    expect(signal).toHaveBeenCalledWith(
+      'run',
+      {
+        event: wait.event,
+        ...(selector !== 'deadline' ? { occurrence: wait.pauseId } : {}),
+        ...(selector !== 'occurrence' ? { resumeAt: wait.resumeAt } : {}),
+        payload: { ready: true },
+      },
+      {
+        kind: 'operator',
+      }
+    );
+    expect(resume).not.toHaveBeenCalled();
+    signal.mockResolvedValueOnce({ signaled: true });
+    expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);
+    expect(resume).toHaveBeenCalledWith(host, 'run', expect.any(Function), {
+      kind: 'wait',
+      pauseId: wait.pauseId,
+      nodeId: wait.nodeId,
+      resumeAt: wait.resumeAt,
+    });
+  }
+);
+
+test('a stale occurrence with an equal deadline never signals or resumes', async () => {
   const wait = {
     owner: 'node' as const,
     nodeId: 'hold',
     kind: 'event' as const,
+    pauseId: 'second',
     event: 'ready',
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2099-08-24T11:00:00.000Z',
   };
   getRun.mockResolvedValue(makeTestWorkflowRun({ metadata: { wait } }));
-  signal.mockResolvedValueOnce({ signaled: false });
-  const values = {
-    json: true,
-    event: wait.event,
-    'resume-at': wait.resumeAt,
-    data: '{"ready":true}',
-  };
-  expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(1);
-  expect(signal).toHaveBeenCalledWith(
-    'run',
-    wait.event,
-    wait.resumeAt,
-    { ready: true },
-    {
-      kind: 'operator',
-    }
-  );
+  expect(
+    await workflowContinuationCommand(host, 'signal', ['run'], {
+      json: true,
+      event: wait.event,
+      occurrence: 'first',
+      'resume-at': wait.resumeAt,
+    })
+  ).toBe(1);
+  expect(signal).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
-  signal.mockResolvedValueOnce({ signaled: true });
-  expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);
-  expect(resume).toHaveBeenCalledWith(host, 'run', expect.any(Function), {
-    kind: 'wait',
-    nodeId: wait.nodeId,
-    resumeAt: wait.resumeAt,
-  });
 });

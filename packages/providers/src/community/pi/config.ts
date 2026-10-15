@@ -1,10 +1,11 @@
-import { snapshotConfigSchema, type PiExtensionPosture } from '@archon/provider-contract';
-import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
+import {
+  snapshotConfigSchema,
+  type PiExtensionPosture,
+  type ProviderConfigScope,
+} from '@archon/provider-contract';
 import { z } from 'zod';
-import { parseConfigSchema } from '../../shared/run-config';
+import { parseConfigLenient, parseConfigSchema } from '../../shared/run-config';
 import { piModelRefSchema } from './model-ref';
-
-export type { PiProviderDefaults };
 
 /**
  * Per-node override of Pi extension posture, keyed by workflow node id
@@ -19,11 +20,6 @@ export type { PiProviderDefaults };
  * precedence semantics live in {@link resolvePiExtensionSettings}.
  */
 export type PiNodeOverride = PiExtensionPosture;
-
-/** parsePiConfig output: assistant-level defaults plus optional per-node overrides. */
-export interface ParsedPiConfig extends PiProviderDefaults {
-  nodes?: Record<string, PiNodeOverride>;
-}
 
 /** Effective extension posture for one sendQuery call. */
 export interface PiExtensionSettings {
@@ -48,7 +44,7 @@ export interface PiExtensionSettings {
  * treat them as role names (`plan`, `implement`) when scoping extension behavior.
  */
 export function resolvePiExtensionSettings(
-  config: ParsedPiConfig,
+  config: PiProviderDefaults,
   nodeId: string | undefined,
   nodeYaml?: PiNodeOverride
 ): PiExtensionSettings {
@@ -72,107 +68,41 @@ export function resolvePiExtensionSettings(
   return { enableExtensions, interactive, extensionFlags };
 }
 
-/**
- * Parse the extension-posture fields shared by assistant-level config and
- * per-node overrides (`PiNodeOverride` deliberately mirrors these three
- * `PiProviderDefaults` fields — one validation rule, two config levels).
- */
-function parseExtensionPostureFields(raw: Record<string, unknown>): PiNodeOverride {
-  const parsed: PiNodeOverride = {};
-  if (typeof raw.enableExtensions === 'boolean') {
-    parsed.enableExtensions = raw.enableExtensions;
-  }
-  if (typeof raw.interactive === 'boolean') {
-    parsed.interactive = raw.interactive;
-  }
-  if (
-    raw.extensionFlags &&
-    typeof raw.extensionFlags === 'object' &&
-    !Array.isArray(raw.extensionFlags)
-  ) {
-    const flags: Record<string, boolean | string> = {};
-    for (const [key, value] of Object.entries(raw.extensionFlags as Record<string, unknown>)) {
-      if (typeof value === 'boolean' || typeof value === 'string') {
-        flags[key] = value;
-      }
-    }
-    if (Object.keys(flags).length > 0) {
-      parsed.extensionFlags = flags;
-    }
-  }
-  return parsed;
-}
-
-/** Parse one `nodes.<id>` entry; returns undefined when nothing valid is set. */
-function parsePiNodeOverride(raw: Record<string, unknown>): PiNodeOverride | undefined {
-  const override = parseExtensionPostureFields(raw);
-  return Object.keys(override).length > 0 ? override : undefined;
-}
-
-/**
- * Parse raw YAML-derived config into typed Pi defaults.
- * Defensive: invalid fields are dropped silently (matches parseClaudeConfig
- * and parseCodexConfig — never throws, so broken user config can't prevent
- * provider registration or workflow discovery).
- */
-export function parsePiConfig(raw: Record<string, unknown>): ParsedPiConfig {
-  const result: ParsedPiConfig = {};
-
-  if (typeof raw.model === 'string') {
-    result.model = raw.model;
-  }
-
-  Object.assign(result, parseExtensionPostureFields(raw));
-
-  if (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) {
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(raw.env as Record<string, unknown>)) {
-      if (typeof value === 'string') {
-        env[key] = value;
-      }
-    }
-    if (Object.keys(env).length > 0) {
-      result.env = env;
-    }
-  }
-
-  if (
-    typeof raw.maxConcurrent === 'number' &&
-    Number.isInteger(raw.maxConcurrent) &&
-    raw.maxConcurrent > 0
-  ) {
-    result.maxConcurrent = raw.maxConcurrent;
-  }
-
-  if (raw.nodes && typeof raw.nodes === 'object' && !Array.isArray(raw.nodes)) {
-    const nodes: Record<string, PiNodeOverride> = {};
-    for (const [nodeId, value] of Object.entries(raw.nodes as Record<string, unknown>)) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-      const override = parsePiNodeOverride(value as Record<string, unknown>);
-      if (override) {
-        nodes[nodeId] = override;
-      }
-    }
-    if (Object.keys(nodes).length > 0) {
-      result.nodes = nodes;
-    }
-  }
-
-  return result;
-}
-
 const extensionFields = {
   enableExtensions: z.boolean().optional(),
   interactive: z.boolean().optional(),
   extensionFlags: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
 };
 const portableFields = {
+  /** Default model ref in '<pi-provider-id>/<model-id>' format, e.g. 'google/gemini-2.5-pro' */
   model: piModelRefSchema.optional(),
   ...extensionFields,
   nodes: z.record(z.string(), z.strictObject(extensionFields)).optional(),
 };
 const processFields = {
+  /**
+   * Environment variables injected into `process.env` at session start so
+   * in-process extensions (which read `process.env` directly) pick them up.
+   * Existing `process.env` entries are NOT overridden — shell env wins over
+   * config. Use for extension-config vars like `PLANNOTATOR_REMOTE=1` that
+   * must be present before the extension's `session_start` hook runs.
+   *
+   * Note: this differs from `requestOptions.env` (codebase-scoped env vars),
+   * which is per-request and only injected into bash subprocesses. Use
+   * codebase env vars for secrets that vary per project; use `assistants.pi.env`
+   * for extension wiring that's global to the Pi provider.
+   */
   env: z.record(z.string(), z.string()).optional(),
+  /**
+   * Maximum number of concurrent Pi `session.prompt()` calls allowed.
+   * When this limit is reached, additional calls queue and wait rather than
+   * fail. Pi/Minimax does not throttle concurrent requests at the SDK layer
+   * (unlike the Claude SDK), so this prevents cascading 429/rate-limit failures
+   * when many parallel workflow nodes invoke Pi simultaneously.
+   *
+   * Set to a positive integer matching your Pi API tier's concurrency limit.
+   * Omit for unlimited (not recommended for production batches).
+   */
   maxConcurrent: z.number().int().positive().optional(),
 };
 export const configSchemas = {
@@ -189,9 +119,17 @@ export const configSchemas = {
   snapshot: snapshotConfigSchema(portableFields, processFields),
 };
 
+/** Assistant-level Pi defaults plus optional per-node overrides (`nodes.<id>`). */
+export type PiProviderDefaults = z.output<typeof configSchemas.install>;
+
+/** Parse raw assistantConfig into typed Pi defaults, dropping invalid values. */
+export function parsePiConfig(raw: Record<string, unknown>): PiProviderDefaults {
+  return parseConfigLenient(configSchemas.install, raw, 'pi');
+}
+
 export function parsePiConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope
-): ParsedPiConfig {
+): PiProviderDefaults {
   return parseConfigSchema(configSchemas[scope], raw);
 }

@@ -64,6 +64,19 @@ describe('Inspector', () => {
     expect(html).toContain('value="report"');
   });
 
+  test('loop inspector explains where to author the until_field schema', () => {
+    const html = renderInspector({
+      id: 'loop',
+      variant: 'loop',
+      base: {},
+      data: { prompt: 'iterate', max_iterations: 5, fresh_context: false },
+    });
+    expect(html).toContain('Until field requires an output_format schema');
+    expect(html).toContain('Author the schema in YAML');
+    expect(html).toContain('the builder does not edit output_format');
+    expect(html).not.toContain('base fields panel');
+  });
+
   test('editing an opaque condition emits the changed base and preserves opaque data', () => {
     const patches: BuilderNode[] = [];
     let conditionInput: ConditionInputProps | undefined;

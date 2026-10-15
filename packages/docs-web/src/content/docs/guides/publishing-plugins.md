@@ -226,8 +226,10 @@ Plugin stderr and plugin-controlled error details are withheld because they may 
 credentials or user messages. The process boundary is not a security sandbox.
 
 Restart the server after installing, updating, or removing a chat plugin. The server
-starts one supervised process per installed chat receipt and verifies its live descriptor
-against the receipt. A matching installed platform supersedes its bundled adapter;
+starts one supervised process per usable chat receipt and verifies its live descriptor
+against the receipt. A receipt that is unreadable or does not own its executable starts
+no process and registers no platform policy; the server logs its path. Run
+`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed platform supersedes its bundled adapter;
 for Slack, this also skips the bundled workflow bridge. The server logs that replacement.
 Without a matching receipt, bundled adapters continue to work as before.
 

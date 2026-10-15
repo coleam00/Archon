@@ -302,10 +302,11 @@ absent from disk entirely, such as Claude's built-in skills and plugin-qualified
 `plugin:skill` entries, are left to the SDK to resolve. A plugin's skill loads only
 when the node also names that plugin under `plugins:`.
 
-Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
-resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo
-therefore narrows and reports itself, instead of falling back to the permissive
-`['project', 'user']` default.
+Archon refuses a config file with an unrecognized entry such as
+`settingSources: ['projct']`. Config that reaches the provider without that check
+has only the unrecognized entry dropped, and logs `provider.config_invalid_fields_dropped`.
+A typo therefore narrows the sources and reports itself, instead of falling back to
+the permissive `['project', 'user']` default.
 
 | Value | Description |
 |-------|-------------|

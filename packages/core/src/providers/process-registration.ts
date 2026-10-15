@@ -1,5 +1,4 @@
 import { normalizeCredentialVendor } from '@archon/providers';
-import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
@@ -14,7 +13,7 @@ import {
 } from '@archon/provider-contract/plugin';
 import { KNOWN_VENDORS } from '../credentials/delivery';
 import { ProcessAgentProvider } from './process-provider';
-import { scopedConfigSchema } from './scoped-config';
+import { modelConfigSchema, scopedConfigSchema } from './scoped-config';
 
 export function processProviderRegistration(
   input: ProviderPluginDescriptor,
@@ -41,24 +40,25 @@ export function processProviderRegistration(
       }
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
+  const runSchema: z.core.JSONSchema.BaseSchema = config?.run ?? descriptor.configSchema;
+  const runModel = modelConfigSchema(runSchema);
   return {
     id: descriptor.id,
     displayName: descriptor.displayName,
     capabilities: descriptor.capabilities,
     builtIn: isMaintainedProvider(descriptor.id),
     ...(descriptor.ownsUnprefixedModelRefs ? { ownsUnprefixedModelRefs: true } : {}),
+    ...(descriptor.skillDiscovery ? { skillDiscovery: descriptor.skillDiscovery } : {}),
     credentials: {
       ...descriptor.credentials,
+      // Vendor lookup receives only a model, so unrelated required run settings
+      // must not prevent validation and normalization of the model field.
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
-        const prefix =
-          model === undefined
-            ? undefined
-            : normalizeCredentialVendor(
-                descriptor.id === 'pi'
-                  ? (parsePiModelRef(model)?.provider ?? '')
-                  : model.split('/')[0]
-              );
+        if (model === undefined) return undefined;
+        const parsed = runModel.safeParse({ model });
+        if (!parsed.success) return undefined;
+        const prefix = normalizeCredentialVendor(parsed.data.model.split('/')[0]);
         return specs.find(spec => spec.vendor === prefix)?.vendor;
       },
     },

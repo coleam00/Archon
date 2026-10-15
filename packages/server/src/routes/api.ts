@@ -1,3 +1,8 @@
+import {
+  ActiveContainerEnvironmentsError,
+  ActiveWorktreeEnvironmentsError,
+  WorktreeRegistrationChangedError,
+} from '@archon/core/db/codebase-delete-error';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
@@ -92,6 +97,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
+  isWorktreeRegistered,
   removeWorktree,
   toRepoPath,
   toWorktreePath,
@@ -919,6 +925,7 @@ const deleteCodebaseRoute = createRoute({
       description: 'Deleted',
     },
     404: jsonError('Not found'),
+    409: jsonError('Active container environments or newly registered worktrees require cleanup'),
     500: jsonError('Server error'),
   },
 });
@@ -1188,7 +1195,8 @@ const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
   tags: ['Workflows'],
-  summary: 'Signal the exact external event awaited by a paused workflow run',
+  summary:
+    'Signal an external event awaited by a paused workflow run; use occurrence for an exact match',
   request: {
     params: z.object({ runId: z.string() }),
     body: {
@@ -3394,21 +3402,45 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Codebase not found');
       }
 
-      // Clean up isolation environments (worktrees)
       const environments = await isolationEnvDb.listByCodebase(id);
-      for (const env of environments) {
+      const containers = environments.filter(env => env.provider === 'container');
+      if (containers.length > 0) {
+        throw new ActiveContainerEnvironmentsError(containers.map(env => env.id));
+      }
+      for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
-          await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
+          const exists = await stat(env.working_path).then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+              throw error;
+            }
+          );
+          if (exists) {
+            await removeWorktree(
+              toRepoPath(codebase.default_cwd),
+              toWorktreePath(env.working_path)
+            );
+          }
+          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
+            throw new Error('Checkout is still registered with Git');
+          }
+          await isolationEnvDb.markWorktreeDestroyed(env);
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
-          // Worktree may already be gone — log but continue
+          if (wtErr instanceof WorktreeRegistrationChangedError) {
+            return apiError(c, 409, wtErr.message);
+          }
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Failed to clean up worktree ${env.id}. Project kept; resolve the cleanup failure and retry deletion.`
+          );
         }
-        await isolationEnvDb.updateStatus(env.id, 'destroyed');
       }
 
-      // Delete from database (unlinks conversations and sessions)
-      await codebaseDb.deleteCodebase(id);
+      await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
 
       // Remove workspace directory from disk — only for Archon-managed repos
       const normalizedCwd = normalize(codebase.default_cwd);
@@ -3417,8 +3449,12 @@ export function registerApiRoutes(
           await rm(normalizedCwd, { recursive: true, force: true });
           getLog().info({ path: normalizedCwd }, 'workspace_removed');
         } catch (rmErr) {
-          // Directory may not exist — log but don't fail
           getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
+          );
         }
       } else {
         getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
@@ -3426,6 +3462,12 @@ export function registerApiRoutes(
 
       return c.json({ success: true });
     } catch (error) {
+      if (
+        error instanceof ActiveContainerEnvironmentsError ||
+        error instanceof ActiveWorktreeEnvironmentsError
+      ) {
+        return apiError(c, 409, error.message);
+      }
       getLog().error({ err: error }, 'delete_codebase_failed');
       return apiError(c, 500, 'Failed to delete codebase');
     }
@@ -4097,18 +4139,13 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const request = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const { event } = request;
     try {
       const store = createWorkflowStore();
       const run = await store.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const { signaled } = await signalWorkflowWait(
-        runId,
-        event,
-        resumeAt,
-        payload,
-        await resolveRunActor(c)
-      );
+      const { signaled } = await signalWorkflowWait(runId, request, await resolveRunActor(c));
       if (!signaled) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }

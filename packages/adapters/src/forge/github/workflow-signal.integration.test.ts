@@ -52,6 +52,7 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
       sessionProvider: null,
       kind: 'event' as const,
       event: 'checks.complete',
+      pauseId: 'check-occurrence',
       waitingSince: new Date(now - 60_000).toISOString(),
       resumeAt: new Date(now + 3_600_000).toISOString(),
     };

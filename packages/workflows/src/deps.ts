@@ -1,3 +1,4 @@
+import type { SETTING_SOURCES } from '@archon/paths/skills';
 import type { ResolvedWorkflowPolicy } from './schemas/run-config';
 /**
  * Workflow dependency injection types.
@@ -34,10 +35,11 @@ import type {
   WorkflowRunConfigSource,
 } from './schemas/run-config';
 
-export const CODEX_AUTH_JSON_RELATIVE_PATH = 'codex-home/auth.json';
+// Older builds delivered a ChatGPT subscription here; resume still removes it.
+const LEGACY_CODEX_AUTH_JSON_RELATIVE_PATH = 'codex-home/auth.json';
 export const PI_AUTH_JSON_RELATIVE_PATH = 'pi-home/auth.json';
 export const MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS = [
-  CODEX_AUTH_JSON_RELATIVE_PATH,
+  LEGACY_CODEX_AUTH_JSON_RELATIVE_PATH,
   PI_AUTH_JSON_RELATIVE_PATH,
 ] as const;
 
@@ -185,7 +187,7 @@ export interface WorkflowConfig {
   assistants: ProviderDefaultsMap & {
     claude: {
       model?: string;
-      settingSources?: ('project' | 'user')[];
+      settingSources?: (typeof SETTING_SOURCES)[number][];
     };
     codex: {
       model?: string;

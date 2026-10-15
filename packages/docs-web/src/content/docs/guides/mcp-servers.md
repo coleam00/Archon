@@ -76,7 +76,7 @@ file exists. Otherwise it runs without them:
 The node's `node_started` and terminal rows record `mcp_unavailable` with the declared
 `path`, the `reason`, and the server names when the file was readable, and the chat
 shows a warning such as
-`Node 'intel' runs without its optional MCP servers (.archon/mcp/posthog.json): config file not found at /repo/.archon/mcp/posthog.json.`
+`Node 'intel' runs without its optional MCP servers (.archon/mcp/posthog.json): MCP config file not found: '.archon/mcp/posthog.json'. Tried: /repo/.archon/mcp/posthog.json.`
 A server that reaches the provider but fails to connect is recorded as an
 `mcp_server_status` provider event, as described under
 [Connection Failure Handling](#connection-failure-handling).
@@ -90,9 +90,20 @@ MCP. `archon validate workflows`
 reports nothing for an optional declaration whose file is missing or whose provider
 lacks MCP, because that is the expected state for most users of a portable workflow.
 
-The path resolves against the run's checkout. A gitignored file such as
-`.archon/mcp/posthog.json` reaches a worktree run only through `worktree.copyFiles`;
-without it the run records `config_missing`.
+Relative paths resolve against the run's checkout first. Only a declaration in a
+home-scoped workflow may fall back to the directory containing its YAML file. This
+is the declaring file's directory, including for nested workflows and nodes brought
+in through `include:`. Project, bundled, and installed workflows use only the checkout.
+Captured runs, including continuations, use the captured copy of the home YAML's
+directory. An absolute path uses exactly that path and bypasses relative lookup.
+
+Only a missing file permits fallback. An unreadable or invalid checkout config fails
+instead of loading a home config. A missing-file error lists every location tried, in
+order; optional missing declarations record `config_missing` and warn with those locations.
+
+A gitignored checkout config such as `.archon/mcp/posthog.json` reaches a worktree run
+only through `worktree.copyFiles`; without it, and without an eligible home fallback,
+the run records `config_missing` for an optional declaration.
 
 The plain string form, `mcp: .archon/mcp/github.json`, is a required declaration.
 
@@ -483,7 +494,7 @@ bun run cli workflow run my-workflow "Review PR #123"
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `MCP config file not found` | Wrong path or file doesn't exist | Check the path relative to your repo root (cwd) |
+| `MCP config file not found` | Wrong path or file doesn't exist | Check every location listed after `Tried:`: the run checkout, then the declaring home YAML's directory (its captured copy for captured runs) when eligible |
 | `MCP config file is not valid JSON` | Syntax error in JSON | Validate with `cat .archon/mcp/config.json \| python3 -m json.tool` |
 | `MCP config must be a JSON object` | Top-level value is array or string | Wrap in `{ "server-name": { ... } }` |
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
