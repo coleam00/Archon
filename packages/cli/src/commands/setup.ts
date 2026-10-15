@@ -2409,6 +2409,13 @@ async function runSetup(options: SetupOptions): Promise<void> {
       ...(scope === 'project' ? selected : otherGitHubEnv),
     };
     const mode = selectGitHubAuthMode(effective);
+    if (config.github?.mode === 'pat' && mode.kind !== 'pat') {
+      throw new Error(
+        mode.kind === 'conflict'
+          ? mode.message
+          : 'Effective GitHub configuration does not activate PAT mode. Check GITHUB_TOKEN and WEBHOOK_SECRET in the environment and both Archon env files.'
+      );
+    }
     if (
       config.github?.mode === 'app' ||
       (!config.github &&

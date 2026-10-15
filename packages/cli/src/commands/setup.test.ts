@@ -1900,6 +1900,38 @@ describe('GitHub setup wizard', () => {
     }
   );
 
+  it.each([...GITHUB_APP_CREDENTIAL_KEYS])(
+    'rejects a PAT proposal when the startup environment carries %s',
+    async key => {
+      authMode = 'pat';
+      const inheritedEnv = {
+        [key]:
+          key === 'GITHUB_APP_PRIVATE_KEY'
+            ? privateKey
+            : key === 'GITHUB_APP_PRIVATE_KEY_PATH'
+              ? keyPath
+              : '123',
+      };
+      expect(await setupCommand({ repoPath: root, scope, providers: [], inheritedEnv })).toBe(1);
+      expect(existsSync(target)).toBe(false);
+    }
+  );
+
+  it.each(['GITHUB_TOKEN', 'WEBHOOK_SECRET'])(
+    'rejects a home PAT proposal disabled by a blank project %s',
+    async key => {
+      authMode = 'pat';
+      scope = 'home';
+      target = resolveScopedEnvPath(scope, root);
+      const projectPath = resolveScopedEnvPath('project', root);
+      const original = serializeEnv({ [key]: '' });
+      writeFileSync(projectPath, original);
+      expect(await run()).toBe(1);
+      expect(existsSync(target)).toBe(false);
+      expect(readFileSync(projectPath, 'utf8')).toBe(original);
+    }
+  );
+
   it.each(['app', 'pat'] as const)(
     '%s setup persists the selected allowlist and permits an explicitly empty list',
     async mode => {
