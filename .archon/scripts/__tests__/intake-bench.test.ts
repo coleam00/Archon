@@ -968,16 +968,17 @@ describe('lookups', () => {
 
   it('preserves stored gh credentials in the socket configuration', () => {
     const operator = track(mkdtempSync(join(tmpdir(), 'bench-gh-auth-')));
-    writeFileSync(join(operator, 'hosts.yml'), 'github.com:\n    oauth_token: bench-stored-token\n    user: bench-test\n    git_protocol: https\n');
+    writeFileSync(join(operator, 'hosts.yml'), 'bench-auth.invalid:\n    oauth_token: bench-stored-token\n    user: bench-test\n    git_protocol: https\n');
     const previous = process.env.GH_CONFIG_DIR;
     process.env.GH_CONFIG_DIR = operator;
-    const server = serveLookups(REPO, views);
+    const server = serveLookups({ ...REPO, host: 'bench-auth.invalid' }, views);
     try {
-      const result = spawnSync('gh', ['auth', 'token', '--hostname', 'github.com'], {
+      const result = spawnSync('gh', ['auth', 'token', '--hostname', 'bench-auth.invalid'], {
         encoding: 'utf8',
         env: { ...process.env, ...server.env, GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '' },
       });
-      expect([result.status, result.stdout.trim()]).toEqual([0, 'bench-stored-token']);
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim() === 'bench-stored-token').toBe(true);
     } finally {
       server.stop();
       if (previous === undefined) delete process.env.GH_CONFIG_DIR;
