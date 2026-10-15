@@ -39,8 +39,18 @@ import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
-import { WorkflowNotResumableError, PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
+import type {
+  AttentionWatch,
+  IWorkflowEngine,
+  WorkflowRunSubscription,
+} from '@archon/workflows/engine-port';
+import {
+  WorkflowEventCursorError,
+  WorkflowNotResumableError,
+  PROVIDER_EVENT_ROW_TYPES,
+  workflowEventCursor,
+} from '@archon/workflows/store';
+import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -4602,6 +4612,10 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /** Stream every change in scope instead of reading the queue once. */
+  watch?: boolean;
+  /** With `watch`: a cursor from an earlier line, to replay what followed it. */
+  after?: string;
 }
 
 /**
@@ -4673,6 +4687,13 @@ export async function workflowAttentionCommand(
   opts: WorkflowAttentionOptions
 ): Promise<number> {
   try {
+    if (opts.after !== undefined && !opts.watch)
+      throw new Error('workflow attention --after needs --watch');
+    if (opts.watch) {
+      if (runId !== undefined || opts.sort !== undefined || opts.countBy !== undefined)
+        throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
+      return await workflowAttentionWatch(host, cwd, opts);
+    }
     const source = attentionQueueSource(host.deps.store, host.records.isolation);
     if (runId !== undefined) {
       if (
@@ -4755,6 +4776,99 @@ export async function workflowAttentionCommand(
       return 1;
     }
     throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+  }
+}
+
+function printAttentionStreamLine(line: AttentionStreamLine, scope: AttentionQueueScope): void {
+  switch (line.type) {
+    case 'attention':
+      console.log(line.snapshot ? 'Needs attention:' : 'Needs attention now:');
+      printAttentionItem(line.item);
+      return;
+    case 'resolved':
+      console.log(
+        line.reason === 'answered'
+          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
+          : `Run ${line.runId} no longer needs attention.`
+      );
+      return;
+    case 'unmatched':
+      console.log(`Run ${line.runId} no longer matches the label filter.`);
+      return;
+    case 'terminal':
+      console.log(
+        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`
+      );
+      return;
+    case 'owner_lost':
+      console.log(
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
+          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`
+      );
+      return;
+    case 'ready':
+      console.log(
+        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`
+      );
+      return;
+    case 'bookmark':
+      return;
+  }
+}
+
+/**
+ * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
+ * 0 then, and 4 when `--after` names a cursor this install's store cannot read, so the
+ * fix is to rerun without it. Read-only: stopping the stream affects no run.
+ */
+async function workflowAttentionWatch(
+  host: WorkflowHost,
+  cwd: string,
+  opts: WorkflowAttentionOptions
+): Promise<number> {
+  const { labels } = parseAttentionQueueRequest(opts);
+  const scope = await attentionScope(host, cwd, opts);
+  if (opts.after === '') throw new Error('--after needs a cursor from an earlier line');
+  let stop!: () => void;
+  const stopped = new Promise<void>(resolve => {
+    stop = resolve;
+  });
+  const listener = async (line: AttentionStreamLine): Promise<void> => {
+    try {
+      if (opts.json) await writeStdout(`${JSON.stringify(line)}\n`);
+      else printAttentionStreamLine(line, scope);
+    } catch (error) {
+      // The reader is gone (EPIPE); nothing more can be delivered.
+      getLog().debug({ err: error as Error }, 'cli.workflow_attention_watch_stdout_closed');
+      stop();
+    }
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  try {
+    let watch: AttentionWatch;
+    try {
+      watch = await host.engine.watchAttention(listener, {
+        scope,
+        labels,
+        ...(opts.after === undefined ? {} : { after: workflowEventCursor(opts.after) }),
+      });
+    } catch (error) {
+      if (!(error instanceof WorkflowEventCursorError)) throw error;
+      if (opts.json)
+        await writeStdout(`${JSON.stringify({ type: 'error', error: 'cursor_invalid' })}\n`);
+      else
+        console.error(
+          'The --after cursor was not issued by this install. Rerun without --after: the lines before "ready" are the open set.'
+        );
+      return 4;
+    }
+    await stopped;
+    await watch.close();
+    return 0;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
   }
 }
 
