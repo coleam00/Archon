@@ -73,6 +73,9 @@ const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 /**
  * Scan a directory for script files, descending at most `MAX_SCRIPT_DISCOVERY_DEPTH`
  * folders deep. Skips files with unknown extensions. Throws on duplicate script names.
+ *
+ * With `requestedNames`, only those scripts are selected. Groups are still traversed,
+ * including links whose target kind is known only after `stat`.
  */
 async function scanScriptDir(
   dirPath: string,
@@ -80,15 +83,18 @@ async function scanScriptDir(
   depth = 0,
   requestedNames?: ReadonlySet<string>
 ): Promise<void> {
+  /** The runtime of a script this scan selects; undefined for any other entry. */
+  const selectedRuntime = (entry: string): ScriptRuntime | undefined => {
+    const ext = extname(entry);
+    if (requestedNames && !requestedNames.has(basename(entry, ext))) return undefined;
+    return getRuntimeForExtension(ext);
+  };
   let entries: string[];
   try {
     entries = requestedNames
       ? (await readdir(dirPath, { withFileTypes: true }))
           .filter(
-            entry =>
-              entry.isDirectory() ||
-              (entry.isSymbolicLink() && !extname(entry.name)) ||
-              requestedNames.has(basename(entry.name, extname(entry.name)))
+            entry => entry.isDirectory() || entry.isSymbolicLink() || selectedRuntime(entry.name)
           )
           .map(entry => entry.name)
       : await readdir(dirPath);
@@ -104,6 +110,7 @@ async function scanScriptDir(
 
   for (const entry of entries) {
     const entryPath = join(dirPath, entry);
+    const runtime = selectedRuntime(entry);
 
     let entryStat;
     try {
@@ -111,8 +118,15 @@ async function scanScriptDir(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
-      getLog().warn({ err, entryPath }, 'script_file_stat_error');
-      throw error;
+      // A failure on the selected script must surface: skipping it would report the
+      // script as missing. Any other entry (an unrelated or looping link) is not this
+      // lookup's concern and must not invalidate it.
+      if (runtime) {
+        getLog().warn({ err, entryPath }, 'script_file_stat_error');
+        throw error;
+      }
+      getLog().debug({ err, entryPath }, 'script_unrelated_entry_stat_skipped');
+      continue;
     }
 
     if (entryStat.isDirectory()) {
@@ -123,15 +137,12 @@ async function scanScriptDir(
       continue;
     }
 
-    const ext = extname(entry);
-    const runtime = getRuntimeForExtension(ext);
-
     if (!runtime) {
-      getLog().debug({ entryPath, ext }, 'script_unknown_extension_skipped');
+      getLog().debug({ entryPath }, 'script_entry_skipped');
       continue;
     }
 
-    const name = basename(entry, ext);
+    const name = basename(entry, extname(entry));
 
     const existing = scripts.get(name);
     if (existing !== undefined) {

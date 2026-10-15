@@ -20,6 +20,31 @@ for (const grouped of [false, true]) {
   });
 }
 
+test('a linked group is traversed whatever its name', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'scripts-links-')));
+  const target = join(root, 'target');
+  const scripts = join(root, 'scripts');
+  await mkdir(target, { recursive: true });
+  await mkdir(scripts);
+  await writeFile(join(target, 'good.ts'), 'console.log("ok")');
+  await symlink(target, join(scripts, 'group.v2'));
+  expect((await discoverScripts(scripts, new Set(['good']))).get('good')?.path).toBe(
+    join(scripts, 'group.v2', 'good.ts').replaceAll('\\', '/')
+  );
+});
+
+for (const grouped of [false, true]) {
+  test(`selected scripts survive an unrelated looping link (grouped=${grouped})`, async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'scripts-links-')));
+    const scripts = grouped ? join(root, 'group') : root;
+    await mkdir(scripts, { recursive: true });
+    await writeFile(join(scripts, 'good.ts'), 'console.log("ok")');
+    await symlink(join(scripts, 'loop'), join(scripts, 'loop'));
+    expect((await discoverScripts(root, new Set(['good']))).has('good')).toBe(true);
+    expect((await discoverScripts(root)).has('good')).toBe(true);
+  });
+}
+
 for (const source of ['project', 'global', 'bundled', 'installed'] as const) {
   test(`selected ${source} packaged script ignores a dangling neighbor`, async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'packaged-links-')));
