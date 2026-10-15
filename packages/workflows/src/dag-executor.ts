@@ -2369,6 +2369,7 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
+  if (commandName !== undefined) await assertNodeSourceReadable(workflowSourceRoots, stepName);
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
   const homeMcpDirectory = readHomeMcpDirectory(node);
@@ -2475,7 +2476,6 @@ async function executeNodeInternal(
   // Load prompt
   let rawPrompt: string;
   if (commandName !== undefined) {
-    await assertNodeSourceReadable(workflowSourceRoots, stepName);
     const promptResult = await loadCommandPrompt(
       deps,
       cwd,

@@ -21401,27 +21401,44 @@ describe('executeDagWorkflow -- script nodes', () => {
         ['an agent', { id: 'step', command: 'my-cmd' }],
         ['a loop', { id: 'step', loop: { command: 'my-cmd', until: 'DONE', max_iterations: 1 } }],
       ] as const) {
-        it(`${kind} command node that cannot read its source releases the run`, async () => {
+        it(`${kind} command node resumes within its spend limit after an unreadable source release`, async () => {
           const mockDeps = createMockDeps();
           await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
           await writeFile(join(testDir, '.archon', 'commands', 'my-cmd.md'), 'Do the thing.');
           const capture = await unreadableCapture(join(testDir, 'ran'));
+          const options = dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflow: {
+              name: 'command-source-unreadable',
+              budget: { max_spend_usd: 5 },
+              nodes: [dagNodeSchema.parse(node)],
+            },
+            workflowRun: makeWorkflowRun('command-source-unreadable-run'),
+            workflowSourceRoots: capture.roots,
+          });
+          mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+          );
           try {
-            await executeDagWorkflow(
-              dagOptions({
-                deps: mockDeps,
-                cwd: testDir,
-                workflow: { name: 'command-source-unreadable', nodes: [dagNodeSchema.parse(node)] },
-                workflowRun: makeWorkflowRun('command-source-unreadable-run'),
-                workflowSourceRoots: capture.roots,
-              })
-            );
+            await executeDagWorkflow(options);
           } finally {
             await capture.restore();
           }
 
           expectReleased(mockDeps.store, 'step');
           expect(mockSendQueryDag).not.toHaveBeenCalled();
+
+          mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'DONE' };
+            yield { type: 'result', sessionId: 'source-resumed-session', cost: 0.1 };
+          });
+          await executeDagWorkflow({ ...options, priorCompletedNodes: new Map() });
+
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
         });
       }
 
