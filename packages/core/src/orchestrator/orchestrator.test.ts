@@ -335,6 +335,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+    attentionNotices: [],
     paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
     workflows: {
@@ -1081,6 +1082,7 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
@@ -1122,6 +1124,7 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
@@ -1167,6 +1170,7 @@ describe('orchestrator-agent handleMessage', () => {
           small: { provider: 'claude', model: 'haiku' },
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+        attentionNotices: [],
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {

@@ -324,6 +324,8 @@ test('gate notes retain resume and rejection distinctions', () => {
     { kind: 'approved', type: 'interactive_loop', resumed: true },
     { kind: 'approved', type: 'approval_gate', resumed: false },
     { kind: 'approved', type: 'approval_gate', resumed: false, waitingForCapacity: true },
+    { kind: 'answered', resumed: false, waitingForCapacity: true },
+    { kind: 'resumed', resumed: false },
     {
       kind: 'rejected',
       cancelled: false,
@@ -363,6 +365,8 @@ test('gate notes retain resume and rejection distinctions', () => {
     expect.stringContaining('otherwise the loop runs another iteration'),
     expect.stringContaining('resume was not accepted'),
     expect.stringContaining('waiting for capacity'),
+    expect.stringContaining('waiting for capacity'),
+    expect.stringContaining('resume was not accepted'),
     expect.stringContaining('waiting for capacity'),
     'cancelled — max reject attempts reached',
     'recorded — workflow resumed to discard the container changes',

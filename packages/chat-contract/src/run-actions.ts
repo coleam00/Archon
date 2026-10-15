@@ -19,12 +19,23 @@ export const chatRunActionSchema = z.discriminatedUnion('action', [
     action: z.literal('respond'),
     response: response.extend({ decision: id }),
   }),
+  z.object({
+    ...target,
+    action: z.literal('answer'),
+    response: z.object({
+      nodeId: id,
+      pauseId: id,
+      choose: z.array(id),
+      text: z.string().optional(),
+    }),
+  }),
+  z.object({ ...target, action: z.literal('resume') }),
   z.object({ ...target, action: z.literal('cancel') }),
 ]);
 export type ChatRunAction = z.infer<typeof chatRunActionSchema>;
 
 /**
- * Present, with `resumed: false`, when the answer is recorded but the run's resource is
+ * Present, with `resumed: false`, when the action is recorded but the run's resource is
  * full: the run stays paused in its place and a continuation host continues it.
  */
 const waitingForCapacity = z.literal(true).optional();
@@ -45,6 +56,8 @@ export const runActionResultSchema = z.discriminatedUnion('kind', [
     resumed: z.boolean(),
     waitingForCapacity,
   }),
+  z.object({ kind: z.literal('answered'), resumed: z.boolean(), waitingForCapacity }),
+  z.object({ kind: z.literal('resumed'), resumed: z.boolean(), waitingForCapacity }),
   z.object({ kind: z.literal('cooperative'), cancelled: z.boolean() }),
   z.object({
     kind: z.literal('stopped'),

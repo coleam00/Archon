@@ -3,6 +3,12 @@ import { PluginRpc, PluginRemoteError, type PluginIO } from '@archon/provider-co
 import { chatPluginDescriptorSchema, type ChatPluginDescriptor } from './descriptor';
 import { chatRunEventSchema, type ChatRunEvent } from './run-events';
 import {
+  chatAttentionNoticeRequestSchema,
+  chatAttentionNoticeResponseSchema,
+  type ChatAttentionNoticeRequest,
+  type ChatAttentionNoticeResponse,
+} from './attention-notices';
+import {
   chatRunActionSchema,
   chatRunActionResponseSchema,
   type ChatRunAction,
@@ -29,6 +35,7 @@ export interface ConnectedChat {
   send(params: ChatSend): Promise<void>;
   resultFooter(params: ChatResultFooter): Promise<void>;
   runEvent(event: ChatRunEvent): Promise<void>;
+  attentionNotice(params: ChatAttentionNoticeRequest): Promise<ChatAttentionNoticeResponse>;
   onInbound(
     handler: (message: ChatInbound) => ChatInboundResponse | Promise<ChatInboundResponse>
   ): void;
@@ -115,6 +122,14 @@ export async function connectChat(
     async runEvent(event): Promise<void> {
       if (!descriptor.capabilities.runEvents) throw rpc.error('runEvents is not declared');
       await rpc.notify('chat/run_event', chatRunEventSchema.parse(event));
+    },
+    async attentionNotice(params): Promise<ChatAttentionNoticeResponse> {
+      if (!descriptor.capabilities.attentionNotices)
+        throw rpc.error('attentionNotices is not declared');
+      return rpc.parse(
+        chatAttentionNoticeResponseSchema,
+        await rpc.request('chat/attention_notice', chatAttentionNoticeRequestSchema.parse(params))
+      );
     },
   };
 }

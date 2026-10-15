@@ -10,18 +10,15 @@ import {
   deleteWebPushSubscription,
   listWebPushSubscriptions,
 } from '@archon/core/db/web-push-subscriptions';
-import {
-  attentionConversationPlatforms,
-  hasAnyAttentionNotice,
-  insertWorkflowEvent,
-} from '@archon/core/db/workflow-events';
-import { listRunsNeedingAttention } from '@archon/core/db/workflows';
-import {
-  selectAttentionNotices,
-  type AttentionNotice,
-} from '@archon/core/services/attention-notices';
+import { hasAnyAttentionNotice } from '@archon/core/db/workflow-events';
+import type { AttentionNotice } from '@archon/core/services/attention-notices';
 import type { WebPushSubscription, WebPushPayload } from '@archon/core/schemas/web-push';
-import type { PushDestination, PushDestinationState, PushDeliveryResult } from './attention-router';
+import {
+  recordActivationBaseline,
+  type PushDestination,
+  type PushDestinationState,
+  type PushDeliveryResult,
+} from './attention-router';
 
 const vapidSchema = z.object({ publicKey: z.string().min(1), privateKey: z.string().min(1) });
 export function loadVapidKeys(home: string = getArchonHome()): z.infer<typeof vapidSchema> {
@@ -83,28 +80,8 @@ export class WebPushDestination implements PushDestination {
       if (getDatabaseType() === 'postgresql')
         await query('LOCK TABLE remote_agent_web_push_subscriptions IN SHARE ROW EXCLUSIVE MODE');
       const subscriptions = await listWebPushSubscriptions(query);
-      if (subscriptions.length === 0 && !(await hasAnyAttentionNotice(this.id, query))) {
-        const runs = await listRunsNeedingAttention(query);
-        const conversationPlatforms = await attentionConversationPlatforms(
-          runs.map(run => run.id),
-          query
-        );
-        const { baselines } = selectAttentionNotices({
-          runs,
-          terminalRuns: [],
-          ledger: [],
-          destinations: [this.id],
-          initialized: new Set(),
-          conversationPlatforms,
-          inlinePlatforms: this.inlinePlatforms,
-        });
-        for (const baseline of baselines)
-          await insertWorkflowEvent(query, {
-            workflow_run_id: baseline.runId,
-            event_type: 'attention_notice_sent',
-            data: baseline.data,
-          });
-      }
+      if (subscriptions.length === 0 && !(await hasAnyAttentionNotice(this.id, query)))
+        await recordActivationBaseline(this.id, this.inlinePlatforms, query);
       await addWebPushSubscription(userId, subscription, query);
     });
   }
