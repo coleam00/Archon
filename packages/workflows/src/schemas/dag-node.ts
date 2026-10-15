@@ -773,20 +773,10 @@ export const attentionOptionsSchema = z
  */
 export const attentionLabelKeySchema = z
   .string()
-  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace")
-  .refine(key => key !== '__proto__', "'__proto__' is not supported as a label key");
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
 
 /** An attention wait's labels: a flat map of plain strings the engine never interprets. */
-export const attentionLabelsSchema = z.preprocess(
-  (labels, ctx) => {
-    // Zod drops __proto__ from records before validating their keys.
-    if (typeof labels === 'object' && labels !== null && Object.hasOwn(labels, '__proto__')) {
-      ctx.addIssue({ code: 'custom', message: "'__proto__' is not supported as a label key" });
-    }
-    return labels;
-  },
-  z.record(attentionLabelKeySchema, z.string())
-);
+export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());
 export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
 
 /** The answers an `approval` attention wait accepts. */

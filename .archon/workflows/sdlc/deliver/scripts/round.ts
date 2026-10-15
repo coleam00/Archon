@@ -84,7 +84,6 @@ emit({
   round,
   done: !again || capped,
   ready: reason === 'delivered',
-  review_ready: reviewReady === 'true',
   reason: capped ? 'round_cap' : reason,
   // A round whose implementer stopped opens no pull request; an earlier round's stands.
   pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,

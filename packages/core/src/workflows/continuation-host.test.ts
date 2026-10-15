@@ -658,7 +658,7 @@ test('blocked rows do not starve later continuations in the same database', asyn
   expect(outcomes).toEqual([expect.objectContaining({ runId: 'queue-25', kind: 'accepted' })]);
 });
 
-test('a manually recovered run warns once for each stopped continuation occurrence', async () => {
+test('a manually recovered run can wake at its next occurrence and warns only once per process', async () => {
   const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
   const root = trackTempRoot(await fs.mkdtemp(join(tmpdir(), 'continuation-recovery-')));
   const persisted = await createFileWorkflowStore({ root });
@@ -730,7 +730,7 @@ test('a manually recovered run warns once for each stopped continuation occurren
   expect(refuse).toHaveBeenCalledTimes(6);
   expect(
     mockWarn.mock.calls.filter(([, message]) => message.includes('This host stopped'))
-  ).toHaveLength(2);
+  ).toHaveLength(1);
   expect((await persisted.getWorkflowRun(candidate.id))?.status).toBe('paused');
 });
 

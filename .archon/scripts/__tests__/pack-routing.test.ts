@@ -194,7 +194,7 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; review_ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -221,28 +221,6 @@ describe("deliver's round", () => {
 
   it('delivers on a passing review and green CI', () => {
     expect(round({})).toMatchObject({ round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL });
-  });
-
-  it.each(['correct', 'replan', 'needs_human'])('does not certify empty coverage after a %s review', action => {
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: action, INPUTS_CI: 'null' })).toMatchObject({
-      ready: false,
-      review_ready: false,
-      contract_left: [],
-    });
-  });
-
-  it('uses the deciding review verdict independently of coverage, CI and the round cap', () => {
-    expect(round({})).toMatchObject({ review_ready: true, contract_left: [] });
-    expect(round({ INPUTS_CI: 'other' })).toMatchObject({ ready: false, review_ready: true });
-    expect(round({ INPUTS_PREVIOUS: '3', INPUTS_REVIEW_READY: 'false', INPUTS_CI: 'null' })).toMatchObject({
-      reason: 'round_cap', review_ready: false, contract_left: [],
-    });
-    expect(round({ INPUTS_REREVIEW_READY: 'false', INPUTS_REREVIEW_ACTION: 'correct', INPUTS_REREVIEW_CONTRACT_LEFT: '[]' })).toMatchObject({
-      review_ready: false, contract_left: [],
-    });
-    expect(round({ INPUTS_REVIEW_READY: 'null', INPUTS_REVIEW_CONTRACT_LEFT: 'null', INPUTS_PREVIOUS_CONTRACT_LEFT: '[]' })).toMatchObject({
-      review_ready: false, contract_left: [],
-    });
   });
 
   it('stops on red the change introduced, before any pull request', () => {

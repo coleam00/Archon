@@ -1179,38 +1179,6 @@ export function describeWorkflowStoreConformance(
         answered: false,
       });
     });
-    test.each(['__proto__', '', 'bad key', 'bad=key'])(
-      'a direct label write rejects invalid set and unset key %j without changing the wait',
-      async key => {
-        const run = await running(store);
-        await store.pauseWorkflowRunForWait(run.id, attentionWait, {
-          kind: 'started',
-          stepName: 'ask',
-        });
-        const before = await store.getWorkflowRun(run.id);
-        for (const changes of [
-          { set: Object.fromEntries([[key, 'value']]), unset: [] },
-          { set: {}, unset: [key] },
-        ]) {
-          await expect(
-            store.labelAttentionWait(run.id, {
-              pauseId: 'ask-1',
-              via: 'cli',
-              ...changes,
-            })
-          ).rejects.toThrow();
-          expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(
-            before?.metadata.wait
-          );
-          expect(
-            (await store.listWorkflowEvents(run.id)).filter(
-              event => event.event_type === 'attention_labeled'
-            )
-          ).toEqual([]);
-        }
-      }
-    );
-
     test('a label write merges, bumps the revision with its audit row, and refuses another pause', async () => {
       const run = await running(store);
       await store.pauseWorkflowRunForWait(

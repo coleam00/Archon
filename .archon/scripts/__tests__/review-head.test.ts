@@ -298,6 +298,41 @@ describe('review head boundary', () => {
     }
   }
 
+  it('uses the GitLab retained ref for an alternate-view forge record and URL scope', () => {
+    const cwd = gitCheckout({}, track);
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/merge-requests/42/head');
+    const url = `https://${PR.repo.host}/${PR.repo.path}/-/merge_requests/42/diffs`;
+    for (const scope of [JSON.stringify(PR), url]) {
+      const options: ScriptOptions = {
+        cwd,
+        source: 'forge',
+        forge: view({ url, head_revision: null }),
+        inputs: { INPUTS_SCOPE: scope },
+      };
+      const refused = check(options);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain("git fetch -- 'upstream' 'refs/merge-requests/42/head'");
+      expect(refused.stderr).toContain(`--from '${head}'`);
+      expect(refused.stderr).not.toContain('refs/pull/');
+      expect(check({
+        ...options,
+        inputs: { ...options.inputs, INPUTS_HEAD: head, ARCHON_NODE_EXECUTION: execution(head) },
+      }).code).toBe(0);
+    }
+  });
+
+  it('refuses an unsupported forge PR URL instead of guessing a retained ref', () => {
+    const run = check({
+      source: 'forge',
+      forge: view({ url: `https://${PR.repo.host}/${PR.repo.path}/unknown/42`, head_revision: null }),
+      inputs: { INPUTS_SCOPE: JSON.stringify(PR) },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('unsupported PR URL');
+    expect(run.stderr).not.toContain('refs/pull/');
+  });
+
   it('refuses an unknown head with a missing retained ref without an unusable retry', () => {
     const cwd = gitCheckout({}, track);
     const run = check({

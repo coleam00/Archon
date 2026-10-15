@@ -117,7 +117,7 @@ nodes:
             # The PR node's structured read-back names the pull request, so review
             # never rediscovers an ambient branch→PR mapping. It does not name the
             # commit: every round reviews the checkout's HEAD, which archon-review
-            # checks against this PR's remote head before lenses and before publishing.
+            # checks against this PR's remote head before publishing.
             scope: "$pr.output"
             # A later round reviews only the delta since the previous round's
             # published report: the previous round's lenses, plus any the delta
@@ -225,7 +225,6 @@ nodes:
               round: { type: integer }
               done: { type: boolean }
               ready: { type: boolean }
-              review_ready: { type: boolean }
               reason:
                 type: string
                 enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap]
@@ -237,13 +236,13 @@ nodes:
               # The latest review's `contract_left`; null until a review judged coverage.
               contract_left: { type: [array, 'null'], items: { type: string } }
               summary: { type: string }
-            required: [round, done, ready, review_ready, reason, pr_url, prior_report, light_review, ci_rerun, contract_left, summary]
+            required: [round, done, ready, reason, pr_url, prior_report, light_review, ci_rerun, contract_left, summary]
 
   # Corrections and the base merge can falsify claims the description made when the
   # draft opened, and an implementer can pass red the description must disclose. One
   # agent reads the live description and the final diff, and edits only what is no
-  # longer true. It closes the issue only on a passing review with complete contract
-  # coverage. It runs once the rounds have ended, never per round.
+  # longer true. It also links the issue by the latest review's coverage: closing
+  # only when nothing is left. It runs once the rounds have ended, never per round.
   - id: update-pr-body
     command: update-pr-body
     model: medium
@@ -251,7 +250,6 @@ nodes:
     when: "$rounds.output.pr_url != ''"
     with:
       pr: "$rounds.output.pr_url"
-      review_ready: "$rounds.output.review_ready"
       contract_left: "$rounds.output.contract_left"
     output_format:
       type: object

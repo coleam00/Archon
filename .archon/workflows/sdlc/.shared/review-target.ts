@@ -11,6 +11,28 @@ import { git, gitOrThrow } from './git.ts';
 import { findOpenPrByHead, viewPr } from './pr.ts';
 import { findRemote, urlRepo } from './remote.ts';
 
+const prUrlKinds = new Map([
+  ['pull', 'pull'],
+  ['pulls', 'pull'],
+  ['merge_requests', 'merge-requests'],
+]);
+
+function reviewPrUrl(url: URL): { pr: QualifiedPr; retainedRef: string } {
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.at(-1) === 'diffs') parts.pop();
+  const number = parts.pop();
+  const kind = parts.pop();
+  const namespace = prUrlKinds.get(kind ?? '');
+  if (kind === 'merge_requests' && parts.at(-1) === '-') parts.pop();
+  if (!namespace || !number || !/^[1-9][0-9]*$/.test(number) || parts.length < 2) {
+    throw new Error('unsupported PR URL: use a full PR URL ending in its positive number or /diffs');
+  }
+  return {
+    pr: { repo: { host: url.hostname, path: parts.join('/') }, number: Number(number) },
+    retainedRef: `refs/${namespace}/${number}/head`,
+  };
+}
+
 /** The pull request delivery recorded, when the scope is that JSON record. */
 export function recordedPr(scope: string): QualifiedPr | undefined {
   let parsed: unknown;
@@ -46,19 +68,7 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
     // Numbers and branch names are relative to the checkout's repository.
   }
   if (url) {
-    const parts = url.pathname.split('/').filter(Boolean);
-    const number = parts.pop();
-    const kind = parts.pop();
-    if (kind === 'merge_requests' && parts.at(-1) === '-') parts.pop();
-    if (
-      !['pull', 'pulls', 'merge_requests'].includes(kind ?? '') ||
-      !number ||
-      !/^[1-9][0-9]*$/.test(number) ||
-      parts.length < 2
-    ) {
-      throw new Error('scope must be a PR URL, positive PR number, branch name, or empty');
-    }
-    const ref = { repo: { host: url.hostname, path: parts.join('/') }, number: Number(number) };
+    const { pr: ref } = reviewPrUrl(url);
     const pr = viewPr(ref, source).pr;
     if (!samePr(pr, ref))
       throw new Error('the forge result does not match the requested pull request');
@@ -101,10 +111,11 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
 }
 
 export function retainedReviewRef(pr: PrRecord): string {
-  const kind = new URL(pr.url).pathname.split('/').filter(Boolean).at(-2);
-  return kind === 'merge_requests'
-    ? `refs/merge-requests/${String(pr.number)}/head`
-    : `refs/pull/${String(pr.number)}/head`;
+  const resolved = reviewPrUrl(new URL(pr.url));
+  if (!samePr(resolved.pr, pr)) {
+    throw new Error('the forge PR URL does not match its pull-request identity');
+  }
+  return resolved.retainedRef;
 }
 
 /** Resolve absent forge revisions from the base repository's retained PR ref. */

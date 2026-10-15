@@ -952,20 +952,17 @@ archon workflow attention <run-id> --json                          # one item
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
 `item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
-tree cannot be read. The list holds the same items. Malformed stored run data fails the
-list read rather than returning a partial queue. Database paused-row normalization
-errors identify the affected run; file-store errors may lack a run ID. For file storage,
-inspect the snapshots and logs under `$ARCHON_HOME/store/runs/<id>/` using the
-[storage layout](/reference/database/#file-storage-for-cli-workflows). Repair the invalid stored data
-before retrying. An unknown run id prints `error: "not_found"` and
+tree cannot be read. The list holds the same items. Database queue reads log and skip paused rows
+whose stored run data cannot be normalized; the returned list does not indicate
+that it is incomplete. The database log identifies the run. File-store read
+errors may fail the list without a run ID; inspect snapshots and logs using the
+[storage layout](/reference/database/#file-storage-for-cli-workflows) before retrying. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
 `countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
-
-Label keys must be non-empty, contain no whitespace or `=`, and cannot be `__proto__`.
 
 ### `workflow attention label`
 
