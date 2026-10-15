@@ -1,19 +1,11 @@
 import { spawn } from 'node:child_process';
-import {
-  forceTerminateWindowsTree,
-  WINDOWS_TREE_TERMINATION_TIMEOUT_MS,
-} from '@archon/paths/plugin-process';
+import { forceTerminateWindowsTree } from '@archon/paths/plugin-process';
+import { TERMINATION_GRACE_MS, TERMINATION_CONFIRM_MS } from './host-node-stop-bounds';
 import {
   confirmGroupGone,
   currentNodeProcessRecorder,
   ProcessGroupStillRunningError,
-  TERMINATION_CONFIRM_MS,
 } from './node-process-trees';
-
-const TERMINATION_GRACE_MS = 5_000;
-export const HOST_NODE_TERMINATION_MAX_MS =
-  (process.platform === 'win32' ? WINDOWS_TREE_TERMINATION_TIMEOUT_MS : TERMINATION_GRACE_MS) +
-  TERMINATION_CONFIRM_MS;
 
 export const hostNodeSubprocess = { exec: execNodeBody };
 

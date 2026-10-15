@@ -1,4 +1,4 @@
-import { HOST_NODE_TERMINATION_MAX_MS } from '@archon/workflows/subprocess';
+import { HOST_NODE_TERMINATION_MAX_MS } from '@archon/workflows/host-node-stop-bounds';
 import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from './windows-process-tree';
 
 /*

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { TERMINATION_CONFIRM_MS } from './host-node-stop-bounds';
 
 export interface NodeProcessRecorder {
   /** Roots with live or unproved cleanup and their termination/owner-watcher responsibilities. */
@@ -83,8 +84,6 @@ export function armNodeLifeline(pgid: number, onError: (error: Error) => void): 
 export function currentNodeProcessRecorder(): NodeProcessRecorder | undefined {
   return nodeProcessRecorder;
 }
-
-export const TERMINATION_CONFIRM_MS = 1000;
 
 export class ProcessGroupStillRunningError extends Error {}
 
