@@ -477,12 +477,18 @@ Then reference it by name from any repo's workflow:
   reads can wait until timeout. Do not depend on interactive input. Container
   scripts receive no stdin through `docker exec`.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
-- **Portable cooperative cancellation** — workflow cancellation sends SIGTERM to
-  host POSIX script process groups. Scripts can handle it to flush or roll back;
-  cleanup has up to five seconds before SIGKILL, and escalation requires a live
-  group leader. Windows uses forced process-tree termination; container execution
-  follows its backend's stop behavior. Do not rely on a cooperative signal across
-  all backends. See [process-tree cleanup](/guides/authoring-workflows#node-fields).
+- **Portable cooperative cancellation** — cancelling a run on the server executing
+  it marks the run `cancelled`; the executor stops at its next status check without
+  sending a cancellation signal to the active script. Cancelling a detached or
+  trigger-started owner through owner control, or gracefully interrupting a
+  foreground CLI run, requests cleanup of its recorded host script trees. On POSIX,
+  cleanup sends SIGTERM to the process group while its leader is alive. Scripts can
+  handle it to flush or roll back; cleanup has up to five seconds before SIGKILL,
+  and escalation also requires a live group leader. Windows uses forced
+  process-tree termination. Container execution follows its backend's stop behavior.
+  Do not rely on a cooperative signal across all runs or backends. See
+  [cancellation ownership](/reference/cli#workflow-cancel) and
+  [process-tree cleanup](/guides/authoring-workflows#node-fields).
 
 ## See Also
 
