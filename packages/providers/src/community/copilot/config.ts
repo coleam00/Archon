@@ -45,7 +45,7 @@ export type CopilotLogLevelsAreComplete = AssertNever<
   Exclude<CopilotLogLevel, (typeof COPILOT_LOG_LEVELS)[number]>
 >;
 
-const fields = {
+const portableFields = {
   /** Default model ref, e.g. 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5'. */
   model: configStringSchema.optional(),
   /**
@@ -57,6 +57,8 @@ const fields = {
     .enum(EFFORT_LADDER, { error: 'expected a valid Archon effort level' })
     .transform(effort => clampEffort(effort, COPILOT_EFFORTS))
     .optional(),
+};
+const localFields = {
   /**
    * Absolute path to the Copilot CLI binary. Required in compiled Archon
    * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
@@ -86,19 +88,11 @@ const fields = {
     .enum(COPILOT_LOG_LEVELS, { error: 'expected none, error, warning, info, debug, or all' })
     .optional(),
 };
+const fields = { ...portableFields, ...localFields };
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
-  snapshot: snapshotConfigSchema(
-    { model: fields.model, modelReasoningEffort: fields.modelReasoningEffort },
-    {
-      copilotCliPath: fields.copilotCliPath,
-      configDir: fields.configDir,
-      enableConfigDiscovery: fields.enableConfigDiscovery,
-      useLoggedInUser: fields.useLoggedInUser,
-      logLevel: fields.logLevel,
-    }
-  ),
+  snapshot: snapshotConfigSchema(portableFields, localFields),
 };
 
 /** Community provider defaults for GitHub Copilot (@github/copilot-sdk). */

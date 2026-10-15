@@ -24,27 +24,23 @@ const CODEX_WEB_SEARCH_MODES = [
   'live',
 ] as const satisfies readonly WebSearchMode[];
 
-const fields = {
+const portableFields = {
   model: configStringSchema.optional(),
   modelReasoningEffort: z
     .enum(CODEX_EFFORTS, { error: `expected ${CODEX_EFFORTS.join(', ')}` })
     .optional(),
+};
+const localFields = {
   webSearchMode: z.enum(CODEX_WEB_SEARCH_MODES).optional(),
   additionalDirectories: z.array(z.string()).optional(),
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
   codexBinaryPath: configStringSchema.optional(),
 };
+const fields = { ...portableFields, ...localFields };
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
-  snapshot: snapshotConfigSchema(
-    { model: fields.model, modelReasoningEffort: fields.modelReasoningEffort },
-    {
-      webSearchMode: fields.webSearchMode,
-      additionalDirectories: fields.additionalDirectories,
-      codexBinaryPath: fields.codexBinaryPath,
-    }
-  ),
+  snapshot: snapshotConfigSchema(portableFields, localFields),
 };
 
 export type CodexProviderDefaults = z.output<typeof configSchemas.install>;

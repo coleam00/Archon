@@ -2,12 +2,15 @@
  * Claude provider config: the schema owns the shape, and the defaults type is
  * derived from it.
  */
+import { SETTING_SOURCES } from '@archon/paths/skills';
 import { snapshotConfigSchema, type ProviderConfigScope } from '@archon/provider-contract';
 import { z } from 'zod';
 import { configStringSchema, parseConfigLenient, parseConfigSchema } from '../shared/run-config';
 
-const fields = {
+const portableFields = {
   model: configStringSchema.optional(),
+};
+const localFields = {
   /** Claude Code settingSources — controls which sources the SDK loads:
    *  CLAUDE.md, skills, commands, agents, and hooks. Both project-level
    *  (`<cwd>/.claude/`) and user-level (`~/.claude/`) are loaded by default.
@@ -16,20 +19,18 @@ const fields = {
    *  @default ['project', 'user']
    */
   settingSources: z
-    .array(z.enum(['project', 'user'], { error: "expected 'project' or 'user'" }))
+    .array(z.enum(SETTING_SOURCES, { error: "expected 'project' or 'user'" }))
     .optional(),
   /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
    *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
    *  (SDK resolves from node_modules). */
   claudeBinaryPath: configStringSchema.optional(),
 };
+const fields = { ...portableFields, ...localFields };
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
-  snapshot: snapshotConfigSchema(
-    { model: fields.model },
-    { settingSources: fields.settingSources, claudeBinaryPath: fields.claudeBinaryPath }
-  ),
+  snapshot: snapshotConfigSchema(portableFields, localFields),
 };
 
 export type ClaudeProviderDefaults = z.output<typeof configSchemas.install>;

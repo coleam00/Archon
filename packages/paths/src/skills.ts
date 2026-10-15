@@ -120,6 +120,8 @@ export function findInstalledSkillNames(roots: string[], skillNames: string[]): 
   return installed;
 }
 
+export const SETTING_SOURCES = ['project', 'user'] as const;
+
 /**
  * Normalize a raw `settingSources` value to the recognized entries, in order.
  * Undefined when raw is not an array.
@@ -133,9 +135,9 @@ export function findInstalledSkillNames(roots: string[], skillNames: string[]): 
  * single typo fall back to the permissive `['project','user']` default,
  * silently granting the ambient access the author was excluding.
  */
-export function parseSettingSources(raw: unknown): ('project' | 'user')[] | undefined {
+export function parseSettingSources(raw: unknown): (typeof SETTING_SOURCES)[number][] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  return raw.filter(
-    (entry): entry is 'project' | 'user' => entry === 'project' || entry === 'user'
+  return raw.filter((entry): entry is (typeof SETTING_SOURCES)[number] =>
+    SETTING_SOURCES.some(source => source === entry)
   );
 }
