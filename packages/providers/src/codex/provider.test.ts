@@ -965,16 +965,11 @@ describe('CodexProvider', () => {
       expect(await promptSent(options as SendQueryOptions)).toBe(expected);
     });
 
-    test('a Claude preset object is dropped with a warning', async () => {
+    test('appended instructions are folded in when no system prompt replaces them', async () => {
+      expect(await promptSent({ appendSystemPrompt: 'extra' })).toBe('extra\n\n---\n\ntest prompt');
       expect(
-        await promptSent({
-          systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
-        } as SendQueryOptions)
-      ).toBe('test prompt');
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ systemPromptType: 'object' }),
-        'codex.system_prompt_dropped_preset'
-      );
+        await promptSent({ appendSystemPrompt: 'extra', nodeConfig: { systemPrompt: 'node' } })
+      ).toBe('node\n\n---\n\ntest prompt');
     });
 
     test('a resumed thread gets the prepend too', async () => {

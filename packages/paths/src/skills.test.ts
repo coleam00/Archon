@@ -5,11 +5,7 @@ import { join } from 'node:path';
 
 import { removeTempTree } from './test-utils';
 
-import {
-  parseClaudeSettingSources,
-  resolveClaudeSkillDirectories,
-  resolveSkillDirectories,
-} from './skills';
+import { parseSettingSources, resolveSkillDirectories } from './skills';
 
 type FakeWorld = {
   root: string;
@@ -146,99 +142,22 @@ describe('resolveSkillDirectories', () => {
   });
 });
 
-describe('resolveClaudeSkillDirectories', () => {
-  const originalHome = process.env.HOME;
-  let fake: ReturnType<typeof makeFakeWorld>;
-
-  beforeEach(() => {
-    fake = makeFakeWorld();
-    process.env.HOME = fake.home;
-  });
-
-  afterEach(async () => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    await removeTempTree(fake.root);
-  });
-
-  test('resolves project and user Claude-native skills', () => {
-    const project = fake.stageSkill('cwd', '.claude', 'project-skill');
-    const user = fake.stageSkill('home', '.claude', 'user-skill');
-
-    expect(resolveClaudeSkillDirectories(fake.cwd, ['project-skill', 'user-skill'])).toEqual({
-      paths: [project, user],
-      missing: [],
-    });
-  });
-
-  test('does not accept an agents-only installation', () => {
-    fake.stageSkill('cwd', '.agents', 'agents-only');
-
-    expect(resolveClaudeSkillDirectories(fake.cwd, ['agents-only'])).toEqual({
-      paths: [],
-      missing: ['agents-only'],
-    });
-  });
-
-  test('honors a custom Claude config directory for user skills', () => {
-    const customConfig = join(fake.root, 'custom-claude');
-    const skill = join(customConfig, 'skills', 'custom-skill');
-    mkdirSync(skill, { recursive: true });
-    writeFileSync(join(skill, 'SKILL.md'), '# custom\n');
-
-    expect(
-      resolveClaudeSkillDirectories(fake.cwd, ['custom-skill'], {
-        userConfigDir: customConfig,
-      })
-    ).toEqual({ paths: [skill], missing: [] });
-  });
-
-  test('can restrict discovery to project skills for isolated execution', () => {
-    fake.stageSkill('home', '.claude', 'user-only');
-
-    expect(resolveClaudeSkillDirectories(fake.cwd, ['user-only'], { includeUser: false })).toEqual({
-      paths: [],
-      missing: ['user-only'],
-    });
-  });
-
-  test('can exclude project skills when project settings are disabled', () => {
-    fake.stageSkill('cwd', '.claude', 'project-only');
-
-    expect(
-      resolveClaudeSkillDirectories(fake.cwd, ['project-only'], { includeProject: false })
-    ).toEqual({ paths: [], missing: ['project-only'] });
-  });
-});
-
-describe('parseClaudeSettingSources', () => {
+describe('parseSettingSources', () => {
   test('returns undefined for a non-array value', () => {
-    expect(parseClaudeSettingSources(undefined)).toEqual({ invalid: [] });
-    expect(parseClaudeSettingSources('project')).toEqual({ invalid: [] });
+    expect(parseSettingSources(undefined)).toBeUndefined();
+    expect(parseSettingSources('project')).toBeUndefined();
   });
 
   test('keeps recognized entries in order', () => {
-    expect(parseClaudeSettingSources(['user', 'project'])).toEqual({
-      value: ['user', 'project'],
-      invalid: [],
-    });
+    expect(parseSettingSources(['user', 'project'])).toEqual(['user', 'project']);
   });
 
   test('preserves an explicitly empty list', () => {
-    expect(parseClaudeSettingSources([])).toEqual({ value: [], invalid: [] });
+    expect(parseSettingSources([])).toEqual([]);
   });
 
-  test('reports unrecognized entries instead of dropping them silently', () => {
-    expect(parseClaudeSettingSources(['project', 'local'])).toEqual({
-      value: ['project'],
-      invalid: ['local'],
-    });
-  });
-
-  test('serializes a non-string entry so the caller can name it', () => {
-    expect(parseClaudeSettingSources([{ nope: 1 }])).toEqual({
-      value: [],
-      invalid: ['{"nope":1}'],
-    });
+  test('drops unrecognized entries, narrowing rather than widening', () => {
+    expect(parseSettingSources(['project', 'local', { nope: 1 }])).toEqual(['project']);
+    expect(parseSettingSources(['projct'])).toEqual([]);
   });
 });
