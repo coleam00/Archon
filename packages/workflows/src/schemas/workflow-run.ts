@@ -1048,7 +1048,7 @@ const approvalDecisionsSchema = z.union([
 export const approvalContextSchema = approvalContextBaseSchema.and(approvalDecisionsSchema);
 export const expectedApprovalGateSchema = z.union([
   z.string().min(1),
-  approvalContextBaseSchema.pick({ nodeId: true, pauseId: true }).required(),
+  z.object({ nodeId: z.string().min(1), pauseId: z.string().min(1) }),
 ]);
 
 export type ApprovalContext = z.infer<typeof approvalContextSchema>;

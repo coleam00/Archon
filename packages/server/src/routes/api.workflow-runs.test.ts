@@ -3238,14 +3238,20 @@ describe('dedicated gate answers with expectedGate', () => {
     }
   );
 
-  test.each(['approve', 'reject'])(
-    '/%s refuses a partial gate identity without writes',
-    async route => {
+  test.each(
+    ['approve', 'reject'].flatMap(route => [
+      { route, expectedGate: { nodeId: 'review-gate' } },
+      { route, expectedGate: { nodeId: '', pauseId: 'pause-1' } },
+      { route, expectedGate: { nodeId: 'review-gate', pauseId: '' } },
+    ])
+  )(
+    '/$route refuses an incomplete gate identity $expectedGate without writes',
+    async ({ route, expectedGate }) => {
       mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
       const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedGate: { nodeId: 'review-gate' } }),
+        body: JSON.stringify({ expectedGate }),
       });
       expect(response.status).toBe(400);
       expect(mockResolveApprovalGate).not.toHaveBeenCalled();
