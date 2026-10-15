@@ -630,6 +630,16 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
   return approval;
 }
 
+function usageLimitNotAGateMessage(
+  run: WorkflowRun,
+  attention: Extract<RunAttention, { kind: 'usage_limit' }>
+): string {
+  return (
+    `Run ${run.id} is waiting for a provider usage limit to reset at ${attention.resumeAt}, ` +
+    'not at a gate. It continues by itself; cancel or abandon it to stop it.'
+  );
+}
+
 function assertApprovableContext(run: WorkflowRun): ApprovalContext {
   if (run.status !== 'paused') {
     throw new Error(
@@ -667,10 +677,7 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
         `Run ${run.id} is paused at an attention wait, not a gate. Answer it in its form.`
       );
     case 'usage_limit':
-      throw new Error(
-        `Run ${run.id} is waiting for a provider usage limit to reset at ${attention.resumeAt}, ` +
-          'not at a gate. It continues by itself; cancel or abandon it to stop it.'
-      );
+      throw new Error(usageLimitNotAGateMessage(run, attention));
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
     case 'stalled_tool_calls':
@@ -764,11 +771,17 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
         );
       }
       break;
+    case 'usage_limit':
+      throw new Error(usageLimitNotAGateMessage(run, attention));
     case 'awaiting_response':
     case 'stalled_tool_calls':
     case 'terminal':
       // The status guard excludes running and terminal runs.
       break;
+    default: {
+      const unhandled: never = attention;
+      throw new Error(`Unhandled attention kind: ${JSON.stringify(unhandled)}`);
+    }
   }
   if (approval) assertDeclaredDecision(run, approval, 'reject');
   return approval;
