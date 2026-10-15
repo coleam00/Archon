@@ -313,7 +313,7 @@ describe('CopilotProvider.sendQuery', () => {
         appendSystemPrompt: 'Lower-priority appended instructions.',
       },
     },
-  ])('$source replaces the default system message', async ({ expected, options }) => {
+  ])('$source appends to the default system message', async ({ expected, options }) => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -329,7 +329,7 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     const opts = createSessionSpy.mock.calls[0]![0] as SessionConfig;
-    expect(opts.systemMessage).toEqual({ content: expected, mode: 'replace' });
+    expect(opts.systemMessage).toEqual({ content: expected, mode: 'append' });
   });
 
   test('appendSystemPrompt appends to the default system message', async () => {

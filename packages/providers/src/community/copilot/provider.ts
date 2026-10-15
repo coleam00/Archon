@@ -145,7 +145,7 @@ function resolveSystemMessage(requestOptions?: SendQueryOptions): SystemMessageC
   const prompt = explicitPrompt ?? requestOptions?.appendSystemPrompt;
   const content = Array.isArray(prompt) ? prompt.join('\n') : prompt;
   if (typeof content === 'string' && content.length > 0) {
-    return { mode: explicitPrompt !== undefined ? 'replace' : 'append', content };
+    return { mode: 'append', content };
   }
   return undefined;
 }

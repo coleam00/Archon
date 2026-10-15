@@ -109,7 +109,7 @@ test.each(['scoped', 'legacy'] as const)(
   }
 );
 
-test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
+test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 'oneOf'] as const)(
   '%s plugin model rules normalize credential preflight without unrelated run fields',
   async composition => {
     const modelRule = normalizedConfigString(
@@ -132,8 +132,11 @@ test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
               $defs: { model: fields.properties?.model ?? true },
               properties: { ...fields.properties, model: { $ref: '#/$defs/model' } },
             }
-          : composition === '$ref'
-            ? { $defs: { fields }, $ref: '#/$defs/fields' }
+          : composition === '$ref' || composition === 'intermediate-ref'
+            ? {
+                $defs: { fields, intermediate: { $ref: '#/$defs/fields' } },
+                $ref: composition === '$ref' ? '#/$defs/fields' : '#/$defs/intermediate',
+              }
             : { [composition]: composition === 'allOf' ? [fields] : [fields, alternative] };
     const registration = processProviderRegistration(
       providerPluginDescriptorSchema.parse({
@@ -248,6 +251,10 @@ test.each(
     expect(z.fromJSONSchema(run).safeParse({ model: ' openai / gpt ', region: 'eu' }).success).toBe(
       true
     );
+    expect(registration.parseConfig({ model: ' openai / gpt ', region: 'eu' }, 'run')).toEqual({
+      model: 'openai/gpt',
+      region: 'eu',
+    });
     expect(registration.credentials.vendorFor(' openai / gpt ')).toBe('openai');
     expect(registration.credentials.vendorFor('anthropic/gpt')).toBeUndefined();
     expect(registration.credentials.vendorFor('openai/other')).toBe(
@@ -294,6 +301,81 @@ test('oneOf credential lookup accepts a distinct second model branch', () => {
     expect(registration.credentials.vendorFor(model)).toBe(vendor);
   }
 });
+
+function modelLookupRegistration(run: z.core.JSONSchema.BaseSchema) {
+  return processProviderRegistration(
+    providerPluginDescriptorSchema.parse({
+      ...descriptor,
+      config: { install: run, run, snapshot: run },
+      credentials: {
+        kind: 'static',
+        specs: [
+          { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+          { vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'] },
+        ],
+      },
+    }),
+    argv
+  );
+}
+
+const objectModelRules: z.core.JSONSchema.BaseSchema[] = [
+  { patternProperties: { '^model$': { type: 'string', pattern: '^openai/' } } },
+  {
+    properties: { model: { type: 'string' } },
+    patternProperties: { '^model$': { type: 'string', pattern: '^openai/' } },
+  },
+  {
+    patternProperties: {
+      '^model': { type: 'string', pattern: '^(openai|anthropic)/' },
+      model$: { type: 'string', pattern: '^openai/' },
+    },
+  },
+  { additionalProperties: { type: 'string', pattern: '^openai/' } },
+  { additionalProperties: false },
+];
+
+test.each(objectModelRules)(
+  'credential lookup applies every object rule covering model: %j',
+  rules => {
+    const registration = modelLookupRegistration({ type: 'object', ...rules });
+    expect(() => registration.parseConfig({ model: 'anthropic/gpt' }, 'run')).toThrow(
+      InvalidProviderRunConfigError
+    );
+    expect(registration.credentials.vendorFor('anthropic/gpt')).toBeUndefined();
+    if (rules.additionalProperties !== false) {
+      expect(registration.parseConfig({ model: 'openai/gpt' }, 'run')).toEqual({
+        model: 'openai/gpt',
+      });
+      expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
+    }
+  }
+);
+
+test.each(['anyOf', 'oneOf'] as const)(
+  '%s credential lookup rejects ambiguous model normalization',
+  composition => {
+    const run = {
+      [composition]: [
+        z.toJSONSchema(z.object({ region: z.literal('us'), model: z.string() }), { io: 'input' }),
+        z.toJSONSchema(
+          z.object({
+            region: z.literal('eu'),
+            model: normalizedConfigString(z.string(), 'slash-separated'),
+          }),
+          { io: 'input' }
+        ),
+      ],
+    };
+    const registration = modelLookupRegistration(run);
+    expect(registration.parseConfig({ model: 'openai/gpt ', region: 'eu' }, 'run')).toEqual({
+      model: 'openai/gpt',
+      region: 'eu',
+    });
+    expect(registration.credentials.vendorFor('openai/gpt ')).toBeUndefined();
+    expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
+  }
+);
 
 test('a declared skillDiscovery survives process registration', () => {
   const skillDiscovery = { project: ['.stub/skills'], user: ['skills'] };
@@ -348,7 +430,7 @@ test('scoped wire config agrees with the in-process parser', () => {
   ).toEqual({ model: 'model' });
 });
 
-test('legacy v1 descriptors still validate all scopes with configSchema', () => {
+test('descriptors without scoped config validate all scopes with configSchema', () => {
   const { config: _config, ...legacy } = descriptor;
   const registration = processProviderRegistration(legacy, argv);
   for (const scope of ['install', 'run', 'snapshot'] as const) {

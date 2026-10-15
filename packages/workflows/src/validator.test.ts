@@ -1545,6 +1545,14 @@ describe('validateWorkflowResources — skills search roots', () => {
       providerRegistry
     );
     expect(missingSkillIssues(issues)).toHaveLength(0);
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        field: 'skills',
+        level: 'warning',
+        message: "Skill 'home-skill' is available only in a host user directory",
+        hint: expect.stringContaining('Container runs'),
+      })
+    );
   });
 
   test('Claude accepts a user skill from the configured CLAUDE_CONFIG_DIR', async () => {

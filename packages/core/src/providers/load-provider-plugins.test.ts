@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 // @archon-test-isolated
 import * as paths from '@archon/paths';
 import { clearRegistry, providerRegistry } from '@archon/providers';
@@ -54,7 +55,7 @@ test('invalid descriptors, executable identities and delivery rules name the rec
   await mkdir(dirname(file), { recursive: true });
   for (const value of [
     { ...receipt, descriptor: { id: descriptor.id } },
-    { ...receipt, descriptor: { ...descriptor, protocol: 2 } },
+    { ...receipt, descriptor: { ...descriptor, protocol: 1 } },
     { ...receipt, descriptor: { ...descriptor, id: 'other' } },
     { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
     {
@@ -72,7 +73,10 @@ test('invalid descriptors, executable identities and delivery rules name the rec
     await expect(loadProviderPlugins(dir)).rejects.toThrow(file);
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin update');
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin remove');
-    if (!('protocol' in value.descriptor) || value.descriptor.protocol !== 1) {
+    if (
+      !('protocol' in value.descriptor) ||
+      value.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL
+    ) {
       await expect(readReceipts(dir)).rejects.toThrow(`Invalid plugin receipt ${file}`);
     }
   }

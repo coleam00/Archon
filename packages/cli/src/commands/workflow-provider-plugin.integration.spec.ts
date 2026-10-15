@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import {
   createReleaseRepo,
   serveFixtureGit,
@@ -578,7 +579,7 @@ test('first-party install enforces version match and can replace an existing pro
       )
     );
     const fixtureDescriptor = providerPluginDescriptorSchema.parse({
-      protocol: 1,
+      protocol: PROVIDER_PLUGIN_PROTOCOL,
       id: 'codex',
       displayName: 'Fixture Codex',
       version: '0.12.0',

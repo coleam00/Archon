@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { providerCapabilitiesSchema } from '@archon/provider-contract';
@@ -187,7 +188,7 @@ test('provider receipts validate the owned descriptor contract', () => {
     installedAt: new Date(0).toISOString(),
     files: [{ path: 'archon-provider-example', sha256: 'b'.repeat(64) }],
     descriptor: providerPluginDescriptorSchema.parse({
-      protocol: 1,
+      protocol: PROVIDER_PLUGIN_PROTOCOL,
       id: 'example',
       displayName: 'Example',
       version: '1',
@@ -216,7 +217,7 @@ test('provider receipts validate the owned descriptor contract', () => {
   ).toBe(true);
   for (const descriptor of [
     { id: 'example' },
-    { ...receipt.descriptor, protocol: 2 },
+    { ...receipt.descriptor, protocol: 1 },
     { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
   ]) {
     expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);

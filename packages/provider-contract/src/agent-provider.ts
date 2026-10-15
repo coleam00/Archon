@@ -102,7 +102,8 @@ export interface AgentRequestOptions {
   /**
    * Instructions added to the provider's own system prompt. A provider that
    * cannot extend its prompt uses them as its system prompt. A `systemPrompt`
-   * (request or node) replaces the provider's prompt and takes precedence.
+   * (request or node) takes precedence, using the provider's native behavior.
+   * Copilot appends explicit prompts to preserve its foundation instructions.
    */
   appendSystemPrompt?: string;
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };

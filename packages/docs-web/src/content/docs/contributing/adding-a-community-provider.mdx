@@ -39,7 +39,7 @@ case as an error. With the `settingSources` capability, the `project` and `user`
 sources gate those roots. A provider without `skillDiscovery` is validated against
 Archon's shared skill roots, and a missing skill is only a warning.
 
-A request's `systemPrompt` replaces the provider's own system prompt. Its
+A request's `systemPrompt` uses the provider's native system-instruction behavior (Copilot appends to its foundation prompt). Its
 `appendSystemPrompt` adds instructions to that prompt; a provider that cannot extend
 its prompt uses them as its system prompt, and a `systemPrompt` takes precedence.
 
@@ -48,12 +48,12 @@ its prompt uses them as its system prompt, and a `systemPrompt` takes precedence
 Wrap the implementation with the contract's plugin entrypoint:
 
 ```ts
-import { serveProvider, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { serveProvider, PROVIDER_PLUGIN_PROTOCOL, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { ExampleProvider } from './provider';
 import { capabilities } from './capabilities';
 
 const descriptor: ProviderPluginDescriptor = {
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'example',
   displayName: 'Example provider',
   version: '1.0.0',
@@ -90,7 +90,7 @@ JSON Schema does not encode Zod string transforms. Use
 `normalizedConfigString(stringSchema, 'slash-separated')` to trim the two sides of
 the first slash in a structured reference. These helpers generate the
 `x-archon-normalize` annotation and the matching in-process transform from one
-owner. Scoped process registration applies normalization after validation.
+owner. Scoped process registration applies normalization after validation. Credential lookup has only a model: alternative run branches must agree on its normalization, or lookup returns no vendor.
 
 
 Keep `configSchema` as a compatibility superset of every configuration accepted in

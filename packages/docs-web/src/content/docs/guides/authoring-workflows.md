@@ -251,12 +251,12 @@ nodes:
 | `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
-| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
+| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Requires the provider's `settingSources` capability. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
 | `systemPrompt` | string | — | Set system instructions for this node (Claude/Codex/Pi/Copilot/OpenCode). Replaces the default `claude_code` prompt on Claude. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
-| `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources Claude discovers (CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Claude only. Per-node only |
+| `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources a capable provider discovers (for Claude: CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Requires the provider's `settingSources` capability. Per-node only |
 
 ### Addressable session ancestry
 
@@ -301,7 +301,7 @@ This is separate from `persist_session`: `{ resume: source }` selects ancestry w
 
 ### Claude SDK Advanced Options
 
-Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `fallbackModel`, `betas`, `sandbox`, and `settingSources` are Claude-only — Codex and other providers emit a warning and ignore them. `systemPrompt` sets per-node system instructions on Claude, Codex, Pi, Copilot and OpenCode; Claude replaces its `claude_code` preset, while Codex includes the instructions in the user prompt. `effort` also applies across providers: it is the one reasoning-depth spelling and applies on **every** provider that has a request-level reasoning control (Claude, Codex, Pi, Copilot), each translating it to its own SDK control. OpenCode has no request-level control — it configures reasoning in `opencode.json` — so `effort:` there warns and is ignored. These settings can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd`, `systemPrompt`, and `settingSources` are per-node only (`settingSources` also has an assistant-level default in `.archon/config.yaml`).
+Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `fallbackModel`, `betas`, and `sandbox` are Claude-only — Codex and other providers emit a warning and ignore them. `settingSources` applies to providers declaring that capability, including Claude and capable plugins. `systemPrompt` sets per-node system instructions on Claude, Codex, Pi, Copilot and OpenCode; Claude replaces its `claude_code` preset, Codex includes the instructions in the user prompt, and Copilot appends them to its foundation prompt. `effort` also applies across providers: it is the one reasoning-depth spelling and applies on **every** provider that has a request-level reasoning control (Claude, Codex, Pi, Copilot), each translating it to its own SDK control. OpenCode has no request-level control — it configures reasoning in `opencode.json` — so `effort:` there warns and is ignored. These settings can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd`, `systemPrompt`, and `settingSources` are per-node only (`settingSources` also has an assistant-level default in `.archon/config.yaml`).
 
 **effort** — reasoning depth:
 
@@ -367,7 +367,7 @@ it fails validation with an error directing the author to `effort:`.
       denyWrite: ['/etc', '/usr']
 ```
 
-**settingSources** — control which filesystem setting sources the Claude SDK discovers (project `CLAUDE.md`/`.claude/` skills, commands, agents vs the user-level `~/.claude/`). For workflow skills, this controls eligibility rather than activation: `skills:` selects the exact active set, and a declaration must exist under an enabled source. Loading fewer sources gives a leaner context and a faster node start — a lean reviewer node can skip project context entirely while a writer node in the same workflow keeps it:
+**settingSources** — control which filesystem setting sources a capable provider discovers. For Claude, these include project `CLAUDE.md`/`.claude/` skills, commands, agents vs the user-level `~/.claude/`. For workflow skills, this controls eligibility rather than activation: `skills:` selects the exact active set, and a declaration must exist under an enabled source. Loading fewer sources gives a leaner context and a faster node start — a lean reviewer node can skip project context entirely while a writer node in the same workflow keeps it:
 
 ```yaml
 - id: lean-review
@@ -379,7 +379,7 @@ it fails validation with an error directing the author to `effort:`.
   settingSources: ['project']     # project sources only, skip ~/.claude/
 ```
 
-Omitting the field inherits the assistant-level `assistants.claude.settingSources` from `.archon/config.yaml`; if that is also unset, the default is `['project', 'user']`.
+Omitting the field inherits the assistant-level `assistants.<provider>.settingSources` from `.archon/config.yaml`; if that is also unset, the default is `['project', 'user']`. Providers without the `settingSources` capability warn and ignore the field. Validation checks host skill paths; a skill found only in a host user directory may be unavailable in container execution. Provider preflight checks the run's actual scope.
 
 ### Plugins
 

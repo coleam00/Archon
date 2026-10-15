@@ -734,12 +734,24 @@ export async function validateWorkflowResources(
               env,
             })
           : skillSearchRoots(cwd);
+        const projectRoots = discovery
+          ? declaredSkillRoots(discovery, cwd, { includeUser: false, env })
+          : skillSearchRoots(cwd).filter(root => root.startsWith(`${cwd}/`));
         for (const skillName of node.skills) {
           let found = false;
           for (const root of searchRoots) {
             const skillPath = join(root, skillName, 'SKILL.md');
             if (await fileExists(skillPath)) {
               found = true;
+              if (!projectRoots.includes(root)) {
+                issues.push({
+                  level: 'warning',
+                  nodeId: node.id,
+                  field: 'skills',
+                  message: `Skill '${skillName}' is available only in a host user directory`,
+                  hint: 'Execution scope is not known during validation. Container runs may not load host user skills; provider preflight checks availability for the run.',
+                });
+              }
               break;
             }
           }
@@ -750,8 +762,7 @@ export async function validateWorkflowResources(
             // unreachable, so it is an error. A name that exists nowhere on disk
             // may be a built-in or `plugin:skill` entry the provider resolves
             // itself — warn there rather than failing a workflow that runs. Same
-            // helper the provider preflight uses, over the same roots, so
-            // validation and execution always agree on which case this is.
+            // helper checks host paths; execution preflight owns run availability.
             const installedButUnusable =
               discovery !== undefined &&
               findInstalledSkillNames(

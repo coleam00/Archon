@@ -35,10 +35,15 @@ export function modelConfigSchema(
 ): z.ZodType<{ model: string }> {
   const modelRule = (node: JsonSchema): z.core.JSONSchema.BaseSchema => {
     if (typeof node !== 'object') return node ? {} : { not: {} };
-    const field = node.properties?.model ?? true;
-    const rules: z.core.JSONSchema.BaseSchema[] = [
-      typeof field === 'object' ? field : field ? {} : { not: {} },
-    ];
+    const fields: JsonSchema[] = [];
+    if (node.properties?.model !== undefined) fields.push(node.properties.model);
+    for (const [pattern, rule] of Object.entries(node.patternProperties ?? {})) {
+      if (new RegExp(pattern).test('model')) fields.push(rule);
+    }
+    if (fields.length === 0) fields.push(node.additionalProperties ?? true);
+    const rules: z.core.JSONSchema.BaseSchema[] = fields.map(field =>
+      typeof field === 'object' ? field : field ? {} : { not: {} }
+    );
     if (node.$ref) rules.push(modelRule(resolveConfigReference(node, schema)));
     if (node.anyOf) rules.push({ anyOf: node.anyOf.map(modelRule) });
     // Distinct run branches can share a model rule once unrelated fields are removed.
@@ -60,16 +65,27 @@ export function modelConfigSchema(
     );
   // Validate every conjunct against the raw model before applying normalization.
   // Intersecting transformed outputs would conflict with identity-only rules.
-  const normalize = (raw: string, node: JsonSchema, value = raw): string => {
-    if (typeof node !== 'object') return value;
+  const normalize = (
+    raw: string,
+    node: JsonSchema,
+    value: string | undefined
+  ): string | undefined => {
+    if (value === undefined || typeof node !== 'object') return value;
     const mode = node[CONFIG_STRING_NORMALIZATION_KEY];
     if (mode !== undefined)
       value = normalizeConfigString(value, configStringNormalizationSchema.parse(mode));
     if (node.$ref) value = normalize(raw, resolveConfigReference(node, schema), value);
     const branches = node.anyOf ?? node.oneOf;
     if (branches) {
-      const branch = branches.find(candidate => validator(candidate).safeParse(raw).success);
-      if (branch !== undefined) value = normalize(raw, branch, value);
+      // Unrelated run fields can select a different branch. A model alone is
+      // sufficient only when every applicable branch gives the same result.
+      const results = new Set(
+        branches
+          .filter(candidate => validator(candidate).safeParse(raw).success)
+          .map(branch => normalize(raw, branch, value))
+      );
+      if (results.size !== 1) return undefined;
+      value = results.values().next().value;
     }
     for (const branch of node.allOf ?? []) value = normalize(raw, branch, value);
     return value;
@@ -77,7 +93,15 @@ export function modelConfigSchema(
   return z.object({
     model: validator(rule)
       .pipe(z.string())
-      .transform(value => normalize(value, rule)),
+      .transform((value, ctx) => {
+        const normalized = normalize(value, rule, value);
+        if (normalized !== undefined) return normalized;
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Model normalization depends on other run settings',
+        });
+        return z.NEVER;
+      }),
   });
 }
 
@@ -93,35 +117,43 @@ export function scopedConfigSchema(
     root = false,
     output = false
   ): unknown => {
-    const node = resolveConfigSchema(unresolved, schema);
+    const node = unresolved;
     if (typeof node !== 'object') return value;
-    const normalization = node[CONFIG_STRING_NORMALIZATION_KEY];
-    if (output && typeof value === 'string' && normalization !== undefined) {
-      return normalizeConfigString(value, configStringNormalizationSchema.parse(normalization));
-    }
+    const original = value;
+    if (node.$ref) value = project(value, resolveConfigReference(node, schema), root, output);
     const branches = node.anyOf ?? node.oneOf;
     if (branches) {
       for (const branch of branches) {
-        const projected = project(value, branch, root);
+        const projected = project(original, branch, root);
         if (
           z
             .fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
             .safeParse(projected).success
-        )
-          return output ? project(projected, branch, root, true) : projected;
+        ) {
+          value = output ? project(value, branch, root, true) : projected;
+          break;
+        }
       }
-      return value;
     }
     if (node.allOf?.length) {
-      const members: z.ZodType[] = node.allOf.map(branch =>
-        z.preprocess(
-          input => project(input, branch, root, output),
-          z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
-        )
-      );
-      const intersection = members.reduce((left, right) => z.intersection(left, right));
-      const parsed = intersection.safeParse(value);
-      return parsed.success ? parsed.data : value;
+      if (output) {
+        for (const branch of node.allOf) value = project(value, branch, root, true);
+      } else {
+        const members: z.ZodType[] = node.allOf.map(branch =>
+          z.preprocess(
+            input => project(input, branch, root),
+            z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
+          )
+        );
+        const parsed = members
+          .reduce((left, right) => z.intersection(left, right))
+          .safeParse(value);
+        if (parsed.success) value = parsed.data;
+      }
+    }
+    const normalization = node[CONFIG_STRING_NORMALIZATION_KEY];
+    if (output && typeof value === 'string' && normalization !== undefined) {
+      return normalizeConfigString(value, configStringNormalizationSchema.parse(normalization));
     }
     if (Array.isArray(value)) {
       return value.map((item: unknown, index) => {
@@ -138,8 +170,9 @@ export function scopedConfigSchema(
       child,
     }));
     const strip =
-      (root && snapshot && node.additionalProperties !== false) ||
-      (stripUnknownKeys && node.additionalProperties === undefined);
+      !output &&
+      ((root && snapshot && node.additionalProperties !== false) ||
+        (stripUnknownKeys && node.additionalProperties === undefined));
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, field]) => {
         const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
@@ -153,7 +186,17 @@ export function scopedConfigSchema(
             resolved.writeOnly === true
           )
             return [];
-          return [[key, project(field, property, false, output)]];
+          return [
+            [
+              key,
+              patterns
+                .filter(({ pattern }) => pattern.test(key))
+                .reduce(
+                  (projected, { child }) => project(projected, child, false, output),
+                  project(field, property, false, output)
+                ),
+            ],
+          ];
         }
         const matching = patterns.filter(({ pattern }) => pattern.test(key));
         if (matching.length > 0)

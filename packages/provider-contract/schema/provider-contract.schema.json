@@ -967,7 +967,7 @@
       "properties": {
         "protocol": {
           "type": "number",
-          "const": 1
+          "const": 2
         },
         "id": {
           "type": "string",
@@ -1394,7 +1394,7 @@
                   "properties": {
                     "protocol": {
                       "type": "number",
-                      "const": 1
+                      "const": 2
                     }
                   },
                   "required": [
