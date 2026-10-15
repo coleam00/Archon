@@ -43,6 +43,13 @@ export class ExistingBranchDivergedError extends Error {
   }
 }
 
+export class WorktreeUncommittedChangesError extends Error {
+  constructor(readonly path: string) {
+    super(`Worktree at ${path} has uncommitted changes.`);
+    this.name = 'WorktreeUncommittedChangesError';
+  }
+}
+
 /**
  * Git unregistered a worktree it was removing but left files behind that Archon
  * could not delete. No retry can prove the directory is Archon's again, so the

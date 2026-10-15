@@ -1,3 +1,4 @@
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -2892,8 +2893,7 @@ interface ChatTurn {
  * The chat message for a failed turn's result. The provider's typed failure decides the
  * advice, as it decides retry in the workflow engine. A result without one comes from a
  * provider that does not report `failure` yet; its subtype and SDK detail still go
- * through the text formatter so actionable cases like "Not logged in" keep their advice
- * (#1983).
+ * through credential redaction and are shown as diagnostics without inferred advice.
  */
 function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
   if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
@@ -3686,7 +3686,12 @@ async function handleRemoveProject(message: string): Promise<string> {
     return `Project "${projectName}" not found.`;
   }
 
-  await codebaseDb.deleteCodebase(codebase.id);
+  try {
+    await codebaseDb.deleteCodebase(codebase.id);
+  } catch (error) {
+    if (error instanceof ActiveContainerEnvironmentsError) return error.message;
+    throw error;
+  }
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }

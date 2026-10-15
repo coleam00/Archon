@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
@@ -7673,6 +7674,22 @@ describe('handleMessage — legacy registration recovery', () => {
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'
     );
+  });
+
+  test('remove-project renders the shared active-container refusal', async () => {
+    mockListCodebases.mockResolvedValue([makeNamedCodebase('my-app')]);
+    mockParseCommand.mockReturnValue({ command: 'remove-project', args: ['my-app'] });
+    mockDeleteCodebase.mockRejectedValueOnce(
+      new ActiveContainerEnvironmentsError(['container-one'])
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/remove-project my-app', { actor: operator });
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => call[1])
+      .join('\n');
+    expect(messages).toContain('container-one');
+    expect(messages).toContain('archon isolation cleanup 0');
+    expect(messages).not.toContain('removed.');
   });
 
   test('update and removal remain available for legacy registrations', async () => {

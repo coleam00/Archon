@@ -6,6 +6,7 @@
 import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platforms/registry';
 import { createLogger } from '@archon/paths';
 import { lstat } from 'node:fs/promises';
+import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as isolationDb from '../db/isolation-environments';
 import { cleanupMergedWorktrees, getLiveRunBlocker } from '../services/cleanup-service';
 import type { MergedCleanupResult } from '../services/cleanup-service';
@@ -55,14 +56,14 @@ export { type CleanupOperationResult, type MergedCleanupResult } from '../servic
  * its missing path, which is the operator's signal to act.
  */
 async function reconcileGhosts(
-  envs: readonly {
-    id: string;
-    working_path: string;
-    created_by_platform: string | null;
-  }[]
+  envs: readonly Pick<
+    IsolationEnvironmentRow,
+    'id' | 'provider' | 'working_path' | 'created_by_platform'
+  >[]
 ): Promise<number> {
   let reconciled = 0;
   for (const env of envs) {
+    if (env.provider !== 'worktree') continue;
     const reason = unknownPlatformReason(env.created_by_platform);
     if (reason) {
       getLog().warn({ envId: env.id, reason }, 'isolation.cleanup_skipped');

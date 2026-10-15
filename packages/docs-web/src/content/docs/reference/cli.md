@@ -1056,10 +1056,10 @@ Signal an exact event wait occurrence and attempt its execution immediately:
 
 ```bash
 archon workflow signal <full-run-id> --event checks.complete \
-  --resume-at '2026-10-04T12:00:00.000Z' --data '{"conclusion":"success"}' --json
+  --occurrence '<metadata.wait.pauseId>' --data '{"conclusion":"success"}' --json
 ```
 
-Use the event name and `metadata.wait.resumeAt` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Stale, duplicate, expired, mismatched, and non-event occurrences are rejected without resuming.
+Use the event name and `metadata.wait.pauseId` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Duplicate, expired, mismatched, and non-event signals are rejected without resuming. `--resume-at <ISO timestamp>` remains accepted for compatibility and is required when `--occurrence` is omitted. Without an occurrence, a stale signal cannot be distinguished from a later wait with the same event and deadline. When both selectors are supplied, both must match. Persisted waits without a `pauseId` can still be signaled with `--resume-at`.
 
 The result reports `signaled` separately from admission and settlement. If the signal succeeds but execution is refused or fails, it remains durable, the command returns 1, and a later `workflow wake` can retry after the problem is resolved. A concurrent resume winner after a successful signal is a normal outcome.
 
@@ -1382,7 +1382,17 @@ of this section. Abandon deletes uncommitted work in that worktree, keeps its br
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
-Remove stale environments. Age cleanup uses the originating platform's registered policy.
+Remove stale environments. Worktree cleanup only handles worktree records. Container
+cleanup removes eligible containers and their volumes through the container backend,
+including when no stale worktrees exist. A missing host folder does not make a container
+destroyed. To clean eligible containers without waiting for the default age threshold,
+run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
+
+Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active container
+environments remain. The error lists their environment IDs and the cleanup command.
+Clean them up explicitly, then retry deletion.
+
+Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
 the plugins. A receipt supersedes a bundled chat policy with the same platform id.
 

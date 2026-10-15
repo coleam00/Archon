@@ -151,7 +151,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
-| DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
+| DELETE | `/api/codebases/{id}` | Delete a codebase after container cleanup |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
 | POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
@@ -198,7 +198,11 @@ Returns the updated codebase. The name is trimmed and must be 1 to 255 character
 curl -X DELETE http://localhost:3090/api/codebases/{id}
 ```
 
-Removes the codebase registration and cleans up associated worktrees and isolation environments.
+Removes the codebase registration and cleans up associated worktrees. If active container environments remain, returns `409` with their environment IDs and leaves the registration intact. Deletion does not remove containers or volumes. A worktree cleanup failure returns `500` and keeps the registration and unfinished cleanup records for retry. If a worktree is registered during cleanup, deletion returns `409`; retry the request to clean it up.
+
+If managed-workspace removal fails after the registration is deleted, the response is `500` and names the retained path. Resolve the filesystem error and remove that directory manually.
+
+Run `archon isolation cleanup 0` to remove eligible containers, then retry the DELETE request. Cleanup preserves containers owned by resumable runs; release those runs before cleanup.
 
 ### List Environments
 
@@ -206,7 +210,7 @@ Removes the codebase registration and cleans up associated worktrees and isolati
 curl http://localhost:3090/api/codebases/{id}/environments
 ```
 
-Returns the isolation environments (worktrees) associated with a codebase.
+Returns the active isolation environments (worktrees and containers) associated with a codebase.
 
 ---
 
@@ -304,8 +308,10 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
 | POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
-| POST | `/api/workflows/runs/{runId}/signal` | Signal the exact external event occurrence awaited by a paused run |
+| POST | `/api/workflows/runs/{runId}/signal` | Signal an external event wait; use `occurrence` for an exact match |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
+
+For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and

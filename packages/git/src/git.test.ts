@@ -983,6 +983,49 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('hasUncommittedChangesStrict', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test.each(['', '?? new-file\0', ' M tracked\0'])(
+      'uses explicit removal status flags and record presence: %j',
+      async stdout => {
+        execSpy.mockResolvedValue({ stdout, stderr: '' });
+        expect(await git.hasUncommittedChangesStrict(worktree('/workspace/wt'))).toBe(
+          stdout.length > 0
+        );
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          [
+            '-C',
+            '/workspace/wt',
+            'status',
+            '--porcelain=v1',
+            '-z',
+            '--untracked-files=all',
+            '--ignore-submodules=none',
+          ],
+          { timeout: 5 * 60 * 1000 }
+        );
+      }
+    );
+
+    test('propagates status failures rather than reporting dirty state', async () => {
+      const failure = new Error('status unavailable');
+      execSpy.mockRejectedValue(failure);
+      await expect(git.hasUncommittedChangesStrict(worktree('/workspace/wt'))).rejects.toBe(
+        failure
+      );
+    });
+  });
+
   describe('hasUncommittedChanges', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
