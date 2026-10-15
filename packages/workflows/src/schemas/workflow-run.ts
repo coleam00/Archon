@@ -63,12 +63,19 @@ export const workflowRunOutcomeSchema = z.enum(['succeeded', 'failed']);
 
 export type WorkflowRunOutcome = z.infer<typeof workflowRunOutcomeSchema>;
 
+// Optional only for waits persisted before occurrence IDs were introduced.
+const workflowWaitDeadlineOccurrenceFields = {
+  pauseId: z.string().min(1).optional(),
+};
+
 const workflowWaitTimeFields = {
+  ...workflowWaitDeadlineOccurrenceFields,
   kind: z.literal('time'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),
 } as const;
 const workflowWaitEventFields = {
+  ...workflowWaitDeadlineOccurrenceFields,
   kind: z.literal('event'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),

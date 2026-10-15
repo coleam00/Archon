@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -370,7 +371,7 @@ integration('chat receipts do not interfere with provider and pack discovery', a
     },
     files: [{ path: `archon-provider-example${suffix}`, sha256: 'b'.repeat(64) }],
     descriptor: providerPluginDescriptorSchema.parse({
-      protocol: 1,
+      protocol: PROVIDER_PLUGIN_PROTOCOL,
       id: 'example',
       displayName: 'Example',
       version: '1',

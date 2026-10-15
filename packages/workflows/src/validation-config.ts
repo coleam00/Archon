@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { parseClaudeSettingSources } from '@archon/paths/skills';
 import { rawAliasesConfigSchema, rawTiersConfigSchema } from './schemas/model-binding';
 import type { ValidationConfig } from './validator';
 
@@ -31,8 +30,7 @@ export function workflowValidationConfig(
     assistant: config.assistant,
     aliases: config.aliases,
     tiers: config.tiers,
-    claudeSettingSources: parseClaudeSettingSources(config.assistants?.claude?.settingSources)
-      .value,
-    claudeConfigDir: (config.envVars ?? config.env)?.CLAUDE_CONFIG_DIR,
+    assistants: config.assistants,
+    env: config.envVars ?? config.env,
   };
 }

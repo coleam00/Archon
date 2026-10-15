@@ -1,0 +1,15 @@
+diff --git a/packages/workflows/src/when-atom.ts b/packages/workflows/src/when-atom.ts
+index b62e75390..a186214db 100644
+--- a/packages/workflows/src/when-atom.ts
++++ b/packages/workflows/src/when-atom.ts
+@@ -18,8 +18,8 @@
+  *   $INPUTS.name              — a named workflow input (#2470)
+  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
+  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
+- *   number/boolean. A numeric operator (<= >= < >) needs an RHS that parses as a
+- *   finite number, quoted or not; anything else could never compare true.
++ *   number/boolean. A numeric operator (<= >= < >) needs a bare finite-number RHS;
++ *   a quoted literal such as '80' is rejected, since it is string data.
+  */
+ import {
+   assertSupportedOutputRefs,

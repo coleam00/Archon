@@ -367,6 +367,60 @@ The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
 The predicate only saves runs; intake ignores any other label.
 
+### The backlog bench
+
+[`intake/scripts/bench/bench.ts`](intake/scripts/bench/bench.ts) compares intake and
+triage versions on issues whose outcome is already known. Run it with `bun` from a
+checkout of the repository; the set, the dispositions file and the output directory
+are the operator's and stay outside the pack and the repository.
+
+- **Set.** `select` pins issues closed as duplicates (with the issue they duplicate),
+  closed by a merged pull request, closed as not planned, open with a human type
+  label, and open issues the operator dispositioned (`--dispositions`, a JSON array
+  of `{number, contract, route?, note?}`), each with its title and body at creation.
+  It also pins which workflow judges each row: a listed maintainer's issue runs
+  through intake in eval mode; an outside author's runs through `archon-triage`
+  directly on the same creation text with `publish=false`, because eval intake never
+  triages an outside item; and some maintainer issues get a second `trust: outside`
+  row, which must take the outside path with no agent node. A group that finds
+  fewer issues than its count pins nothing.
+- **Versions.** A version file is `{label, pack_sha}` for the baseline, the model
+  triage's tier resolves to today, plus `provider` and `model` for any other. Every
+  version runs with a config layer pinning that tier, with the baseline's effort, so
+  versions differ only in the model. The binding is resolved by a dry run on the
+  pack's own `triage/fixtures/deliver.stubs.yaml` at `pack_sha`. A version that
+  cannot be resolved refuses the batch before any run.
+- **Batches.** `run` takes the set's n-th five rows and runs every version on them,
+  one ordinary run each at one base commit. Each run has its own worktree of the
+  checkout, so `--concurrency` never puts two runs on one checkout. Every run
+  appends one line, labelled with its version, to `samples.jsonl`. The batch then
+  fails if any batch issue or state document of the repository changed, if a
+  `trust: outside` row ran an agent node, if any comment was posted, or if a run was
+  cancelled, did not finish, or failed before any agent ran; a failed batch is
+  reported before anyone evaluates it. A run that failed after its agent ran is the
+  version's result, not a batch failure. A `trust: auto`
+  run that returns no triage verdict, or a verdict whose transcript is missing so no
+  leak check ran, is recorded as failed: it counts against the bars as not right.
+- **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
+  the operator prepared, one per version, and `run --live` runs intake for real
+  there, reading each verdict from the copy's work item. The work item keeps no
+  summary, maintainer recommendation or links, so a live verdict shows none. A
+  scratch repository may not be the set's own or another version's.
+- **Evaluation.** `page` serves one batch's page on the loopback interface: each
+  row's versions side by side with the verdict, the five fields, any close proposal
+  or maintainer recommendation with its links, cost, time and the triage report. The
+  operator marks each run right, wrong or partly right, and marks land in
+  `marks.jsonl`, so they tally across batches.
+- **Score.** `score` prints one column per version from each version's latest line
+  per row, with live lines in their own `<label> (live)` column: which workflow
+  judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
+  the operator's marks), false closes (a close proposal on an issue that was still
+  open, unless the operator dispositioned it closed), the `type` confusion matrix
+  with `enhancement` read as `feature`, leaks (a command, fetch or search that looked
+  up the judged issue, left out of the accuracy numbers), cost over the runs in
+  which an agent ran (`unreported` when no provider reported one) and wall time, and
+  which versions got each disagreement right. It does not choose a winner.
+
 ## Composition validation
 
 [archon-validate](validate/README.md) accepts an explicit composition request to run

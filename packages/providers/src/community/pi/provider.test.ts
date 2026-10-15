@@ -2023,18 +2023,31 @@ describe('PiProvider', () => {
     expect(loaderArgs?.systemPrompt).toBe('request-level wins');
   });
 
-  test('preset object systemPrompt is dropped with warning', async () => {
+  test('appendSystemPrompt becomes the session system prompt when nothing replaces it', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: 'extra',
-        } as unknown as string,
+        appendSystemPrompt: 'orchestrator instructions',
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.systemPrompt).toBe('orchestrator instructions');
+  });
+
+  test('string[] systemPrompt is dropped with warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        systemPrompt: ['part one', 'part two'],
       })
     );
 
@@ -2050,7 +2063,7 @@ describe('PiProvider', () => {
   });
 
   test('invalid request-level systemPrompt does not mask valid node-level prompt', async () => {
-    // Regression: a non-string request-level prompt (preset object) must NOT win
+    // Regression: a non-string request-level prompt (string[]) must NOT win
     // via `??` and shadow a valid node-level string — each level is validated
     // independently before precedence applies.
     process.env.GEMINI_API_KEY = 'sk-test';
@@ -2059,16 +2072,12 @@ describe('PiProvider', () => {
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: 'extra',
-        } as unknown as string,
+        systemPrompt: ['part one', 'part two'],
         nodeConfig: { systemPrompt: 'node-level prompt' },
       })
     );
 
-    // The dropped request-level object is reported, tagged with its source.
+    // The dropped request-level array is reported, tagged with its source.
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ systemPromptType: 'object', systemPromptSource: 'request' }),
       'pi.system_prompt_dropped_non_string'

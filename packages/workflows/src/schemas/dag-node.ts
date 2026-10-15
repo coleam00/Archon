@@ -10,6 +10,7 @@
  * z.union() is NOT used here — YAML nodes lack an explicit `type` discriminant,
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
+import { SETTING_SOURCES } from '@archon/paths/skills';
 import { z } from 'zod';
 import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
@@ -262,7 +263,7 @@ export const dagNodeBaseSchema = z.object({
   // assistant-level default (['project', 'user'] when unset). Claude-only;
   // other providers warn and ignore it. Lets a lean node (e.g. a reviewer)
   // skip project/user context loading for faster startup.
-  settingSources: z.array(z.enum(['project', 'user'])).optional(),
+  settingSources: z.array(z.enum(SETTING_SOURCES)).optional(),
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a

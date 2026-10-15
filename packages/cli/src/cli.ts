@@ -1031,14 +1031,13 @@ async function main(): Promise<number> {
             if (!resumeRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow resume <run-id>');
             }
-            await workflowResumeCommand(
+            return await workflowResumeCommand(
               workflowHost,
               resumeRunId,
               jsonFlag,
               effectiveCwd,
               detachFlag
             );
-            break;
           }
 
           case 'abandon': {
@@ -1071,7 +1070,7 @@ async function main(): Promise<number> {
             const rawApproveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
-            await workflowApproveCommand(
+            return await workflowApproveCommand(
               workflowHost,
               approveRunId,
               approveComment,
@@ -1080,7 +1079,6 @@ async function main(): Promise<number> {
               detachFlag,
               values.occurrence as string | undefined
             );
-            break;
           }
 
           case 'reject': {
@@ -1091,7 +1089,7 @@ async function main(): Promise<number> {
             const rawRejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
-            await workflowRejectCommand(
+            return await workflowRejectCommand(
               workflowHost,
               rejectRunId,
               rejectReason,
@@ -1100,7 +1098,6 @@ async function main(): Promise<number> {
               detachFlag,
               values.occurrence as string | undefined
             );
-            break;
           }
 
           case 'respond': {
@@ -1117,7 +1114,7 @@ async function main(): Promise<number> {
             const rawRespondText =
               (values.text as string | undefined) || positionals.slice(4).join(' ');
             const respondText = rawRespondText.length > 0 ? rawRespondText : undefined;
-            await workflowRespondCommand(
+            return await workflowRespondCommand(
               workflowHost,
               respondRunId,
               decision,
@@ -1127,7 +1124,6 @@ async function main(): Promise<number> {
               detachFlag,
               values.occurrence as string | undefined
             );
-            break;
           }
 
           case 'answer': {

@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '../../plugin/wire';
 import { z } from 'zod';
 import { existsSync, writeFileSync } from 'node:fs';
 import {
@@ -15,7 +16,7 @@ const configSchemas = {
   snapshot: z.object(modelFields),
 };
 export const descriptor = providerPluginDescriptorSchema.parse({
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'test-provider',
   displayName: 'Test provider',
   version: '1',
