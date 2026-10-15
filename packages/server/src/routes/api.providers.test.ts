@@ -45,7 +45,7 @@ mock.module('@archon/core', () => ({
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   toSafeConfig: (config: unknown) => config,
-  generateAndSetTitle: mock(async () => {}),
+  generateTitleForUser: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   updateGlobalConfig: mockUpdateGlobalConfig,
   createLogger: () => ({

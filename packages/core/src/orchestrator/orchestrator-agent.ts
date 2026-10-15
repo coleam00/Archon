@@ -118,15 +118,15 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import { deliverCredential, normalizeCredentialVendor } from '../credentials/delivery';
+import { deliverCredential } from '../credentials/delivery';
 import {
   ConnectedCredentialUnavailableError,
   type CredentialFailure,
 } from '../credentials/unavailable-error';
 import {
-  getDecryptedProviderCredential,
-  listUserProviderKeys,
-} from '../db/user-provider-key-store';
+  resolveUserProviderCredentials,
+  type UserProviderCredential,
+} from '../credentials/user-provider-resolution';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
@@ -138,7 +138,7 @@ import {
 } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
-import { generateAndSetTitle } from '../services/title-generator';
+import { generateTitleForUser } from '../services/user-title-generator';
 import { startRunLiveOwner, withRunLiveOwner } from '../services/run-live-owner';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
@@ -493,14 +493,15 @@ function isCommandFullyParsed(accumulated: string): boolean {
  * the user's. Throws when the user's credentials cannot be listed, for the same
  * reason.
  */
-async function resolveUserProviderEnvForChat(
-  userId: string
-): Promise<{ env: Record<string, string>; failed: Map<string, CredentialFailure> }> {
+async function resolveUserProviderEnvForChat(userId: string): Promise<{
+  env: Record<string, string>;
+  failed: Map<string, CredentialFailure>;
+  credentials: UserProviderCredential[];
+}> {
   const env: Record<string, string> = {};
   const failed = new Map<string, CredentialFailure>();
-  for (const { provider } of await listUserProviderKeys(userId)) {
-    const vendor = normalizeCredentialVendor(provider);
-    const stored = await getDecryptedProviderCredential(userId, provider);
+  const credentials = await resolveUserProviderCredentials(userId);
+  for (const { provider, vendor, stored } of credentials) {
     if (stored.state === 'usable') {
       try {
         Object.assign(env, deliverCredential(provider, stored.credential).env);
@@ -520,7 +521,7 @@ async function resolveUserProviderEnvForChat(
       });
     }
   }
-  return { env, failed };
+  return { env, failed, credentials };
 }
 
 /**
@@ -2652,7 +2653,7 @@ export async function handleMessage(
     const delivery =
       isPerUserProviderKeysEnabled() && executionUserId
         ? await resolveUserProviderEnvForChat(executionUserId)
-        : { env: {}, failed: new Map<string, CredentialFailure>() };
+        : { env: {}, failed: new Map<string, CredentialFailure>(), credentials: undefined };
     const failedVendorFor = (
       provider: string,
       model: string | undefined
@@ -2718,38 +2719,23 @@ export async function handleMessage(
       !conversation.title && !trimmedMessage.startsWith('/')
         ? resolveModelRequest(aiProfile, 'small', configuredProviderKey)
         : undefined;
-    const failedTitleVendor =
-      titleRequest && failedVendorFor(titleRequest.provider, titleRequest.model);
-    if (failedTitleVendor) {
-      // The turn itself is fine; only the title model's credential failed. The
-      // conversation keeps its placeholder title rather than sending the message out
-      // on the host's login.
-      getLog().warn(
-        { conversationId, vendor: failedTitleVendor.vendor },
-        'orchestrator.title_skipped_credential_unavailable'
-      );
-    } else if (titleRequest) {
+    if (titleRequest) {
       const titleOptions: SendQueryOptions = {
         model: titleRequest.model,
         assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
-        // Thread the per-user credential bag so title generation authenticates as
-        // the sender too. Without this, title-gen runs with no per-user
-        // subscription/key and fails on per-user-only installs (#1984; same family
-        // as #1794/#1855). Same env-only bag as the main chat request above.
-        env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-        protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
+        env: { ...(config.envVars ?? {}), ...dbEnvVars },
       };
       if (titleRequest.preset) {
         applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
       }
-      void generateAndSetTitle(
+      void generateTitleForUser(
         conversation.id,
         message,
-        titleRequest.provider,
+        { provider: titleRequest.provider, options: titleOptions },
         cwd,
+        executionUserId,
         undefined,
-        titleOptions.assistantConfig,
-        titleOptions
+        delivery.credentials
       );
     }
 

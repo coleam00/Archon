@@ -182,6 +182,9 @@
     ],
     [
       "src/chat-host/attention-route.integration.test.ts"
+    ],
+    [
+      "src/routes/api.title-credentials.test.ts"
     ]
   ]
 }

@@ -65,7 +65,7 @@ import {
   registerRepository,
   registerFolder,
   ConversationNotFoundError,
-  generateAndSetTitle,
+  generateTitleForUser,
   resolveTitleRequest,
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
@@ -3109,14 +3109,12 @@ export function registerApiRoutes(
         // active account (e.g. ChatGPT-plan accounts, #1855). Both calls never throw.
         if (!message.startsWith('/')) {
           void resolveTitleRequest(conversation.ai_assistant_type, userId).then(titleRequest =>
-            generateAndSetTitle(
+            generateTitleForUser(
               conversation.id,
               message,
-              titleRequest.provider,
+              titleRequest,
               getArchonWorkspacesPath(),
-              undefined,
-              titleRequest.options.assistantConfig,
-              titleRequest.options
+              userId
             )
           );
         }
@@ -4011,14 +4009,13 @@ export function registerApiRoutes(
           // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
           // assistant default (#1855). Both calls never throw.
           void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
-            generateAndSetTitle(
+            generateTitleForUser(
               conv.id,
               message,
-              titleRequest.provider,
+              titleRequest,
               getArchonWorkspacesPath(),
-              workflowName,
-              titleRequest.options.assistantConfig,
-              titleRequest.options
+              userId,
+              workflowName
             )
           );
         }

@@ -45,9 +45,8 @@ export async function generateAndSetTitle(
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
 
-    // TITLE_GENERATION_MODEL is an emergency literal override for operators.
-    // Normal title generation should be resolved by the caller to the `small` tier.
-    const titleModel = process.env.TITLE_GENERATION_MODEL || undefined;
+    // Credential-aware callers resolve the literal override before authorizing the model.
+    const titleModel = requestOptions?.model ?? (process.env.TITLE_GENERATION_MODEL || undefined);
 
     // Build the title generation prompt
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);

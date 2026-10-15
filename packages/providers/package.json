@@ -237,6 +237,15 @@
     ],
     [
       "src/shared/plugin-logging.test.ts"
+    ],
+    [
+      "src/claude/credential-authority.boundary.test.ts"
+    ],
+    [
+      "src/codex/credential-authority.boundary.test.ts"
+    ],
+    [
+      "src/community/pi/credential-authority.integration.test.ts"
     ]
   ]
 }

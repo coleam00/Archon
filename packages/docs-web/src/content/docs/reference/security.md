@@ -164,6 +164,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - The CWD project env files listed above are untrusted sources. They belong to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
 **Per-user provider credentials:**
+- In per-user GitHub mode, conversation titles use the requesting user's credential for the title model. If that credential is absent or unusable, title generation is skipped. Delivered per-user credentials take precedence over installation and project authentication settings; requests without a per-user delivery keep native provider precedence.
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
 - The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) carry no secrets and work without an identity on solo installs. They follow the general API authentication gate when it is enabled. Credential routes require identity even when that gate is off.
 

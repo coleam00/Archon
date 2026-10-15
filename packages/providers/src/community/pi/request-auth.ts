@@ -44,6 +44,7 @@ import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi
 
 export interface CustomProviderEnvScope {
   provider: string;
+  authoritativeCredential?: boolean;
   /** The values `${VAR}` references are substituted with. */
   env: Readonly<Record<string, string>>;
   protectedEnvKeys: readonly string[] | undefined;
@@ -224,21 +225,37 @@ export function getUserModelsStorePath(): string {
   return join(dirname(getUserModelsPath()), 'models-store.json');
 }
 
+function parseModelsJson(raw: string): unknown {
+  let json = '';
+  let quoted = false;
+  let escaped = false;
+  for (let i = raw.charCodeAt(0) === 0xfeff ? 1 : 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (quoted) {
+      json += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') {
+      quoted = true;
+      json += char;
+    } else if (char === '/' && raw[i + 1] === '/') {
+      while (i + 1 < raw.length && raw[i + 1] !== '\n') i++;
+      json += ' ';
+    } else if (char === '/' && raw[i + 1] === '*') {
+      const end = raw.indexOf('*/', i + 2);
+      if (end === -1) throw new Error('Unterminated models.json comment');
+      i = end + 1;
+      json += ' ';
+    } else json += char;
+  }
+  return JSON.parse(json);
+}
+
 /**
- * Build a per-call `models.json` with the targeted custom provider's
- * `${VAR}` references substituted against `env`. Returns the path to
- * the written file (suitable for `ModelRuntime.create({ modelsPath })`), or
- * `undefined` when no substitution applies and the SDK's default `modelsPath`
- * lookup should be left in place.
- *
- * Returns `undefined` when:
- *   - the user's `models.json` doesn't exist or isn't valid JSON;
- *   - the targeted provider isn't in `models.json`;
- *   - no `${VAR}` reference in the provider's `apiKey`/`headers` produces a
- *     substitution: the provider has no template values, or every templated
- *     field references only missing/empty (and no protected) keys. A
- *     protected reference ALWAYS produces a substitution (its placeholder),
- *     so a file is written whenever one is present.
+ * Substitute custom-provider env references, or remove competing native auth for a
+ * delivered credential. The returned private file must live until runtime release.
+ * Without delivery, unreadable configuration retains the native SDK failure path.
  */
 export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): string | undefined {
   const { provider, env, protectedEnvKeys } = scope;
@@ -249,13 +266,15 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   let raw: string;
   try {
     raw = readFileSync(userModelsPath, 'utf-8');
-  } catch {
+  } catch (err) {
+    if (scope.authoritativeCredential) throw err;
     return undefined;
   }
   let parsed: { providers?: Record<string, Record<string, unknown>> };
   try {
-    parsed = JSON.parse(raw) as { providers?: Record<string, Record<string, unknown>> };
-  } catch {
+    parsed = parseModelsJson(raw) as { providers?: Record<string, Record<string, unknown>> };
+  } catch (err) {
+    if (scope.authoritativeCredential) throw err;
     return undefined;
   }
   const providerEntry = parsed.providers?.[provider];
@@ -264,7 +283,33 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   const protectedSet = new Set(protectedEnvKeys ?? []);
   // Clone to avoid mutating the parsed object graph.
   const substituted: Record<string, unknown> = structuredClone(providerEntry);
-  let anySubstitution = false;
+  let anySubstitution = scope.authoritativeCredential === true;
+  if (scope.authoritativeCredential) {
+    const removeAuth = (entry: Record<string, unknown>): void => {
+      delete entry.apiKey;
+      if (entry.headers && typeof entry.headers === 'object') {
+        entry.headers = Object.fromEntries(
+          Object.entries(entry.headers).filter(
+            ([name]) =>
+              !['authorization', 'x-api-key', 'api-key', 'x-goog-api-key'].includes(
+                name.toLowerCase()
+              )
+          )
+        );
+      }
+    };
+    removeAuth(substituted);
+    if (Array.isArray(substituted.models)) {
+      for (const model of substituted.models) {
+        if (model && typeof model === 'object') removeAuth(model);
+      }
+    }
+    if (substituted.modelOverrides && typeof substituted.modelOverrides === 'object') {
+      for (const model of Object.values(substituted.modelOverrides)) {
+        if (model && typeof model === 'object') removeAuth(model as Record<string, unknown>);
+      }
+    }
+  }
 
   if (typeof substituted.apiKey === 'string') {
     const result = resolveProviderConfigValue(substituted.apiKey, env, protectedSet);
@@ -306,7 +351,16 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   // file is owned by the calling process; no cross-run sharing is intended.
   const fileName = `models-${provider}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`;
   const filePath = join(dir, fileName);
-  const payload = JSON.stringify({ providers: { [provider]: substituted } }, null, 2);
+  const payload = JSON.stringify(
+    {
+      providers: {
+        ...(scope.authoritativeCredential ? parsed.providers : {}),
+        [provider]: substituted,
+      },
+    },
+    null,
+    2
+  );
   // mode is diluted by the process umask; set it explicitly AND chmod after
   // to guarantee 0o600 on disk. Mirrors the token-crypto pattern in
   // `packages/core/src/utils/token-crypto.ts:100-102`. If the chmod (or a

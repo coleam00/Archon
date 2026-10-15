@@ -235,7 +235,7 @@ mock.module('@archon/core', () => ({
     }
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
-  generateAndSetTitle: mockGenerateAndSetTitle,
+  generateTitleForUser: mockGenerateAndSetTitle,
   resolveTitleRequest: mockResolveTitleRequest,
   createWorkflowDeps: mock(() => ({
     store: {
@@ -1047,11 +1047,15 @@ describe('POST /api/workflows/:name/run', () => {
       body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy' }),
     });
 
-    // generateAndSetTitle is fire-and-forget; just verify it was called
-    // (it runs asynchronously so we check the mock was called, not the result)
-    // Allow the microtask queue to flush
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockGenerateAndSetTitle).toHaveBeenCalled();
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(
+      MOCK_CONV.id,
+      'Deploy',
+      { provider: 'claude', options: {} },
+      expect.any(String),
+      undefined,
+      'deploy'
+    );
   });
 
   test('returns 400 when conversationId is missing', async () => {

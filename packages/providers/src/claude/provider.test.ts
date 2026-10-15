@@ -3483,6 +3483,26 @@ describe('sendQuery decomposition behaviors', () => {
       expect(options.strictMcpConfig).toBe(true);
     });
 
+    test('delivered auth disables key helpers while retaining capability settings', async () => {
+      pluginIdsSpy.mockResolvedValue(['posthog@official']);
+      mockQuery.mockImplementation(async function* () {
+        yield builtinInit;
+        yield { type: 'result', session_id: 'sid' };
+      });
+      for await (const _chunk of client.sendQuery('test', tmpdir(), undefined, {
+        nodeConfig: { nodeId: 'title' },
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-token' },
+        protectedEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+      })) {
+      }
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.settings).toMatchObject({
+        apiKeyHelper: '',
+        enabledPlugins: { 'posthog@official': false },
+      });
+      expect(options.settingSources).toEqual(['project', 'user']);
+    });
+
     test('a named plugin is the only one enabled', async () => {
       pluginIdsSpy.mockResolvedValue(['posthog@official', 'prp-core@prp']);
       mockQuery.mockImplementation(async function* () {

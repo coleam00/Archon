@@ -1092,6 +1092,21 @@ describe('PiProvider', () => {
     expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: perRunAuthPath });
   });
 
+  test('a protected delivered auth file outranks competing host and request API keys', async () => {
+    fileCreds.anthropic = { type: 'oauth' };
+    process.env.ANTHROPIC_API_KEY = 'host-key';
+    resetScript(scriptedAgentEnd());
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ARCHON_PI_AUTH_PATH: '/run/user/auth.json', ANTHROPIC_API_KEY: 'project-key' },
+        protectedEnvKeys: ['ARCHON_PI_AUTH_PATH'],
+      })
+    );
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: '/run/user/auth.json' });
+    expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
+  });
+
   test('ModelRuntime.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
     // A shell-level ARCHON_PI_AUTH_PATH still applies when no per-call value is
     // present, preserving the local-dev / manual override path.

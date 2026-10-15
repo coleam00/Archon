@@ -424,6 +424,7 @@ interface PiAuthEnv {
   credentialEnv: Readonly<Record<string, string>>;
   credentialValues: readonly string[];
   protectedEnvKeys: readonly string[] | undefined;
+  deliveredEnvKeys: readonly string[];
 }
 
 function piAuthEnv(
@@ -445,14 +446,18 @@ function piAuthEnv(
     credentialEnv,
     credentialValues: collectCredentialValues(credentialEnv, protectedEnvKeys),
     protectedEnvKeys,
+    deliveredEnvKeys: (protectedEnvKeys ?? []).filter(key => Boolean(requestEnv?.[key])),
   };
 }
 
 async function applyPiEnvOverride(
   runtime: Pick<ModelRuntime, 'setRuntimeApiKey'>,
   providerId: string,
-  env: Readonly<Record<string, string | undefined>>
+  authEnv: PiAuthEnv,
+  authPath: string | undefined
 ): Promise<void> {
+  if (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) return;
+  const env = authEnv.credentialEnv;
   const keyVar = PI_PROVIDER_ENV_VARS[providerId];
   const key = keyVar ? env[keyVar] : undefined;
   if (key) await runtime.setRuntimeApiKey(providerId, key);
@@ -529,7 +534,7 @@ async function createPiModelRuntime(
   provider: string,
   authEnv: PiAuthEnv,
   signal?: AbortSignal
-): Promise<RequestModelRuntime> {
+): Promise<RequestModelRuntime & { authPath?: string }> {
   // Pi reads exactly one auth store. The per-run file holds only Archon's delivered
   // credentials, so it is used only when it holds one for this provider; otherwise Pi
   // reads the user's own auth.json, with its own locking and refresh write-back, so a
@@ -539,13 +544,24 @@ async function createPiModelRuntime(
     authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
     piCodingAgent.readStoredCredential
   );
-  return createRequestModelRuntime(
+  const authoritativeCredential = Boolean(
+    (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) ||
+    (authEnv.deliveredEnvKeys.includes(PI_PROVIDER_ENV_VARS[provider] ?? '') &&
+      authEnv.credentialEnv[PI_PROVIDER_ENV_VARS[provider] ?? ''])
+  );
+  const requestRuntime = await createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
     authPath,
-    PI_PROVIDER_ENV_VARS[provider]
-      ? undefined
-      : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }
+    authoritativeCredential || !PI_PROVIDER_ENV_VARS[provider]
+      ? {
+          provider,
+          env: authEnv.credentialEnv,
+          protectedEnvKeys: authEnv.protectedEnvKeys,
+          authoritativeCredential,
+        }
+      : undefined
   );
+  return { ...requestRuntime, authPath };
 }
 
 /**
@@ -655,7 +671,7 @@ export class PiProvider implements IAgentProvider {
       );
       const { runtime } = requestModelRuntime;
       try {
-        await applyPiEnvOverride(runtime, parsed.provider, authEnv.credentialEnv);
+        await applyPiEnvOverride(runtime, parsed.provider, authEnv, requestModelRuntime.authPath);
         const { status } = await resolvePiTurnAuth(
           runtime,
           parsed.provider,
@@ -794,7 +810,7 @@ export class PiProvider implements IAgentProvider {
 
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
     const authEnv = piAuthEnv(piConfig.env, requestOptions?.env, requestOptions?.protectedEnvKeys);
-    let requestModelRuntime: RequestModelRuntime;
+    let requestModelRuntime: RequestModelRuntime & { authPath?: string };
     try {
       requestModelRuntime = await createPiModelRuntime(piCodingAgent, parsed.provider, authEnv);
     } catch (err) {
@@ -838,7 +854,12 @@ export class PiProvider implements IAgentProvider {
       //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi
       //    login. setRuntimeApiKey stays runtime-only (no auth.json disk write, unlike
       //    AuthStorage.set).
-      await applyPiEnvOverride(modelRuntime, parsed.provider, authEnv.credentialEnv);
+      await applyPiEnvOverride(
+        modelRuntime,
+        parsed.provider,
+        authEnv,
+        requestModelRuntime.authPath
+      );
       const { status: authStatus, apiKey } = await resolvePiTurnAuth(
         modelRuntime,
         parsed.provider,

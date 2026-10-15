@@ -444,7 +444,15 @@ mock.module('@archon/providers', () => ({
     if (!mockIsRegisteredProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
     return {
       parseConfig: (raw: Record<string, unknown>) => raw,
-      credentials: { vendorFor: (model?: string) => mockChatVendor(model) },
+      credentials: {
+        kind: 'static',
+        specs: ['anthropic', 'openai'].map(vendor => ({
+          vendor,
+          displayName: vendor,
+          kinds: ['api_key', 'subscription'],
+        })),
+        vendorFor: (model?: string) => mockChatVendor(model),
+      },
     };
   },
   getAgentProvider: mock(() => ({
