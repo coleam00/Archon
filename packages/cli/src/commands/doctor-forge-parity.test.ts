@@ -48,6 +48,7 @@ const setups = [
     source,
     login: false,
     app: true,
+    repoToken: 'stale-repository-token',
     ok: true,
     detail: 'source: GH_TOKEN',
   })),
@@ -56,6 +57,7 @@ const setups = [
     source,
     login: false,
     app: true,
+    repoToken: 'stale-repository-token',
     unregistered: true,
     ok: true,
     detail: 'source: GH_TOKEN',
@@ -170,6 +172,8 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
   );
   if ('repoLogin' in setup)
     writeFileSync(join(repo, '.archon/.env'), `GH_CONFIG_DIR=${join(home, 'logged-out')}\n`);
+  if ('repoToken' in setup)
+    writeFileSync(join(repo, '.archon/.env'), `GH_TOKEN=${setup.repoToken}\n`);
   const preload = join(home, 'app-preload.ts');
   if ('app' in setup) {
     Object.assign(env, {
@@ -232,8 +236,9 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
     }
     const { codebase } = await resolveCodebaseForPath(process.cwd(), host.records.codebases);
     const github = await resolveWorkflowGithubEnvironment(host.deps, codebase?.id, undefined, config);
+    const run = await host.deps.store.createWorkflowRun({ workflow_name: 'forge-parity', user_message: '' });
     const child = Bun.spawn([${JSON.stringify(process.execPath)}, '--no-env-file', ${JSON.stringify(preflight)}], {
-      env: {...process.env, ...github.envVars, ARCHON_CLI_COMMAND: ${JSON.stringify(JSON.stringify([process.execPath, '--no-env-file', cli]))}},
+      env: {...process.env, ...github.envVars, WORKFLOW_ID: run.id, ARCHON_CLI_COMMAND: ${JSON.stringify(JSON.stringify([process.execPath, '--no-env-file', cli]))}},
       stdout: 'inherit', stderr: 'inherit',
     });
     process.exitCode = await child.exited;
@@ -279,10 +284,12 @@ test('installation verification enters a forge checkout before doctor', async ()
   expect(recipe.indexOf('cd /path/to/your/repo')).toBeLessThan(recipe.indexOf('archon doctor'));
   expect(recipe).toContain('forge remote');
 });
-test('Docker gh login uses the server user', async () => {
+test('Docker gh login uses the persisted server home and user', async () => {
   const doc = await Bun.file(
     resolve(import.meta.dir, '../../../docs-web/src/content/docs/deployment/docker.md')
   ).text();
-  expect(doc).toContain('docker compose exec -u appuser app gh auth login');
+  expect(doc).toContain('docker compose exec -u appuser -e HOME=/home/appuser app gh auth login');
+  const dockerfile = await Bun.file(resolve(import.meta.dir, '../../../../Dockerfile')).text();
+  expect(dockerfile).toContain('ENV HOME=/home/appuser');
   expect(doc).not.toContain('docker compose exec app gh auth login');
 });

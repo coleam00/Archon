@@ -10,6 +10,7 @@ import {
   PR,
   type ScriptOptions,
 } from './deliver-checks-harness';
+import { cliForgeMetadataRequestSchema } from '../../../packages/forge/src/cli-response';
 import { REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
 
 const { runPackScript } = packScriptRunner();
@@ -77,6 +78,26 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       selector: { kind: 'head', repo: PR.repo, headRepo: PR.repo, head: 'archon-forge-check' },
     });
   });
+
+  it.each(['gh', 'forge'])(
+    '%s metadata requests conform to the CLI host input',
+    source => {
+      const run = check({
+        source,
+        gh: { authFail: 'logged out' },
+        forge: { kind: 'fake', response: ANSWERED },
+      });
+      expect(run.code).toBe(source === 'forge' ? 0 : 1);
+      expect(run.forge[0]).toContain('forge metadata');
+      const request = cliForgeMetadataRequestSchema.parse({
+        ...JSON.parse(run.forgeRequests[0] ?? ''),
+        op: 'metadata',
+        operationId: 'cli-operation',
+      });
+      expect(request.host).toBe(PR.repo.host);
+      if (source === 'gh') expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge');
+    }
+  );
 
   it('accepts a capable installed plugin through host discovery and authenticated dispatch', () => {
     const plugin = `
