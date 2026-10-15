@@ -8,7 +8,8 @@ import {
   toRepoPath,
   toBranchName,
   execFileAsync,
-  hasUncommittedChanges,
+  hasUncommittedChangesStrict,
+  worktreeExists,
   toWorktreePath,
   getDefaultBranch,
   getUniqueCommitCount,
@@ -314,8 +315,11 @@ export async function isolationCompleteCommand(
 
       // Check 1: uncommitted changes in worktree
       try {
-        const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
-        if (hasChanges) {
+        const workingPath = toWorktreePath(env.working_path);
+        if (
+          (await worktreeExists(workingPath)) &&
+          (await hasUncommittedChangesStrict(workingPath))
+        ) {
           blockers.push('uncommitted changes in worktree');
         }
       } catch (error) {

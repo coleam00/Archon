@@ -21,6 +21,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import type { CleanupOperationResult } from '../services/cleanup-service';
 import {
   MissingProjectDirectoryError,
+  WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
   type DestroyResult,
@@ -409,6 +410,7 @@ mock.module('../isolation', () => ({
   }),
 }));
 mock.module('@archon/isolation', () => ({
+  WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
   getIsolationProvider: () => ({
@@ -1699,6 +1701,45 @@ describe('CommandHandler', () => {
           working_path: '/workspace/my-repo/worktrees/feat-x',
           branch_name: 'feat-x',
           metadata: { worktree_creation_id: 'checkout-proof' },
+        });
+
+        test('suggests force only for a typed dirty-worktree refusal and retains state', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+          mockIsolationDestroy.mockRejectedValueOnce(
+            new WorktreeUncommittedChangesError(featXEnv.working_path)
+          );
+          const result = await handleCommand(conv, '/worktree remove', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toBe(
+            'Worktree has uncommitted changes.\n\nCommit your work first, or use `/worktree remove --force` to discard.'
+          );
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+          expect(mockDeactivateSession).not.toHaveBeenCalled();
+        });
+
+        test('does not suggest force for an unrelated removal failure containing modified', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+          mockIsolationDestroy.mockRejectedValueOnce(
+            new Error('worktree metadata could not be modified')
+          );
+          const result = await handleCommand(conv, '/worktree remove', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toBe(
+            'Failed to remove worktree: worktree metadata could not be modified'
+          );
+          expect(result.message).not.toContain('--force');
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+          expect(mockDeactivateSession).not.toHaveBeenCalled();
         });
 
         test('should require active worktree', async () => {
