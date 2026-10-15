@@ -55,8 +55,8 @@ function verdictCell(line: Line, row: Row, outDir: string): string {
       parts.push(`<div><b>Proposes close</b> without a person${target}</div>`);
       const checked = closeCheck(row, line);
       if (checked === 'false') parts.push('<div class="warn">Counts as a false close unless you mark it right.</div>');
-      if (checked === 'excused') {
-        parts.push(`<div>A merged pull request on the base references this issue: ${(line.merged_on_base ?? []).map(link).join(', ')}. The close counts as false only if you mark it wrong.</div>`);
+      if (checked === 'pending') {
+        parts.push(`<div>A merged pull request on the base references this issue: ${(line.merged_on_base ?? []).map(link).join(', ')}. Mark whether it fixes the issue: the close bar stays pending until you mark it right or wrong.</div>`);
       }
     }
     if (verdict.blocked_reason != null) parts.push(`<div><b>Maintainer recommendation:</b> ${escape(verdict.blocked_reason)}</div>`);

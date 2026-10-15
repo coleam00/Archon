@@ -39,7 +39,7 @@ import {
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
 import { answerLookup, atCreation, type CreationView, creationLabels, serveLookups } from '../../workflows/sdlc/intake/scripts/bench/lookups';
-import { MARKS_FILE, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
+import { MARKS_FILE, falseClose, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
   humanType,
@@ -329,6 +329,9 @@ describe('bench run', () => {
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
   function benchLive(scenario: Partial<FakeConfig> = {}) {
     const { runWith, argv, repo, out, cli } = bench(scenario);
+    const file = join(out, 'set.json');
+    const set = JSON.parse(readFileSync(file, 'utf8')) as BenchSet;
+    writeFileSync(file, JSON.stringify({ ...set, rows: set.rows.map(row => ({ ...row, body_from: 'current' })) }));
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
@@ -352,7 +355,7 @@ describe('bench run', () => {
     expect(existsSync(join(cli, 'ghconfig-run-1'))).toBe(false);
   });
 
-  it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
+  it('runs intake live with unrecoverable creation bodies and reads the copy work item', () => {
     const { status, stderr, lines, checks, argv, scratch } = benchLive();
     expect(stderr).toBe('');
     expect(status).toBe(0);
@@ -531,6 +534,8 @@ describe('bench run', () => {
           createdAt: '2026-10-01T10:00:00Z',
           labelEvents: [
             { createdAt: '2026-10-01T10:00:01Z', actor: 'someone', label: 'bug' },
+            { createdAt: '2026-10-01T10:00:02Z', actor: 'someone', label: 'removed' },
+            { createdAt: '2026-10-01T10:00:03Z', actor: 'someone', label: 'removed', removed: true },
             { createdAt: '2026-10-01T11:00:00Z', actor: 'Maintainer', label: 'archon-ready' },
           ],
         },
@@ -602,6 +607,37 @@ describe('bench run', () => {
     expect(valid).toEqual(Array(11).fill(true));
   });
 
+  it('refuses unrecoverable creation bodies in eval', () => {
+    const { runWith, out } = bench();
+    const file = join(out, 'set.json');
+    const set = JSON.parse(readFileSync(file, 'utf8')) as BenchSet;
+    writeFileSync(file, JSON.stringify({ ...set, rows: set.rows.map(row => ({ ...row, body_from: 'current' })) }));
+    const { lines } = runWith([], 'base');
+    expect(lines).toHaveLength(2);
+    expect(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('creation body')))).toBe(true);
+  });
+
+  it('rejects incomplete label and merged reference events, retaining unrelated references', () => {
+    const valid: boolean[] = [];
+    for (const event of [null, {}, { __typename: 'LabeledEvent', createdAt: 'x' }, { __typename: 'UnlabeledEvent', label: { name: 'bug' } }]) {
+      const { run } = bench({ batchIssueOverrides: { labelEvents: { nodes: [event], pageInfo: { hasNextPage: false } } } });
+      const { lines } = run('base');
+      expect(lines).toHaveLength(2);
+      valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('label event'))));
+    }
+    for (const key of ['source', 'subject']) {
+      for (const pr of [{ __typename: 'PullRequest' }, { merged: true }, { merged: true, url: 'https://github.com/o/r/pull/1' }, { merged: true, url: 'https://github.com/o/r/pull/1', mergeCommit: {} }]) {
+        const { run } = bench({ batchIssueOverrides: { refs: { nodes: [{ [key]: { __typename: 'PullRequest', ...pr } }], pageInfo: { hasNextPage: false } } } });
+        const { lines } = run('base');
+        expect(lines).toHaveLength(2);
+        valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('reference'))));
+      }
+    }
+    expect(valid).toEqual(Array(12).fill(true));
+    const { run } = bench({ batchIssueOverrides: { refs: { nodes: [{ source: { __typename: 'Issue' } }], pageInfo: { hasNextPage: false } } } });
+    expect(run('base').lines.every(line => line.status === 'completed')).toBe(true);
+  });
+
   it('records the merged pull requests on the base that reference the row issue', () => {
     const { runWith, repo, cli } = bench();
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
@@ -623,7 +659,7 @@ describe('bench run', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
     appendLine(join(out, CHECKS_FILE), checks[0]);
     appendLine(join(out, SAMPLES_FILE), { ...line, group: 'typed', verdict: { ...line.verdict, contract: 'NO_ACTION', route: null } });
-    expect(renderScore(score(set, out))).toContain('1 excused by a merged base PR');
+    expect(renderScore(score(set, out))).toContain('1 awaiting operator judgment (11): pending');
   });
 
   it('refuses an incomplete page of label history before launching the row', () => {
@@ -1013,6 +1049,51 @@ describe('lookups', () => {
       expect([await answer.response.json(), answer.answered, answer.live]).toEqual([{ data: { node: { closed: false } } }, [4], []]);
     }
   });
+
+  it('snapshots implicit issue collection nodes and edge nodes', async () => {
+    for (const edges of [false, true]) {
+      const fields = edges ? 'edges { node { body state } }' : 'nodes { body state }';
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query: `{ repository(owner: "o", name: "r") { issues(first: 10) { ${fields} } } }` }),
+      }), REPO, views, async (_url, init) => {
+        const query = (JSON.parse(String(init.body)) as { query: string }).query;
+        expect(query).toContain(`${edges ? 'node' : 'nodes'} { ... on Issue { _archonBenchIssueId: id }`);
+        const issue = { body: 'Fixed by PR #9', state: 'CLOSED', ...(query.includes('_archonBenchIssueId: id') ? { _archonBenchIssueId: 'I_4' } : {}) };
+        return Response.json({ data: { repository: { issues: edges ? { edges: [{ node: issue }] } : { nodes: [issue] } } } });
+      });
+      const issue = { body: 'As opened.', state: 'OPEN' };
+      expect(await answer.response.json()).toEqual({ data: { repository: { issues: edges ? { edges: [{ node: issue }] } : { nodes: [issue] } } } });
+      expect([answer.answered, answer.live]).toEqual([[4], []]);
+    }
+  });
+
+  it('uses numeric and null label defaults only for omitted variables of the selected operation', async () => {
+    for (const limit of ['first', 'last']) {
+      const query = `query Other($limit: Int = 0) { viewer { login } } query Read($limit: Int = 10, $after: String = null, $before: String = null) { repository(owner: "o", name: "r") { issue(number: 4) { labels(${limit}: $limit, after: $after, before: $before) { nodes { name } } } } }`;
+      for (const variables of [{}, { limit: 10 }]) {
+        const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+          method: 'POST', body: JSON.stringify({ query, operationName: 'Read', variables }),
+        }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [{ name: 'done' }] } } } } }));
+        expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{ name: 'bug' }] } } } } });
+        expect([answer.answered, answer.live]).toEqual([[4], []]);
+      }
+      await expect(answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query, operationName: 'Read', variables: { limit: 0 } }),
+      }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [] } } } } }))).rejects.toThrow('partial labels page');
+    }
+  });
+
+  for (const anotherAnswered of [false, true]) {
+    it(`records a selected batch issue with missing identity as live (another answered: ${String(anotherAnswered)})`, async () => {
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query: `{ repository(owner: "o", name: "r") { issue(number: 4) { body state } ${anotherAnswered ? 'other: issue(number: 4) { body }' : ''} } }` }),
+      }), REPO, views, async () => Response.json({ data: { repository: {
+        issue: { body: 'Fixed live', state: 'CLOSED' },
+        ...(anotherAnswered ? { other: { _archonBenchIssueId: 'I_4', body: 'Fixed live' } } : {}),
+      } } }));
+      expect([answer.answered, answer.live]).toEqual([anotherAnswered ? [4] : [], [4]]);
+    });
+  }
 
   it('reports an identified batch node answered without its requested identity as live', async () => {
     const answer = await answerLookup(new Request('http://api.github.com/graphql', {
@@ -1564,16 +1645,31 @@ describe('score', () => {
     expect([a.false_closes, b.false_closes]).toEqual([['22'], ['2']]);
   });
 
-  it('excuses a close on an open row a merged base PR references, unless marked wrong', () => {
+  it('keeps reference-only closes pending until the operator judges the fix', () => {
     const out = benchOut();
     const fixedOnBase = { merged_on_base: ['https://github.com/o/r/pull/40'] };
     appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', fixedOnBase));
-    const excused = score(set, out).versions[1];
-    expect([excused.false_closes, excused.excused_closes]).toEqual([[], ['2']]);
-    expect(renderScore(score(set, out))).toContain('0, 1 excused by a merged base PR (2): pass');
+    const pending = score(set, out).versions[1];
+    expect([pending.false_closes, pending.pending_closes]).toEqual([[], ['2']]);
+    expect(renderScore(score(set, out))).toContain('0, 1 awaiting operator judgment (2): pending');
     expect(renderPage(set, out, 1)).toContain('A merged pull request on the base references this issue: <a href="https://github.com/o/r/pull/40">');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'partly', note: '' });
+    expect(score(set, out).versions[1].pending_closes).toEqual(['2']);
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'wrong', note: '' });
-    expect([score(set, out).versions[1].false_closes, score(set, out).versions[1].excused_closes]).toEqual([['2'], []]);
+    expect(score(set, out).versions[1].false_closes).toEqual(['2']);
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: 'verified fix' });
+    expect(renderScore(score(set, out))).toContain('| false closes (none allowed) | 0: pass | 0: pass |');
+  });
+
+  it('lets a wrong operator mark overturn an open close disposition, retaining closed rows', () => {
+    const disposed = row(21, { group: 'dispositioned', known: { disposition: { contract: 'NO_ACTION' } } });
+    const proposed = line('a', disposed, '2-y');
+    expect(([undefined, 'right', 'wrong', 'partly'] as const).map(mark => falseClose(disposed, proposed, mark))).toEqual([false, false, true, false]);
+    expect(falseClose(fixed, line('a', fixed, '2-y'), 'wrong')).toBe(false);
+    const out = benchOut();
+    appendLine(join(out, SAMPLES_FILE), proposed);
+    appendLine(join(out, MARKS_FILE), { run_id: proposed.run_id, batch: 2, row: disposed.id, label: 'a', mark: 'wrong', note: '' });
+    expect(score({ ...set, rows: [...set.rows, disposed] }, out).versions[0].false_closes).toEqual(['21']);
   });
 
   it('lets a mark override the expected answer for closes and dispositions, but not for type', () => {

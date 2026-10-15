@@ -399,6 +399,8 @@ are the operator's and stay outside the pack and the repository.
   A request that names a batch issue by its REST path, GraphQL `number` or node id
   but that the server answered live is a leak. Failed lookup requests and server
   cleanup errors are recorded as row problems, so those rows cannot pass.
+  Eval rows without a recoverable creation body do not run; a pinned current-body
+  fallback is not a creation snapshot. Live scratch runs retain that fallback.
   Every eval or live line records the merged pull requests on the base that
   reference the original row's issue. A row whose original issue metadata cannot
   be read completely does not run, and its line says why. This includes partial
@@ -421,8 +423,10 @@ are the operator's and stay outside the pack and the repository.
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
   the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed or marked the run right; a close
-  that a merged pull request on the base references is excused unless marked wrong),
+  open, unless the operator dispositioned it closed or marked the run right; a wrong
+  mark overrides a close disposition. A merged pull request on the base that only
+  references the issue leaves the close bar pending until the operator marks the
+  run right or wrong),
   dispositions matched (a right or wrong mark decides), the `type` confusion matrix
   with `enhancement` read as `feature`, leaks (a lookup of the judged issue that the
   creation-time answer did not cover, left out of the accuracy numbers), cost over the runs in

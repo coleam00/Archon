@@ -331,7 +331,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
             labelEvents: { ...(/labelEvents:[^{]+\{\s*pageInfo\s*\{\s*hasNextPage\s*\}/.test(query) ? { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 } } : {}), nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
             refs: {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
-              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
+              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { __typename: 'PullRequest', url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
             },
             ...config.batchIssueOverrides,
           },

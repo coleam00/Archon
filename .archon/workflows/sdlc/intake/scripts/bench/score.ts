@@ -94,19 +94,20 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
  * What a close proposal on this row is before the operator's mark. Null when the line
  * proposes no close, or the row was closed when the set was pinned (the duplicate,
  * fixed and not-planned bars reward that close), or the operator dispositioned it
- * closed. `excused` when a merged pull request on the batch base references the
- * issue, which may have fixed it though merges to a working branch close nothing;
+ * closed. `pending` when a merged pull request on the batch base references the
+ * issue, awaiting the operator's judgment of whether it fixes it;
  * otherwise `false`.
  */
-export function closeCheck(row: Row, line: Line): 'false' | 'excused' | null {
+export function closeCheck(row: Row, line: Line): 'false' | 'pending' | null {
   if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group] || row.known.disposition?.contract === 'NO_ACTION') return null;
-  return (line.merged_on_base ?? []).length > 0 ? 'excused' : 'false';
+  return (line.merged_on_base ?? []).length > 0 ? 'pending' : 'false';
 }
 
-/** Whether a close counts as false: a `right` mark clears a false close, and a `wrong` mark convicts an excused one. */
+/** Operator marks override the expected answer for an open row's close proposal. */
 export function falseClose(row: Row, line: Line, mark: MarkValue | undefined): boolean {
-  const checked = closeCheck(row, line);
-  return checked === 'false' ? mark !== 'right' : checked === 'excused' && mark === 'wrong';
+  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group]) return false;
+  if (mark === 'right' || mark === 'wrong') return mark === 'wrong';
+  return closeCheck(row, line) === 'false';
 }
 
 /** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
@@ -157,8 +158,8 @@ export interface VersionScore {
   readonly outside: { readonly rows: number; readonly ran_agent: number };
   readonly bars: Readonly<Record<(typeof BARS)[number]['group'], MarkedBar>>;
   readonly false_closes: readonly string[];
-  /** Closes a merged pull request on the base excused and no `wrong` mark convicted. */
-  readonly excused_closes: readonly string[];
+  /** Reference-only closes still awaiting a right or wrong operator mark. */
+  readonly pending_closes: readonly string[];
   /** Judged lines on rows that were open, where a close can be false. */
   readonly open_rows: number;
   readonly type: { readonly rows: number; readonly agree: number; readonly matrix: Readonly<Record<string, Readonly<Record<string, number>>>> };
@@ -257,8 +258,8 @@ function scoreVersion(
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
     bars: Object.fromEntries(BARS.map(entry => [entry.group, bar(entry.group, entry.at_least)])) as VersionScore['bars'],
     false_closes: openLines.filter(line => falseClose(rows.get(line.row) as Row, line, markOf(line))).map(line => line.row),
-    excused_closes: openLines
-      .filter(line => closeCheck(rows.get(line.row) as Row, line) === 'excused' && markOf(line) !== 'wrong')
+    pending_closes: openLines
+      .filter(line => closeCheck(rows.get(line.row) as Row, line) === 'pending' && markOf(line) !== 'wrong' && markOf(line) !== 'right')
       .map(line => line.row),
     open_rows: openLines.length,
     type: { rows: typed.length, agree, matrix },
@@ -360,8 +361,12 @@ export function renderScore(result: Score): string {
       )
     ),
     row('false closes (none allowed)', each(version => {
-      const excused = version.excused_closes.length > 0 ? `, ${String(version.excused_closes.length)} excused by a merged base PR${listed(version.excused_closes)}` : '';
-      return `${String(version.false_closes.length)}${listed(version.false_closes)}${excused}: ${version.open_rows === 0 ? NOT_APPLICABLE : passFail(version.false_closes.length === 0)}`;
+      const pending = version.pending_closes.length > 0 ? `, ${String(version.pending_closes.length)} awaiting operator judgment${listed(version.pending_closes)}` : '';
+      let status: BarStatus = 'pass';
+      if (version.open_rows === 0) status = NOT_APPLICABLE;
+      else if (version.false_closes.length > 0) status = 'fail';
+      else if (version.pending_closes.length > 0) status = 'pending';
+      return `${String(version.false_closes.length)}${listed(version.false_closes)}${pending}: ${status}`;
     })),
     row(`\`type\` agreement (at least ${String(TYPE_BAR * 100)}%)`, each(version => `${pct(version.type.agree, version.type.rows)}: ${version.type.rows === 0 ? NOT_APPLICABLE : passFail(version.type.agree / version.type.rows >= TYPE_BAR)}`)),
     row('cost per item, mean (no bar)', each(version => (version.cost.mean === null ? 'unreported' : `$${version.cost.mean.toFixed(4)}`))),

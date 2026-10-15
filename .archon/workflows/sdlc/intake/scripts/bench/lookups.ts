@@ -183,6 +183,8 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         if (tokens[j]?.[0] === '=' && !(variable in variables)) {
           const value = tokens[j + 1]?.[0];
           if (value === 'true' || value === 'false') variables[variable] = value === 'true';
+          else if (value === 'null') variables[variable] = null;
+          else if (value !== undefined && /^[0-9]+$/.test(value)) variables[variable] = Number(value);
         }
       } else j++;
     }
@@ -217,7 +219,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
     }
     return enabled;
   };
-  const selectionSet = (issue = false, inFragment = false, root = false): Selections => {
+  const selectionSet = (issue = false, inFragment = false, root = false, parentType = ''): Selections => {
     if (token() !== '{') return [];
     if (issue) insertions.push(tokens[i].index + 1);
     i++;
@@ -230,11 +232,11 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
           const type = token();
           i++;
           const enabled = directives();
-          const children = selectionSet(type === 'Issue', true, type === 'Query');
+          const children = selectionSet(type === 'Issue', true, type === 'Query', type);
           if (enabled) fields.push(...children);
         } else if (token() === '@' || token() === '{') {
           const enabled = directives();
-          const children = selectionSet(false, inFragment, root);
+          const children = selectionSet(false, inFragment, root, parentType);
           if (enabled) fields.push(...children);
         } else {
           const fragment = token() ?? '';
@@ -294,7 +296,9 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       }
       skipGroup('(', ')');
       const enabled = directives();
-      const children = selectionSet(issueField || nodeField, inFragment);
+      const collectionIssue = (parentType === 'IssueConnection' && name === 'nodes') || (parentType === 'IssueEdge' && name === 'node');
+      const childType = name === 'issues' ? 'IssueConnection' : parentType === 'IssueConnection' && name === 'edges' ? 'IssueEdge' : '';
+      const children = selectionSet(issueField || nodeField || collectionIssue, inFragment, false, childType);
       if (enabled) fields.push({ key, wireKey, name, number: issueNumber, ids, labelArguments, children });
     }
     i++;
@@ -307,7 +311,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       const type = tokens[i + 3]?.[0];
       i += 4;
       directives();
-      fragments.set(name, selectionSet(type === 'Issue', true, type === 'Query'));
+      fragments.set(name, selectionSet(type === 'Issue', true, type === 'Query', type));
     } else {
       let name = '';
       if (token() !== '{') {
@@ -371,10 +375,11 @@ export function atCreation(
   value: unknown,
   views: ReadonlyMap<number, CreationView>,
   graphql?: Graphql
-): { value: unknown; answered: Set<number> } {
+): { value: unknown; answered: Set<number>; unresolved: Set<number> } {
   const answered = new Set<number>();
-  const visit = (node: unknown, selections: Selections): unknown => {
-    if (Array.isArray(node)) return node.map(inner => visit(inner, selections));
+  const unresolved = new Set<number>();
+  const visit = (node: unknown, selections: Selections, number?: number): unknown => {
+    if (Array.isArray(node)) return node.map(inner => visit(inner, selections, number));
     if (!isObject(node)) return node;
     const fields = graphql === undefined ? [] : selectedFields(selections, graphql);
     const identity = graphql?.identity ?? ISSUE_ID;
@@ -402,12 +407,16 @@ export function atCreation(
         return [[field.key, value] as const];
       }));
     }
+    if (number !== undefined && views.has(number) && typeof node[identity] !== 'string' &&
+      !fields.some(field => (field.name === 'id' || field.name === 'url') && typeof node[field.wireKey] === 'string')) {
+      unresolved.add(number);
+    }
     return mergeEntries(Object.entries(original).map(([key, inner]) => {
       const field = fields.find(field => field.wireKey === key);
-      return [field?.key ?? key, visit(inner, field?.children ?? [])] as const;
+      return [field?.key ?? key, visit(inner, field?.children ?? [], field?.number)] as const;
     }));
   };
-  return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', wireKey: 'data', name: 'data', children: graphql.fields }]), answered };
+  return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', wireKey: 'data', name: 'data', children: graphql.fields }]), answered, unresolved };
 }
 
 /**
@@ -483,13 +492,14 @@ export async function answerLookup(
   const rewritten = atCreation(parsed, views, graphql);
   if (rewritten.answered.size === 0 && body === originalBody) return { ...unchanged, problem, ...(refused ? { live: [] } : {}) };
   const answered = [...rewritten.answered];
-  // Enriched selections carry their own identity. An unmatched number can name a
-  // sibling PR or an issue in another repository, not a live read of this batch.
+  // A different identity proves an unrelated issue or PR; a missing identity
+  // leaves the selected batch number unproven even if a sibling was rewritten.
   const namedNodes = [...views.values()].filter(view => graphql?.ids.includes(view.id)).map(view => view.number);
-  const live = [...new Set([
-    ...(body !== originalBody || refused ? [] : named),
-    ...(refused ? [] : namedNodes),
-  ])].filter(number => !answered.includes(number));
+  const live = refused ? [] : [...new Set([
+    ...(body !== originalBody ? [] : named).filter(number => !answered.includes(number)),
+    ...namedNodes.filter(number => !answered.includes(number)),
+    ...rewritten.unresolved,
+  ])];
   return { response: new Response(JSON.stringify(rewritten.value), init), answered, live, problem };
 }
 

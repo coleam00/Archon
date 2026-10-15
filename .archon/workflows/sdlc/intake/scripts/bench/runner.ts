@@ -401,8 +401,8 @@ const BATCH_ISSUE_QUERY = [
   '... on LabeledEvent { createdAt actor { login } label { name } }',
   '... on UnlabeledEvent { createdAt actor { login } label { name } } } }',
   'refs: timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) { pageInfo { hasNextPage } nodes {',
-  '... on CrossReferencedEvent { source { ... on PullRequest { url merged mergeCommit { oid } } } }',
-  '... on ConnectedEvent { subject { ... on PullRequest { url merged mergeCommit { oid } } } } } }',
+  '... on CrossReferencedEvent { source { __typename ... on PullRequest { url merged mergeCommit { oid } } } }',
+  '... on ConnectedEvent { subject { __typename ... on PullRequest { url merged mergeCommit { oid } } } } } }',
   '} } }',
 ].join(' ');
 
@@ -414,8 +414,8 @@ export interface BatchIssue {
 
 /**
  * One batch row's issue as it was opened, and the merged pull requests on the base
- * that reference it. A reference is evidence the issue is fixed on the base, not
- * proof: merges to a working branch close nothing, and a fix may say only `Refs`.
+ * that reference it. The operator judges whether a reference actually fixes it;
+ * merges to a working branch close nothing, and a fix may say only `Refs`.
  */
 export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: string): BatchIssue {
   const where = issueKey(repo, row.number);
@@ -461,18 +461,28 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
     }
     return connection.nodes;
   };
-  const events = nodes('labelEvents', labelEvents).flatMap((event): LabelEvent[] => {
-    if (!isObject(event) || typeof event.createdAt !== 'string' || !isObject(event.label) || typeof event.label.name !== 'string') return [];
+  const events = nodes('labelEvents', labelEvents).map((event): LabelEvent => {
+    if (!isObject(event) || (event.__typename !== 'LabeledEvent' && event.__typename !== 'UnlabeledEvent') || typeof event.createdAt !== 'string' || !isObject(event.label) || typeof event.label.name !== 'string') {
+      throw new Error(`${where} answered with an incomplete label event`);
+    }
     const actor = isObject(event.actor) && typeof event.actor.login === 'string' ? event.actor.login : null;
-    return [{ createdAt: event.createdAt, actor, label: event.label.name, removed: event.__typename === 'UnlabeledEvent' }];
+    return { createdAt: event.createdAt, actor, label: event.label.name, removed: event.__typename === 'UnlabeledEvent' };
   });
   const login = isObject(author) && typeof author.login === 'string' ? author.login : null;
   const merged = new Set<string>();
   for (const node of nodes('refs', refs)) {
     const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;
-    if (!isObject(pr) || pr.merged !== true || typeof pr.url !== 'string' || !isObject(pr.mergeCommit)) continue;
-    const oid = pr.mergeCommit.oid;
-    if (typeof oid !== 'string') continue;
+    if (!isObject(pr) || typeof pr.__typename !== 'string') throw new Error(`${where} answered with an incomplete reference event`);
+    if (pr.__typename !== 'PullRequest') continue;
+    if (typeof pr.merged !== 'boolean' || typeof pr.url !== 'string') {
+      throw new Error(`${where} answered with an incomplete pull request reference`);
+    }
+    if (!pr.merged) continue;
+    const commit = pr.mergeCommit;
+    if (!isObject(commit) || typeof commit.oid !== 'string') {
+      throw new Error(`${where} answered without a reference merge commit`);
+    }
+    const oid = commit.oid;
     // A merge commit this clone lacks (a fork's or another repository's) cannot be in the base, which resolves here.
     if (git('-C', repoRoot, 'cat-file', '-e', `${oid}^{commit}`).code !== 0) continue;
     // 1 is "not an ancestor"; anything else leaves the answer unknown.
@@ -1053,6 +1063,10 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const issues = new Map<number, BatchIssue>();
   const unread = new Map<number, string>();
   for (const row of rows) {
+    if (live === undefined && row.body_from !== 'creation') {
+      unread.set(row.number, `${issueKey(set.repo, row.number)} has no recoverable creation body`);
+      continue;
+    }
     if (issues.has(row.number) || unread.has(row.number)) continue;
     try {
       issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));
