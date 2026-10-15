@@ -2,6 +2,9 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // doctor.test.ts imports the SDLC pack's source selector, and pack modules import
+    // each other with `.ts` extensions (pack scripts run under Bun with no build step).
+    "allowImportingTsExtensions": true,
     "paths": {
       "@archon/adapters": ["../adapters/src"],
       "@archon/adapters/*": ["../adapters/src/*"],

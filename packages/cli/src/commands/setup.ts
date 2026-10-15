@@ -47,6 +47,7 @@ import { getRegisteredProviders, registerProvider, providerRegistry } from '@arc
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
 import { checkProviderDiagnostics, type CheckResult } from './doctor';
+import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
 import {
   CODEX_SETUP_ENV,
   migrateCodexSetupEnv,
@@ -384,7 +385,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // the configured default assistant, so Claude users who share the same key
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
-    forgeToken: hasEnvValue(content, 'GH_TOKEN') || hasEnvValue(content, 'GITHUB_TOKEN'),
+    forgeToken: githubPluginMetadata.token_env.some(name => hasEnvValue(content, name)),
     platforms: {
       // A lone GH_TOKEN is the forge plugin's credential; the webhook adapter needs its secret too.
       github:

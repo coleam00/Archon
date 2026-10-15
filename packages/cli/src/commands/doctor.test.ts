@@ -14,6 +14,8 @@ import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
+import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
+import { forgeSource } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -63,6 +65,29 @@ describe('checkGithubForge', () => {
   const refusing = (kind: string, message = `${kind} message`) =>
     answering({ ok: false, error: { kind, message } });
 
+  it('fails on exactly the ARCHON_SDLC_FORGE values the SDLC pack refuses', async () => {
+    const saved = process.env.ARCHON_SDLC_FORGE;
+    try {
+      for (const value of ['', 'forge', 'gh', ' gh ', 'github', 'GH']) {
+        process.env.ARCHON_SDLC_FORGE = value;
+        let packRefuses = false;
+        try {
+          forgeSource();
+        } catch {
+          packRefuses = true;
+        }
+        const result = await checkGithubForge(
+          { ARCHON_SDLC_FORGE: value, GH_TOKEN: 'ghp_x' },
+          answering({ ok: true })
+        );
+        expect({ value, failed: result.status === 'fail' }).toEqual({ value, failed: packRefuses });
+      }
+    } finally {
+      if (saved === undefined) delete process.env.ARCHON_SDLC_FORGE;
+      else process.env.ARCHON_SDLC_FORGE = saved;
+    }
+  });
+
   it('skips without a forge read when the operator selected gh', async () => {
     const runForge = mock(answering({ ok: true }));
     const result = await checkGithubForge({ ARCHON_SDLC_FORGE: 'gh' }, runForge);
@@ -82,6 +107,13 @@ describe('checkGithubForge', () => {
     const result = await checkGithubForge({ GH_TOKEN: 'ghp_x' }, refusing('no_plugin_for_host'));
     expect(result.status).toBe('warn');
     expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+  });
+
+  it('counts every token the GitHub plugin reads as configured', async () => {
+    for (const name of githubPluginMetadata.token_env) {
+      const result = await checkGithubForge({ [name]: 'ghp_x' }, refusing('no_plugin_for_host'));
+      expect(result.status).toBe('warn');
+    }
   });
 
   it('skips naming both steps when neither is set up', async () => {

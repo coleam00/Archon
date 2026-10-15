@@ -37,6 +37,7 @@ import {
   type StoredCredentialKind,
 } from '@archon/provider-contract';
 import { forgeResponseSchema, type ForgeResponse } from '@archon/forge/operations';
+import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
 import { forgeCommand } from './forge';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -254,10 +255,19 @@ export async function checkGithubForge(
   runForge: RunForge = runForgeCommand
 ): Promise<CheckResult> {
   const label = 'GitHub forge plugin';
-  if ((env.ARCHON_SDLC_FORGE ?? '').trim() === 'gh') {
+  // The SDLC pack's `forgeSource()` owns these values; doctor.test.ts holds this to it.
+  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
+  if (selected === 'gh') {
     return { label, status: 'skip', message: 'ARCHON_SDLC_FORGE=gh: the SDLC workflows use gh' };
   }
-  const hasToken = Boolean(env.GH_TOKEN || env.GITHUB_TOKEN);
+  if (selected !== '' && selected !== 'forge') {
+    return {
+      label,
+      status: 'fail',
+      message: `ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"; every SDLC run refuses until it is`,
+    };
+  }
+  const hasToken = githubPluginMetadata.token_env.some(name => Boolean(env[name]));
   const appMode = Boolean(env.GITHUB_APP_ID);
   // A public repository, the plugin's own source, so any valid token can read it.
   const response = await runForge('repo.labels.list', {
