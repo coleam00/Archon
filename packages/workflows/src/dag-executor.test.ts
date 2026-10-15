@@ -28,7 +28,7 @@ import { chmod, mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { isAbsolute, join } from 'path';
+import { dirname, isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -21247,7 +21247,10 @@ describe('executeDagWorkflow -- script nodes', () => {
       };
 
       /** Capture `check.ts` (which writes `marker`), then make the captured scripts unreadable. */
-      async function unreadableCapture(marker: string): Promise<{
+      async function unreadableCapture(
+        marker: string,
+        commandFolder?: string
+      ): Promise<{
         roots: WorkflowSourceRoots;
         captureRoot: string;
         restore: () => Promise<void>;
@@ -21259,7 +21262,15 @@ describe('executeDagWorkflow -- script nodes', () => {
           join(scriptsDir, 'check.ts'),
           `await Bun.write(${JSON.stringify(marker)}, "ran")`
         );
-        const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+        const capture = await captureWorkflowSource({
+          sourceRoot: testDir,
+          captureRoot,
+          commandFolder,
+          sourceConfig: {
+            ...sourceIntegrity.DEFAULT_WORKFLOW_SOURCE_CONFIG,
+            command_folder: commandFolder,
+          },
+        });
         const capturedScripts = join(captureRoot, 'project', '.archon', 'scripts');
         await chmod(capturedScripts, 0o000);
         return {
@@ -21338,36 +21349,45 @@ describe('executeDagWorkflow -- script nodes', () => {
 
       for (const kind of [
         'script-directory',
+        'script-file',
+        'script-file-directory',
         'script-stat',
         'project-command',
+        'project-command-file',
+        'configured-command-file',
         'global-command',
+        'global-command-file',
         'legacy-command',
+        'legacy-command-file',
         'mcp',
       ] as const) {
         it(`source recovery retains post-verification absence (${kind})`, async () => {
           const deps = createMockDeps();
-          const commandFolder = join(testDir, '.archon/commands');
+          const configuredFolder =
+            kind === 'configured-command-file' ? '.archon/team-commands' : undefined;
+          const commandFolder = join(testDir, configuredFolder ?? '.archon/commands');
           await mkdir(commandFolder, { recursive: true });
           await writeFile(join(commandFolder, 'work.md'), 'DONE');
           await writeFile(join(commandFolder, 'servers.json'), '{}');
-          const capture = await unreadableCapture(join(testDir, 'ran'));
+          const capture = await unreadableCapture(join(testDir, 'ran'), configuredFolder);
           await capture.restore();
           const base = join(capture.captureRoot, 'project/.archon');
-          const commandRoot = join(base, 'commands');
-          const roots =
-            kind === 'global-command'
-              ? { ...capture.roots, project: null, globalCommands: commandRoot }
-              : kind === 'legacy-command'
-                ? { ...capture.roots, project: null, bundledCommands: commandRoot }
-                : capture.roots;
+          const commandRoot = join(base, configuredFolder ? 'team-commands' : 'commands');
+          const roots = kind.startsWith('global-command')
+            ? { ...capture.roots, project: null, globalCommands: commandRoot }
+            : kind.startsWith('legacy-command')
+              ? { ...capture.roots, project: null, bundledCommands: commandRoot }
+              : capture.roots;
           const target =
             kind === 'script-directory'
               ? join(base, 'scripts')
-              : kind === 'script-stat'
+              : kind === 'script-stat' || kind === 'script-file' || kind === 'script-file-directory'
                 ? join(base, 'scripts/check.ts')
                 : kind === 'mcp'
                   ? join(commandRoot, 'servers.json')
-                  : commandRoot;
+                  : kind.endsWith('command-file')
+                    ? join(commandRoot, 'work.md')
+                    : commandRoot;
           const node = kind.startsWith('script')
             ? checkNode
             : dagNodeSchema.parse(
@@ -21399,7 +21419,10 @@ describe('executeDagWorkflow -- script nodes', () => {
                   })
                 );
                 restoreStat = () => spy.mockRestore();
-              } else await sourceFiles.rename(target, `${target}.away`);
+              } else {
+                await sourceFiles.rename(target, `${target}.away`);
+                if (kind === 'script-file-directory') await mkdir(target);
+              }
             }
             return files;
           });
@@ -21418,7 +21441,10 @@ describe('executeDagWorkflow -- script nodes', () => {
           } finally {
             verifier.mockRestore();
             restoreStat();
-            if (lost && kind !== 'script-stat') await sourceFiles.rename(`${target}.away`, target);
+            if (lost && kind !== 'script-stat') {
+              if (kind === 'script-file-directory') await removeTempTree(target);
+              await sourceFiles.rename(`${target}.away`, target);
+            }
           }
           expectReleased(deps.store, node.id);
           expect(mockSendQueryDag).not.toHaveBeenCalled();
@@ -21435,59 +21461,74 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
-      it('source recovery retains expected composed-directory evidence for ENOTDIR', async () => {
-        const deps = createMockDeps();
-        await mkdir(join(testDir, '.archon/workflows'), { recursive: true });
-        await writeFile(
-          join(testDir, '.archon/workflows/block.yaml'),
-          'name: block\ndescription: block\nnodes:\n  - id: work\n    prompt: DONE\n'
-        );
-        const capture = await unreadableCapture(join(testDir, 'ran'));
-        await capture.restore();
-        const dir = join(capture.captureRoot, 'project/.archon/workflows');
-        const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
-        let replaced = false;
-        let checks = 0;
-        const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
-          async roots => {
+      for (const loss of ['directory-shape', 'workflow-absent', 'command-absent']) {
+        it(`source recovery retains composed inventory (${loss})`, async () => {
+          const deps = createMockDeps();
+          await mkdir(join(testDir, '.archon/workflows'), { recursive: true });
+          await writeFile(
+            join(testDir, '.archon/workflows/block.yaml'),
+            loss === 'command-absent'
+              ? 'name: block\ndescription: block\nnodes:\n  - id: work\n    command: work\n'
+              : 'name: block\ndescription: block\nnodes:\n  - id: work\n    prompt: DONE\n'
+          );
+          await mkdir(join(testDir, '.archon/commands'), { recursive: true });
+          await writeFile(join(testDir, '.archon/commands/work.md'), 'DONE');
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          await capture.restore();
+          const dir = join(
+            capture.captureRoot,
+            'project/.archon',
+            loss === 'workflow-absent'
+              ? 'workflows/block.yaml'
+              : loss === 'command-absent'
+                ? 'commands/work.md'
+                : 'workflows'
+          );
+          const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+          let replaced = false;
+          let checks = 0;
+          const verifier = spyOn(
+            sourceIntegrity,
+            'assertWorkflowSourceIntegrity'
+          ).mockImplementation(async roots => {
             const files = await verify(roots);
             if (++checks === 2) {
               replaced = true;
               await sourceFiles.rename(dir, `${dir}.away`);
-              await writeFile(dir, 'wrong local mount');
+              if (loss === 'directory-shape') await writeFile(dir, 'wrong local mount');
             }
             return files;
+          });
+          try {
+            await executeDagWorkflow(
+              dagOptions({
+                deps,
+                cwd: testDir,
+                workflowSourceRoots: capture.roots,
+                workflowRun: makeWorkflowRun('composed-shape'),
+                workflow: {
+                  name: 'composed-shape',
+                  nodes: [
+                    {
+                      id: 'fan',
+                      kind: 'compose_fan_out',
+                      include: 'block',
+                      fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                    },
+                  ],
+                },
+              })
+            );
+          } finally {
+            verifier.mockRestore();
+            if (replaced) {
+              if (loss === 'directory-shape') await rm(dir);
+              await sourceFiles.rename(`${dir}.away`, dir);
+            }
           }
-        );
-        try {
-          await executeDagWorkflow(
-            dagOptions({
-              deps,
-              cwd: testDir,
-              workflowSourceRoots: capture.roots,
-              workflowRun: makeWorkflowRun('composed-shape'),
-              workflow: {
-                name: 'composed-shape',
-                nodes: [
-                  {
-                    id: 'fan',
-                    kind: 'compose_fan_out',
-                    include: 'block',
-                    fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
-                  },
-                ],
-              },
-            })
-          );
-        } finally {
-          verifier.mockRestore();
-          if (replaced) {
-            await rm(dir);
-            await sourceFiles.rename(`${dir}.away`, dir);
-          }
-        }
-        expectReleased(deps.store, 'fan');
-      });
+          expectReleased(deps.store, 'fan');
+        });
+      }
 
       for (const kind of ['script', 'command'] as const) {
         it(`source recovery rejects invalid live source directories (${kind}, ENOTDIR)`, async () => {
@@ -21575,129 +21616,183 @@ describe('executeDagWorkflow -- script nodes', () => {
         'project-pack',
         'global-pack',
         'installed-pack',
+        'bundled-pack',
       ] as const) {
         for (const captured of [false, true]) {
+          if (scope === 'bundled-pack' && !captured) continue;
           for (const runtime of ['bun', 'uv'] as const) {
-            it(`releases a selected unreadable script before spending (${scope}, captured=${captured}, ${runtime})`, async () => {
-              const deps = createMockDeps();
-              const packaged = scope.endsWith('-pack');
-              const global = scope.startsWith('global');
-              const installed = scope === 'installed-pack';
-              const relative = installed
-                ? join('plugins/packs/acme/kit', 'a'.repeat(40), 'block/scripts')
-                : packaged
-                  ? '.archon/workflows/team/block/scripts'
-                  : '.archon/scripts';
-              const folder = join(testDir, relative);
-              await mkdir(folder, { recursive: true });
-              const filename = runtime === 'bun' ? 'check.ts' : 'check.py';
-              await writeFile(
-                join(folder, filename),
-                runtime === 'bun' ? 'console.log("done")' : 'print("done")'
-              );
-              const pluginsDir = join(testDir, 'plugins');
-              const installedRoot = { kind: 'receipts' as const, pluginsDir };
-              if (installed) {
-                const manifest = {
-                  schemaVersion: 1,
-                  kind: 'workflow-pack',
-                  name: 'kit',
-                  description: 'test',
-                  entrypoints: { block: 'block/workflow.yaml' },
-                };
-                await mkdir(join(pluginsDir, 'installed/acme/kit'), { recursive: true });
+            const failures =
+              captured && runtime === 'bun'
+                ? [
+                    'permission',
+                    'file-absent',
+                    ...(scope.endsWith('-pack')
+                      ? ['pack-to-file', 'workflow-to-file']
+                      : ['group-to-file']),
+                    ...(scope === 'installed-pack'
+                      ? ['manifest-absent', 'manifest-unreadable', 'command-manifest-absent']
+                      : []),
+                  ]
+                : ['permission'];
+            for (const failure of failures) {
+              it(`releases a selected unreadable script before spending (${scope}, captured=${captured}, ${runtime}, ${failure})`, async () => {
+                const deps = createMockDeps();
+                const packaged = scope.endsWith('-pack');
+                const global = scope.startsWith('global');
+                const installed = scope === 'installed-pack';
+                const bundled = scope === 'bundled-pack';
+                const relative = installed
+                  ? join('plugins/packs/acme/kit', 'a'.repeat(40), 'block/scripts')
+                  : packaged
+                    ? '.archon/workflows/team/block/scripts'
+                    : failure === 'group-to-file'
+                      ? '.archon/scripts/group'
+                      : '.archon/scripts';
+                const folder = join(testDir, relative);
+                await mkdir(folder, { recursive: true });
+                const filename = runtime === 'bun' ? 'check.ts' : 'check.py';
                 await writeFile(
-                  join(pluginsDir, 'installed/acme/kit/receipt.json'),
-                  JSON.stringify({
-                    schemaVersion: 1,
-                    id: 'acme/kit',
-                    manifest,
-                    commit: 'a'.repeat(40),
-                    installedAt: new Date().toISOString(),
-                  })
+                  join(folder, filename),
+                  runtime === 'bun' ? 'console.log("done")' : 'print("done")'
                 );
-                const tree = join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40));
-                await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
-              }
-              const capture = captured
-                ? await captureWorkflowSource({
-                    sourceRoot: testDir,
-                    captureRoot: join(testDir, 'capture'),
-                    ...(installed ? { installedFrom: installedRoot } : {}),
-                  })
-                : undefined;
-              const roots = capture
-                ? capturedSourceRoots(capture.anchor)
-                : sourceIntegrity.liveSourceRoots(testDir);
-              const project = capture ? join(capture.anchor.root, 'project') : testDir;
-              const selected = installed
-                ? join(
-                    capture
-                      ? join(capture.anchor.root, 'installed/acme.kit')
-                      : join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40)),
-                    'block/scripts',
-                    filename
-                  )
-                : join(project, relative, filename);
-              const workflowSourceRoots = global
-                ? {
-                    ...roots,
-                    project: null,
-                    globalScripts: join(project, '.archon/scripts'),
-                    globalWorkflows: join(project, '.archon/workflows'),
+                const pluginsDir = join(testDir, 'plugins');
+                const installedRoot = { kind: 'receipts' as const, pluginsDir };
+                if (installed) {
+                  const manifest = {
+                    schemaVersion: 1,
+                    kind: 'workflow-pack',
+                    name: 'kit',
+                    description: 'test',
+                    entrypoints: { block: 'block/workflow.yaml' },
+                  };
+                  await mkdir(join(pluginsDir, 'installed/acme/kit'), { recursive: true });
+                  await writeFile(
+                    join(pluginsDir, 'installed/acme/kit/receipt.json'),
+                    JSON.stringify({
+                      schemaVersion: 1,
+                      id: 'acme/kit',
+                      manifest,
+                      commit: 'a'.repeat(40),
+                      installedAt: new Date().toISOString(),
+                    })
+                  );
+                  const tree = join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40));
+                  await mkdir(join(tree, 'block/commands'), { recursive: true });
+                  await writeFile(join(tree, 'block/commands/check.md'), 'DONE');
+                  await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+                }
+                const capture = captured
+                  ? await captureWorkflowSource({
+                      sourceRoot: testDir,
+                      captureRoot: join(testDir, 'capture'),
+                      ...(installed ? { installedFrom: installedRoot } : {}),
+                    })
+                  : undefined;
+                const roots = capture
+                  ? capturedSourceRoots(capture.anchor)
+                  : sourceIntegrity.liveSourceRoots(testDir);
+                const project = capture ? join(capture.anchor.root, 'project') : testDir;
+                const selected = installed
+                  ? join(
+                      capture
+                        ? join(capture.anchor.root, 'installed/acme.kit')
+                        : join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40)),
+                      'block/scripts',
+                      filename
+                    )
+                  : join(project, relative, filename);
+                const workflowSourceRoots = bundled
+                  ? { ...roots, bundledWorkflows: join(project, '.archon/workflows') }
+                  : global
+                    ? {
+                        ...roots,
+                        project: null,
+                        globalScripts: join(project, '.archon/scripts'),
+                        globalWorkflows: join(project, '.archon/workflows'),
+                      }
+                    : installed && !capture
+                      ? { ...roots, installed: installedRoot }
+                      : roots;
+                const script = packaged
+                  ? formatPackagedResourceReference(
+                      {
+                        source: installed
+                          ? 'installed'
+                          : bundled
+                            ? 'bundled'
+                            : global
+                              ? 'global'
+                              : 'project',
+                        pack: installed ? 'acme.kit' : 'team',
+                        workflow: 'block',
+                      },
+                      'check'
+                    )
+                  : 'check';
+                const options = dagOptions({
+                  deps,
+                  cwd: testDir,
+                  workflowSourceRoots,
+                  workflowRun: makeWorkflowRun('selected-script-read'),
+                  workflow: {
+                    name: 'selected-script-read',
+                    budget: { max_work_units: 1 },
+                    nodes:
+                      failure === 'command-manifest-absent'
+                        ? [dagNodeSchema.parse({ id: 'run-check', command: script })]
+                        : [{ ...checkNode, runtime, script }],
+                  },
+                });
+                deps.store.getDagResumeSnapshot.mockImplementation(async id =>
+                  foldDagResumeSnapshot(persistedEvents(deps.store), id)
+                );
+                const target =
+                  failure === 'pack-to-file'
+                    ? dirname(dirname(dirname(selected)))
+                    : failure === 'workflow-to-file'
+                      ? dirname(dirname(selected))
+                      : failure.includes('manifest-')
+                        ? join(dirname(dirname(dirname(selected))), 'archon-plugin.json')
+                        : failure === 'group-to-file'
+                          ? dirname(selected)
+                          : selected;
+                const moved = `${target}.away`;
+                const permission = failure === 'permission' || failure === 'manifest-unreadable';
+                const replacement = failure.endsWith('-to-file');
+                const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+                const verifier = spyOn(
+                  sourceIntegrity,
+                  'assertWorkflowSourceIntegrity'
+                ).mockImplementation(async roots => {
+                  const result = await verify(roots);
+                  if (permission) await chmod(target, 0o000);
+                  else {
+                    await sourceFiles.rename(target, moved);
+                    if (replacement) await writeFile(target, 'host mount changed');
                   }
-                : installed && !capture
-                  ? { ...roots, installed: installedRoot }
-                  : roots;
-              const script = packaged
-                ? formatPackagedResourceReference(
-                    {
-                      source: installed ? 'installed' : global ? 'global' : 'project',
-                      pack: installed ? 'acme.kit' : 'team',
-                      workflow: 'block',
-                    },
-                    'check'
-                  )
-                : 'check';
-              const options = dagOptions({
-                deps,
-                cwd: testDir,
-                workflowSourceRoots,
-                workflowRun: makeWorkflowRun('selected-script-read'),
-                workflow: {
-                  name: 'selected-script-read',
-                  budget: { max_work_units: 1 },
-                  nodes: [{ ...checkNode, runtime, script }],
-                },
-              });
-              deps.store.getDagResumeSnapshot.mockImplementation(async id =>
-                foldDagResumeSnapshot(persistedEvents(deps.store), id)
-              );
-              const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
-              const verifier = spyOn(
-                sourceIntegrity,
-                'assertWorkflowSourceIntegrity'
-              ).mockImplementation(async roots => {
-                const result = await verify(roots);
-                await chmod(selected, 0o000);
-                return result;
-              });
-              try {
+                  return result;
+                });
+                try {
+                  await executeDagWorkflow(options);
+                } finally {
+                  verifier.mockRestore();
+                  if (permission) await chmod(target, 0o644);
+                  else {
+                    if (replacement) await rm(target);
+                    await sourceFiles.rename(moved, target);
+                  }
+                }
+                expectReleased(deps.store, 'run-check');
+                expect(
+                  (await deps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+                ).toBe(0);
+                if (runtime === 'uv') return;
+                deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
                 await executeDagWorkflow(options);
-              } finally {
-                verifier.mockRestore();
-                await chmod(selected, 0o644);
-              }
-              expectReleased(deps.store, 'run-check');
-              expect(
-                (await deps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
-              ).toBe(0);
-              if (runtime === 'uv') return;
-              deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
-              await executeDagWorkflow(options);
-              expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-              expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
-            });
+                expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+                expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+              });
+            }
           }
         }
       }
@@ -36138,6 +36233,42 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
     expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
+
+  for (const released of [true, false]) {
+    it(`a post-release container status read cannot discard the ownership result (released=${released})`, async () => {
+      const backend = makeWritebackBackend();
+      const deps = createMockDeps();
+      const execSpy = stubMissingContainer();
+      const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockRejectedValue(
+        new sourceIntegrity.WorkflowSourceUnavailableError('/capture', new Error('unreadable'))
+      );
+      deps.store.releaseRunForUnreadableSource.mockImplementation(async () => {
+        deps.store.getWorkflowRunStatus.mockRejectedValue(new Error('store disconnected'));
+        return { released };
+      });
+      try {
+        const result = await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd: wbTestDir,
+            workflowRun: makeWorkflowRun('container-source-status'),
+            workflow: {
+              name: 'source-status',
+              nodes: [{ id: 'work', kind: 'exec', runtime: 'bun', script: 'check' }],
+            },
+            execContext: CONTAINER_EXEC,
+            containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+          })
+        );
+        expect(result).toEqual({ kind: 'source_release', released });
+      } finally {
+        verifier.mockRestore();
+        execSpy.mockRestore();
+      }
+      expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(backend.finalize).not.toHaveBeenCalled();
+    });
+  }
 
   it('mid-DAG pause suspends the container instead of completing', async () => {
     const backend = makeWritebackBackend();

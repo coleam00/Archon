@@ -14,6 +14,7 @@ import * as archonPaths from '@archon/paths';
 import {
   liveSourceRoots,
   capturedSourceReadGuard,
+  assertCapturedFilesPresent,
   packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
@@ -373,6 +374,7 @@ export async function loadCommandPrompt(
     }
 
     const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    await assertCapturedFilesPresent(verifiedFiles);
     if (workflowDir === null) {
       return {
         success: false,
@@ -434,6 +436,7 @@ export async function loadCommandPrompt(
 
   for (const dir of resolvedSearchPaths) {
     const entries = await archonPaths.findCommandFiles(dir, capturedSourceReadGuard(verifiedFiles));
+    await assertCapturedFilesPresent(verifiedFiles);
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
 
@@ -483,6 +486,7 @@ export async function loadCommandPrompt(
       appDefaultsPath,
       capturedSourceReadGuard(verifiedFiles)
     );
+    await assertCapturedFilesPresent(verifiedFiles);
     const match = entries.find(e => e.commandName === commandName);
     if (match) {
       try {

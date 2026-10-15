@@ -38,6 +38,7 @@ import * as archonPaths from '@archon/paths';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import {
   assertWorkflowSourceIntegrity,
+  assertCapturedFilesPresent,
   installedWorkflowName,
   listInstalledPacks,
   liveSourceRoots,
@@ -689,7 +690,8 @@ export async function resolveWorkflowCommandContents(
   roots: WorkflowSourceRoots,
   workflows: readonly {
     readonly nodes: readonly (DagNode | IncludeDirective)[];
-  }[]
+  }[],
+  verifiedFiles: ReadonlySet<string> | undefined
 ): Promise<Map<string, IncludeCommandContent>> {
   const sourceConfig = workflowSourceConfigForRoots(roots);
   const contents = new Map<string, IncludeCommandContent>();
@@ -705,6 +707,7 @@ export async function resolveWorkflowCommandContents(
       );
     }
   }
+  await assertCapturedFilesPresent(verifiedFiles);
   return contents;
 }
 
@@ -750,7 +753,7 @@ export async function discoverWorkflows(
   }
 ): Promise<WorkflowLoadResult> {
   const roots = options.sourceRoots ?? liveSourceRoots(cwd);
-  await assertWorkflowSourceIntegrity(roots);
+  const verifiedFiles = await assertWorkflowSourceIntegrity(roots);
   const projectRoot = roots.project;
   // Names the exec env-read checker treats as "supplied": .archon/.env + ~/.archon/.env
   // (read fresh, not from the process's full ambient environment — see
@@ -1100,6 +1103,7 @@ export async function discoverWorkflows(
       },
       'workflows_discovery_completed'
     );
+    await assertCapturedFilesPresent(verifiedFiles);
     return { workflows, support: installed.support, errors: allErrors };
   };
 

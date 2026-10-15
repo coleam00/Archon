@@ -404,7 +404,12 @@ export async function packagedWorkflowDirectory(
     case 'bundled':
       return join(roots.bundledWorkflows, owner.pack, owner.workflow);
     case 'installed': {
-      const { packs } = await listInstalledPacks(roots.installed);
+      const { packs, errors } = await listInstalledPacks(roots.installed);
+      if (roots.installed.kind === 'captured') {
+        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, owner.pack);
+        const failure = errors.find(error => error.path === packPath);
+        if (failure) throw failure.cause ?? new Error(failure.message);
+      }
       const pack = packs.find(p => p.key === owner.pack);
       return pack ? join(pack.dir, owner.workflow) : null;
     }
@@ -545,6 +550,24 @@ function hasVerifiedFileBelow(
 ): boolean {
   return (
     verifiedFiles !== undefined && [...verifiedFiles].some(file => file.startsWith(path + sep))
+  );
+}
+
+/** Discovery may omit vanished entries without a syscall error; the verified inventory cannot. */
+export async function assertCapturedFilesPresent(
+  verifiedFiles: ReadonlySet<string> | undefined
+): Promise<void> {
+  if (!verifiedFiles) return;
+  await Promise.all(
+    [...verifiedFiles].map(async path => {
+      const info = await stat(path);
+      if (!info.isFile()) {
+        throw new WorkflowSourceUnavailableError(
+          path,
+          new Error('Verified source file is no longer a file')
+        );
+      }
+    })
   );
 }
 
@@ -1134,6 +1157,12 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
+    if (isSystemError(error) && error.code === 'EISDIR') {
+      throw new WorkflowSourceIntegrityError(
+        `Workflow source manifest at ${captureRoot} is a directory`,
+        join(captureRoot, MANIFEST_FILE)
+      );
+    }
     throw sourceReadError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;

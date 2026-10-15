@@ -57,6 +57,7 @@ import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './w
 import {
   assertWorkflowSourceIntegrity,
   capturedSourceReadGuard,
+  assertCapturedFilesPresent,
   isSourceReadFailure,
   isSystemError,
   liveSourceRoots,
@@ -3921,6 +3922,7 @@ async function executeScriptNode(
         capturedSourceReadGuard(verifiedScriptFiles)
       )
         .then(async scripts => {
+          await assertCapturedFilesPresent(verifiedScriptFiles);
           const selected = scripts.get(finalScript);
           if (selected) await readFile(selected.path);
           return scripts;
@@ -8154,7 +8156,11 @@ export async function resolveFanOutChildDefinition(
         unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
       };
     }
-    const commandContents = await resolveWorkflowCommandContents(sourceRoots, [definition]);
+    const commandContents = await resolveWorkflowCommandContents(
+      sourceRoots,
+      [definition],
+      verifiedFiles
+    );
     for (const content of commandContents.values()) {
       if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {
         throw content.cause;
@@ -12324,19 +12330,27 @@ export async function executeDagWorkflow(
   // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
   // suspended. Only 'paused' triggers this.
   if (execContext.kind === 'container' && containerCtx) {
-    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (pausedStatus === 'paused') {
-      await suspendContainerForPause(
-        deps,
-        platform,
-        conversationId,
-        containerCtx,
-        execContext,
-        workflowRun.id
+    try {
+      const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+      if (pausedStatus === 'paused') {
+        await suspendContainerForPause(
+          deps,
+          platform,
+          conversationId,
+          containerCtx,
+          execContext,
+          workflowRun.id
+        );
+        return sourceUnreadable !== undefined
+          ? { kind: 'source_release', released: sourceReleased }
+          : undefined;
+      }
+    } catch (error) {
+      if (sourceUnreadable === undefined) throw error;
+      getLog().error(
+        { err: error, workflowRunId: workflowRun.id },
+        'dag.source_release_container_cleanup_failed'
       );
-      return sourceUnreadable !== undefined
-        ? { kind: 'source_release', released: sourceReleased }
-        : undefined;
     }
   }
 

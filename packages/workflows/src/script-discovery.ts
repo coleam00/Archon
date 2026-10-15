@@ -298,7 +298,12 @@ async function discoverInstalledPackScripts(
   onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  for (const pack of (await listInstalledPacks(roots.installed)).packs) {
+  const listed = await listInstalledPacks(roots.installed);
+  if (roots.installed.kind === 'captured' && listed.errors.length > 0) {
+    const error = listed.errors[0];
+    throw error.cause ?? new Error(error.message);
+  }
+  for (const pack of listed.packs) {
     await discoverPackScripts(pack.dir, pack.key, 'installed', scripts, requestedNames, onMissing);
   }
   return scripts;

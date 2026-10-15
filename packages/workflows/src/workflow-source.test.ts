@@ -1187,3 +1187,17 @@ describe('isSourceReadFailure', () => {
     expect(isSourceReadFailure(error)).toBe(true);
   });
 });
+
+test('a directory at the captured manifest is terminal invalid source', async () => {
+  const sandbox = await createSandbox();
+  const capture = await captureWorkflowSource({
+    sourceRoot: sandbox.source,
+    captureRoot: join(sandbox.root, 'capture'),
+  });
+  const manifest = join(capture.anchor.root, 'manifest.json');
+  await rm(manifest);
+  await mkdir(manifest);
+  const error = await loadWorkflowSource(capture.anchor.root).catch(error => error);
+  expect(error).toBeInstanceOf(WorkflowSourceIntegrityError);
+  expect(isSourceReadFailure(error)).toBe(false);
+});
