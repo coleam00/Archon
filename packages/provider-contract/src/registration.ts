@@ -171,6 +171,31 @@ export interface ProviderRegistration {
   ownsUnprefixedModelRefs?: true;
 }
 
+export function hasValidProviderCapabilities(capabilities: ProviderCapabilities): boolean {
+  return capabilities.sessionFork !== true || capabilities.sessionResume;
+}
+
+function assertValidCapabilities(entry: ProviderRegistration): void {
+  if (!hasValidProviderCapabilities(entry.capabilities)) {
+    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
+  }
+}
+
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
+    throw new Error(`Provider '${entry.id}' is already registered`);
+  }
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
+  if (entry.ownsUnprefixedModelRefs && owner) {
+    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
+  }
+  assertValidCapabilities(entry);
+}
+
 /**
  * Standardized error for unknown provider types.
  * Thrown by getAgentProvider() — all surfaces (CLI, server, orchestrator, workflows)
