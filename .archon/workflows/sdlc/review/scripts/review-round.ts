@@ -14,10 +14,13 @@
  * the delta run backwards or cover commits the previous round never read, so the
  * round refuses instead.
  *
- * A first round's lenses are the route agent's call. A continuation reruns the
- * lenses the previous round ran, which publish-review recorded beside the report,
- * on the delta only. A light continuation, which follows a correction for CI
- * rather than for review, runs the general code lens alone.
+ * A first round's lenses are the route agent's call. An ordinary continuation
+ * reruns the lenses the previous round ran, which publish-review recorded beside
+ * the report, on the delta only, and the route agent adds any the delta needs. The
+ * route agent is told to select at least one lens, so a record with no lenses
+ * still leaves the round something to certify. A light
+ * continuation, which follows a correction for CI rather than for review, runs
+ * the general code lens alone and does not route.
  *
  * The prior report is a declared input an outside caller can fill with a path
  * from an earlier run, so its existence is checked here too: a continuation that
@@ -98,7 +101,7 @@ try {
   // round's lens artifacts.
   const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
+    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -113,11 +116,12 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
+    const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
     const lenses =
-      trimmed(process.env.INPUTS_LIGHT) === 'true'
+      light
         ? { ...NO_LENSES, code: true }
         : recordedLenses(join(dirname(prior), REVIEWED_LENSES));
-    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses, part });
+    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

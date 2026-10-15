@@ -453,6 +453,7 @@ console.log(response);
           delete stubs['head-check'];
           stubs.mode = {
             continuation,
+            light: false,
             head,
             cursor: continuation ? head : '',
             risks: 'fixture',
@@ -492,7 +493,7 @@ console.log(response);
           if (matching) {
             for (const node of ['seams', 'code', 'docs', 'synthesize', 'publish'])
               expect(states.get(node)).toBe('stubbed');
-            expect(states.get('route')).toBe(continuation ? 'skipped' : 'stubbed');
+            expect(states.get('route')).toBe('stubbed');
           } else {
             for (const node of [
               'route',
@@ -576,6 +577,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
         stubs['pr__publish'] = forgePrRecord({ head_revision: 'before-reshape' });
         stubs['rereview__mode'] = {
           continuation: true,
+          light: true,
           head,
           cursor: 'before-reshape',
           risks: 'fixture',
