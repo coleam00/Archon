@@ -216,7 +216,8 @@ describe('bench run', () => {
       null,
       ['https://github.com/o/r/issues/1'],
     ]);
-    expect(lines.find(line => line.row === '12-outside')?.agent_nodes).toEqual([]);
+    // The skipped judge's empty binding proves nothing and fails nothing.
+    expect(lines.find(line => line.row === '12-outside')).toMatchObject({ agent_nodes: [], binding: null, verdict: null });
     expect(checks).toHaveLength(1);
     expect(checks[0].passed).toBe(true);
   });
@@ -256,8 +257,13 @@ describe('bench run', () => {
     expect(stderr).toBe('');
     expect(status).toBe(0);
     expect(argv(1)).toEqual(expect.arrayContaining(['archon-intake', scratch, 'repo_path=me/scratch-base', 'number=101', 'mode=live', 'trust=auto']));
+    // Row 11 is pinned to archon-triage; live, it runs through intake and is proven on intake's judge.
     const live = lines.find(line => line.row === '11');
     expect([live?.mode, live?.workflow, live?.verdict?.contract, live?.verdict?.route, live?.verdict?.summary]).toEqual(['live', 'intake', 'READY', 'plan', undefined]);
+    expect(lines.map(line => [line.row, line.passed, line.problems])).toEqual([
+      ['11', true, []],
+      ['12-outside', true, []],
+    ]);
     expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
   });
 
@@ -275,6 +281,45 @@ describe('bench run', () => {
     ok(dir, 'remote', 'add', 'origin', 'https://github.com/me/s.git');
     ok(dir, 'commit', '-q', '--allow-empty', '-m', 'one');
     expect(() => checkScratch('a', shared, '0'.repeat(40))).toThrow('is at');
+  });
+
+  it('refuses a concurrency of zero before any run', () => {
+    const { runWith } = bench();
+    const { status, stderr, lines } = runWith(['--concurrency', '0'], 'base');
+    expect([status, stderr.trim(), lines]).toEqual([1, '--concurrency must be at least 1', []]);
+  });
+
+  it('pins a dispositioned issue that a typed search also finds, and nothing from a group counted zero', () => {
+    const { repo, out, cli } = bench();
+    const bare = track(mkdtempSync(join(tmpdir(), 'intake-bench-remote-')));
+    ok(bare, 'clone', '-q', '--bare', repo, '.');
+    ok(repo, 'config', `url.${bare}.insteadOf`, 'https://github.com/o/r.git');
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    writeFileSync(
+      join(cli, 'config.json'),
+      JSON.stringify({
+        ...config,
+        issues: [
+          { number: 20, labels: ['bug'], comments: 0, state: 'open' },
+          { number: 21, labels: ['enhancement'], comments: 0, state: 'open' },
+          { number: 30, labels: [], comments: 0 },
+        ],
+        searches: { 'is:open': [20, 21], 'not planned': [30] },
+      })
+    );
+    writeFileSync(join(out, 'dispositions.json'), JSON.stringify([{ number: 20, contract: 'BLOCKED' }]));
+    const counts = ['--duplicates', '0', '--fixed', '0', '--not-planned', '0', '--typed', '2', '--outside', '0'];
+    const result = spawnSync(
+      process.execPath,
+      ['--preload', join(cli, 'preload.ts'), SCRIPT, 'select', '--repo', 'github.com/o/r', '--set', join(out, 'pinned.json'), '--dispositions', join(out, 'dispositions.json'), ...counts],
+      { cwd: repo, encoding: 'utf8' }
+    );
+    expect(result.stderr).toBe('');
+    const pinned = JSON.parse(readFileSync(join(out, 'pinned.json'), 'utf8')) as BenchSet;
+    expect(pinned.rows.map(entry => [entry.id, entry.group])).toEqual([
+      ['21', 'typed'],
+      ['20', 'dispositioned'],
+    ]);
   });
 
   it('does not pass a run whose judging node recorded no model binding', () => {
@@ -435,6 +480,39 @@ describe('score', () => {
       ['6', [], []],
     ]);
     expect(renderScore(result)).toContain('| duplicates found with the right canonical link (at least 70%, by marks) | 1/1 (100%) right');
+  });
+
+  it('labels which workflow judged each row', () => {
+    const out = benchOut();
+    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', { workflow: 'intake', verdict: { ...line('b', typed, '1-x').verdict!, type: field('bug') } }));
+    const result = score(set, out);
+    expect(result.versions.map(version => version.workflows)).toEqual([{ 'archon-triage': 3 }, { 'archon-triage': 2, 'intake eval': 1 }]);
+    expect(result.disagreements.find(entry => entry.row === '2')?.workflows).toEqual({ a: 'archon-triage', b: 'intake eval' });
+    expect(renderScore(result)).toContain('| 2 (typed) | READY/plan bug (archon-triage) | NO_ACTION bug (intake eval) |');
+  });
+
+  it('fails the outside bar when a trust: outside row ran an agent, and keeps the row out of accuracy', () => {
+    const out = benchOut();
+    const outside = row(2, { id: '2-outside', group: 'typed', workflow: 'intake', trust: 'outside', known: { type: 'bug' } });
+    const withOutside: BenchSet = { ...set, rows: [...set.rows, outside] };
+    const before = score(withOutside, out).versions[0];
+    appendLine(join(out, SAMPLES_FILE), line('a', outside, '1-x', { workflow: 'intake', agent_nodes: ['triage__triage'] }));
+    const after = score(withOutside, out);
+    expect(after.versions[0].outside).toEqual({ rows: 1, ran_agent: 1 });
+    expect(after.versions[0].type).toEqual(before.type);
+    expect(renderScore(after)).toContain('| every `trust: outside` row ran no agent node | 1 of 1 ran one: fail |');
+  });
+
+  it('scores a live line in its own column, without canonical links, leaving the eval column as it was', () => {
+    const out = benchOut();
+    const before = score(set, out).versions[0];
+    appendLine(join(out, SAMPLES_FILE), line('a', dup, '4-live', { mode: 'live', workflow: 'intake', verdict: { ...line('a', dup, '4-live').verdict!, blocked_by: undefined } }));
+    appendLine(join(out, CHECKS_FILE), { ...checks('4-live', true), mode: 'live' });
+    const result = score(set, out);
+    expect(result.versions.map(version => version.label)).toEqual(['a', 'b', 'a (live)']);
+    expect(result.versions[0]).toEqual(before);
+    expect(result.versions[2]).toMatchObject({ workflows: { 'intake live': 1 }, bars: { duplicate: { rows: 1, cites_canonical: null } } });
+    expect(renderScore(result)).toContain('links not recorded live');
   });
 
   it('serves no mark for a run of a batch that failed its hard checks', () => {

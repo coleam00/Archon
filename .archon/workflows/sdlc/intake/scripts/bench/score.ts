@@ -67,6 +67,11 @@ export function latestByVersion(outDir: string): Map<string, Map<string, Line>> 
   return versions;
 }
 
+/** Which workflow judged a line, and how: archon-triage directly, or intake in eval or live mode. */
+export function judgedBy(line: Line): string {
+  return line.workflow === 'triage' ? 'archon-triage' : `intake ${line.mode}`;
+}
+
 /** Whether a line's batch run passed its hard checks; a run with no record did not finish. */
 export function batchPassed(line: Line, checks: ReadonlyMap<string, BatchChecks>): boolean {
   return checks.get(line.batch_run)?.passed === true;
@@ -98,13 +103,15 @@ export interface MarkedBar {
   readonly unmarked: number;
   /** Rows whose verdict proposes a close or recommends one to a maintainer. */
   readonly closing: number;
-  /** Duplicates whose maintainer recommendation links the canonical issue. */
-  readonly cites_canonical: number;
+  /** Duplicates whose maintainer recommendation links the canonical issue; null where links are not recorded (live). */
+  readonly cites_canonical: number | null;
   readonly status: BarStatus;
 }
 
 export interface VersionScore {
   readonly label: string;
+  /** Judged rows by the workflow that judged them. */
+  readonly workflows: Readonly<Record<string, number>>;
   /** Batch runs this version's latest lines came from that failed each hard check. */
   readonly hard: Readonly<Record<'writes' | 'outside_agent' | 'posted_text' | 'finished', number>>;
   readonly failed_batches: readonly string[];
@@ -143,6 +150,8 @@ function scoreVersion(
   }
   const outsideLines = lines.filter(line => line.trust === 'outside');
   const judged = lines.filter(line => isJudged(line, checks) && rows.has(line.row));
+  // A live verdict is read from the work item, which keeps no maintainer recommendation or links.
+  const linksRecorded = lines.every(line => line.mode === 'eval');
   const markOf = (line: Line): MarkValue | undefined => (line.run_id === null ? undefined : marks.get(line.run_id)?.mark);
 
   const bar = (group: Group, atLeast: number): MarkedBar => {
@@ -156,10 +165,12 @@ function scoreVersion(
       partly: inGroup.filter(line => markOf(line) === 'partly').length,
       unmarked,
       closing: inGroup.filter(line => line.verdict?.contract === 'NO_ACTION' || line.verdict?.contract === 'BLOCKED').length,
-      cites_canonical: inGroup.filter(line => {
-        const canonical = rows.get(line.row)?.known.canonical;
-        return canonical !== undefined && (line.verdict?.blocked_by ?? []).some(url => url.toLowerCase() === canonical.toLowerCase());
-      }).length,
+      cites_canonical: linksRecorded
+        ? inGroup.filter(line => {
+            const canonical = rows.get(line.row)?.known.canonical;
+            return canonical !== undefined && (line.verdict?.blocked_by ?? []).some(url => url.toLowerCase() === canonical.toLowerCase());
+          }).length
+        : null,
       status,
     };
   };
@@ -182,8 +193,11 @@ function scoreVersion(
   const costs = lines.filter(line => line.run_id !== null);
   const reported = costs.flatMap(line => (line.cost_usd === null ? [] : [line.cost_usd]));
   const total = reported.reduce((sum, cost) => sum + cost, 0);
+  const workflows: Record<string, number> = {};
+  for (const line of judged) workflows[judgedBy(line)] = (workflows[judgedBy(line)] ?? 0) + 1;
   return {
     label,
+    workflows,
     hard,
     failed_batches: batchRuns.filter(batchRun => checks.get(batchRun)?.passed !== true),
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
@@ -210,6 +224,8 @@ export interface Disagreement {
   readonly row: string;
   readonly group: Group;
   readonly answers: Readonly<Record<string, string>>;
+  /** The workflow that judged each version's answer. */
+  readonly workflows: Readonly<Record<string, string>>;
   /** Versions the operator marked right. */
   readonly right: readonly string[];
   /** Versions whose type matches the human label, when the row has one. */
@@ -244,6 +260,7 @@ export function score(set: BenchSet, outDir: string): Score {
       row: row.id,
       group: row.group,
       answers,
+      workflows: Object.fromEntries(judged.map(([label, line]) => [label, judgedBy(line)])),
       right: judged.filter((_, index) => marked[index] === 'right').map(([label]) => label),
       type_right:
         row.known.type === undefined ? [] : judged.filter(([, line]) => line.verdict?.type.value === row.known.type).map(([label]) => label),
@@ -267,6 +284,7 @@ export function renderScore(result: Score): string {
     '',
     row('', versions.map(version => version.label)),
     row('---', versions.map(() => '---')),
+    row('judged rows, by workflow', each(version => Object.entries(version.workflows).map(([name, count]) => `${name} ${String(count)}`).join(', ') || 'none')),
     row('**Hard checks** (each must be 0)', each(() => '')),
     row('writes in eval', each(version => String(version.hard.writes))),
     row('agent node on a `trust: outside` row', each(version => String(version.hard.outside_agent))),
@@ -280,7 +298,8 @@ export function renderScore(result: Score): string {
         `${bar.label} (at least ${Math.round(bar.at_least * 100)}%, by marks)`,
         each(version => {
           const value = version.bars[bar.group];
-          const auto = `${String(value.closing)} propose close${bar.group === 'duplicate' ? `, ${String(value.cites_canonical)} cite the canonical` : ''}`;
+          const cites = value.cites_canonical === null ? 'links not recorded live' : `${String(value.cites_canonical)} cite the canonical`;
+          const auto = `${String(value.closing)} propose close${bar.group === 'duplicate' ? `, ${cites}` : ''}`;
           return `${pct(value.right, value.rows)} right, ${String(value.partly)} partly, ${String(value.unmarked)} unmarked: ${value.status} (auto: ${auto})`;
         })
       )
@@ -308,7 +327,7 @@ export function renderScore(result: Score): string {
     const labels = versions.map(version => version.label);
     lines.push('', '## Disagreements', '', row('row', [...labels, 'marked right', 'type right']), row('---', [...labels, '', ''].map(() => '---')));
     for (const entry of result.disagreements) {
-      lines.push(row(`${entry.row} (${entry.group})`, [...labels.map(label => entry.answers[label] ?? '-'), entry.right.join(', ') || '-', entry.type_right.join(', ') || '-']));
+      lines.push(row(`${entry.row} (${entry.group})`, [...labels.map(label => (entry.answers[label] === undefined ? '-' : `${entry.answers[label]} (${entry.workflows[label]})`)), entry.right.join(', ') || '-', entry.type_right.join(', ') || '-']));
     }
   }
   return `${lines.join('\n')}\n`;

@@ -355,15 +355,17 @@ are the operator's and stay outside the pack and the repository.
   not finish; a failed batch is reported before anyone evaluates it.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
-  there, reading each verdict from the copy's work item. A scratch repository may
-  not be the set's own or another version's.
+  there, reading each verdict from the copy's work item. The work item keeps no
+  summary, maintainer recommendation or links, so a live verdict shows none. A
+  scratch repository may not be the set's own or another version's.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
   operator marks each run right, wrong or partly right, and marks land in
   `marks.jsonl`, so they tally across batches.
 - **Score.** `score` prints one column per version from each version's latest line
-  per row: the hard checks, each bar (the duplicates, fixed and not-planned bars by
+  per row, with live lines in their own `<label> (live)` column: which workflow
+  judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
   the operator's marks), the `type` confusion matrix with `enhancement` read as
   `feature`, leaks (a tool call that looked up the judged issue, left out of the
   accuracy numbers), cost and wall time, and which versions got each disagreement

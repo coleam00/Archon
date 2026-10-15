@@ -68,6 +68,12 @@ function count(name: string, value: string | undefined): number {
   return parsed;
 }
 
+function atLeastOne(name: string, value: string | undefined): number {
+  const parsed = count(name, value);
+  if (parsed === 0) throw new Error(`--${name} must be at least 1`);
+  return parsed;
+}
+
 async function main(): Promise<void> {
   const command = positionals[0];
   const repoRoot = gitOrThrow('rev-parse', '--show-toplevel');
@@ -158,7 +164,7 @@ async function main(): Promise<void> {
           : new Map(
               [...live].map(([label, scratch]) => [label, { scratch, copies: readCopies(outDir, label, scratch.repo) }])
             ),
-      concurrency: values.concurrency === undefined ? undefined : count('concurrency', values.concurrency),
+      concurrency: values.concurrency === undefined ? undefined : atLeastOne('concurrency', values.concurrency),
     };
     const { lines, checks } = await runBatch(options);
     for (const line of lines) {

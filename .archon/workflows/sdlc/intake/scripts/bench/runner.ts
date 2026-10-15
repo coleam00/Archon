@@ -471,10 +471,12 @@ export function triageNodeId(workflow: BenchWorkflow): string {
   return workflow === 'intake' ? 'triage__triage' : 'triage';
 }
 
+const ran = (node: RunNode): boolean => node.state !== 'skipped' && node.state !== 'pending';
+
 /** Nodes that ran an agent; a node that ran without recording its kind cannot be cleared. */
 export function agentNodesRan(nodes: readonly RunNode[]): string[] {
   return nodes
-    .filter(node => node.state !== 'skipped' && node.state !== 'pending')
+    .filter(ran)
     .filter(node => node.execution?.node?.kind === undefined || node.execution.node.kind === 'agent')
     .map(node => node.nodeId);
 }
@@ -548,10 +550,14 @@ export function toVerdict(value: unknown): Verdict {
   };
 }
 
-/** A live item's verdict, as intake recorded it on the item's work document. */
-export function liveVerdict(document: unknown): Verdict | null {
+/**
+ * A live item's verdict, as intake recorded it on the item's work document. The
+ * document keeps an earlier run's triage when this run took another path, so only a
+ * verdict this run recorded counts.
+ */
+export function liveVerdict(document: unknown, runId: string): Verdict | null {
   const facts = isObject(document) && isObject(document.facts) ? document.facts.triage : undefined;
-  if (!isObject(facts) || !isObject(facts.verdict)) return null;
+  if (!isObject(facts) || !isObject(facts.verdict) || facts.run_id !== runId) return null;
   const { verdict } = facts;
   return {
     contract: verdict.contract as Contract,
@@ -563,6 +569,11 @@ export function liveVerdict(document: unknown): Verdict | null {
     importance: facts.importance as Field,
     urgency: facts.urgency as Field,
   };
+}
+
+/** The workflow a row's run launches: a live run is always intake on the row's copy. */
+function workflowOf(run: RowRun): BenchWorkflow {
+  return run.live === undefined ? run.row.workflow : 'intake';
 }
 
 export interface RowRun {
@@ -602,14 +613,14 @@ function inputsFor(run: RowRun, set: BenchSet): Record<string, string> {
 /** What a finished run decided, read from where its path records it. */
 async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: string | null; verdict: Verdict | null }> {
   const returned = returnedValue(detail);
-  if (run.live === undefined && run.row.workflow === 'triage') return { path: null, verdict: toVerdict(returned) };
+  if (workflowOf(run) === 'triage') return { path: null, verdict: toVerdict(returned) };
   if (!isObject(returned) || typeof returned.path !== 'string') throw new Error('intake returned no path');
   if (run.live !== undefined) {
     if (returned.item !== run.live.number) {
       throw new Error(`intake claimed issue ${String(returned.item)}, not the row's copy ${String(run.live.number)}`);
     }
     const document = await archonJson(['state', 'get', `work/${String(run.live.number)}`], run.cwd);
-    return { path: returned.path, verdict: liveVerdict(document.value) };
+    return { path: returned.path, verdict: liveVerdict(document.value, detail.id) };
   }
   const evaluation = isObject(returned.evaluation) ? returned.evaluation : undefined;
   if (evaluation === undefined) throw new Error('eval intake returned no evaluation');
@@ -620,14 +631,18 @@ async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: str
 export async function runRow(run: RowRun, context: BatchContext): Promise<Line> {
   const { row, resolved } = run;
   const { version } = resolved;
+  const workflow = workflowOf(run);
   const problems: string[] = [];
+  const fail = (error: unknown): void => {
+    problems.push(error instanceof Error ? error.message : String(error));
+  };
   let runId: string | null = null;
   let status = 'not_started';
   let detail: RunDetail | undefined;
   let decided: { path: string | null; verdict: Verdict | null } = { path: null, verdict: null };
   try {
     runId = await launch({
-      workflow: WORKFLOWS[run.live === undefined ? row.workflow : 'intake'],
+      workflow: WORKFLOWS[workflow],
       cwd: run.cwd,
       source: resolved.source,
       config: resolved.config,
@@ -639,32 +654,39 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     if (status !== 'completed') problems.push(`the run is ${status}`);
     else decided = await readDecision(run, detail);
   } catch (error) {
-    problems.push(error instanceof Error ? error.message : String(error));
+    fail(error);
     if (runId !== null && status === 'not_started') status = 'unknown';
   }
 
   const nodes = detail?.nodes ?? [];
-  const judge = nodes.find(node => node.nodeId === triageNodeId(row.workflow));
+  // A skipped agent node records an empty binding; only a judge that ran has a model to prove.
+  const judge = nodes.find(node => node.nodeId === triageNodeId(workflow) && ran(node));
   const binding = agentBinding(judge) ?? null;
-  if (binding !== null && (binding.provider !== version.provider || binding.requested !== version.model)) {
-    problems.push(`triage ran ${String(binding.provider)}/${String(binding.requested)}, not ${version.provider}/${version.model}`);
-  } else if (binding === null && decided.verdict !== null) {
-    problems.push(`${triageNodeId(row.workflow)} recorded no model binding, so its version is unproven`);
+  if (binding?.provider !== undefined && binding.requested !== undefined) {
+    if (binding.provider !== version.provider || binding.requested !== version.model) {
+      problems.push(`triage ran ${binding.provider}/${binding.requested}, not ${version.provider}/${version.model}`);
+    }
+  } else if (decided.verdict !== null) {
+    problems.push(`${triageNodeId(workflow)} recorded no model binding, so its version is unproven`);
   }
   let leak: string[] = [];
-  if (detail?.transcript_path != null && existsSync(detail.transcript_path)) {
-    const tokens = [
-      ...issueTokens(context.set.repo, row.number),
-      ...(run.live === undefined ? [] : issueTokens(run.live.repo, run.live.number)),
-    ];
-    leak = findLeaks(readFileSync(detail.transcript_path, 'utf8'), tokens);
-  }
   let report: string | null = null;
-  if (detail !== undefined && existsSync(join(artifactsOf(detail), 'triage.md'))) {
-    const target = join(context.outDir, 'items', detail.id, 'triage.md');
-    mkdirSync(join(context.outDir, 'items', detail.id), { recursive: true });
-    copyFileSync(join(artifactsOf(detail), 'triage.md'), target);
-    report = relative(context.outDir, target);
+  try {
+    if (detail?.transcript_path != null && existsSync(detail.transcript_path)) {
+      const tokens = [
+        ...issueTokens(context.set.repo, row.number),
+        ...(run.live === undefined ? [] : issueTokens(run.live.repo, run.live.number)),
+      ];
+      leak = findLeaks(readFileSync(detail.transcript_path, 'utf8'), tokens);
+    }
+    if (detail !== undefined && existsSync(join(artifactsOf(detail), 'triage.md'))) {
+      const target = join(context.outDir, 'items', detail.id, 'triage.md');
+      mkdirSync(join(context.outDir, 'items', detail.id), { recursive: true });
+      copyFileSync(join(artifactsOf(detail), 'triage.md'), target);
+      report = relative(context.outDir, target);
+    }
+  } catch (error) {
+    fail(error);
   }
   const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
 
@@ -677,7 +699,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     row: row.id,
     number: row.number,
     group: row.group,
-    workflow: run.live === undefined ? row.workflow : 'intake',
+    workflow,
     trust: row.trust,
     version,
     run_id: runId,
@@ -815,19 +837,29 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
           return done;
         }))).flat();
 
-  const after = await snapshot(watched, stateDirs);
   const setKeys = new Set(rows.map(row => issueKey(set.repo, row.number)));
   const onSet = (snap: Snapshot): Snapshot => ({
     issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setKeys.has(key))),
     state: snap.state,
   });
+  let writes: string[];
+  let posted: string[];
+  try {
+    const after = await snapshot(watched, stateDirs);
+    writes = snapshotChanges(onSet(before), onSet(after));
+    posted = postedComments(before, after);
+  } catch (error) {
+    const unproven = `the after-read failed, so the batch is unproven: ${error instanceof Error ? error.message : String(error)}`;
+    writes = [unproven];
+    posted = [unproven];
+  }
   const checks = batchChecks(
     context,
     live === undefined ? 'eval' : 'live',
     options.versions.map(version => version.resolved.version.label),
     lines,
-    snapshotChanges(onSet(before), onSet(after)),
-    postedComments(before, after)
+    writes,
+    posted
   );
   appendLine(join(outDir, CHECKS_FILE), checks);
   return { lines, checks };

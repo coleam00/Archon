@@ -161,6 +161,7 @@ export function toCandidate(node: unknown): Candidate | undefined {
 /** Search hits in the tracker's order, newest first, until `enough` of them qualify. */
 function search(repo: Repo, query: string, qualifies: (candidate: Candidate) => boolean, enough: number): Candidate[] {
   const found: Candidate[] = [];
+  if (enough === 0) return found;
   let after: string | null = null;
   do {
     const page: unknown = gh(repo.host, [
@@ -265,6 +266,12 @@ export function selectSet(
     }
   };
   const fresh = (candidate: Candidate): boolean => !taken.has(candidate.number);
+  // Dispositioned issues are picked first, so an open typed search cannot take one.
+  for (const [number, disposition] of dispositions) {
+    const issue = viewIssue({ repo, number });
+    if (issue.state !== 'open') throw new Error(`dispositioned issue ${String(number)} is not open`);
+    pick('dispositioned', [{ number, author: issue.author ?? null, labels: issue.labels, duplicateOf: null, closedBy: null }], () => ({ disposition }));
+  }
   // A duplicate counts only when the tracker records what it duplicates.
   pick('duplicate', search(repo, 'is:closed reason:duplicate', c => fresh(c) && c.duplicateOf !== null, counts.duplicate), c => ({
     canonical: c.duplicateOf ?? undefined,
@@ -275,12 +282,6 @@ export function selectSet(
   pick('not_planned', search(repo, 'is:closed reason:"not planned"', fresh, counts.not_planned), () => ({}));
   const typeLabels = Object.keys(HUMAN_TYPE_LABELS).join(',');
   pick('typed', search(repo, `is:open label:${typeLabels}`, c => fresh(c) && humanType(c.labels) !== undefined, counts.typed), () => ({}));
-  for (const [number, disposition] of dispositions) {
-    if (taken.has(number)) throw new Error(`issue ${String(number)} is dispositioned but already in group ${picked.find(p => p.candidate.number === number)?.group}`);
-    const issue = viewIssue({ repo, number });
-    if (issue.state !== 'open') throw new Error(`dispositioned issue ${String(number)} is not open`);
-    pick('dispositioned', [{ number, author: issue.author ?? null, labels: issue.labels, duplicateOf: null, closedBy: null }], () => ({ disposition }));
-  }
 
   const isMaintainer = (author: string | null): boolean => author !== null && maintainers.has(author.toLowerCase());
   const rows: Row[] = [];

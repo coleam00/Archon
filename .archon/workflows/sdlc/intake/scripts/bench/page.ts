@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BatchChecks, Line } from './runner.ts';
-import { MARKS, type MarkValue, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
+import { MARKS, type MarkValue, judgedBy, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
 import { type BenchSet, type Row, batchRows } from './set.ts';
 
 function escape(text: string): string {
@@ -28,7 +28,7 @@ function link(url: string): string {
 function known(row: Row): string {
   const facts = [
     `group <b>${escape(row.group)}</b>`,
-    `judged by <b>${escape(row.workflow === 'intake' ? `intake eval, trust ${row.trust}` : 'archon-triage')}</b>`,
+    `trust <b>${escape(row.trust)}</b>`,
     row.known.canonical === undefined ? '' : `duplicate of ${link(row.known.canonical)}`,
     row.known.fixed_by === undefined ? '' : `closed by ${link(row.known.fixed_by)}`,
     row.known.type === undefined ? '' : `human type <b>${escape(row.known.type)}</b>`,
@@ -41,7 +41,7 @@ function known(row: Row): string {
 }
 
 function verdictCell(line: Line, outDir: string): string {
-  const parts: string[] = [];
+  const parts: string[] = [`<div>judged by <b>${escape(judgedBy(line))}</b></div>`];
   if (line.path !== null) parts.push(`<div>intake path <b>${escape(line.path)}</b></div>`);
   const { verdict } = line;
   if (verdict === null) {
@@ -58,6 +58,7 @@ function verdictCell(line: Line, outDir: string): string {
     }
     parts.push('</table>');
     if (verdict.summary !== undefined && verdict.summary !== '') parts.push(`<p>${escape(verdict.summary)}</p>`);
+    if (line.mode === 'live') parts.push('<div><i>A live run keeps no summary, maintainer recommendation or links on its work item.</i></div>');
   }
   const cost = line.cost_usd === null ? 'cost unreported' : `$${line.cost_usd.toFixed(4)}`;
   const time = line.duration_ms === null ? '' : `, ${(line.duration_ms / 1000).toFixed(0)} s`;
@@ -153,12 +154,17 @@ for (const form of document.querySelectorAll('form.mark')) {
     event.preventDefault();
     const data = new FormData(form);
     const saved = form.querySelector('.saved');
-    const response = await fetch('/marks', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run_id: form.dataset.run, mark: data.get('mark'), note: data.get('note') ?? '' }),
-    });
-    saved.textContent = response.ok ? 'saved' : 'not saved: ' + (await response.text());
+    saved.textContent = 'saving';
+    try {
+      const response = await fetch('/marks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ run_id: form.dataset.run, mark: data.get('mark'), note: data.get('note') ?? '' }),
+      });
+      saved.textContent = response.ok ? 'saved' : 'not saved: ' + (await response.text());
+    } catch (error) {
+      saved.textContent = 'not saved: ' + error.message;
+    }
   });
 }
 </script>

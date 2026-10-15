@@ -7,9 +7,9 @@
  * git included, runs for real.
  *
  * Its state is a directory. `config.json` holds the scenario: the baseline binding a
- * dry run resolves, the tracker's issues, whether a launched run writes a label to its
- * issue, and whether an outside row's triage agent runs anyway. Each launch's arguments
- * land in `argv-<n>.json`.
+ * dry run resolves, the tracker's issues and searches, whether a launched run writes a
+ * label to its issue, and whether an outside row's triage agent runs anyway. Each
+ * launch's arguments land in `argv-<n>.json`.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,6 +18,9 @@ export interface FakeIssue {
   readonly number: number;
   readonly labels: string[];
   readonly comments: number;
+  /** Defaults to closed. */
+  readonly state?: 'open' | 'closed';
+  readonly author?: string;
 }
 
 export interface FakeConfig {
@@ -33,6 +36,8 @@ export interface FakeConfig {
   readonly unboundTriage?: boolean;
   /** The project key `archon state list` names. */
   readonly projectKey: string;
+  /** Issue numbers a tracker search answers, by a fragment of its query. */
+  readonly searches?: Record<string, number[]>;
 }
 
 const verdict = {
@@ -82,7 +87,11 @@ function agent(nodeId: string, state: string, bound: FakeConfig['baseline']) {
     state,
     execution: {
       node: { kind: 'agent' },
-      binding: { provider: bound?.provider, tier: 'medium', model: { requested: bound?.model, resolved: { source: 'unavailable', reason: 'not_reported' } } },
+      // The engine records a skipped agent node with an empty binding.
+      binding:
+        state === 'skipped'
+          ? {}
+          : { provider: bound?.provider, tier: 'medium', model: { requested: bound?.model, resolved: { source: 'unavailable', reason: 'not_reported' } } },
       spend: { costUsd: { source: 'provider', value: 0.5 } },
     },
   };
@@ -95,9 +104,8 @@ function answer(dir: string, args: readonly string[]): string {
     return JSON.stringify({ scope: { kind: 'project', key: config.projectKey }, documents: [] });
   }
   if (args[0] === 'state' && args[1] === 'get') {
-    const field = { value: 'bug', reason: 'r' };
-    const triage = { verdict: { contract: 'READY', route: 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' } };
-    return JSON.stringify({ name: args[2], revision: 2, value: { facts: { triage } } });
+    const work = join(dir, `${args[2].replace('/', '-')}.json`);
+    return JSON.stringify({ name: args[2], revision: 2, value: { facts: existsSync(work) ? JSON.parse(readFileSync(work, 'utf8')) : {} } });
   }
   if (args[0] !== 'workflow') throw new Error(`fake archon: unexpected command ${args.join(' ')}`);
   if (args[1] === 'run' && args.includes('--dry-run')) {
@@ -118,6 +126,16 @@ function answer(dir: string, args: readonly string[]): string {
     const intake = args[2] === 'archon-intake';
     const outside = given.trust === 'outside';
     const triageRan = !intake || !outside || config.outsideAgentRuns === true;
+    // A live intake run that triages records its verdict on the item's work document;
+    // one that does not leaves an earlier run's there.
+    const work = join(dir, `work-${given.number}.json`);
+    if (given.mode === 'live' && !outside) {
+      const field = { value: 'bug', reason: 'r' };
+      const triage = { verdict: { contract: 'READY', route: 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
+      writeFileSync(work, JSON.stringify({ triage }));
+    } else if (given.mode === 'live' && !existsSync(work)) {
+      writeFileSync(work, JSON.stringify({ triage: { verdict: { contract: 'READY', route: 'plan' }, run_id: 'an-earlier-run' } }));
+    }
     const detail = {
       id: `run-${n}`,
       status: 'completed',
@@ -152,6 +170,19 @@ function answer(dir: string, args: readonly string[]): string {
 
 function ghAnswer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
+  if (args.includes('graphql')) {
+    const q = args.find(arg => arg.startsWith('q='));
+    if (q === undefined) {
+      // An issue's history: never edited or renamed, so its creation text is its current text.
+      return JSON.stringify({ data: { repository: { issue: { createdAt: 'x', userContentEdits: { totalCount: 0, nodes: [] }, timelineItems: { nodes: [] } } } } });
+    }
+    const hits = Object.entries(config.searches ?? {}).find(([fragment]) => q.includes(fragment))?.[1] ?? [];
+    const nodes = hits.map(number => {
+      const issue = config.issues.find(entry => entry.number === number);
+      return { number, author: { login: issue?.author ?? 'someone' }, labels: { nodes: (issue?.labels ?? []).map(name => ({ name })) }, timelineItems: { nodes: [] } };
+    });
+    return JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } });
+  }
   const endpoint = args.find(arg => arg.startsWith('repos/')) ?? '';
   const number = Number(endpoint.split('/').pop());
   const issue = config.issues.find(entry => entry.number === number);
@@ -160,7 +191,9 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     number,
     title: `Issue ${String(number)}`,
     body: 'body',
-    state: 'closed',
+    state: issue.state ?? 'closed',
+    html_url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
+    user: { login: issue.author ?? 'someone' },
     comments: issue.comments,
     labels: issue.labels.map(name => ({ name })),
   });
