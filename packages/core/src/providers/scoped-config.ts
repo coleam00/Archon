@@ -111,54 +111,65 @@ export function scopedConfigSchema(
   snapshot: boolean
 ): z.ZodType {
   const validator = z.fromJSONSchema(schema);
-  // Composed schemas describe the same object. Stripping in one conjunct must
-  // retain fields declared by its siblings.
-  const declaresKey = (node: JsonSchema, key: string): boolean => {
-    if (typeof node !== 'object') return node;
-    return (
-      Object.hasOwn(node.properties ?? {}, key) ||
-      Object.keys(node.patternProperties ?? {}).some(pattern => new RegExp(pattern).test(key)) ||
-      node.additionalProperties === true ||
-      typeof node.additionalProperties === 'object' ||
-      (!!node.$ref && declaresKey(resolveConfigReference(node, schema), key)) ||
-      [...(node.allOf ?? []), ...(node.anyOf ?? []), ...(node.oneOf ?? [])].some(branch =>
-        declaresKey(branch, key)
-      )
+  const branchValidator = (branch: JsonSchema) =>
+    z.fromJSONSchema(
+      typeof branch === 'object'
+        ? { $defs: schema.$defs, definitions: schema.definitions, ...branch }
+        : branch
     );
+  const selectedBranch = (value: unknown, branches: JsonSchema[], root: boolean) =>
+    branches.find(
+      branch => branchValidator(branch).safeParse(project(value, branch, root)).success
+    );
+  // Conjuncts share field ownership; alternatives contribute only their selected branch.
+  const objectRules = (
+    value: unknown,
+    node: JsonSchema,
+    root: boolean
+  ): z.core.JSONSchema.BaseSchema[] => {
+    if (typeof node !== 'object') return [];
+    const rules = [node];
+    if (node.$ref) rules.push(...objectRules(value, resolveConfigReference(node, schema), root));
+    for (const branch of node.allOf ?? []) rules.push(...objectRules(value, branch, root));
+    const alternatives = node.anyOf ?? node.oneOf;
+    if (alternatives) {
+      const branch = selectedBranch(value, alternatives, root);
+      if (branch !== undefined) rules.push(...objectRules(value, branch, root));
+    }
+    return rules;
   };
+  const declaresKey = (rules: z.core.JSONSchema.BaseSchema[], key: string): boolean =>
+    rules.some(
+      node =>
+        Object.hasOwn(node.properties ?? {}, key) ||
+        Object.keys(node.patternProperties ?? {}).some(pattern => new RegExp(pattern).test(key)) ||
+        node.additionalProperties === true ||
+        typeof node.additionalProperties === 'object'
+    );
   const project = (
     value: unknown,
     unresolved: JsonSchema,
     root = false,
     output = false,
-    objectSchema = unresolved
+    owners = objectRules(value, unresolved, root)
   ): unknown => {
     const node = unresolved;
     if (typeof node !== 'object') return value;
     const original = value;
     if (node.$ref)
-      value = project(value, resolveConfigReference(node, schema), root, output, objectSchema);
+      value = project(value, resolveConfigReference(node, schema), root, output, owners);
     const branches = node.anyOf ?? node.oneOf;
     if (branches) {
-      for (const branch of branches) {
-        const projected = project(original, branch, root, false, objectSchema);
-        if (
-          z
-            .fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
-            .safeParse(projected).success
-        ) {
-          value = output ? project(value, branch, root, true, objectSchema) : projected;
-          break;
-        }
-      }
+      const branch = selectedBranch(original, branches, root);
+      if (branch !== undefined) value = project(value, branch, root, output, owners);
     }
     if (node.allOf?.length) {
       if (output) {
-        for (const branch of node.allOf) value = project(value, branch, root, true, objectSchema);
+        for (const branch of node.allOf) value = project(value, branch, root, true, owners);
       } else {
         const members: z.ZodType[] = node.allOf.map(branch =>
           z.preprocess(
-            input => project(input, branch, root, false, objectSchema),
+            input => project(input, branch, root, false, owners),
             z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
           )
         );
@@ -186,8 +197,15 @@ export function scopedConfigSchema(
       pattern: new RegExp(pattern),
       child,
     }));
+    const constrainedObject = owners.some(
+      rule =>
+        rule.properties !== undefined ||
+        rule.patternProperties !== undefined ||
+        rule.additionalProperties !== undefined
+    );
     const strip =
       !output &&
+      constrainedObject &&
       ((root && snapshot && node.additionalProperties !== false) ||
         (stripUnknownKeys && node.additionalProperties === undefined));
     return Object.fromEntries(
@@ -228,7 +246,7 @@ export function scopedConfigSchema(
           ];
         if (typeof node.additionalProperties === 'object')
           return [[key, project(field, node.additionalProperties, false, output)]];
-        return strip && !declaresKey(objectSchema, key) ? [] : [[key, field]];
+        return strip && !declaresKey(owners, key) ? [] : [[key, field]];
       })
     );
   };

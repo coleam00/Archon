@@ -779,3 +779,109 @@ test('matching pattern normalizes an explicitly declared model in both registrat
   });
   expect(registration.credentials.vendorFor(' openai / gpt ')).toBe('openai');
 });
+
+test.each([
+  'property',
+  'pattern',
+  'additional',
+  'items',
+  'tuple',
+  '$ref',
+  'allOf',
+  'anyOf',
+  'oneOf',
+] as const)('unconstrained object data survives %s recursive projection', route => {
+  const value = { arbitrary: 'kept', nested: { enabled: true } };
+  const wrappers: Record<typeof route, z.core.JSONSchema.BaseSchema> = {
+    property: { properties: { value: {} } },
+    pattern: { patternProperties: { '^value$': {} } },
+    additional: { additionalProperties: {} },
+    items: { properties: { value: { type: 'array', items: {} } } },
+    tuple: { properties: { value: { type: 'array', prefixItems: [{}] } } },
+    $ref: { $defs: { value: {} }, properties: { value: { $ref: '#/$defs/value' } } },
+    allOf: { properties: { value: { allOf: [{}] } } },
+    anyOf: { properties: { value: { anyOf: [{}] } } },
+    oneOf: { properties: { value: { oneOf: [{}] } } },
+  };
+  const schema = { type: 'object', ...wrappers[route] };
+  const registration = processProviderRegistration(
+    providerPluginDescriptorSchema.parse({
+      ...descriptor,
+      config: { install: schema, run: schema, snapshot: schema, stripUnknownKeys: true },
+    }),
+    argv
+  );
+  const raw = { value: route === 'items' || route === 'tuple' ? [value] : value };
+  for (const scope of ['install', 'run', 'snapshot'] as const)
+    expect(registration.parseConfig(raw, scope)).toEqual(raw);
+});
+
+test.each(['anyOf', 'oneOf'] as const)(
+  '%s projection retains only the selected alternative plus enclosing and conjunct fields',
+  keyword => {
+    const choice = {
+      [keyword]: [
+        {
+          type: 'object',
+          properties: { kind: { const: 'left' }, left: { type: 'string' } },
+          required: ['left'],
+        },
+        {
+          type: 'object',
+          properties: { kind: { const: 'right' }, right: { type: 'string' } },
+          required: ['right'],
+        },
+      ],
+    };
+    for (const nested of [false, true]) {
+      const selected = {
+        type: 'object',
+        properties: { shared: { type: 'string' } },
+        allOf: [choice, { properties: { conjunct: { type: 'string' } } }],
+      };
+      const schema = nested ? { type: 'object', properties: { choice: selected } } : selected;
+      const registration = processProviderRegistration(
+        providerPluginDescriptorSchema.parse({
+          ...descriptor,
+          config: { install: schema, run: schema, snapshot: schema, stripUnknownKeys: true },
+        }),
+        argv
+      );
+      for (const kind of ['left', 'right']) {
+        const fields = {
+          kind,
+          left: 'left',
+          right: 'right',
+          shared: 'shared',
+          conjunct: 'conjunct',
+          unknown: true,
+        };
+        const expected = { kind, [kind]: kind, shared: 'shared', conjunct: 'conjunct' };
+        for (const scope of ['install', 'run', 'snapshot'] as const)
+          expect(registration.parseConfig(nested ? { choice: fields } : fields, scope)).toEqual(
+            nested ? { choice: expected } : expected
+          );
+      }
+    }
+  }
+);
+
+test('generated union projection agrees with its Zod owner when both alternatives have fields', () => {
+  const owner = z.object({
+    choice: z.union([z.object({ left: z.string() }), z.object({ right: z.string() })]),
+    value: z.unknown(),
+  });
+  const schema = z.toJSONSchema(owner, { io: 'input' });
+  const registration = processProviderRegistration(
+    providerPluginDescriptorSchema.parse({
+      ...descriptor,
+      config: { install: schema, run: schema, snapshot: schema, stripUnknownKeys: true },
+    }),
+    argv
+  );
+  for (const choice of [{ left: 'left', right: 'right' }, { right: 'right' }]) {
+    const raw = { choice, value: { arbitrary: 'kept' } };
+    for (const scope of ['install', 'run', 'snapshot'] as const)
+      expect(registration.parseConfig(raw, scope)).toEqual(owner.parse(raw));
+  }
+});
