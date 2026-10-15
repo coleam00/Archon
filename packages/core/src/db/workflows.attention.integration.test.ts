@@ -69,7 +69,7 @@ test('attention is unpaged, includes originless triggered runs, and excludes mac
 });
 
 test.each(['not-json', JSON.stringify({ futureOrigin: 'secret message' })])(
-  'a corrupt paused origin fails queue reads with its run ID: %s',
+  'a corrupt paused origin does not hide valid attention items: %s',
   async origin => {
     const valid = await workflows.createWorkflowRun({ workflow_name: 'valid', user_message: '' });
     const corrupt = await workflows.createWorkflowRun({
@@ -88,8 +88,9 @@ test.each(['not-json', JSON.stringify({ futureOrigin: 'secret message' })])(
     ]);
     try {
       for (const read of [workflows.listRunsNeedingAttention, workflows.listAttentionQueueRows]) {
-        await expect(read()).rejects.toThrow(`Cannot read paused workflow run ${corrupt.id}`);
-        await expect(read()).rejects.not.toThrow('secret message');
+        const rows = await read();
+        expect(rows.map(row => row.id)).toContain(valid.id);
+        expect(rows.map(row => row.id)).not.toContain(corrupt.id);
       }
     } finally {
       await db.query('DELETE FROM remote_agent_workflow_runs WHERE id IN ($1, $2)', [

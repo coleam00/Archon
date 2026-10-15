@@ -64,7 +64,7 @@ describe('review head boundary', () => {
       expect(run.stderr).toContain(
         `archon workflow run archon-review --branch 'feature' --input 'scope=${PR_URL}'`
       );
-      expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/heads/feature'");
+      expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/pull/42/head'");
       expect(run.stderr).toContain(`--from 'newhead' --input 'scope=${PR_URL}'`);
       expect(run.stderr).toContain('No review lenses ran');
     });
@@ -77,15 +77,7 @@ describe('review head boundary', () => {
           const cwd = gitCheckout({}, track);
           const headRepo = fork ? { ...PR.repo, path: 'contributor/repo' } : PR.repo;
           if (failure === 'ambiguous') {
-            git(cwd, 'remote', 'add', 'alias', `https://${headRepo.host}/${headRepo.path}.git`);
-            if (fork)
-              git(
-                cwd,
-                'remote',
-                'add',
-                'contributor',
-                `https://${headRepo.host}/${headRepo.path}.git`
-              );
+            git(cwd, 'remote', 'add', 'alias', `https://${PR.repo.host}/${PR.repo.path}.git`);
           } else {
             writeFileSync(join(cwd, '.git/config'), '[broken');
           }
@@ -106,7 +98,7 @@ describe('review head boundary', () => {
           expect(run.stderr).toContain(HEAD);
           expect(run.stderr).toContain('newhead');
           expect(run.stderr).toContain(
-            `git fetch -- 'https://${headRepo.host}/${headRepo.path}.git' 'refs/heads/feature'`
+            `git fetch -- 'https://${PR.repo.host}/${PR.repo.path}.git' 'refs/pull/42/head'`
           );
           expect(run.stderr).toContain(
             `archon workflow run archon-review --from 'newhead' --input 'scope=${PR_URL}'`
@@ -125,6 +117,31 @@ describe('review head boundary', () => {
     });
     expect(run.code).toBe(0);
     expect(run.gh).toHaveLength(1);
+  });
+
+  it('binds an explicit target when the agent substitutes a matching different PR', () => {
+    const run = check({
+      source: 'forge',
+      forge: view(),
+      inputs: {
+        INPUTS_SELECTOR: PR_URL.replace('/42', '/99'),
+        INPUTS_PR: JSON.stringify({ ...PR, number: 99 }),
+      },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('does not match');
+    expect(JSON.parse(run.forgeRequests[0]).selector).toEqual({ kind: 'number', ref: PR });
+  });
+
+  it('resolves the recorded delivery JSON in both scope and selector by number', () => {
+    const recorded = JSON.stringify(forgePrRecord({ head_revision: 'stale' }));
+    const run = check({
+      source: 'forge',
+      forge: view(),
+      inputs: { INPUTS_SCOPE: recorded, INPUTS_SELECTOR: recorded },
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.forgeRequests[0]).selector).toEqual({ kind: 'number', ref: PR });
   });
 
   it('refuses a checkout that moved since mode without consulting the forge', () => {
@@ -260,14 +277,14 @@ describe('review head boundary', () => {
     expect(run.gh).toEqual([]);
   });
 
-  it('quotes the fork branch, selects its own remote, and hides remote credentials', () => {
+  it('fetches fork heads from the base remote and hides remote credentials', () => {
     const cwd = gitCheckout({}, track);
     git(
       cwd,
       'remote',
-      'add',
-      'contributor',
-      'https://secret:password@ghe.example.com/contributor/repo.git'
+      'set-url',
+      'upstream',
+      'https://secret:password@ghe.example.com/example/repo.git'
     );
     const run = check({
       cwd,
@@ -279,15 +296,16 @@ describe('review head boundary', () => {
       }),
     });
     expect(run.code).toBe(1);
-    expect(run.stderr).toContain("git fetch -- 'contributor' 'refs/heads/fix/it'\\''s'");
+    expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/pull/42/head'");
     expect(run.stderr).toContain("--from 'forksha'");
     expect(run.stderr).not.toContain('--branch');
     expect(run.stderr).not.toContain('password');
     expect(run.stderr).not.toContain('secret');
   });
 
-  it('uses the head repository URL when no configured remote names it', () => {
+  it('uses the base repository URL when no configured remote names it', () => {
     const cwd = gitCheckout({}, track);
+    git(cwd, 'remote', 'set-url', 'upstream', 'https://other.example.com/other/repo.git');
     const run = check({
       cwd,
       source: 'forge',
@@ -296,17 +314,65 @@ describe('review head boundary', () => {
         head_revision: 'forksha',
       }),
     });
-    expect(run.stderr).toContain("git fetch -- 'https://git.example.com/fork/project.git'");
+    expect(run.stderr).toContain("git fetch -- 'https://ghe.example.com/example/repo.git'");
+  });
+
+  for (const state of ['closed', 'merged'] as const) {
+    for (const fork of [false, true]) {
+      it(`recovers a ${state} PR with a deleted ${fork ? 'fork' : 'same-repository'} branch`, () => {
+        const cwd = gitCheckout({}, track);
+        const head = git(cwd, 'rev-parse', 'HEAD');
+        git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/pull/42/head');
+        const run = check({
+          cwd,
+          source: 'forge',
+          forge: view({
+            state,
+            head_revision: head,
+            head_repo: fork ? { ...PR.repo, path: 'contributor/repo' } : PR.repo,
+          }),
+        });
+        expect(run.code).toBe(1);
+        expect(run.stderr).not.toContain('--branch');
+        expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/pull/42/head'");
+        expect(run.stderr).toContain(`--from '${head}'`);
+        const command = run.stderr.split('\n').find(line => line.startsWith('git fetch -- '));
+        if (!command) throw new Error('missing fetch command');
+        expect(spawnSync('sh', ['-c', command], { cwd, encoding: 'utf8' }).status).toBe(0);
+        expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
+      });
+    }
+  }
+
+  it('fetches a GitLab merge request retained ref even when the source repository is gone', () => {
+    const cwd = gitCheckout({}, track);
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/merge-requests/42/head');
+    const run = check({
+      cwd,
+      source: 'forge',
+      forge: view({
+        url: `https://${PR.repo.host}/${PR.repo.path}/-/merge_requests/42`,
+        state: 'closed',
+        head_revision: head,
+        head_repo: null,
+      }),
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/merge-requests/42/head'");
+    expect(run.stderr).toContain(`--from '${head}'`);
+    git(cwd, 'fetch', '--', 'upstream', 'refs/merge-requests/42/head');
+    expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
   });
 
   it('pins the fetched head even when setup later fetches the base', () => {
     const cwd = gitCheckout({}, track);
     const head = git(cwd, 'rev-parse', 'HEAD');
-    git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/pull/42/head');
     const run = check({ cwd, source: 'forge', forge: view({ head_revision: head }) });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain(`--from '${head}'`);
-    git(cwd, 'fetch', '--', 'upstream', 'refs/heads/feature');
+    git(cwd, 'fetch', '--', 'upstream', 'refs/pull/42/head');
     git(cwd, 'fetch', 'upstream', 'dev');
     expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).not.toBe(head);
     const review = join(cwd, '..', 'review');
@@ -420,7 +486,7 @@ console.log(response);
             execWorkspace: cwd,
             execCode: true,
             userMessage: override ? 'Review PR 99 instead' : 'Review this PR',
-            inputs: { scope: PR_URL },
+            inputs: { scope: override ? '' : PR_URL },
             stubs,
           });
           const states = new Map(result.trace.map(entry => [entry.nodeId, entry.state]));

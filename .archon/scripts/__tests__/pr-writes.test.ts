@@ -394,6 +394,14 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
 
+  it('refuses to publish to a substituted PR even when its head matches', () => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_SCOPE: PR_URL, INPUTS_PR: JSON.stringify({ ...PR, number: 99 }) },
+    });
+    expect(result.code).toBe(1);
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
   it('publishes to the recorded pull request when the scope declaration agrees', () => {
     const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
     expect(result.code).toBe(0);

@@ -11,27 +11,32 @@ function quote(value: string): string {
 function retry(pr: PrRecord): string {
   const scope = `--input ${quote(`scope=${pr.url}`)}`;
   const retained = 'Retain any other non-default review inputs when retrying.';
-  if (pr.head_revision === null || pr.head_repo === null) {
+  if (pr.head_revision === null) {
     return (
       `Restore resolution of the PR's head revision and head repository first, then retry:\n` +
       `archon workflow run archon-review --branch ${quote(pr.head)} ${scope}\n${retained}`
     );
   }
-  const branch = sameRepo(pr.repo, pr.head_repo)
-    ? `Retry on the PR branch:\narchon workflow run archon-review --branch ${quote(pr.head)} ${scope}\n`
-    : '';
-  let remote = `https://${pr.head_repo.host}/${pr.head_repo.path}.git`;
+  const branch =
+    pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.repo, pr.head_repo)
+      ? `Retry on the PR branch:\narchon workflow run archon-review --branch ${quote(pr.head)} ${scope}\n`
+      : '';
+  let remote = `https://${pr.repo.host}/${pr.repo.path}.git`;
   let diagnostic = '';
   try {
-    remote = findRemote(pr.head_repo) ?? remote;
+    remote = findRemote(pr.repo) ?? remote;
   } catch (error) {
-    diagnostic = `Remote discovery failed; the fetch uses the head repository URL: ${error instanceof Error ? error.message : String(error)}\n`;
+    diagnostic = `Remote discovery failed; the fetch uses the base repository URL: ${error instanceof Error ? error.message : String(error)}\n`;
   }
+  const ref =
+    new URL(pr.url).pathname.split('/').at(-2) === 'merge_requests'
+      ? `refs/merge-requests/${String(pr.number)}/head`
+      : `refs/pull/${String(pr.number)}/head`;
   return (
     branch +
     diagnostic +
     `Or fetch the PR head and start an isolated review pinned to this commit:\n` +
-    `git fetch -- ${quote(remote)} ${quote(`refs/heads/${pr.head}`)}\n` +
+    `git fetch -- ${quote(remote)} ${quote(ref)}\n` +
     `archon workflow run archon-review --from ${quote(pr.head_revision)} ${scope}\n${retained}`
   );
 }
@@ -48,7 +53,10 @@ try {
   if (recorded && (!declared || !samePr(declared, recorded))) {
     throw new Error('the scope declaration does not match the recorded pull request');
   }
-  const pr = resolveReviewPr(text(process.env.INPUTS_SELECTOR).trim() || scope, forgeSource());
+  const pr = resolveReviewPr(
+    scope.trim() || text(process.env.INPUTS_SELECTOR).trim(),
+    forgeSource()
+  );
   if (pr ? !declared || !samePr(declared, pr) : declared !== undefined) {
     throw new Error(
       'the scope declaration does not match the resolved pull request. No review lenses ran.' +
