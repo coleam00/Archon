@@ -3398,7 +3398,7 @@ function execStdoutPreview(stdout: string, credentialValues: readonly string[]):
  *
  * @throws ExecOutputContractError when stdout is not JSON, or fails the declared schema.
  */
-function certifyExecOutput(
+export function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
