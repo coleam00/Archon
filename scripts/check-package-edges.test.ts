@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import {
   findEdgeViolations,
   findLayeringViolations,
   type Layering,
   type PackageManifest,
+  PACKAGE_LAYERING,
 } from './check-package-edges';
 
 function manifests(): PackageManifest[] {
@@ -343,5 +345,40 @@ describe('package layering', () => {
         message: 'PACKAGE_LAYERING has a row for engine, which is not a workspace package',
       },
     ]);
+  });
+
+  test('the package table in .archon/architecture.md equals PACKAGE_LAYERING', () => {
+    const doc = readFileSync(new URL('../.archon/architecture.md', import.meta.url), 'utf8');
+    const table = doc.split('### Packages')[1]?.split('\n### ')[0] ?? '';
+    const rows = table
+      .split('\n')
+      .filter(line => line.includes('|'))
+      .map(line => {
+        const cells = line
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map(cell => cell.trim());
+        if (cells.length === 3) cells.push('');
+        expect(cells).toHaveLength(4);
+        const [name, , runtime, testOnly] = cells;
+        return [name, runtime, testOnly];
+      })
+      .filter(([name]) => name !== 'Package' && !/^:?-+:?$/.test(name))
+      .sort(([a], [b]) => a.localeCompare(b));
+    const imports = (names: readonly string[]): string =>
+      [...names]
+        .sort()
+        .map(name => `\`${name}\``)
+        .join(', ');
+    const expected = Object.entries(PACKAGE_LAYERING)
+      .map(([name, row]) => [
+        `\`${name}\``,
+        imports(row.runtime) || 'none',
+        imports(row.test ?? []),
+      ])
+      .sort(([a], [b]) => a.localeCompare(b));
+    expect(rows).toEqual(expected);
   });
 });
