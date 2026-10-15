@@ -1,5 +1,5 @@
 import { EFFORT_LADDER } from '@archon/provider-contract/effort';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 export const effortLevelSchema = z.enum(EFFORT_LADDER);
 export type EffortLevel = z.infer<typeof effortLevelSchema>;

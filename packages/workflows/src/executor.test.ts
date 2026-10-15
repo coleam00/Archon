@@ -346,6 +346,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),
@@ -848,6 +849,27 @@ describe('executeWorkflow', () => {
 
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a budgeted workflow whose loop the run budget cannot count before creating a run', async () => {
+    const workflow = resolveWorkflow(
+      workflowDefinitionSchema.parse({
+        name: 'budgeted-loop',
+        description: 'loop under a run budget',
+        budget: { max_work_units: 5 },
+        nodes: [{ id: 'spin', loop: { until: 'done', max_iterations: 2, prompt: 'p' } }],
+      })
+    );
+    const store = makeStore();
+
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp/ops', workflow, 'msg', {
+        conversationId: 'db-conv-1',
+      })
+    ).rejects.toThrow("node 'spin' is a loop node");
+
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -3593,6 +3615,7 @@ describe('executeWorkflow', () => {
           completedNodeOutputs,
           fanOutSnapshots: new Map(),
           unresolvedNodeStarts: new Set<string>(),
+          budget: { workUnits: 0, spendUsd: 0 },
           tokens,
           costUsd,
         })),
@@ -5268,6 +5291,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
       })),
@@ -5292,6 +5316,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
       })),
@@ -5333,6 +5358,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5365,6 +5391,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots,
         unresolvedNodeStarts: new Set(['fan__instance-a']),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5391,6 +5418,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5439,6 +5467,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5479,6 +5508,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5513,6 +5543,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5539,6 +5570,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5568,6 +5600,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),

@@ -2,7 +2,6 @@
  * Isolation commands - list, cleanup, and complete worktrees
  */
 import * as isolationDb from '@archon/core/db/isolation-environments';
-import * as workflowDb from '@archon/core/db/workflows';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
 import {
@@ -21,6 +20,7 @@ import {
   readWorktreeCreationId,
 } from '@archon/isolation';
 import {
+  getLiveRunBlocker,
   removeEnvironment,
   getCleanupRunLock,
   listContainerEnvironments,
@@ -147,11 +147,9 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         staleDays: daysStale,
       });
       if (lock.kind === 'locked') {
-        getLog().info(
-          { envId: env.id, runId: lock.runId, runStatus: lock.status },
-          'skip_stale_live_run'
-        );
-        console.log(`  Status: Skipped — run ${lock.runId.slice(0, 8)} is ${lock.status}`);
+        const { runId, runStatus, display } = lock.blocker;
+        getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
+        console.log(`  Status: Skipped — ${display}`);
         skipped++;
         continue;
       }
@@ -328,15 +326,14 @@ export async function isolationCompleteCommand(
         blockers.push('could not verify uncommitted changes (worktree path may be missing)');
       }
 
-      // Check 2: running workflow on this branch
+      // Check 2: a run that can still claim this environment
       try {
-        const activeRun = await workflowDb.getActiveWorkflowRunByPath(env.working_path);
-        if (activeRun) {
-          blockers.push(`running workflow: ${activeRun.workflow_name} (id: ${activeRun.id})`);
-        }
+        const liveRun = await getLiveRunBlocker(env.id);
+        if (liveRun) blockers.push(liveRun.display);
       } catch (error) {
-        getLog().warn({ err: error as Error, branch }, 'isolation.complete_workflow_check_failed');
-        console.warn('  Warning: could not check for running workflows — skipping workflow check');
+        const err = error as Error;
+        getLog().warn({ err, branch }, 'isolation.complete_live_run_check_failed');
+        blockers.push(`could not check for a run that owns this environment (${err.message})`);
       }
 
       // Check 3: open PRs on this branch (requires gh CLI)

@@ -299,7 +299,6 @@
         "@archon/paths": "workspace:*",
         "@archon/plugin-manifest": "workspace:*",
         "@archon/provider-contract": "workspace:*",
-        "@hono/zod-openapi": "^1.4.0",
         "ajv": "^8.20.0",
         "zod": "^4.4.3",
       },

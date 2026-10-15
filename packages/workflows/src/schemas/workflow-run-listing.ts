@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { workflowRunSchema, workflowRunStatusSchema } from './workflow-run';
 
 // ---------------------------------------------------------------------------

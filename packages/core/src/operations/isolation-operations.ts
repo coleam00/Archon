@@ -7,7 +7,11 @@ import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platfor
 import { createLogger } from '@archon/paths';
 import { lstat } from 'node:fs/promises';
 import * as isolationDb from '../db/isolation-environments';
-import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
+import {
+  cleanupStaleWorktrees,
+  cleanupMergedWorktrees,
+  getLiveRunBlocker,
+} from '../services/cleanup-service';
 import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
@@ -77,10 +81,15 @@ async function reconcileGhosts(
         }
       );
       if (!exists) {
-        const liveRun = await isolationDb.getLiveRunOwningEnv(env.id);
+        const liveRun = await getLiveRunBlocker(env.id);
         if (liveRun) {
           getLog().info(
-            { envId: env.id, path: env.working_path, runId: liveRun.id, runStatus: liveRun.status },
+            {
+              envId: env.id,
+              path: env.working_path,
+              runId: liveRun.runId,
+              runStatus: liveRun.runStatus,
+            },
             'isolation.ghost_kept_for_live_run'
           );
           continue;

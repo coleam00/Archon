@@ -78,10 +78,31 @@ async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<R
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
-// Configuration constants (configurable via env vars)
-const STALE_THRESHOLD_DAYS = parseInt(process.env.STALE_THRESHOLD_DAYS ?? '14', 10);
-const CLEANUP_INTERVAL_HOURS = parseInt(process.env.CLEANUP_INTERVAL_HOURS ?? '6', 10);
-const SESSION_RETENTION_DAYS = parseInt(process.env.SESSION_RETENTION_DAYS ?? '30', 10);
+function readPositiveIntegerEnv(
+  name: string,
+  defaultValue: number,
+  maximum = Number.MAX_SAFE_INTEGER
+): number {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  const parsed = /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) {
+    const limit = maximum === Number.MAX_SAFE_INTEGER ? '' : `; maximum is ${String(maximum)}`;
+    throw new Error(
+      `${name} must be a positive integer; received ${JSON.stringify(value)}${limit}`
+    );
+  }
+  return parsed;
+}
+
+const STALE_THRESHOLD_DAYS = readPositiveIntegerEnv('STALE_THRESHOLD_DAYS', 14);
+// Runtime timers clamp delays above the signed 32-bit millisecond limit to 1 ms.
+const CLEANUP_INTERVAL_HOURS = readPositiveIntegerEnv(
+  'CLEANUP_INTERVAL_HOURS',
+  6,
+  Math.floor(2_147_483_647 / (60 * 60 * 1000))
+);
+const SESSION_RETENTION_DAYS = readPositiveIntegerEnv('SESSION_RETENTION_DAYS', 30);
 
 // Export configuration for use by other modules
 export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS };
@@ -221,9 +242,9 @@ export async function cleanupContainerEnvironments(
     // Same lock the worktree sweeps use. getRunByIsolationEnvId, which this replaced,
     // took the newest run row BEFORE filtering status, so a newer terminal run could
     // shadow an older claimable one and the container would be reaped underneath it.
-    let liveRun: Awaited<ReturnType<typeof isolationEnvDb.getLiveRunOwningEnv>>;
+    let liveRun: LiveRunBlocker | null;
     try {
-      liveRun = await isolationEnvDb.getLiveRunOwningEnv(row.id);
+      liveRun = await getLiveRunBlocker(row.id);
     } catch (err) {
       report.errors.push({
         id: row.id,
@@ -233,10 +254,7 @@ export async function cleanupContainerEnvironments(
       continue;
     }
     if (liveRun) {
-      report.skipped.push({
-        id: row.id,
-        reason: `run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
-      });
+      report.skipped.push({ id: row.id, reason: liveRun.display });
       continue;
     }
     if (row.days_since_created < daysStale) {
@@ -320,9 +338,12 @@ export async function onConversationClosed(
   // read before the null-out below: a top-level run attaches to its env ONLY
   // through this conversation's reference, so clearing first would erase the
   // pin and let the env be removed under a running or paused run.
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
+  const liveRun = await getLiveRunBlocker(envId);
   if (liveRun) {
-    getLog().info({ envId, runId: liveRun.id, runStatus: liveRun.status }, 'env_has_live_run');
+    getLog().info(
+      { envId, runId: liveRun.runId, runStatus: liveRun.runStatus },
+      'env_has_live_run'
+    );
     return;
   }
 
@@ -494,6 +515,34 @@ export async function cleanupToMakeRoom(
   return cleanupMergedWorktrees(codebaseId, mainRepoPath);
 }
 
+export interface LiveRunBlocker {
+  reason: 'live_run';
+  display: string;
+  runId: string;
+  runStatus: string;
+}
+
+/**
+ * The live-run lock removers report: a workflow run that can still claim the
+ * environment — running, pending, paused, or failed-but-resumable (see
+ * getLiveRunOwningEnv) — with the refusal text chat, the CLI, and the sweeps share.
+ * Historical conversation references are data, not locks. A lookup failure throws;
+ * callers must refuse removal rather than read it as "no run".
+ */
+export async function getLiveRunBlocker(envId: string): Promise<LiveRunBlocker | null> {
+  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
+  return liveRun ? toLiveRunBlocker(liveRun) : null;
+}
+
+function toLiveRunBlocker(run: { id: string; status: string }): LiveRunBlocker {
+  return {
+    reason: 'live_run',
+    display: `run ${run.id.slice(0, 8)} is ${run.status}`,
+    runId: run.id,
+    runStatus: run.status,
+  };
+}
+
 /**
  * What a cleanup sweep has established about an environment's outcome. A failed
  * run's lock lasts only until one of these holds.
@@ -512,7 +561,7 @@ export interface ReleasedFailedRun {
 
 export type CleanupRunLock =
   | { kind: 'free' }
-  | { kind: 'locked'; runId: string; status: string }
+  | { kind: 'locked'; blocker: LiveRunBlocker }
   | ({ kind: 'released' } & ReleasedFailedRun)
   | { kind: 'unpushed'; runId: string; commits: number };
 
@@ -540,13 +589,13 @@ export async function getCleanupRunLock(
   const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
   if (!owner) return { kind: 'free' };
   if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
-    return { kind: 'locked', runId: owner.id, status: owner.status };
+    return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
   }
   const lock = await isolationEnvDb.getLiveRunOwningEnv(
     env.id,
     settlement.kind === 'stale' ? settlement : { kind: 'settled' }
   );
-  if (lock) return { kind: 'locked', runId: lock.id, status: lock.status };
+  if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   if (settlement.kind === 'stale') {
     const commits = await countUnpushedCommits(env, repoPath);
     if (commits > 0) return { kind: 'unpushed', runId: owner.id, commits };
@@ -572,7 +621,7 @@ async function countUnpushedCommits(
 /** Why an environment cannot be removed. */
 type RemovalBlocker =
   | { reason: 'uncommitted_changes'; display: string }
-  | { reason: 'live_run'; display: string; runId: string; runStatus: string }
+  | LiveRunBlocker
   | { reason: 'unpushed_commits'; display: string; runId: string };
 
 type RemovalCheck =
@@ -600,14 +649,7 @@ async function checkRemoval(
     case 'released':
       return { blocker: null, released: { runId: lock.runId, reason: lock.reason } };
     case 'locked':
-      return {
-        blocker: {
-          reason: 'live_run',
-          display: `run ${lock.runId.slice(0, 8)} is ${lock.status}`,
-          runId: lock.runId,
-          runStatus: lock.status,
-        },
-      };
+      return { blocker: lock.blocker };
     case 'unpushed':
       return {
         blocker: {
@@ -764,14 +806,11 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           // Even with the directory gone, marking the env destroyed invalidates
           // the live run's resume handle. A failed run's lock is instead settled by
           // the merged and stale checks below, which handle a missing worktree.
-          const liveRun = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-          if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.status)) {
-            report.skipped.push({
-              id: env.id,
-              reason: `path missing but run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
-            });
+          const liveRun = await getLiveRunBlocker(env.id);
+          if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.runStatus)) {
+            report.skipped.push({ id: env.id, reason: `path missing but ${liveRun.display}` });
             getLog().info(
-              { envId: env.id, runId: liveRun.id, runStatus: liveRun.status },
+              { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
               'skip_path_missing_live_run'
             );
             continue;

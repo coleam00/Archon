@@ -10,6 +10,11 @@ import {
 import { nodeCostScope, DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-serialization';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
+  RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
+  addAttemptSpend,
+  emptyRunBudgetUsage,
+} from './run-budget';
+import {
   DURABLE_WORKFLOW_EVENT_TYPES,
   NODE_STATE_EVENT_TYPES,
   foldActiveNodeIds,
@@ -124,6 +129,12 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
  * completed a loop_group under an older build and is resumed under this one can still
  * double-count its cost. Bounded and self-clearing: only cost is affected (the roll-up
  * never carried `tokens`), and only until those runs reach a terminal state.
+ *
+ * The run budget (`budget`) is folded separately and fails closed: it counts one
+ * work unit per `run_budget_work_unit` row and charges each own-scope `agent` attempt
+ * through `addAttemptSpend`, so an attempt whose cost is unreported, partial or
+ * invalid, or one that started and never reached a terminal row, marks spend
+ * unavailable instead of adding nothing as the telemetry total does.
  */
 export async function foldDagResumeSnapshot(
   rows: readonly DagResumeEvent[],
@@ -145,6 +156,12 @@ export async function foldDagResumeSnapshot(
     costUsd?: number;
   }[] = [];
   const authoritativeInstanceScopes = new Set<string>();
+  const budget = emptyRunBudgetUsage();
+  // Started `agent` attempts with no terminal row yet: attempt id → path.
+  const openAgentAttempts = new Map<string, string>();
+  // An attempt can carry a second terminal row (the dispatch catch re-finishes its start
+  // record after an engine-side throw); the live ledger charged only the first.
+  const settledAgentAttempts = new Set<string>();
   function addUsage(
     stepName: string,
     rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown }
@@ -230,6 +247,10 @@ export async function foldDagResumeSnapshot(
         row.event_type !== 'fan_out_instances')
     )
       continue;
+    if (row.event_type === RUN_BUDGET_WORK_UNIT_EVENT_TYPE) {
+      budget.workUnits++;
+      continue;
+    }
     if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) {
       let usage: ReturnType<typeof readDeferredNodeUsageEvent>;
       try {
@@ -287,6 +308,18 @@ export async function foldDagResumeSnapshot(
     }
     if (!record) continue;
     const data = record.data;
+    if (record.metadata?.node.kind === 'agent' && record.metadata.accounting === 'node') {
+      if (record.eventType === 'node_started') {
+        openAgentAttempts.set(record.metadata.attempt.id, record.path);
+      } else if (record.eventType === 'node_completed' || record.eventType === 'node_failed') {
+        const attemptId = record.metadata.attempt.id;
+        openAgentAttempts.delete(attemptId);
+        if (!settledAgentAttempts.has(attemptId)) {
+          settledAgentAttempts.add(attemptId);
+          addAttemptSpend(budget, record.path, record.metadata);
+        }
+      }
+    }
     if (record.metadata) {
       const key = nodeInvocationKey(record.path, record.metadata.invocation.loopPath);
       if (
@@ -410,6 +443,9 @@ export async function foldDagResumeSnapshot(
     if (nodeCostScope(data) === 'total' && !isAuthoritativeInstanceUsage) continue;
     if (row.event_type !== 'node_skipped_prior_success') addUsage(row.step_name, record.rawUsage);
   }
+  for (const path of openAgentAttempts.values()) {
+    budget.costUnavailable ??= { path, reason: 'interrupted' };
+  }
   const authoritativeInstancePrefixes = [...authoritativeInstanceScopes].map(scope => `${scope}__`);
   const countedUsage = usageContributions.filter(
     contribution =>
@@ -429,5 +465,6 @@ export async function foldDagResumeSnapshot(
           )
         ),
     costUsd: countedUsage.reduce((total, contribution) => total + (contribution.costUsd ?? 0), 0),
+    budget,
   };
 }

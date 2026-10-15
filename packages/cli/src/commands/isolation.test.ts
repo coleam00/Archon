@@ -4,7 +4,6 @@
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import type * as Core from '@archon/core';
 import type * as IsolationDb from '@archon/core/db/isolation-environments';
-import type * as WorkflowDb from '@archon/core/db/workflows';
 import type * as IsolationOperations from '@archon/core/operations/isolation-operations';
 import type * as CleanupService from '@archon/core/services/cleanup-service';
 import type * as Git from '@archon/git';
@@ -49,14 +48,6 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   updateStatus: mockUpdateStatus,
 }));
 
-const mockGetActiveWorkflowRunByPath = mock<typeof WorkflowDb.getActiveWorkflowRunByPath>(() =>
-  Promise.resolve(null)
-);
-
-mock.module('@archon/core/db/workflows', () => ({
-  getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-}));
-
 const mockLoadRepoConfig = mock<typeof Core.loadRepoConfig>(() => Promise.resolve({}));
 
 mock.module('@archon/core', () => ({
@@ -77,6 +68,18 @@ const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorkt
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
+const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+  Promise.resolve(null)
+);
+
+function liveRunBlocker(runStatus: string): CleanupService.LiveRunBlocker {
+  return {
+    reason: 'live_run',
+    display: `run run-live is ${runStatus}`,
+    runId: 'run-live-1',
+    runStatus,
+  };
+}
 
 const mockGetCleanupRunLock = mock<typeof CleanupService.getCleanupRunLock>(() =>
   Promise.resolve({ kind: 'free' })
@@ -87,6 +90,7 @@ mock.module('@archon/core/services/cleanup-service', () => ({
   getCleanupRunLock: mockGetCleanupRunLock,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupContainerEnvironments: mockCleanupContainerEnvironments,
+  getLiveRunBlocker: mockGetLiveRunBlocker,
 }));
 
 const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>(() =>
@@ -187,35 +191,6 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
 
 const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
 
-type ActiveWorkflowRun = NonNullable<
-  Awaited<ReturnType<typeof WorkflowDb.getActiveWorkflowRunByPath>>
->;
-
-function makeActiveWorkflowRun(overrides: Partial<ActiveWorkflowRun> = {}): ActiveWorkflowRun {
-  return {
-    origin: { conversationId: 'conv-123' },
-    id: 'run-abc',
-    workflow_name: 'implement',
-    conversation_id: 'conv-123',
-    parent_conversation_id: null,
-    codebase_id: 'cb-123',
-    status: 'running',
-    outcome: null,
-    user_message: 'test request',
-    metadata: {},
-    started_at: new Date('2026-01-01T00:00:00.000Z'),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: '/test/worktree',
-    user_id: null,
-    parent_run_id: null,
-    adopted_from_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    ...overrides,
-  };
-}
-
 describe('isolationCompleteCommand', () => {
   let consoleLogSpy: ReturnType<typeof spyOn>;
   let consoleErrorSpy: ReturnType<typeof spyOn>;
@@ -229,8 +204,8 @@ describe('isolationCompleteCommand', () => {
     mockRemoveEnvironment.mockReset();
     mockHasUncommittedChanges.mockReset();
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockGetActiveWorkflowRunByPath.mockReset();
-    mockGetActiveWorkflowRunByPath.mockResolvedValue(null);
+    mockGetLiveRunBlocker.mockReset();
+    mockGetLiveRunBlocker.mockResolvedValue(null);
     mockExecFileAsync.mockReset();
     // Default: gh returns empty PR array and git reports no unpushed commits.
     mockExecFileAsync.mockImplementation((cmd: string) =>
@@ -295,16 +270,34 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
-  it('blocks when there is a running workflow on the branch', async () => {
+  // The worktree is clean and pushed, so the live-run lock is the only blocker. The
+  // environment is the failed run's resume handle; removeEnvironment is what would
+  // delete its worktree and its local and remote branch.
+  it('refuses a clean, pushed environment a failed run can still resume', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
+    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
+
+    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+
+    expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-123');
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is failed');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+  });
+
+  it('refuses when the owning-run lookup fails', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
 
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ running workflow: implement (id: run-abc)');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '    ✗ could not check for a run that owns this environment (database is locked)'
+    );
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
@@ -597,7 +590,7 @@ describe('isolationCompleteCommand', () => {
   it('reports all blockers together when multiple checks fail', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
+    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
@@ -613,7 +606,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
     expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ running workflow: implement (id: run-abc)');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is running');
     expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ open PR #140 — "fix: metrics"');
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
@@ -647,7 +640,7 @@ describe('isolationCompleteCommand', () => {
   it('proceeds despite all checks when --force is set', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
+    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -658,7 +651,7 @@ describe('isolationCompleteCommand', () => {
 
     // All safety checks should NOT be called when force is true
     expect(mockHasUncommittedChanges).not.toHaveBeenCalled();
-    expect(mockGetActiveWorkflowRunByPath).not.toHaveBeenCalled();
+    expect(mockGetLiveRunBlocker).not.toHaveBeenCalled();
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
       force: true,
@@ -820,6 +813,8 @@ describe('isolationCleanupCommand', () => {
     mockFindStaleEnvironments.mockResolvedValue([]);
     mockGetCleanupRunLock.mockReset();
     mockGetCleanupRunLock.mockResolvedValue({ kind: 'free' });
+    mockGetLiveRunBlocker.mockReset();
+    mockGetLiveRunBlocker.mockResolvedValue(null);
     mockDestroyWorktree.mockReset().mockResolvedValue({
       worktreeRemoved: true,
       directoryClean: true,
@@ -910,8 +905,7 @@ describe('isolationCleanupCommand', () => {
     ]);
     mockGetCleanupRunLock.mockResolvedValueOnce({
       kind: 'locked',
-      runId: 'run-live-1',
-      status: 'paused',
+      blocker: liveRunBlocker('paused'),
     });
 
     await isolationCleanupCommand(7);

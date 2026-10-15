@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
-import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { toBranchName } from '@archon/git';
 import type {
@@ -1773,14 +1773,117 @@ describe('runScheduledCleanup', () => {
   });
 });
 
-describe('SESSION_RETENTION_DAYS', () => {
-  test('exports configuration constant', () => {
-    expect(typeof SESSION_RETENTION_DAYS).toBe('number');
-    expect(SESSION_RETENTION_DAYS).toBeGreaterThan(0);
+describe('cleanup environment configuration', () => {
+  const variables = [
+    'STALE_THRESHOLD_DAYS',
+    'CLEANUP_INTERVAL_HOURS',
+    'SESSION_RETENTION_DAYS',
+  ] as const;
+  let savedEnv: NodeJS.ProcessEnv;
+  let importId = 0;
+
+  function loadCleanupService(): Promise<typeof import('./cleanup-service')> {
+    return import(`./cleanup-service.ts?configuration-test=${importId++}`);
+  }
+
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    for (const name of variables) delete process.env[name];
   });
 
-  test('has default value of 30', () => {
-    expect(SESSION_RETENTION_DAYS).toBe(30);
+  afterEach(() => {
+    for (const name of variables) {
+      const value = savedEnv[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  for (const name of variables) {
+    test.each([
+      'abc',
+      '0',
+      '-1',
+      '1.5',
+      '',
+      ' ',
+      '12days',
+      'Infinity',
+      '9007199254740993',
+      '0.99999999999999999',
+      '1.0000000000000001',
+    ])(`${name} rejects %j during module initialization`, async value => {
+      process.env[name] = value;
+      await expect(loadCleanupService()).rejects.toThrow(
+        `${name} must be a positive integer; received ${JSON.stringify(value)}`
+      );
+    });
+  }
+
+  test('rejects an interval beyond the runtime timer limit at startup', async () => {
+    process.env.CLEANUP_INTERVAL_HOURS = '597';
+    await expect(loadCleanupService()).rejects.toThrow(
+      'CLEANUP_INTERVAL_HOURS must be a positive integer; received "597"'
+    );
+  });
+
+  test('preserves a 20-day worktree with a configured 21-day stale threshold', async () => {
+    process.env.STALE_THRESHOLD_DAYS = '21';
+    const service = await loadCleanupService();
+    const env = makeEnvironmentWithAge({
+      branch_name: 'twenty-day-branch',
+      created_by_platform: 'slack',
+      days_since_activity: 20,
+    });
+    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockGetById.mockResolvedValue(env);
+    mockGetCodebase.mockResolvedValue(makeCodebase());
+    mockWorktreeExists.mockResolvedValue(true);
+    mockDestroy.mockClear();
+    mockUpdateStatus.mockClear();
+
+    try {
+      const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
+
+      expect(result).toEqual({ removed: [], skipped: [], releasedFailedRuns: [] });
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    } finally {
+      mockGetById.mockResolvedValue(null);
+      mockGetCodebase.mockResolvedValue(null);
+      mockWorktreeExists.mockResolvedValue(false);
+    }
+  });
+
+  test.each([
+    { values: undefined, staleDays: 14, intervalHours: 6, retentionDays: 30 },
+    { values: ['1', '2', '3'], staleDays: 1, intervalHours: 2, retentionDays: 3 },
+    { values: ['21', '12', '60'], staleDays: 21, intervalHours: 12, retentionDays: 60 },
+    { values: ['14', '596', '30'], staleDays: 14, intervalHours: 596, retentionDays: 30 },
+  ])('uses defaults or configured positive integers: %j', async configuration => {
+    for (const [index, name] of variables.entries()) {
+      const value = configuration.values?.[index];
+      if (value !== undefined) process.env[name] = value;
+    }
+    const service = await loadCleanupService();
+    for (const name of variables) process.env[name] = 'abc';
+    expect(service.STALE_THRESHOLD_DAYS).toBe(configuration.staleDays);
+    expect(service.SESSION_RETENTION_DAYS).toBe(configuration.retentionDays);
+
+    mockListAllActiveWithCodebase.mockResolvedValue([]);
+    mockDeleteOldSessions.mockClear();
+    await service.runScheduledCleanup();
+    expect(mockDeleteOldSessions).toHaveBeenCalledWith(configuration.retentionDays);
+    const interval = spyOn(globalThis, 'setInterval');
+    try {
+      service.startCleanupScheduler();
+      expect(interval.mock.calls.at(-1)?.[1]).toBe(configuration.intervalHours * 60 * 60 * 1000);
+    } finally {
+      service.stopCleanupScheduler();
+      interval.mockRestore();
+    }
   });
 });
 
