@@ -27,12 +27,13 @@ import {
   truncateToolOutput,
   type ProviderFailureClass,
 } from '@archon/provider-contract';
-import { failureClassOfThrown, failureResult } from '../shared/failure';
+import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../shared/failure';
 import { diagnoseBinary } from '../shared/binary-diagnostics';
 import { readCodexSetupEnv, formatCodexSetupDeprecation } from './setup-env';
 import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
+import { CODEX_CREDENTIAL_ENV } from './credential-env';
 import { resolveCodexBinary, resolveCodexBinaryWithSource } from './binary-resolver';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
@@ -115,10 +116,37 @@ function resolveModelReasoningEffort(
   return clamped;
 }
 
+/** A credential Archon hands the app-server in memory, never through the user's CODEX_HOME. */
+type CodexLogin = Extract<
+  ParamsOf<'account/login/start'>,
+  { type: 'apiKey' | 'chatgptAuthTokens' }
+>;
+
+/**
+ * The login the env opts into: managed ChatGPT tokens win over `CODEX_API_KEY`, as a
+ * connected user's credential wins over install-level env. Without either Codex uses the
+ * user's own login. Half a token pair throws: falling back would bill another account.
+ */
+function codexLogin(env: Record<string, string>): CodexLogin | undefined {
+  const accessToken = env[CODEX_CREDENTIAL_ENV.chatgptAccessToken] || undefined;
+  const chatgptAccountId = env[CODEX_CREDENTIAL_ENV.chatgptAccountId] || undefined;
+  if (accessToken && chatgptAccountId) {
+    return { type: 'chatgptAuthTokens', accessToken, chatgptAccountId };
+  }
+  if (accessToken || chatgptAccountId) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `A managed ChatGPT login needs both ${CODEX_CREDENTIAL_ENV.chatgptAccessToken} and ${CODEX_CREDENTIAL_ENV.chatgptAccountId}; only one is set.`
+    );
+  }
+  const apiKey = env[CODEX_CREDENTIAL_ENV.apiKey] || undefined;
+  return apiKey ? { type: 'apiKey', apiKey } : undefined;
+}
+
 /**
  * What a Codex app-server starts with: the process env with the request env on top (managed
- * project env wins on collisions), the API key that env opts into, and the configured binary.
- * The login check starts the same app-server a turn does.
+ * project env wins on collisions) and the configured binary. The login check starts the
+ * same app-server a turn does.
  */
 function codexLaunch(
   assistantConfig: Record<string, unknown> | undefined,
@@ -126,7 +154,6 @@ function codexLaunch(
 ): {
   config: CodexProviderDefaults;
   env: Record<string, string>;
-  apiKey: string | undefined;
   resolveBinary: () => ReturnType<typeof resolveCodexBinary>;
 } {
   const config = parseCodexConfig(assistantConfig ?? {});
@@ -137,7 +164,6 @@ function codexLaunch(
   return {
     config,
     env,
-    apiKey: env.CODEX_API_KEY || undefined,
     resolveBinary: () => resolveCodexBinary(config.codexBinaryPath),
   };
 }
@@ -519,7 +545,7 @@ function codexHomeOf(initializeResponse: unknown): string {
 
 interface TurnRequest {
   connection: AppServerConnection;
-  apiKey: string | undefined;
+  login: CodexLogin | undefined;
   cwd: string;
   resumeSessionId: string | undefined;
   /**
@@ -547,16 +573,21 @@ interface TurnRequest {
  * Lost observation is thrown for `sendQuery` to classify; it never settles.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
-  const { connection, nodePlugins } = request;
+  const { connection, nodePlugins, login } = request;
   const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
-    capabilities: null,
+    // Codex accepts external ChatGPT tokens only from a client that opts into its
+    // experimental API.
+    capabilities:
+      login?.type === 'chatgptAuthTokens'
+        ? { experimentalApi: true, requestAttestation: false }
+        : null,
   });
   connection.notify('initialized');
-  if (request.apiKey) {
-    // The key stays in this process's memory: the app-server was started with the
+  if (login) {
+    // The credential stays in this process's memory: the app-server was started with the
     // ephemeral credential store, so nothing reaches the user's CODEX_HOME.
-    await connection.request('account/login/start', { type: 'apiKey', apiKey: request.apiKey });
+    await connection.request('account/login/start', login);
   }
 
   let { threadParams } = request;
@@ -914,12 +945,12 @@ export class CodexProvider implements IAgentProvider {
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
     const { signal } = request;
-    const { env, apiKey, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
+    const { env, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
     let connection: AppServerConnection | undefined;
     let onAbort: (() => void) | undefined;
     try {
       signal.throwIfAborted();
-      if (apiKey) return { state: 'usable', source: 'native' };
+      if (codexLogin(env)) return { state: 'usable', source: 'native' };
       const binary = await resolveBinary();
       signal.throwIfAborted();
       connection = AppServerConnection.start(binary, [], env, this.spawner);
@@ -1063,10 +1094,9 @@ export class CodexProvider implements IAgentProvider {
         yield { type: 'warning', ...warning };
       }
 
+      const { env } = launch;
+      const login = codexLogin(env);
       const binary = await launch.resolveBinary();
-      const { env, apiKey } = launch;
-      // `CODEX_API_KEY` opts a turn into API-key auth. Without it Codex uses the user's
-      // own login in their CODEX_HOME. The ephemeral store keeps the key out of that home.
       const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
       const effort = resolveModelReasoningEffort(
         requestOptions?.nodeConfig,
@@ -1082,7 +1112,9 @@ export class CodexProvider implements IAgentProvider {
       connection = AppServerConnection.start(
         binary,
         [
-          ...(apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
+          // An Archon-supplied login stays out of the user's CODEX_HOME; without one Codex
+          // uses the user's own login there.
+          ...(login ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
           // A user who turned plugins off globally gets an empty `plugin/installed`, so a
           // node that names plugins could not find them. This process serves only this
           // node's thread, and the thread config switches off every plugin it does not name.
@@ -1097,7 +1129,7 @@ export class CodexProvider implements IAgentProvider {
 
       const stream = streamTurn({
         connection,
-        apiKey,
+        login,
         cwd,
         resumeSessionId,
         forkSession: requestOptions?.forkSession === true,
