@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  addSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
   isWorktreeRegistered,
@@ -163,7 +164,7 @@ const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
  *
  * Rules (Fail Fast — malformed values throw; empty/whitespace values are ignored):
  * - `undefined` / empty-after-trim → `undefined` (no override; default resolution applies)
- * - Absolute path                  → throw (users must configure globally, not per-repo)
+ * - Absolute path                  → throw (override must stay within the repo)
  * - Contains `..` segment          → throw (escapes repo root)
  * - Resolved path escapes repoRoot → throw (covers symlink / nested `../` edge cases)
  *
@@ -180,7 +181,7 @@ export function resolveRepoLocalOverride(
   if (isAbsolute(trimmed)) {
     throw new Error(
       `.archon/config.yaml worktree.path must be relative to the repo root (got absolute: ${trimmed}). ` +
-        'For an absolute location, set ~/.archon/config.yaml paths.worktrees instead.'
+        "Use a path relative to the repo root, or omit worktree.path to use Archon's default location."
     );
   }
 
@@ -677,6 +678,7 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
+    await addSafeDirectory(toRepoPath(path));
     let repoPath: RepoPath;
     let worktrees: WorktreeInfo[];
     try {
@@ -809,6 +811,7 @@ export class WorktreeProvider implements IIsolationProvider {
       : exactTaskBranch;
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
+      await addSafeDirectory(toRepoPath(worktreePath));
       // Verify the existing worktree belongs to the same repo root before
       // adopting. Two clones of the same remote resolve to the same worktree
       // base dir, so a worktree created from clone A is visible from clone B.
@@ -869,6 +872,7 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
+    await addSafeDirectory(toRepoPath(worktreePath));
     try {
       await verifyWorktreeOwnership(worktreePath, request.canonicalRepoPath);
     } catch (err) {
@@ -1562,6 +1566,7 @@ export class WorktreeProvider implements IIsolationProvider {
     args: string[]
   ): Promise<void> {
     await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, setupLockReason, async () => {
+      await addSafeDirectory(toRepoPath(worktreePath));
       try {
         await execFileAsync(
           'git',

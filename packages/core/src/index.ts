@@ -183,13 +183,7 @@ export type {
 // =============================================================================
 // State
 // =============================================================================
-export {
-  type TransitionTrigger,
-  shouldCreateNewSession,
-  shouldDeactivateSession,
-  detectPlanToExecuteTransition,
-  getTriggerForCommand,
-} from './state/session-transitions';
+export { type TransitionTrigger, getTriggerForCommand } from './state/session-transitions';
 
 // =============================================================================
 // Utils

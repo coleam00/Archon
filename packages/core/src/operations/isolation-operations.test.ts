@@ -27,9 +27,6 @@ mock.module('../db/isolation-environments', () => ({
   updateStatus: mockUpdateStatus,
 }));
 
-const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [] })
-);
 const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
   Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [], baseRef: MERGED_BASE_REF })
@@ -38,7 +35,6 @@ const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =
   Promise.resolve(null)
 );
 mock.module('../services/cleanup-service', () => ({
-  cleanupStaleWorktrees: mockCleanupStale,
   cleanupMergedWorktrees: mockCleanupMerged,
   getLiveRunBlocker: mockGetLiveRunBlocker,
 }));
@@ -56,8 +52,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Import AFTER mocks
-const { listEnvironments, cleanupStaleEnvironments, cleanupMergedEnvironments } =
-  await import('./isolation-operations');
+const { listEnvironments, cleanupMergedEnvironments } = await import('./isolation-operations');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -224,38 +219,6 @@ describe('listEnvironments', () => {
     expect(result.codebases[0].environments).toHaveLength(1);
     expect(result.totalEnvironments).toBe(1);
     expect(result.ghostsReconciled).toBe(0);
-  });
-});
-
-describe('cleanupStaleEnvironments', () => {
-  beforeEach(() => {
-    mockListAllActiveWithCodebase.mockClear();
-    mockLstat.mockClear();
-    mockCleanupStale.mockClear();
-  });
-
-  test('reconciles ghosts then delegates to cleanupStaleWorktrees', async () => {
-    // listAllActiveWithCodebase returns envs with codebase_id matching 'cb-1'
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      {
-        ...makeActiveEnv({ codebase_id: 'cb-1' }),
-        id: 'env-1',
-        working_path: '/worktrees/feat',
-        branch_name: 'feat',
-        workflow_id: 'wf-1',
-      },
-    ]);
-    mockLstat.mockResolvedValueOnce(undefined); // not a ghost
-    mockCleanupStale.mockResolvedValueOnce({
-      removed: ['feat'],
-      skipped: [],
-      releasedFailedRuns: [],
-    });
-
-    const result = await cleanupStaleEnvironments('cb-1', '/main');
-
-    expect(mockCleanupStale).toHaveBeenCalledWith('cb-1', '/main');
-    expect(result.removed).toEqual(['feat']);
   });
 });
 

@@ -175,7 +175,6 @@ export type ExecutionOutput = z.infer<typeof executionOutputSchema>;
  * `mcp_server_status` event instead.
  */
 export const mcpUnavailableReasonSchema = z.enum(['provider_unsupported', 'config_missing']);
-export type McpUnavailableReason = z.infer<typeof mcpUnavailableReasonSchema>;
 
 export const mcpUnavailableSchema = z.object({
   /** The path as the node declared it. */

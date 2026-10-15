@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { convertToTelegramMarkdown, escapeMarkdownV2, isAlreadyEscaped } from './markdown';
+import { convertToTelegramMarkdown, escapeMarkdownV2 } from './markdown';
 
 describe('telegram-markdown', () => {
   describe('convertToTelegramMarkdown', () => {
@@ -134,28 +134,6 @@ describe('telegram-markdown', () => {
       const input = 'Use `code` and *bold* here!';
       const result = escapeMarkdownV2(input);
       expect(result).toBe('Use \\`code\\` and \\*bold\\* here\\!');
-    });
-  });
-
-  describe('isAlreadyEscaped', () => {
-    test('returns true for escaped underscore', () => {
-      expect(isAlreadyEscaped('snake\\_case')).toBe(true);
-    });
-
-    test('returns true for escaped asterisk', () => {
-      expect(isAlreadyEscaped('2\\*3')).toBe(true);
-    });
-
-    test('returns false for unescaped text', () => {
-      expect(isAlreadyEscaped('Hello world')).toBe(false);
-    });
-
-    test('returns false for regular markdown', () => {
-      expect(isAlreadyEscaped('**bold** text')).toBe(false);
-    });
-
-    test('returns false for empty string', () => {
-      expect(isAlreadyEscaped('')).toBe(false);
     });
   });
 });

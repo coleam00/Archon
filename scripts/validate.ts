@@ -1,3 +1,4 @@
+import { formatDuration } from '@archon/paths/duration';
 import { resolve } from 'node:path';
 
 type Command = readonly [string, ...string[]];
@@ -106,12 +107,6 @@ export function parseOnly(argv: readonly string[]): string[] {
     only.push(...value.split(',').filter(id => id.length > 0));
   }
   return only;
-}
-
-function formatDuration(milliseconds: number): string {
-  const seconds = milliseconds / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  return `${String(Math.floor(seconds / 60))}m ${(seconds % 60).toFixed(0)}s`;
 }
 
 interface CheckResult {

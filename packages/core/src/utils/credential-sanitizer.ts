@@ -1,13 +1,10 @@
+import { escapeRegExp } from '@archon/paths/regexp';
 /**
  * Credential Sanitizer
  * Removes sensitive values from strings to prevent credential leaks
  */
 
 const SENSITIVE_ENV_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GITLAB_TOKEN', 'GITEA_TOKEN'];
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 export function sanitizeCredentials(input: string): string {
   let result = input;

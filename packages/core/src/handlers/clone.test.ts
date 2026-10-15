@@ -27,6 +27,9 @@ import {
 } from '../services/codebase-checkout-resolver';
 import { createMockLogger } from '../test/mocks/logger';
 
+const realExecFileAsync = gitUtils.execFileAsync;
+const realAddSafeDirectory = gitUtils.addSafeDirectory;
+
 // Capture the real functions before the re-export is replaced by the module mock.
 const { findCommandFiles: discoverCommandFiles, isPathInside } =
   await import('@archon/paths/archon-paths');
@@ -151,6 +154,7 @@ let spyFsRm: ReturnType<typeof spyOn>;
 let spyFsStat: ReturnType<typeof spyOn>;
 let spyFsRealpath: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
+let spyAddSafeDirectory: ReturnType<typeof spyOn>;
 let spyCloneGitRepository: ReturnType<typeof spyOn>;
 let spyGetCanonicalRepoPath: ReturnType<typeof spyOn>;
 
@@ -172,6 +176,7 @@ function setupSpies(): void {
     stdout: '',
     stderr: '',
   });
+  spyAddSafeDirectory = spyOn(gitUtils, 'addSafeDirectory').mockResolvedValue(undefined);
   spyCloneGitRepository = spyOn(gitUtils, 'cloneRepository').mockResolvedValue({
     ok: true,
     value: undefined,
@@ -188,6 +193,7 @@ function restoreSpies(): void {
   spyFsRealpath?.mockRestore();
   spyFsStat?.mockRestore();
   spyExecFileAsync?.mockRestore();
+  spyAddSafeDirectory?.mockRestore();
   spyCloneGitRepository?.mockRestore();
   spyGetCanonicalRepoPath?.mockRestore();
 }
@@ -596,6 +602,10 @@ describe('cloneRepository', () => {
         cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
       ).rejects.toThrow('git remote failed');
       const target = getGitCloneCall()?.[1];
+      expect(spyAddSafeDirectory).toHaveBeenCalledWith(target);
+      expect(spyAddSafeDirectory.mock.invocationCallOrder[0]).toBeLessThan(
+        remote.mock.invocationCallOrder[0]
+      );
       expect(target).toBeDefined();
       expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
@@ -678,15 +688,90 @@ describe('cloneRepository', () => {
       expect(result.name).toBe('owner/repo');
     });
 
-    test('adds safe.directory after a successful clone', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    test.each([false, true])(
+      'repeated clone retains one trust grant after setup (rejected: %s)',
+      async rejected => {
+        const home = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-safe-'));
+        const env = {
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+          GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_COUNT: '0',
+        };
+        const previousEnv = Object.fromEntries(
+          Object.keys(env).map(key => [key, process.env[key]])
+        );
+        try {
+          Object.assign(process.env, env);
+          spyExecFileAsync.mockImplementation(realExecFileAsync);
+          spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
+          await fsPromises.writeFile(
+            env.GIT_CONFIG_GLOBAL,
+            '[safe]\n directory = /workspace/other\n'
+          );
+          mockCreateCodebase.mockResolvedValue(makeCodebase());
 
+          // The filesystem mock models a removed clone, so each invocation sets up the same path.
+          if (rejected) {
+            const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+            const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
+              new Error('registration failed')
+            );
+            try {
+              await expect(
+                cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
+              ).rejects.toThrow('registration failed');
+              const target = getGitCloneCall()?.[1];
+              expect(spyFsRm.mock.calls.some((call: unknown[]) => call[0] === target)).toBe(true);
+            } finally {
+              syntax.mockRestore();
+              remote.mockRestore();
+            }
+          } else {
+            await cloneRepository('https://github.com/owner/repo');
+            await cloneRepository('https://github.com/owner/repo');
+          }
+
+          const target = getGitCloneCall()?.[1];
+          if (!target) throw new Error('Clone destination missing');
+          expect(spyCloneGitRepository).toHaveBeenCalledTimes(rejected ? 1 : 2);
+          const { stdout } = await realExecFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim().split('\n')).toEqual(['/workspace/other', target]);
+        } finally {
+          for (const [key, value] of Object.entries(previousEnv)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+          spyFsRm.mockRestore();
+          await removeTempTree(home);
+        }
+      }
+    );
+
+    test('trusts the destination before clone can execute checkout hooks', async () => {
+      mockCreateCodebase.mockResolvedValue(makeCodebase());
+      const cloneWithHook: typeof gitUtils.cloneRepository = async (_url, target) => {
+        expect(spyAddSafeDirectory).toHaveBeenCalledWith(target);
+        return { ok: true, value: undefined };
+      };
+      spyCloneGitRepository.mockImplementation(cloneWithHook);
       await cloneRepository('https://github.com/owner/repo');
+    });
 
-      const safeDir = (spyExecFileAsync.mock.calls as string[][]).find(args =>
-        args[1]?.includes('safe.directory')
+    test('adds safe.directory before registration and propagates config failures', async () => {
+      spyAddSafeDirectory.mockRejectedValueOnce(new Error('config locked'));
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+        'config locked'
       );
-      expect(safeDir).toBeDefined();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(spyFsRm).not.toHaveBeenCalled();
     });
   });
 
