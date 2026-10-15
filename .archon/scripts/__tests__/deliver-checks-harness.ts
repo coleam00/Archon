@@ -67,6 +67,16 @@ export interface GhApiIssue {
   /** The author's login; null for a deleted account. */
   readonly author?: string | null;
   readonly state?: 'open' | 'closed';
+  /**
+   * The edit history `gh api graphql` reports; never edited when omitted. A null
+   * `createdBody` is a creation revision that cannot be recovered (deleted).
+   * `firstEditedBody` is an oldest revision made after creation, so not the creation body.
+   */
+  readonly history?: {
+    readonly createdBody?: string | null;
+    readonly firstEditedBody?: string;
+    readonly createdTitle?: string;
+  };
 }
 
 /** One tracker issue the fake gh knows. */
@@ -223,6 +233,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
+  if (text.startsWith('api graphql')) {
+    const history = fake.issue?.history ?? {};
+    const createdAt = '2026-01-01T00:00:00Z';
+    const nodes = history.firstEditedBody !== undefined
+      ? [{ editedAt: '2026-02-01T00:00:00Z', diff: history.firstEditedBody }]
+      : history.createdBody === undefined ? []
+      : [{ editedAt: createdAt, diff: history.createdBody }];
+    return result(0, JSON.stringify({ data: { repository: { issue: {
+      createdAt,
+      userContentEdits: { totalCount: nodes.length === 0 ? 0 : 2, nodes },
+      timelineItems: { nodes: history.createdTitle === undefined ? [] : [{ previousTitle: history.createdTitle }] },
+    } } } }));
+  }
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
     if (endpoint === undefined) return result(95, '', 'unexpected gh api call');

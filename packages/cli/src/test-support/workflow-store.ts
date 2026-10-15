@@ -192,6 +192,7 @@ export function createInMemoryWorkflowStore(
     ...createInMemoryStateDocumentStore(),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
+    hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
     acceptStartReceipt: admit(admission.acceptStartReceipt.bind(admission)),
     getStartReceipt: admit(admission.getStartReceipt.bind(admission)),
     listStartReceipts: admit(admission.listStartReceipts.bind(admission)),
@@ -303,6 +304,8 @@ export function createInMemoryWorkflowStore(
     deferWorkflowContinuation: (id, retry, cursor) =>
       write(view => view.deferWorkflowContinuation(id, retry, cursor)),
     answerAttentionWait: (id, answered) => write(view => view.answerAttentionWait(id, answered)),
+    labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
+    listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),

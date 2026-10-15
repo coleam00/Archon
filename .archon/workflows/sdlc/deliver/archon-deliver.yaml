@@ -29,6 +29,12 @@ inputs:
       an existing pull request when this run was launched on its branch
       (`--adopt`, or from the pull request). Empty means the run's trigger
       message is the work.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this delivery is, forwarded
+      unchanged to every review in the rounds. archon-review's `part` input
+      owns its shape. Empty delivers the whole contract.
   # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"
@@ -127,6 +133,7 @@ nodes:
             prior_report: "$LOOP_PREV.round.output.prior_report"
             light: "$LOOP_PREV.round.output.light_review"
             work_order: "$INPUTS.work"
+            part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
         # After a review passes, before CI. Once per run: a later round finds the
@@ -169,6 +176,7 @@ nodes:
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             light: "true"
             work_order: "$INPUTS.work"
+            part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
         # CI is the project's full validation: implementers run only focused checks.

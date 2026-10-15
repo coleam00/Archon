@@ -6,13 +6,15 @@ import {
   outputPathsFromRootFields,
   type DeclaredOutputPaths,
 } from '../output-ref';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   APPROVAL_ATTENTION_OPTIONS,
   approvalDecisionConfigSchema,
   attentionFormSchema,
+  attentionLabelsSchema,
   attentionOptionSchema,
   type AttentionForm,
+  type AttentionLabels,
   type AttentionOption,
 } from './dag-node';
 import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
@@ -89,7 +91,9 @@ export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
  * wait carries its occurrence, its form and resolved options, and once answered, the
- * answer with the surface it came through and when.
+ * answer with the surface it came through and when. `labels` holds the node's resolved
+ * labels merged with every label write since, and `revision` counts those writes from 1;
+ * a wait without them has no labels and is at revision 1.
  */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
@@ -101,6 +105,8 @@ const workflowWaitAttentionFields = {
   answer: attentionAnswerSchema.optional(),
   answeredVia: recordSurfaceSchema.optional(),
   answeredAt: z.string().datetime().optional(),
+  labels: attentionLabelsSchema.optional(),
+  revision: z.number().int().positive().optional(),
 } as const;
 const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),
@@ -179,6 +185,16 @@ export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly A
     case 'multi_select':
       return wait.options ?? [];
   }
+}
+
+/** An attention wait's current labels. */
+export function attentionLabels(wait: WorkflowAttentionWaitContext): AttentionLabels {
+  return wait.labels ?? {};
+}
+
+/** How many label writes an attention wait has seen, counting from 1. */
+export function attentionRevision(wait: WorkflowAttentionWaitContext): number {
+  return wait.revision ?? 1;
 }
 
 const LEGACY_OCCURRENCE_PREFIX = 'legacy:';
@@ -1092,8 +1108,7 @@ export type GateAddress = z.infer<typeof gateAddressSchema>;
  * and `child_pointer_missing` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
  * produced by a reader that follows a `blocked_on_child` or `blocked_on_children`
- * pointer into the database
- * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
+ * pointer into the store (`resolveRunAttention`); the projection is pure and never does.
  */
 export const runAttentionUnreadableReasonSchema = z.enum([
   'malformed_tool_call_attention',
@@ -1226,7 +1241,8 @@ export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pause
  * `approval_received`), and two gate pauses write an unreliable event or none at all.
  *
  * Consumed by `assertApprovable`/`assertRejectable`, the server approve/reject/respond
- * routes, the orchestrator's paused-gate prompt section, and `waitForRunAttention`.
+ * routes, the orchestrator's paused-gate prompt section, `waitForRunAttention`, and the
+ * attention queue (`attention-queue.ts`).
  * Before this existed each of those re-derived the same four steps independently, in
  * three different orders, and the load-bearing "act on the child, not this run"
  * conclusion survived only inside an error string.
@@ -1352,6 +1368,46 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
     message: raw.message,
     occurrence: gateOccurrence(raw),
   };
+}
+
+/** The run-attention of a run the attention queue lists. */
+export type QueuedRunAttention = Extract<
+  RunAttention,
+  { kind: 'attention' | 'awaiting_response' | 'unreadable' }
+>;
+
+/**
+ * The run-attention that puts `run` in the attention queue, if any: a paused run with a
+ * pause someone must answer, or a paused run nothing can read, which needs someone to
+ * look. The queue's list and single read both build items by this one rule.
+ */
+export function queuedRunAttention(
+  run: RunAttentionInput,
+  attention: RunAttention | null = runAttention(run)
+): QueuedRunAttention | undefined {
+  if (run.status !== 'paused' || attention === null) return undefined;
+  switch (attention.kind) {
+    case 'attention':
+    case 'awaiting_response':
+    case 'unreadable':
+      return attention;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * True when the attention queue reads `run`: a queue item on its own
+ * (`queuedRunAttention`), or a paused parent blocked on sub-runs, which resolves to a
+ * child's item or, when its sub-run tree cannot be read, to an unreadable item of its own.
+ */
+export function isAttentionQueueRow(run: RunAttentionInput): boolean {
+  const attention = runAttention(run);
+  return (
+    queuedRunAttention(run, attention) !== undefined ||
+    (run.status === 'paused' &&
+      (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children'))
+  );
 }
 
 /**

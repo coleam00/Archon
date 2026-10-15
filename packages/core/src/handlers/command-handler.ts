@@ -26,6 +26,7 @@ import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
+  getLiveRunBlocker,
   getWorktreeStatusBreakdown,
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
@@ -462,13 +463,11 @@ async function handleWorktreeCommand(
       const forceFlag = args[1] === '--force';
 
       try {
-        const liveRun = await isolationEnvDb.getLiveRunOwningEnv(isolationEnvId);
+        const liveRun = await getLiveRunBlocker(isolationEnvId);
         if (liveRun) {
           return {
             success: false,
-            message:
-              `Worktree is still owned by workflow run ${liveRun.id.slice(0, 8)} ` +
-              `(${liveRun.status}). Resume or abandon it before removing the worktree.`,
+            message: `Worktree kept: ${liveRun.display}. Resume or abandon the run before removing the worktree.`,
           };
         }
 
@@ -602,6 +601,9 @@ async function handleWorktreeCommand(
           for (const branch of result.removed) {
             msg += `  • ${branch}\n`;
           }
+          for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+            msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
+          }
         } else {
           msg += `No ${cleanupType} worktrees to clean up.\n`;
         }
@@ -654,6 +656,117 @@ async function resolveChatRunId(arg: string, conversation: Conversation): Promis
   return matches[0]?.id ?? arg;
 }
 
+/** Workflow commands work with or without a project context. */
+async function resolveWorkflowCwd(conversation: Conversation): Promise<string> {
+  const codebase = conversation.codebase_id
+    ? await codebaseDb.getCodebase(conversation.codebase_id)
+    : null;
+  return codebase ? (conversation.cwd ?? codebase.default_cwd) : getArchonWorkspacesPath();
+}
+
+/**
+ * Resolve a workflow by name and return the request that starts it with `workflowArgs`
+ * as its message. Chat reaches this through `/workflow run`; the run route calls it
+ * directly so the message is never tokenized as a command.
+ */
+export async function startWorkflow(
+  conversation: Conversation,
+  workflowName: string,
+  workflowArgs: string,
+  force: boolean,
+  surface: WorkflowCommandSurface
+): Promise<CommandResult> {
+  const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  const workflowCwd = await resolveWorkflowCwd(conversation);
+
+  getLog().debug(
+    { workflowName, args: workflowArgs, cwd: workflowCwd },
+    'cmd.workflow_run_invoked'
+  );
+
+  // Discover workflows with error handling
+  let workflowEntries: readonly WorkflowWithSource[];
+  let loadErrors: readonly WorkflowLoadError[];
+  try {
+    const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
+    workflowEntries = result.workflows;
+    loadErrors = result.errors;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
+    return {
+      success: false,
+      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+    };
+  }
+
+  const workflows = workflowEntries.map(ws => ws.workflow);
+  getLog().debug(
+    {
+      count: workflows.length,
+      names: workflows.map(w => w.name),
+      searchingFor: workflowName,
+    },
+    'cmd.workflows_discovered'
+  );
+
+  let workflow: ResolvedWorkflow | undefined;
+  try {
+    workflow = resolveWorkflowName(workflowName, workflows);
+  } catch (err) {
+    // Ambiguous match — surface the candidates to the user
+    getLog().warn(
+      { requested: workflowName, error: (err as Error).message },
+      'cmd.workflow_resolve_ambiguous'
+    );
+    return {
+      success: false,
+      message: (err as Error).message,
+    };
+  }
+
+  if (!workflow) {
+    // Check if the requested workflow had a load error
+    const loadError = findWorkflowLoadError(loadErrors, workflowName);
+    if (loadError) {
+      return {
+        success: false,
+        message: `Workflow \`${workflowName}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
+      };
+    }
+    getLog().warn(
+      { requested: workflowName, available: workflows.map(w => w.name) },
+      'cmd.workflow_not_found'
+    );
+    return {
+      success: false,
+      message: `Workflow \`${workflowName}\` not found.\n\nUse ${cmd('list')} to see available workflows.`,
+    };
+  }
+
+  getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
+
+  // Recover the discovery entry the `.map()` above dropped, so the keys the
+  // engine ignores reach the conversation when the run STARTS — not only
+  // when the author happens to browse `/workflow list` (#2213).
+  const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
+
+  // Return special result that triggers workflow execution in orchestrator
+  return {
+    success: true,
+    message: `Starting workflow: \`${workflow.name}\``,
+    workflow: {
+      kind: 'start',
+      definition: workflow,
+      args: workflowArgs,
+      force: force ? true : undefined,
+      ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
+        ? { parseWarnings: resolvedEntry.parseWarnings }
+        : {}),
+    },
+  };
+}
+
 async function handleWorkflowCommand(
   operations: WorkflowOperations,
   conversation: Conversation,
@@ -666,14 +779,7 @@ async function handleWorkflowCommand(
   /** A child-run redirect is spelled for THIS surface; anything else reports as-is. */
   const failureText = (err: Error): string => workflowOperationErrorMessage(err, surface);
 
-  // Workflow commands work with or without a project context
-  const codebase = conversation.codebase_id
-    ? await codebaseDb.getCodebase(conversation.codebase_id)
-    : null;
-
-  const workflowCwd = codebase
-    ? (conversation.cwd ?? codebase.default_cwd)
-    : getArchonWorkspacesPath();
+  const workflowCwd = await resolveWorkflowCwd(conversation);
 
   switch (subcommand) {
     case 'list':
@@ -1098,92 +1204,7 @@ async function handleWorkflowCommand(
         };
       }
 
-      getLog().debug(
-        { workflowName, args: workflowArgs, cwd: workflowCwd },
-        'cmd.workflow_run_invoked'
-      );
-
-      // Discover workflows with error handling
-      let workflowEntries: readonly WorkflowWithSource[];
-      let loadErrors: readonly WorkflowLoadError[];
-      try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
-        workflowEntries = result.workflows;
-        loadErrors = result.errors;
-      } catch (error) {
-        const err = error as Error;
-        getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
-        return {
-          success: false,
-          message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
-        };
-      }
-
-      const workflows = workflowEntries.map(ws => ws.workflow);
-      getLog().debug(
-        {
-          count: workflows.length,
-          names: workflows.map(w => w.name),
-          searchingFor: workflowName,
-        },
-        'cmd.workflows_discovered'
-      );
-
-      let workflow: ResolvedWorkflow | undefined;
-      try {
-        workflow = resolveWorkflowName(workflowName, workflows);
-      } catch (err) {
-        // Ambiguous match — surface the candidates to the user
-        getLog().warn(
-          { requested: workflowName, error: (err as Error).message },
-          'cmd.workflow_resolve_ambiguous'
-        );
-        return {
-          success: false,
-          message: (err as Error).message,
-        };
-      }
-
-      if (!workflow) {
-        // Check if the requested workflow had a load error
-        const loadError = findWorkflowLoadError(loadErrors, workflowName);
-        if (loadError) {
-          return {
-            success: false,
-            message: `Workflow \`${workflowName}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
-          };
-        }
-        getLog().warn(
-          { requested: workflowName, available: workflows.map(w => w.name) },
-          'cmd.workflow_not_found'
-        );
-        return {
-          success: false,
-          message: `Workflow \`${workflowName}\` not found.\n\nUse ${cmd('list')} to see available workflows.`,
-        };
-      }
-
-      getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
-
-      // Recover the discovery entry the `.map()` above dropped, so the keys the
-      // engine ignores reach the conversation when the run STARTS — not only
-      // when the author happens to browse `/workflow list` (#2213).
-      const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
-
-      // Return special result that triggers workflow execution in orchestrator
-      return {
-        success: true,
-        message: `Starting workflow: \`${workflow.name}\``,
-        workflow: {
-          kind: 'start',
-          definition: workflow,
-          args: workflowArgs,
-          force: force ? true : undefined,
-          ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
-            ? { parseWarnings: resolvedEntry.parseWarnings }
-            : {}),
-        },
-      };
+      return startWorkflow(conversation, workflowName, workflowArgs, force, surface);
     }
 
     default:

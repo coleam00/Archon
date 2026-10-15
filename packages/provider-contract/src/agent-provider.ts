@@ -327,7 +327,7 @@ export interface IAgentProvider {
 
   /**
    * Get the provider's capability flags.
-   * Used by the dag-executor to warn when nodes specify unsupported features.
+   * Registered factories bind this view to the registry descriptor's declaration.
    */
   getCapabilities(): ProviderCapabilities;
 }

@@ -51,6 +51,7 @@ export {
   getCurrentBranchStrict,
   localBranchExists,
   countCommitsAhead,
+  countCommitsMissingFromRemotes,
   checkout,
   hasUncommittedChanges,
   commitAllChanges,

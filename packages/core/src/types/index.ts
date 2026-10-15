@@ -55,6 +55,12 @@ export interface HandleMessageContext {
   readonly attachedFiles?: AttachedFile[];
   readonly actor: RunActor;
   /**
+   * Set ONLY by the `POST /api/workflows/:name/run` route: start this workflow with the
+   * message, byte for byte, as its `$ARGUMENTS`. The message is never parsed as a command,
+   * so no word in it can change the run (#4159).
+   */
+  readonly workflowName?: string;
+  /**
    * Declared workflow inputs supplied by the caller (#2554), keyed by input name.
    *
    * Set ONLY by the `POST /api/workflows/:name/run` route, whose body carries an

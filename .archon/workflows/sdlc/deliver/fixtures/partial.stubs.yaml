@@ -1,7 +1,9 @@
-# Outcome: delivered, with part of the contract left. The review passes because the
-# operator deferred one acceptance item to a later delivery, so its contract coverage
-# leaves that item open: the description references the issue without closing it and
-# lists what is left, and so does the outcome.
+# Outcome: delivered, with part of the contract left. The run delivers part 1 of a
+# two-part plan, and the review's mode script is unstubbed so the part assignment
+# reaches it through deliver. The review passes because the assignment gives one
+# acceptance item to part 2, so its contract coverage leaves that item open: the
+# description references the issue without closing it and lists what is left, and so
+# does the outcome.
 forge: { source: forge }
 implement__implement:
   done: true
@@ -12,7 +14,6 @@ implement__assert-changed: "3 files changed"
 pr__forge: { source: forge }
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
@@ -27,19 +28,23 @@ review__synthesize:
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-  contract_left: ["acceptance: the console shows the new state (deferred by the operator to a later delivery)"]
+  contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-  contract_left: ["acceptance: the console shows the new state (deferred by the operator to a later delivery)"]
+  contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: true, summary: "stub: the issue stays referenced as Refs #1; added the Left open list" }
 fixture:
+  inputs:
+    part: '{"delivers":1,"parts":[{"part":1,"items":["the API returns the new state"]},{"part":2,"items":["the console shows the new state"]}]}'
   expect: completed
+  resolved-text-contains:
+    review__scope: '"delivers":1,"parts":[{"part":1'
   reached: [ci, round, update-pr-body, outcome]
 exec-code: true
