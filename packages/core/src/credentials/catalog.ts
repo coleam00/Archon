@@ -17,6 +17,7 @@ import {
   PI_PROVIDER_ENV_VARS,
   type CredentialKind,
 } from '@archon/providers';
+import { consumesStoredCredential, type StoredCredentialKind } from '@archon/provider-contract';
 import { KNOWN_VENDORS, normalizeCredentialVendor } from './delivery';
 import { SUBSCRIPTION_PROVIDERS } from './oauth-providers';
 
@@ -94,13 +95,20 @@ export interface AgentCredentialStatus {
   displayName: string;
   kinds: CredentialKind[];
   /** The calling user's stored connection for this vendor, or null. */
-  connected: 'api_key' | 'oauth' | null;
+  connected: StoredCredentialKind | null;
+  /**
+   * Whether this agent uses `connected`. A stored Claude subscription is shown on Pi's
+   * Anthropic row but is not Pi's credential, and is managed on the Claude card.
+   */
+  connectionConsumed: boolean;
   /** Whether subscription (OAuth) login is currently connectable (gates included). */
   subscriptionAvailable: boolean;
   /** Whether the server process env already carries this vendor's key. */
   installEnv: boolean;
   /** Ambient chains only: detected in the server environment. */
   ambientConfigured?: boolean;
+  /** Whether this credential authenticates the agent: a consumed connection, install env or ambient. */
+  usable: boolean;
 }
 
 /**
@@ -111,8 +119,7 @@ export interface AgentCredentialMatrixEntry {
   displayName: string;
   catalog: 'static' | 'dynamic';
   /**
-   * Whether at least one credential is usable (connected, present in the
-   * install env, or ambient-detected). Always false for `dynamic` agents —
+   * Whether at least one credential is `usable`. Always false for `dynamic` agents —
    * their surface is only knowable from their own runtime introspection.
    */
   ready: boolean;
@@ -120,20 +127,23 @@ export interface AgentCredentialMatrixEntry {
 }
 
 /**
- * Extra env vars (beyond the vendor's API-key var) whose presence means the
- * install env already authenticates the vendor.
+ * Env vars, beyond the vendor's API-key var, whose presence means the install env already
+ * authenticates `agent` for the vendor. Scoped per agent: Pi never reads the Claude SDK's
+ * variables, so a `CLAUDE_CODE_OAUTH_TOKEN`-only install leaves Pi unauthenticated.
  */
-const EXTRA_INSTALL_ENV_VARS: Record<string, string[]> = {
+const EXTRA_INSTALL_ENV_VARS: Record<string, Record<string, string[]>> = {
   // CLAUDE_API_KEY: read by the native Claude provider (and set by Archon's
   // own anthropic api_key delivery) — an install configured with only this
   // var is authenticated.
-  anthropic: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_OAUTH_TOKEN'],
+  claude: { anthropic: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'] },
+  // pi-ai's own env lookup reads a token the operator set; Archon never delivers it.
+  pi: { anthropic: ['ANTHROPIC_OAUTH_TOKEN'] },
 };
 
-function hasInstallEnv(vendor: string): boolean {
+function hasInstallEnv(agent: string, vendor: string): boolean {
   const vars = [
     ...(PI_PROVIDER_ENV_VARS[vendor] ? [PI_PROVIDER_ENV_VARS[vendor]] : []),
-    ...(EXTRA_INSTALL_ENV_VARS[vendor] ?? []),
+    ...(EXTRA_INSTALL_ENV_VARS[agent]?.[vendor] ?? []),
   ];
   return vars.some(v => !!process.env[v]);
 }
@@ -172,9 +182,9 @@ function isAmbientConfigured(vendor: string): boolean {
  * install-env and ambient detection still populate readiness.
  */
 export function buildAgentCredentialMatrix(
-  connections: { provider: string; kind: 'api_key' | 'oauth' }[]
+  connections: { provider: string; kind: StoredCredentialKind }[]
 ): AgentCredentialMatrixEntry[] {
-  const connectedByVendor = new Map<string, 'api_key' | 'oauth'>(
+  const connectedByVendor = new Map<string, StoredCredentialKind>(
     connections.map(c => [normalizeCredentialVendor(c.provider), c.kind])
   );
   return getRegisteredProviders().map(reg => {
@@ -187,25 +197,33 @@ export function buildAgentCredentialMatrix(
         credentials: [],
       };
     }
-    const credentials = reg.credentials.specs.map(spec => {
-      const ambient = spec.kinds.includes('ambient');
-      const status: AgentCredentialStatus = {
+    const catalog = reg.credentials;
+    const credentials = catalog.specs.map((spec): AgentCredentialStatus => {
+      const connected = connectedByVendor.get(spec.vendor) ?? null;
+      const connectionConsumed =
+        connected !== null && consumesStoredCredential(catalog, spec.vendor, connected);
+      const installEnv = hasInstallEnv(reg.id, spec.vendor);
+      const ambientConfigured = spec.kinds.includes('ambient')
+        ? isAmbientConfigured(spec.vendor)
+        : undefined;
+      return {
         vendor: spec.vendor,
         displayName: spec.displayName,
         kinds: spec.kinds,
-        connected: connectedByVendor.get(spec.vendor) ?? null,
+        connected,
+        connectionConsumed,
         subscriptionAvailable:
           spec.kinds.includes('subscription') && SUBSCRIPTION_PROVIDERS.has(spec.vendor),
-        installEnv: hasInstallEnv(spec.vendor),
+        installEnv,
+        ...(ambientConfigured !== undefined ? { ambientConfigured } : {}),
+        usable: connectionConsumed || installEnv || ambientConfigured === true,
       };
-      if (ambient) status.ambientConfigured = isAmbientConfigured(spec.vendor);
-      return status;
     });
     return {
       id: reg.id,
       displayName: reg.displayName,
       catalog: 'static' as const,
-      ready: credentials.some(s => s.connected !== null || s.installEnv || s.ambientConfigured),
+      ready: credentials.some(s => s.usable),
       credentials,
     };
   });
