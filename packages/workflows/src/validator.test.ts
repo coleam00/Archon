@@ -24,6 +24,7 @@ import {
 import type { WorkflowDefinition, DagNode } from './schemas';
 import { dagNodeSchema } from './schemas';
 import { parseWorkflow } from './loader';
+import { discoverWorkflows } from './workflow-discovery';
 import { BUNDLED_WORKFLOWS, BUNDLED_WORKFLOW_OWNERS } from './defaults/bundled-defaults';
 import { makeTestWorkflow } from './test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
@@ -569,6 +570,82 @@ describe('validateWorkflowResources — loop.command', () => {
 // =============================================================================
 
 describe('validateWorkflowResources — MCP validation', () => {
+  async function homeMcpWorkflow(declaration = 'servers.json') {
+    const yamlDir = join(tmpHomeDir, 'workflows', 'nested');
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      `name: home-mcp
+description: Portable home MCP
+nodes:
+  - id: check
+    prompt: Check
+    mcp: ${declaration}
+`
+    );
+    await writeFile(join(yamlDir, 'servers.json'), '{"homeServer":{"command":"example"}}');
+    const catalog = await discoverWorkflows(tmpDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
+    expect(catalog.errors).toEqual([]);
+    const entry = catalog.workflows.find(entry => entry.workflow.name === 'home-mcp');
+    expect(entry?.source).toBe('global');
+    if (!entry) throw new Error('Home workflow was not discovered');
+    return { workflow: entry.workflow, yamlDir };
+  }
+
+  test('nested home YAML resolves adjacent MCP config against another checkout', async () => {
+    const { workflow } = await homeMcpWorkflow();
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    expect(issues.filter(issue => issue.field === 'mcp')).toEqual([]);
+  });
+
+  test.each(['servers.json', '{ path: servers.json, optional: true }'])(
+    'home declaration %s rejects broken checkout config instead of falling back',
+    async declaration => {
+      const { workflow } = await homeMcpWorkflow(declaration);
+      await writeFile(join(tmpDir, 'servers.json'), '{broken');
+      const issues = (await validateWorkflowResources(workflow, tmpDir, providerRegistry)).filter(
+        i => i.field === 'mcp'
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0].message).toContain('invalid JSON');
+    }
+  );
+
+  test.each([false, true])(
+    'home missing config lists both candidates unless optional: %s',
+    async optional => {
+      const { workflow, yamlDir } = await homeMcpWorkflow(
+        optional ? '{ path: servers.json, optional: true }' : 'servers.json'
+      );
+      await rm(join(yamlDir, 'servers.json'));
+      const issues = (await validateWorkflowResources(workflow, tmpDir, providerRegistry)).filter(
+        i => i.field === 'mcp'
+      );
+      if (optional) expect(issues).toEqual([]);
+      else {
+        expect(issues).toHaveLength(1);
+        expect(issues[0].message).toBe(
+          `MCP config file not found: 'servers.json'. Tried: ${join(tmpDir, 'servers.json')}, ${join(yamlDir, 'servers.json')}`
+        );
+      }
+    }
+  );
+
+  test('unreadable home config is a read error, including for optional declarations', async () => {
+    const { workflow, yamlDir } = await homeMcpWorkflow('{ path: servers.json, optional: true }');
+    await rm(join(yamlDir, 'servers.json'));
+    await mkdir(join(yamlDir, 'servers.json'));
+    const issues = (await validateWorkflowResources(workflow, tmpDir, providerRegistry)).filter(
+      i => i.field === 'mcp'
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain('Failed to read MCP config file');
+    expect(issues[0].message).toContain(join(yamlDir, 'servers.json'));
+  });
+
   test('error when MCP config file is missing', async () => {
     const workflow = makeWorkflow('test', [
       {

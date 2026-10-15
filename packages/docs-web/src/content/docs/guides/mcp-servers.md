@@ -90,9 +90,20 @@ MCP. `archon validate workflows`
 reports nothing for an optional declaration whose file is missing or whose provider
 lacks MCP, because that is the expected state for most users of a portable workflow.
 
-The path resolves against the run's checkout. A gitignored file such as
-`.archon/mcp/posthog.json` reaches a worktree run only through `worktree.copyFiles`;
-without it the run records `config_missing`.
+Relative paths resolve against the run's checkout first. Only a declaration in a
+home-scoped workflow may fall back to the directory containing its YAML file. This
+is the declaring file's directory, including for nested workflows and nodes brought
+in through `include:`. Project, bundled, and installed workflows use only the checkout.
+Captured runs, including continuations, use the captured copy of the home YAML's
+directory. An absolute path uses exactly that path and bypasses relative lookup.
+
+Only a missing file permits fallback. An unreadable or invalid checkout config fails
+instead of loading a home config. A missing-file error lists every location tried, in
+order; optional missing declarations record `config_missing` and warn with those locations.
+
+A gitignored checkout config such as `.archon/mcp/posthog.json` reaches a worktree run
+only through `worktree.copyFiles`; without it, and without an eligible home fallback,
+the run records `config_missing` for an optional declaration.
 
 The plain string form, `mcp: .archon/mcp/github.json`, is a required declaration.
 

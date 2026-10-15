@@ -10,7 +10,9 @@
  */
 import type { ProviderRegistry } from '@archon/provider-contract';
 
-import { join, resolve, isAbsolute } from 'path';
+import { join } from 'path';
+import { readHomeMcpDirectory } from './compiled-command';
+import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
 import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
@@ -657,22 +659,28 @@ export async function validateWorkflowResources(
     // the absence instead.
     const mcp = 'mcp' in node ? mcpDeclaration(node.mcp) : undefined;
     if (mcp !== undefined) {
-      const mcpPath = isAbsolute(mcp.path) ? mcp.path : resolve(cwd, mcp.path);
+      const selected = await resolveMcpPath(mcp.path, cwd, readHomeMcpDirectory(node));
 
-      if (!(await fileExists(mcpPath))) {
+      if (selected.kind === 'missing') {
         if (!mcp.optional) {
           issues.push({
             level: 'error',
             nodeId: node.id,
             field: 'mcp',
-            message: `MCP config file not found: '${mcp.path}'`,
-            hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+            message: missingMcpConfigMessage(mcp.path, selected.attemptedPaths),
+            hint: `Create the file at ${selected.attemptedPaths[0]} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
           });
         }
+      } else if (selected.kind === 'read_error') {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'mcp',
+          message: `Failed to read MCP config file '${selected.path}': ${String(selected.error)}`,
+        });
       } else {
         try {
-          const content = await readFile(mcpPath, 'utf-8');
-          const serverMap = mcpServerMap(JSON.parse(content));
+          const serverMap = mcpServerMap(JSON.parse(selected.content));
           if (!serverMap.ok) {
             issues.push({
               level: 'error',
