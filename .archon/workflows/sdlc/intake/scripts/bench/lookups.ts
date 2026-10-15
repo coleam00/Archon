@@ -118,6 +118,7 @@ const ISSUE_ID = '_archonBenchIssueId';
 interface Selection {
   readonly name: string;
   readonly key: string;
+  readonly wireKey: string;
   readonly children: Selections;
 }
 type Selections = readonly (Selection | string)[];
@@ -147,6 +148,8 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
   const variables = isObject(request.variables) ? request.variables : {};
   const numbers: number[] = [];
   const insertions: number[] = [];
+  const aliases: { at: number; end: number; text: string }[] = [];
+  const aliasNames = new Map<string, string>();
   const fragments = new Map<string, Selections>();
   let i = 0;
   const token = () => tokens[i]?.[0];
@@ -165,7 +168,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       skipGroup('(', ')');
     }
   };
-  const selectionSet = (issue = false): Selections => {
+  const selectionSet = (issue = false, inFragment = false): Selections => {
     if (token() !== '{') return [];
     if (issue) insertions.push(tokens[i].index + 1);
     i++;
@@ -178,10 +181,10 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
           const type = token();
           i++;
           directives();
-          fields.push(...selectionSet(type === 'Issue'));
+          fields.push(...selectionSet(type === 'Issue', true));
         } else if (token() === '@' || token() === '{') {
           directives();
-          fields.push(...selectionSet());
+          fields.push(...selectionSet(false, inFragment));
         } else {
           fields.push(token() ?? '');
           i++;
@@ -190,12 +193,22 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         continue;
       }
       const key = token() ?? '';
+      const keyToken = tokens[i];
       i++;
       let name = key;
+      let wireKey = key;
       if (token() === ':') {
         i++;
         name = token() ?? '';
         i++;
+        // Disjoint type fragments may reuse one response alias for different fields.
+        if (inFragment) {
+          const mapping = `${key}:${name}`;
+          wireKey = aliasNames.get(mapping) ?? `${identity}Field${String(aliasNames.size)}`;
+          while (tokens.some(token => token[0] === wireKey)) wireKey += '_';
+          aliasNames.set(mapping, wireKey);
+          aliases.push({ at: keyToken.index, end: keyToken.index + key.length, text: wireKey });
+        }
       }
       const issueField = name === 'issue' || name === 'issueOrPullRequest';
       if (issueField && token() === '(') {
@@ -208,7 +221,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       }
       skipGroup('(', ')');
       directives();
-      fields.push({ key, name, children: selectionSet(issueField) });
+      fields.push({ key, wireKey, name, children: selectionSet(issueField, inFragment) });
     }
     i++;
     return fields;
@@ -220,21 +233,22 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       const type = tokens[i + 3]?.[0];
       i += 4;
       directives();
-      fragments.set(name, selectionSet(type === 'Issue'));
+      fragments.set(name, selectionSet(type === 'Issue', true));
     } else if (token() === '{') fields.push(...selectionSet());
     else if (token() === '(') skipGroup('(', ')');
     else i++;
   }
   let identified = query;
-  for (const at of insertions.reverse()) identified = `${identified.slice(0, at)} ... on Issue { ${identity}: id } ${identified.slice(at)}`;
-  return { body: insertions.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers };
+  const edits = [...aliases, ...insertions.map(at => ({ at, end: at, text: ` ... on Issue { ${identity}: id } ` }))];
+  for (const edit of edits.sort((a, b) => b.at - a.at)) identified = `${identified.slice(0, edit.at)}${edit.text}${identified.slice(edit.end)}`;
+  return { body: edits.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers };
 }
 
 function selectedFields(fields: Selections, graphql: Graphql): Selection[] {
   const merged = new Map<string, Selection>();
   for (const field of fields.flatMap(field => typeof field === 'string' ? selectedFields(graphql.fragments.get(field) ?? [], graphql) : [field])) {
-    const previous = merged.get(field.key);
-    merged.set(field.key, previous === undefined ? field : { ...field, children: [...previous.children, ...field.children] });
+    const previous = merged.get(field.wireKey);
+    merged.set(field.wireKey, previous === undefined ? field : { ...field, children: [...previous.children, ...field.children] });
   }
   return [...merged.values()];
 }
@@ -269,20 +283,23 @@ export function atCreation(
       answered.add(view.number);
       if (graphql === undefined) return creationObject(original, view);
       return Object.fromEntries(fields.flatMap(field => {
-        if (!(field.key in original)) return [];
-        const inner = original[field.key];
+        if (!(field.wireKey in original)) return [];
+        const inner = original[field.wireKey];
         const canonical = isObject(inner) ? Object.fromEntries(Object.entries(inner).map(([key, value]) => [
-          selectedFields(field.children, graphql).find(child => child.key === key)?.name ?? key, value,
+          selectedFields(field.children, graphql).find(child => child.wireKey === key)?.name ?? key, value,
         ])) : inner;
         const rewritten = creationObject({ [field.name]: canonical }, view);
         if (!(field.name in rewritten)) return [];
-        const value = KEPT.has(field.name) ? original[field.key] : projectSelection(rewritten[field.name], field.children, graphql);
+        const value = KEPT.has(field.name) ? visit(original[field.wireKey], field.children) : projectSelection(rewritten[field.name], field.children, graphql);
         return [[field.key, value]];
       }));
     }
-    return Object.fromEntries(Object.entries(original).map(([key, inner]) => [key, visit(inner, fields.find(field => field.key === key)?.children ?? [])]));
+    return Object.fromEntries(Object.entries(original).map(([key, inner]) => {
+      const field = fields.find(field => field.wireKey === key);
+      return [field?.key ?? key, visit(inner, field?.children ?? [])];
+    }));
   };
-  return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', name: 'data', children: graphql.fields }]), answered };
+  return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', wireKey: 'data', name: 'data', children: graphql.fields }]), answered };
 }
 
 /**

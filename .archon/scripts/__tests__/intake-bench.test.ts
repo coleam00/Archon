@@ -924,6 +924,25 @@ describe('lookups', () => {
     expect([answer.answered, answer.live]).toEqual([[4], []]);
   });
 
+  it('keeps alias ownership separate across disjoint Issue and PR fragments', async () => {
+    const query = '{ search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ... on Issue { id: body writer: author { name: login } } ... on PullRequest { id } } } }';
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async (_url, init) => {
+      const forwarded = JSON.parse(String(init.body)) as { query: string };
+      const keyOf = (name: string) => new RegExp(`(\\w+): ${name}\\b`).exec(forwarded.query)?.[1] ?? 'missing';
+      return Response.json({ data: { search: { nodes: [
+        { _archonBenchIssueId: 'I_4', [keyOf('body')]: 'Live outcome', [keyOf('author')]: { [keyOf('login')]: 'opener' } },
+        { id: 'PR_4' },
+      ] } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { search: { nodes: [
+      { id: 'As opened.', writer: { name: 'opener' } },
+      { id: 'PR_4' },
+    ] } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
   it('does not count issue syntax inside GraphQL strings or comments as a selection', async () => {
     for (const query of [
       '{ search(query: "issue(number: 4)", type: ISSUE, first: 1) { issueCount } }',
