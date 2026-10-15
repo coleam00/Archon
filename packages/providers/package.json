@@ -201,6 +201,9 @@
       "src/community/opencode/runtime.test.ts"
     ],
     [
+      "src/community/opencode/session.test.ts"
+    ],
+    [
       "src/shared/structured-output.test.ts"
     ],
     [
