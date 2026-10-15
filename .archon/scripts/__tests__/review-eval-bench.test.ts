@@ -416,7 +416,9 @@ describe('collectItem', () => {
   it('names lens files, not the review\'s own files, and sees findings.json', () => {
     const root = track(mkdtempSync(join(tmpdir(), 'archon-bench-item-')));
     const artifacts = getRunArtifactsDirForRoot(root, 'r1');
-    for (const file of ['code.md', 'scope.md', 'report.md', 'code-round-1.md', 'findings.json']) write(artifacts, `review/${file}`, 'x');
+    for (const file of ['code.md', 'scope.md', 'report.md', 'discoveries.md', 'code-round-1.md', 'findings.json']) {
+      write(artifacts, `review/${file}`, 'x');
+    }
     write(artifacts, 'shape.md', 'x');
     const detail: RunDetail = {
       id: 'r1',

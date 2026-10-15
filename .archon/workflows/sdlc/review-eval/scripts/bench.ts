@@ -19,7 +19,7 @@
  * run may still be using.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -486,9 +486,6 @@ export function hardChecks(
   return { checks, passed: Object.values(checks).every(entry => entry.ok) };
 }
 
-/** Round copies (`code-round-1.md`) are history of a lens file, not another lens. */
-const NOT_A_LENS = /^(scope|report.*|.+-round-\d+)\.md$/;
-
 export interface ReviewItem {
   readonly lenses: readonly string[];
   /** Whether the review wrote its machine-readable `review/findings.json`. */
@@ -497,9 +494,8 @@ export interface ReviewItem {
 
 /**
  * Copy the sample's review output to `<out>/items/<run_id>/` and name its lenses:
- * any `review/<name>.md` the review does not declare as its own, and `shape.md` as
- * simplify. Reading files rather than a lens list lets one collector read every
- * pack shape a version can pin.
+ * `review/<lens>.md` for each review lens, and `shape.md` as simplify. The review's
+ * own files (scope, report, discoveries, round copies) are copied but are no lens.
  */
 export function collectItem(run: RunDetail, itemDir: string): ReviewItem {
   const artifacts = artifactsOf(run);
@@ -507,9 +503,7 @@ export function collectItem(run: RunDetail, itemDir: string): ReviewItem {
   const lenses: string[] = [];
   if (existsSync(join(artifacts, 'review'))) {
     cpSync(join(artifacts, 'review'), join(itemDir, 'review'), { recursive: true });
-    for (const file of readdirSync(join(itemDir, 'review'))) {
-      if (file.endsWith('.md') && !NOT_A_LENS.test(file)) lenses.push(file.slice(0, -'.md'.length));
-    }
+    for (const lens of REVIEW_LENSES) if (existsSync(join(itemDir, 'review', `${lens}.md`))) lenses.push(lens);
   }
   if (existsSync(join(artifacts, 'shape.md'))) {
     cpSync(join(artifacts, 'shape.md'), join(itemDir, 'shape.md'));
