@@ -4064,6 +4064,10 @@ describe('workflow dispatch routing', () => {
     expect(sent).toContain("resource owner 'holder-1' has priority. It stays paused");
     expect(sent).not.toContain('Error:');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'raced-run-1', refusal: 'paused' }),
+      'orchestrator.resume_resource_busy'
+    );
   });
 
   test('refuses immediately when the resumable run is not a continuation candidate', async () => {

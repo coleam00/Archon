@@ -1452,8 +1452,13 @@ async function dispatchOrchestratorWorkflowOwned(
           // The run keeps its state; only its resource is busy. Never fall through to a fresh run.
           if (err instanceof workflowDb.WorkflowResourceBusyError) {
             getLog().info(
-              { workflowName: workflow.name, runId: resumableRun.id, blocker: err.blocker },
-              'orchestrator.resume_waiting_for_capacity'
+              {
+                workflowName: workflow.name,
+                runId: resumableRun.id,
+                blocker: err.blocker,
+                refusal: err.refusal,
+              },
+              'orchestrator.resume_resource_busy'
             );
             await platform.sendMessage(
               conversationId,
