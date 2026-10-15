@@ -22,6 +22,7 @@ mock.module('./connection', () => ({
 
 import {
   createCodebase,
+  removeUnregisteredCheckout,
   getCodebase,
   updateCodebaseCommands,
   getCodebaseCommands,
@@ -192,6 +193,32 @@ describe('codebases', () => {
       delete process.env.DEFAULT_AI_ASSISTANT;
     });
   });
+
+  test.each(['registered', 'unregistered'])(
+    'checkout cleanup shares the registration lock for a %s checkout',
+    async state => {
+      const owned = state === 'registered';
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([mockCodebase]));
+      await createCodebase({ name: mockCodebase.name, default_cwd: mockCodebase.default_cwd });
+      const registrationLock = mockQuery.mock.calls[0];
+      mockQuery.mockClear();
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult(owned ? [mockCodebase] : []));
+      const remove = mock(async () => {
+        expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+      });
+
+      await removeUnregisteredCheckout(mockCodebase.default_cwd, remove);
+
+      expect(registrationLock?.[0]).toContain('pg_advisory_xact_lock');
+      expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+      expect(remove).toHaveBeenCalledTimes(owned ? 0 : 1);
+    }
+  );
 
   describe('getCodebase', () => {
     test('returns existing codebase', async () => {

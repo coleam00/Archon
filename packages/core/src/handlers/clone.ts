@@ -506,8 +506,16 @@ export async function cloneRepository(
       default_branch: options.baseBranch ?? null,
     });
   } catch (error) {
-    // Any failure here leaves a clone with no registration, which would block a retry.
-    await rm(targetPath, { recursive: true });
+    try {
+      await codebases.removeUnregisteredCheckout(targetPath, () =>
+        rm(targetPath, { recursive: true })
+      );
+    } catch (cleanupError) {
+      getLog().error(
+        { path: targetPath, err: cleanupError },
+        'registration.checkout_cleanup_failed'
+      );
+    }
     throw error;
   }
 

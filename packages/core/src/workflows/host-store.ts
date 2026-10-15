@@ -18,6 +18,8 @@ export interface IWorkflowHostStore {
     findCodebaseByRepoUrl(url: string): Promise<Codebase | null>;
     listCodebases(): Promise<readonly Codebase[]>;
     createCodebase(data: CreateCodebaseInput): Promise<Codebase>;
+    /** Hold the registration writer lock through the ownership check and removal. */
+    removeUnregisteredCheckout(path: string, remove: () => Promise<void>): Promise<void>;
     updateCodebase(target: Pick<Codebase, 'id' | 'name'>, data: UpdateCodebaseInput): Promise<void>;
     getCodebaseCommands(id: string): Promise<Codebase['commands']>;
     updateCodebaseCommands(id: string, commands: Codebase['commands']): Promise<void>;

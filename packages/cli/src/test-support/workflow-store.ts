@@ -47,6 +47,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
         [...codebases.values()].find(row => row.name === name) ?? null,
       findCodebaseByRepoUrl: async url =>
         [...codebases.values()].find(row => row.repository_url === url) ?? null,
+      removeUnregisteredCheckout: unsupported,
       createCodebase: async (
         input
       ): ReturnType<IWorkflowHostStore['codebases']['createCodebase']> => {

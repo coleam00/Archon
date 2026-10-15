@@ -1,4 +1,10 @@
-import { getProjectStoragePaths, resolveProjectStorageKey, parseOwnerRepo } from '@archon/paths';
+import {
+  canonicalizeProjectPath,
+  isPathInside,
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
+  parseOwnerRepo,
+} from '@archon/paths';
 import type { Codebase } from '../schemas/codebase';
 
 export type ProjectIdentity = Pick<Codebase, 'kind' | 'name' | 'default_cwd'> &
@@ -6,6 +12,22 @@ export type ProjectIdentity = Pick<Codebase, 'kind' | 'name' | 'default_cwd'> &
 
 export function storageRoot(project: ProjectIdentity): string {
   return getProjectStoragePaths(resolveProjectStorageKey(project, project.default_cwd)).root;
+}
+
+export async function isCheckoutRegistered(
+  path: string,
+  registered: readonly Pick<ProjectIdentity, 'default_cwd'>[]
+): Promise<boolean> {
+  const checkout = await canonicalizeProjectPath(path);
+  for (const project of registered) {
+    const cwd = await canonicalizeProjectPath(project.default_cwd);
+    if (
+      isPathInside(checkout, cwd, { includeRoot: true }) ||
+      isPathInside(cwd, checkout, { includeRoot: true })
+    )
+      return true;
+  }
+  return false;
 }
 
 export function assertProjectRegistrationAvailable(

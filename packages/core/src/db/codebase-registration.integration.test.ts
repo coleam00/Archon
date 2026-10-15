@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { Database } from 'bun:sqlite';
 import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,8 @@ mock.module('./connection', () => ({
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const { createCodebase, createManagedCodebase, listCodebases } = await import('./codebases');
+const { createCodebase, createManagedCodebase, listCodebases, removeUnregisteredCheckout } =
+  await import('./codebases');
 
 afterAll(async () => {
   for (const db of databases) await db.close();
@@ -73,4 +75,30 @@ test('concurrent registrations with distinct names cannot claim the same remote'
   expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
   const rejected = results.find(result => result.status === 'rejected');
   expect(rejected?.status === 'rejected' && String(rejected.reason)).toContain('worktrees');
+});
+
+test('checkout cleanup holds the SQLite writer reservation until removal finishes', async () => {
+  const contender = new Database(path);
+  try {
+    contender.run('PRAGMA busy_timeout = 0');
+    let removed = false;
+    await removeUnregisteredCheckout(join(root, 'checkout'), async () => {
+      const error = (() => {
+        try {
+          contender.run('UPDATE remote_agent_codebases SET name = name WHERE 1 = 0');
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(error).toMatchObject({ code: 'SQLITE_BUSY' });
+      removed = true;
+    });
+    expect(removed).toBe(true);
+    expect(() =>
+      contender.run('UPDATE remote_agent_codebases SET name = name WHERE 1 = 0')
+    ).not.toThrow();
+  } finally {
+    contender.close();
+  }
 });

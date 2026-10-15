@@ -2,7 +2,7 @@ import { afterEach, expect, expectTypeOf, test } from 'bun:test';
 import type { z } from 'zod';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -273,4 +273,33 @@ test('file host refuses legacy tokenless replacements within its atomic adoption
     expect(await store.getById(created.id)).toEqual(replacement);
     await store.updateMetadata(replacement.id, { adopted: true }, replacement);
   }
+});
+
+test('file checkout cleanup preserves registered paths and aliases, and removes an unowned sibling', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const checkout = join(home, 'checkout');
+  const unowned = join(home, 'checkout-other');
+  await mkdir(join(checkout, 'subdirectory'), { recursive: true });
+  await mkdir(unowned);
+  await writeFile(join(checkout, 'operator-work.txt'), 'keep my work');
+  const alias = join(home, 'alias');
+  await symlink(checkout, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await first.records.codebases.createCodebase({ name: 'owner', default_cwd: alias });
+
+  for (const path of [checkout, alias, home, join(checkout, 'subdirectory')]) {
+    await second.records.codebases.removeUnregisteredCheckout(path, () =>
+      rm(path, { recursive: true })
+    );
+    expect(await readFile(join(checkout, 'operator-work.txt'), 'utf8')).toBe('keep my work');
+  }
+  await second.records.codebases.removeUnregisteredCheckout(unowned, () =>
+    rm(unowned, { recursive: true })
+  );
+  await expect(access(unowned)).rejects.toThrow();
 });

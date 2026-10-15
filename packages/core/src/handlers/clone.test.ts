@@ -80,6 +80,7 @@ const mockEnsureProjectStructure = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
+  removeUnregisteredCheckout: async (_path: string, remove: () => Promise<void>) => remove(),
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
@@ -1224,6 +1225,21 @@ describe('cloneRepository', () => {
 
   // ── Error handling ─────────────────────────────────────────────────────
   describe('error handling', () => {
+    test('retains the registration error and logs a failed checkout cleanup', async () => {
+      const registrationError = new Error('Project owner at /existing/checkout; use worktrees');
+      const cleanupError = new Error('permission denied');
+      mockCreateCodebase.mockRejectedValueOnce(registrationError);
+      spyFsRm.mockRejectedValueOnce(cleanupError);
+
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toBe(
+        registrationError
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { path: '/home/test/.archon/workspaces/owner/repo/source', err: cleanupError },
+        'registration.checkout_cleanup_failed'
+      );
+    });
+
     test('wraps a sanitized clone failure', async () => {
       process.env.GH_TOKEN = 'super_secret_token';
       spyCloneGitRepository.mockResolvedValue({

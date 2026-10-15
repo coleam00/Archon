@@ -352,6 +352,46 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each(['remote', 'name'] as const)(
+    'a rejected clone preserves a checkout another request registered at its target through a %s claim',
+    async claim => {
+      const root = await makeHome();
+      const url = 'https://github.com/acme/api.git';
+      const target = join(root, '.archon', 'workspaces', 'acme', 'api', 'source');
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+        await gitCheckout(path, url);
+        return { ok: true, value: undefined };
+      });
+      const safeDirectory = spyOn(git, 'addSafeDirectory').mockResolvedValue(undefined);
+      let ownerId: string | undefined;
+      const racingStore = {
+        ...codebases,
+        createCodebase: async (input: Parameters<typeof createCodebase>[0]) => {
+          if (claim === 'remote') {
+            ownerId = (await registerRepository(target)).codebaseId;
+          } else {
+            ownerId = (
+              await createCodebase({ ...input, repository_url: 'https://other.example/acme/api' })
+            ).id;
+          }
+          await writeFile(join(target, 'operator-work.txt'), 'keep my work');
+          return createCodebase(input);
+        },
+      };
+      try {
+        await expect(cloneRepository(racingStore, url)).rejects.toThrow(
+          claim === 'remote' ? 'worktrees' : 'storage'
+        );
+        expect(await readFile(join(target, 'operator-work.txt'), 'utf8')).toBe('keep my work');
+        expect(await listCodebases()).toMatchObject([{ id: ownerId, default_cwd: target }]);
+        expect(await listCodebases()).toHaveLength(1);
+      } finally {
+        clone.mockRestore();
+        safeDirectory.mockRestore();
+      }
+    }
+  );
+
   test('concurrent folder claims cannot insert two owners of one storage root', async () => {
     const root = await makeHome();
     await mkdir(join(root, 'a'));

@@ -66,6 +66,7 @@ const mockCreateCodebase = mock(
 
 mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
+  removeUnregisteredCheckout: async (_path: string, remove: () => Promise<void>) => remove(),
   getCodebaseCommands: mock(async () => ({})),
   updateCodebaseCommands: mock(async () => undefined),
   findCodebaseByRepoUrl: mock(async () => null),

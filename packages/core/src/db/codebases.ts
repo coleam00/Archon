@@ -19,6 +19,7 @@ import {
 import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
 import {
   allocateProjectName,
+  isCheckoutRegistered,
   assertProjectRegistrationAvailable,
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
@@ -114,6 +115,29 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
   // chat command) funnels through this INSERT — no name/path/URL is ever sent.
   captureCodebaseRegistered();
   return validateCodebase(result.rows[0]);
+}
+
+export async function removeUnregisteredCheckout(
+  path: string,
+  remove: () => Promise<void>
+): Promise<void> {
+  // SQLite may retry a transaction after COMMIT; filesystem removal must run only once.
+  let removed = false;
+  await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
+    } else {
+      // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
+      await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
+    }
+    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
+    if (!removed && !(await isCheckoutRegistered(path, registered.rows))) {
+      await remove();
+      removed = true;
+    }
+  });
 }
 
 export async function getCodebase(id: string): Promise<Codebase | null> {
