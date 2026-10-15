@@ -84,9 +84,11 @@ done
 
 # The token stays in the environment, not in the persisted ~/.gitconfig.
 ARCHON_PAT_HELPER='!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f'
-# Mirrors selectGitHubAuthMode (packages/server/src/github-auth-bootstrap.ts):
-# a partial App config or an App/PAT conflict leaves PAT behavior untouched.
-# scripts/docker-entrypoint.test.ts checks the two agree.
+# Mirrors selectGitHubAuthMode (packages/server/src/github-auth-bootstrap.ts)
+# on the container env only: the server also loads /.archon/.env, which this
+# script never reads, so docker.md requires the GitHub auth variables in the
+# container env. A partial App config or an App/PAT conflict leaves PAT
+# behavior untouched. scripts/docker-entrypoint.test.ts checks the two agree.
 if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${WEBHOOK_SECRET:-}" ] &&
   [ -n "${GITHUB_APP_PRIVATE_KEY:-}${GITHUB_APP_PRIVATE_KEY_PATH:-}" ] &&
   [ -z "${GITHUB_TOKEN:-}" ]; then

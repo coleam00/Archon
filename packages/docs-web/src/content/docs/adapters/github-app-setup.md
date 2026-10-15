@@ -265,7 +265,7 @@ If the external POST probe returns anything other than `404` or `403` from the p
 ## Migration from PAT mode
 
 1. Register the App and install on your orgs (Steps 1–5 above).
-2. Add `GITHUB_APP_*` env vars (Step 6).
+2. Add `GITHUB_APP_*` env vars (Step 6). In Docker, put them in the container environment (the compose `.env`), not `/.archon/.env`; see [GitHub CLI authentication](/deployment/docker/#github-cli-authentication).
 3. **Remove** `GITHUB_TOKEN` from your env (or comment it out). Archon refuses to start if both are set.
 4. **Remove** `GH_TOKEN` if you set it to the same PAT. Archon starts with it set, but the GitHub CLI in the container keeps using the old PAT.
 5. Restart Archon.
