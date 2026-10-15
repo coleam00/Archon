@@ -6,14 +6,25 @@ export const DEFAULT_TOOL_CALL_ATTENTION_MS = 30 * 60 * 1000;
 
 const providerDefaultsSchema = z.record(z.string(), z.unknown());
 
+/**
+ * Settings of the scheduled quota continuation that a usage-limit wait replaced. They
+ * still parse, so a config file or a persisted run config that sets them stays readable,
+ * but they have no effect: a usage-limit wait lasts until the provider's reported reset,
+ * with no fallback time, attempt cap or deadline.
+ */
+const deprecatedQuotaPolicySchema = z.object({
+  quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+  quotaMaxAttempts: z.number().int().positive().optional(),
+  quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+});
+const DEPRECATED_QUOTA_POLICY_KEYS = deprecatedQuotaPolicySchema.keyof().options;
+type DeprecatedQuotaPolicyKey = (typeof DEPRECATED_QUOTA_POLICY_KEYS)[number];
+
 export const workflowRunContinuationConfigSchema = z
   .object({
     toolCallAttentionMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
     autoResumeOnQuotaReset: z.boolean().optional(),
-    // Deprecated (`DEPRECATED_QUOTA_POLICY_KEYS`): still parsed, never read.
-    quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
-    quotaMaxAttempts: z.number().int().positive().optional(),
-    quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+    ...deprecatedQuotaPolicySchema.shape,
   })
   .strict();
 
@@ -63,30 +74,13 @@ export type WorkflowRunConfigMetadata = z.infer<typeof workflowRunConfigMetadata
 
 export type WorkflowContinuationConfig = z.infer<typeof workflowRunContinuationConfigSchema>;
 
-/**
- * Settings of the scheduled quota continuation that a usage-limit wait replaced. They
- * still parse, so a config file or a persisted run config that sets them stays readable,
- * but they have no effect: a usage-limit wait lasts until the provider's reported reset,
- * with no fallback time, attempt cap or deadline.
- */
-export const DEPRECATED_QUOTA_POLICY_KEYS = [
-  'quotaFallbackDelayMs',
-  'quotaMaxAttempts',
-  'quotaDeadlineMs',
-] as const;
-type DeprecatedQuotaPolicyKey = (typeof DEPRECATED_QUOTA_POLICY_KEYS)[number];
-
 export type LiveWorkflowPolicy = Omit<WorkflowContinuationConfig, DeprecatedQuotaPolicyKey>;
 export type ResolvedWorkflowPolicy = LiveWorkflowPolicy & { autoResumeOnQuotaReset: boolean };
 
 /** `config` without its deprecated keys. */
 export function liveWorkflowPolicy(config: WorkflowContinuationConfig): LiveWorkflowPolicy {
-  const {
-    quotaFallbackDelayMs: _fallback,
-    quotaMaxAttempts: _attempts,
-    quotaDeadlineMs: _deadline,
-    ...live
-  } = config;
+  const live = { ...config };
+  for (const key of DEPRECATED_QUOTA_POLICY_KEYS) delete live[key];
   return live;
 }
 
