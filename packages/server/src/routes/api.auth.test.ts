@@ -15,8 +15,9 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 // ---------------------------------------------------------------------------
 // Mock setup — must precede the dynamic import of ./api below.
 // Covers: GET /api/auth/status (enabled/disabled shape) and the non-enforcing
-// ?mine filter on the runs + conversations list endpoints (session-first, then
-// the X-Archon-User header, threaded into the DB query as a userId filter).
+// ?mine filter on the runs list endpoint (session-first, then the X-Archon-User
+// header, threaded into the DB query as a userId filter). Conversation scoping
+// lives in api.conversation-ownership.test.ts.
 // ---------------------------------------------------------------------------
 
 const mockLogger = {
@@ -45,6 +46,7 @@ mock.module('../auth', () => ({
   isWebAuthEnabled: () => authEnabled,
   getSignupMode: () => signupMode,
   isApiGateEnabled: () => apiGateEnabled,
+  isConversationOwnershipEnforced: () => false,
 }));
 
 // --- Identity resolution ---
@@ -66,13 +68,7 @@ mock.module('@archon/core/db/users', () => ({
 // --- List endpoints we assert the filter threading on ---
 const mockListWorkflowRuns = mock(async (_opts?: { userId?: string }) => [] as unknown[]);
 const mockListConversations = mock(
-  async (
-    _limit?: number,
-    _platform?: string,
-    _codebaseId?: string,
-    _excludeEmpty?: boolean,
-    _userId?: string
-  ) => [] as unknown[]
+  async (_visibility?: unknown, _filter?: unknown) => [] as unknown[]
 );
 
 mock.module('@archon/core', () => ({
@@ -346,9 +342,8 @@ describe('server-side /api/* gate', () => {
   });
 
   // Fail-closed: a session lookup that throws (e.g. DB outage) with NO trusted
-  // header must NOT admit the request. resolveAuthContext swallows the throw and
-  // returns undefined, which the gate maps to 401 — never access-granted.
-  test('gate on + session lookup throws + no header → 401 (fails closed)', async () => {
+  // header must NOT admit the request, and must not read as "signed out" either.
+  test('gate on + session lookup throws + no header → 503 (fails closed)', async () => {
     apiGateEnabled = true;
     authEnabled = true;
     authInstance = {
@@ -359,11 +354,11 @@ describe('server-side /api/* gate', () => {
       },
     };
     const res = await makeApp().request('/api/conversations');
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(503);
   });
 });
 
-describe('?mine filter — non-enforcing', () => {
+describe('runs ?mine filter — non-enforcing', () => {
   beforeEach(() => {
     authEnabled = false;
     signupMode = 'open';
@@ -408,40 +403,14 @@ describe('?mine filter — non-enforcing', () => {
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBe('user-from-sess-1');
   });
 
-  test('conversations: no ?mine → listConversations called without a userId filter', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations');
-    expect(res.status).toBe(200);
-    // listConversations(limit, platform, codebaseId, excludeEmpty, userId)
-    expect(mockListConversations.mock.calls[0]?.[4]).toBeUndefined();
-  });
-
-  test('conversations: ?mine=true with X-Archon-User header → filters by userId', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations?mine=true', {
-      headers: { 'X-Archon-User': 'bob' },
-    });
-    expect(res.status).toBe(200);
-    expect(mockListConversations.mock.calls[0]?.[4]).toBe('user-from-bob');
-  });
-
-  // The headline guarantee of this PR: ?mine is non-enforcing. With no
-  // resolvable identity (no session, no header) it must degrade to listing
-  // everything — NOT to an empty/zero-result gate.
+  // Run reads stay open: with no resolvable identity (no session, no header)
+  // ?mine degrades to listing everything — NOT to an empty/zero-result gate.
   test('runs: ?mine=true with no identity → still returns all (no userId filter)', async () => {
     const app = makeApp();
     const res = await app.request('/api/workflows/runs?mine=true');
     expect(res.status).toBe(200);
     expect(mockFindOrCreateUser).not.toHaveBeenCalled();
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBeUndefined();
-  });
-
-  test('conversations: ?mine=true with no identity → still returns all (no userId filter)', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations?mine=true');
-    expect(res.status).toBe(200);
-    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
-    expect(mockListConversations.mock.calls[0]?.[4]).toBeUndefined();
   });
 
   // Resilience: a Better Auth session lookup that throws (e.g. DB outage) must

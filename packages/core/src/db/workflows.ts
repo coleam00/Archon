@@ -1244,6 +1244,23 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 }
 
 /**
+ * Whether a run executes in this conversation as its own transcript: a hidden
+ * worker conversation, or a CLI run's conversation. A foreground run started from
+ * a chat executes in that chat (`conversation_id = parent_conversation_id`), and
+ * the chat stays its owner's, so it does not count.
+ */
+export async function isRunTranscriptConversation(conversationId: string): Promise<boolean> {
+  const result = await pool.query<{ found: number }>(
+    `SELECT 1 AS found FROM remote_agent_workflow_runs
+     WHERE conversation_id = $1
+       AND (parent_conversation_id IS NULL OR parent_conversation_id <> conversation_id)
+     LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows.length > 0;
+}
+
+/**
  * Find the most recent workflow run for a worker platform conversation ID.
  * Joins with conversations table to resolve platform_conversation_id → DB id.
  */
