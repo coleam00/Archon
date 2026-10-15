@@ -47,7 +47,6 @@ import { getRegisteredProviders, registerProvider, providerRegistry } from '@arc
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
 import { checkProviderDiagnostics, type CheckResult } from './doctor';
-import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
 import {
   CODEX_SETUP_ENV,
   migrateCodexSetupEnv,
@@ -220,7 +219,7 @@ interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
   hasPi: boolean;
-  /** A GitHub token the forge plugin can use, whether or not the webhook adapter is set up. */
+  /** `GH_TOKEN`, the forge credential setup writes, whether or not the webhook adapter is set up. */
   forgeToken: boolean;
   platforms: {
     github: boolean;
@@ -385,7 +384,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // the configured default assistant, so Claude users who share the same key
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
-    forgeToken: githubPluginMetadata.token_env.some(name => hasEnvValue(content, name)),
+    forgeToken: hasEnvValue(content, 'GH_TOKEN'),
     platforms: {
       // A lone GH_TOKEN is the forge plugin's credential; the webhook adapter needs its secret too.
       github:
@@ -2080,7 +2079,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
       `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
-      `GitHub token (forge plugin): ${existing.forgeToken ? 'Configured' : 'Not configured'}`,
+      `GH_TOKEN (forge plugin): ${existing.forgeToken ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 

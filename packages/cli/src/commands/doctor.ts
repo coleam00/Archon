@@ -37,7 +37,6 @@ import {
   type StoredCredentialKind,
 } from '@archon/provider-contract';
 import { forgeResponseSchema, type ForgeResponse } from '@archon/forge/operations';
-import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
 import { forgeCommand } from './forge';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -283,7 +282,6 @@ export async function checkGithubForge(
       message: `ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"; every SDLC run refuses until it is`,
     };
   }
-  const hasToken = githubPluginMetadata.token_env.some(name => Boolean(env[name]));
   const appMode = Boolean(env.GITHUB_APP_ID);
   // A public repository, the plugin's own source, so any valid token can read it.
   const response = await runForge('repo.labels.list', {
@@ -291,14 +289,14 @@ export async function checkGithubForge(
   });
   if (response.ok) return { label, status: 'pass', message: 'installed; the token is accepted' };
   const { kind, message } = response.error;
+  // Which token names count belongs to the plugin, so with none installed doctor
+  // cannot tell a forge setup in progress from an install that never runs the pack.
   if (kind === 'no_plugin_for_host') {
-    return hasToken || appMode
-      ? { label, status: 'warn', message: `not installed. Run \`${FORGE_PLUGIN_INSTALL}\`.` }
-      : {
-          label,
-          status: 'skip',
-          message: `not set up. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ~/.archon/.env (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
-        };
+    return {
+      label,
+      status: 'skip',
+      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ~/.archon/.env (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
+    };
   }
   if (kind === 'unsupported_op') {
     return {

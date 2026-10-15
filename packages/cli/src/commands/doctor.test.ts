@@ -15,7 +15,6 @@ import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
-import { githubPluginMetadata } from '@archon/adapters/forge/github/operations';
 import { forgeSource } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 import {
   checkConfigFiles,
@@ -104,21 +103,8 @@ describe('checkGithubForge', () => {
     });
   });
 
-  it('warns with the install command when a token is set but no plugin is installed', async () => {
+  it('skips naming both steps when no plugin is installed', async () => {
     const result = await checkGithubForge({ GH_TOKEN: 'ghp_x' }, refusing('no_plugin_for_host'));
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
-  });
-
-  it('counts every token the GitHub plugin reads as configured', async () => {
-    for (const name of githubPluginMetadata.token_env) {
-      const result = await checkGithubForge({ [name]: 'ghp_x' }, refusing('no_plugin_for_host'));
-      expect(result.status).toBe('warn');
-    }
-  });
-
-  it('skips naming both steps when neither is set up', async () => {
-    const result = await checkGithubForge({}, refusing('no_plugin_for_host'));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
     expect(result.message).toContain('GH_TOKEN in ~/.archon/.env');
