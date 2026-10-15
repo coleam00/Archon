@@ -135,8 +135,8 @@ const CONSUMED_KIND: Record<StoredCredentialKind, CredentialKind> = {
 };
 
 /**
- * Whether a provider can use a stored `vendor` credential connected as `kind`. A dynamic catalog declares no vendors, so it
- * consumes no stored credential.
+ * Whether a provider can use a stored `vendor` credential connected as `kind`. A dynamic
+ * catalog declares no vendors, so it consumes no stored credential.
  */
 export function consumesStoredCredential(
   catalog: { kind: 'static'; specs: readonly CredentialSpec[] } | { kind: 'dynamic' },
