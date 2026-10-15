@@ -3993,6 +3993,33 @@ branch refs/heads/feature/auth
       }
     });
 
+    test('preserves the original remote failure when absence confirmation fails', async () => {
+      const original = new git.GitFailure(
+        'unclassified',
+        'remote lookup failed',
+        Object.assign(new Error('lookup failed'), { code: 2, stderr: 'original Git evidence' })
+      );
+      const confirmationFailure = new git.GitFailure(
+        'unclassified',
+        'local config lookup failed',
+        Object.assign(new Error('inspection failed'), { code: 128, stderr: 'config unreadable' })
+      );
+
+      for (const inspect of [
+        () => git.getRemoteUrl(repo('/workspace/repo')),
+        () => git.detectForge(repo('/workspace/repo')),
+      ]) {
+        execSpy.mockReset();
+        execSpy.mockRejectedValueOnce(original);
+        execSpy.mockRejectedValueOnce(confirmationFailure);
+
+        const failure = await inspect().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toHaveProperty('cause', original);
+        expect(execSpy).toHaveBeenCalledTimes(2);
+      }
+    });
+
     test('throws for unexpected errors', async () => {
       execSpy.mockRejectedValue(new Error('fatal: permission denied'));
 
