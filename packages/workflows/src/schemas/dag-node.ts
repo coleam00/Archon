@@ -1042,8 +1042,8 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
- * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
- * budget ceiling is deferred to #1961. `join` reduces the
+ * leave some children uncancelled when the parent is abandoned. The workflow `budget:`
+ * does not cover fan-out yet (a budgeted workflow rejects it at load; #2815). `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
  *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
  *      cancelled entries are represented as `{ archon_failed: true, error, status }`

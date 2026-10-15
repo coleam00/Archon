@@ -49,7 +49,18 @@ export function reportedMeasurementSchema<T extends z.ZodType>(
 }
 export const executionSpendSchema = z.object({
   tokens: reportedMeasurementSchema(tokenUsageSchema),
-  costUsd: reportedMeasurementSchema(z.number()),
+  costUsd: z.discriminatedUnion('source', [
+    z.object({
+      source: z.literal('provider'),
+      value: z.number(),
+      /**
+       * The attempt made provider calls whose cost was not all reported, so
+       * `value` is a floor. A run budget treats such a cost as unavailable.
+       */
+      partial: z.literal(true).optional(),
+    }),
+    unavailableMeasurementSchema,
+  ]),
   stopReason: reportedMeasurementSchema(z.string()),
   numTurns: reportedMeasurementSchema(z.number()),
 });

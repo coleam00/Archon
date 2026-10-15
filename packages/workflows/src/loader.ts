@@ -50,6 +50,7 @@ import {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowRunBudgetSchema,
   workflowDeprecationSchema,
   workflowInputSpecSchema,
   KNOWN_WORKFLOW_KEYS,
@@ -59,6 +60,7 @@ import {
 import type {
   WorkflowRequirement,
   WorkflowEvidencePolicy,
+  WorkflowRunBudget,
   WorkflowDeprecation,
   WorkflowInputSpec,
 } from './schemas/workflow';
@@ -222,6 +224,43 @@ export function validateWorkflowOutcomeDeclaration(
     return `Workflow outcome_field: '${field}' on node '${workflow.returns}' must explicitly declare type: boolean`;
   }
   return null;
+}
+
+/**
+ * Whether the run budget counts each node kind's work and spend. Keyed by every kind so
+ * a new kind fails the type-check until it is classified. `include` is judged after
+ * expansion, by the kinds it flattens into.
+ */
+const RUN_BUDGET_SUPPORTS_KIND: Record<(DagNode | IncludeDirective)['kind'], boolean> = {
+  agent: true,
+  exec: true,
+  gate: true,
+  halt: true,
+  wait: true,
+  include: true,
+  loop: false,
+  loop_group: false,
+  workflow: false,
+  compose_fan_out: false,
+};
+
+/**
+ * Reject node shapes whose work or spend the run budget does not yet count.
+ *
+ * Runs on the flattened graph too (`expandWorkflowIncludes`), so a loop reached
+ * through `include:` is caught. An included workflow's own `budget:` is dropped
+ * like any run-owned field; the composing run's budget governs every node.
+ */
+export function validateRunBudgetShape(
+  workflow: Pick<WorkflowDefinition, 'budget'> & {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  }
+): string | null {
+  if (workflow.budget === undefined) return null;
+  const node = workflow.nodes.find(n => !RUN_BUDGET_SUPPORTS_KIND[n.kind]);
+  if (node === undefined) return null;
+  const shape = node.kind === 'compose_fan_out' ? 'include with fan_out' : node.kind;
+  return `Workflow declares budget: but node '${node.id}' is a ${shape} node, whose work and spend the run budget does not count yet (loops, workflow: child runs and fan-out are not supported under a run budget). Remove budget: or restructure the workflow without that node.`;
 }
 
 /**
@@ -1925,6 +1964,26 @@ export function parseWorkflow(
       evidencePolicy = parsedEvidence.data;
     }
 
+    // Parse workflow-level run budget (#2814). Malformed REJECTS, like
+    // evidence_policy: a misspelt or invalid ceiling must not silently mean no
+    // ceiling. The strict schema rejects unknown keys, so `budget` needs no
+    // KNOWN_WORKFLOW_NESTED_KEYS entry.
+    let budget: WorkflowRunBudget | undefined;
+    if (raw.budget !== undefined) {
+      const parsedBudget = workflowRunBudgetSchema.safeParse(raw.budget);
+      if (!parsedBudget.success) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: `Invalid budget: expected { max_work_units?: positive integer, max_spend_usd?: positive number } declaring at least one ceiling (${parsedBudget.error.issues[0]?.message ?? 'invalid value'}).`,
+            errorType: 'validation_error',
+          },
+        };
+      }
+      budget = parsedBudget.data;
+    }
+
     // Parse workflow-level deprecation marker (#2781). Like evidence_policy, a
     // malformed block REJECTS the workflow instead of warn-and-ignore: silently
     // dropping it would ship a bundled default with no removal warning at all,
@@ -2259,6 +2318,7 @@ export function parseWorkflow(
       ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
       ...(containerPolicy ? { container: containerPolicy } : {}),
       ...(evidencePolicy !== undefined ? { evidence_policy: evidencePolicy } : {}),
+      ...(budget !== undefined ? { budget } : {}),
       ...(tags !== undefined ? { tags } : {}),
       ...(requires !== undefined ? { requires } : {}),
       ...(inputs !== undefined ? { inputs } : {}),
@@ -2287,6 +2347,13 @@ export function parseWorkflow(
           error: outcomeDeclarationError,
           errorType: 'validation_error',
         },
+      };
+    }
+    const runBudgetShapeError = validateRunBudgetShape(workflow);
+    if (runBudgetShapeError !== null) {
+      return {
+        workflow: null,
+        error: { filename, error: runBudgetShapeError, errorType: 'validation_error' },
       };
     }
 
