@@ -389,6 +389,7 @@ export type LoadCommandResult =
       success: false;
       reason: 'invalid_name' | 'empty_file' | 'not_found' | 'permission_denied' | 'read_error';
       message: string;
+      cause?: unknown;
     };
 
 // ---------------------------------------------------------------------------
@@ -464,6 +465,7 @@ export interface WorkflowLoadError {
   readonly filename: string;
   readonly error: string;
   readonly errorType: 'read_error' | 'parse_error' | 'validation_error';
+  readonly cause?: unknown;
 }
 
 /**

@@ -1367,7 +1367,12 @@ export function expandWorkflowIncludes(
     } catch (e) {
       if (e instanceof IncludeExpansionError) {
         failed.add(name);
-        errors.push({ filename: name, error: e.message, errorType: e.errorType });
+        errors.push({
+          filename: name,
+          error: e.message,
+          errorType: e.errorType,
+          ...(e.cause !== undefined ? { cause: e.cause } : {}),
+        });
       } else {
         throw e;
       }

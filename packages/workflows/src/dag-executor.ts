@@ -5,6 +5,7 @@ import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import { randomUUID } from 'node:crypto';
+import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -236,6 +237,7 @@ import {
   readComposedMeta,
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
+  isIncludeCommandReadError,
 } from './compiled-command';
 import {
   assistantModelDefaults,
@@ -1106,25 +1108,27 @@ function retryableFailureClass(
 
 /**
  * Run one governed attempt under the run budget: admit and reserve a work unit, write
- * its durable record, run the attempt, then charge its spend. The reservation precedes
- * the first await so parallel siblings cannot share the last unit; the record precedes
- * the attempt so a crash over-counts rather than under-counts.
+ * its durable record, run the attempt, then charge its spend. The executor reserves
+ * after source preparation and before recording its attempt. Admission is synchronous
+ * so parallel siblings cannot share the last unit.
  */
 async function runBudgetedAttempt(
   ctx: RunLayersContext,
   node: AgentNode | ExecNode,
-  attempt: () => Promise<NodeExecutionResult>
+  attempt: (reserve: () => Promise<void>) => Promise<NodeExecutionResult>
 ): Promise<NodeExecutionResult> {
   const ledger = ctx.runBudget;
-  if (ledger === undefined) return attempt();
+  if (ledger === undefined) return attempt(async () => undefined);
   const path = ctx.stepNamePrefix + node.id;
-  const refusal = admitRunBudgetAttempt(ledger, path);
-  if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
-  await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  const reserve = async (): Promise<void> => {
+    const refusal = admitRunBudgetAttempt(ledger, path);
+    if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
+    await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  };
   const executionBefore = ctx.currentExecution;
   let result: NodeExecutionResult;
   try {
-    result = await attempt();
+    result = await attempt(reserve);
   } catch (error) {
     // An agent attempt that started and then threw never reported its cost. One that
     // threw before starting made no provider call.
@@ -2319,6 +2323,7 @@ function aiNodeEnvironment(
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
+  reserveBudget: () => Promise<void>,
   provider: string,
   nodeOptions: SendQueryOptions | undefined,
   resumeSessionId: string | undefined,
@@ -2344,7 +2349,6 @@ async function executeNodeInternal(
     logDir,
     baseBranch,
     docsDir,
-    configuredCommandFolder,
     issueContext,
     workflowSourceRoots,
   } = ctx;
@@ -2369,7 +2373,9 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
-  if (commandName !== undefined) await assertNodeSourceReadable(workflowSourceRoots, stepName);
+  const commandPrompt =
+    commandName === undefined ? undefined : await loadNodeCommandPrompt(ctx, commandName, stepName);
+  await reserveBudget();
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
   const homeMcpDirectory = readHomeMcpDirectory(node);
@@ -2476,13 +2482,8 @@ async function executeNodeInternal(
   // Load prompt
   let rawPrompt: string;
   if (commandName !== undefined) {
-    const promptResult = await loadCommandPrompt(
-      deps,
-      cwd,
-      commandName,
-      configuredCommandFolder,
-      workflowSourceRoots
-    );
+    const promptResult = commandPrompt;
+    if (promptResult === undefined) throw new Error(`Missing prepared command for '${stepName}'`);
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
@@ -3362,6 +3363,28 @@ async function assertNodeSourceReadable(
   }
 }
 
+async function loadNodeCommandPrompt(
+  ctx: RunLayersContext,
+  command: string,
+  stepName: string
+): Promise<Awaited<ReturnType<typeof loadCommandPrompt>>> {
+  await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
+  try {
+    const result = await loadCommandPrompt(
+      ctx.deps,
+      ctx.cwd,
+      command,
+      ctx.configuredCommandFolder,
+      ctx.workflowSourceRoots
+    );
+    if (!result.success && isSourceReadFailure(result.cause)) throw result.cause;
+    return result;
+  } catch (error) {
+    if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+    throw error;
+  }
+}
+
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
 class NodeFailure extends Error {
   constructor(
@@ -3776,6 +3799,7 @@ async function warnOnLiteralUserVars(
 async function executeScriptNode(
   ctx: RunLayersContext,
   node: ExecNode,
+  reserveBudget: () => Promise<void>,
   envVars?: Record<string, string>,
   protectedEnvKeys?: readonly string[],
   protectedCredentialValues?: readonly string[],
@@ -3808,15 +3832,6 @@ async function executeScriptNode(
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
-  const execution: NodeExecutionRecord = {
-    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
-    diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
-  };
-
-  getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
-
-  await recordNodeState({ store: deps.store, logDir }, execution);
-
   // Resolve before deciding whether this is inline or filesystem-backed: substitutions
   // can turn the authored field into either form. A named source is checked outside the
   // deterministic retry classifier, so an integrity failure cannot consume retries.
@@ -3843,6 +3858,21 @@ async function executeScriptNode(
     }
   );
   if (!isInlineScript(finalScript)) await assertNodeSourceReadable(workflowSourceRoots, stepName);
+  const namedScripts = isInlineScript(finalScript)
+    ? undefined
+    : await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript])).catch(error => {
+        if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+        return error instanceof Error ? error : new Error(String(error));
+      });
+  await reserveBudget();
+  const execution: NodeExecutionRecord = {
+    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
+    diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
+  };
+
+  getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
+
+  await recordNodeState({ store: deps.store, logDir }, execution);
 
   // One-release migration warn for any literal user-controlled var ref that no
   // longer substitutes now that delivery moved to env vars (#2115).
@@ -3899,18 +3929,8 @@ async function executeScriptNode(
   } else {
     // Named script — look up across repo and home scopes.
     // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
-    // Discovery has its own try/catch so a read error on a scripts directory isn't
-    // mis-attributed by the outer catch's "permission denied (check cwd permissions)"
-    // branch, which is for execFileAsync EACCES. A read error is this host's problem, not
-    // the run's: it releases the run (#4209). Anything else, such as a duplicate script
-    // name, is source that was read and found invalid, and fails the node.
-    let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
-    try {
-      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]));
-    } catch (discoveryErr) {
-      if (isSourceReadFailure(discoveryErr))
-        throw new RunSourceUnreadableError(stepName, discoveryErr);
-      const err = discoveryErr as Error;
+    if (namedScripts instanceof Error) {
+      const err = namedScripts;
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
       getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
       await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
@@ -3924,7 +3944,7 @@ async function executeScriptNode(
         )
       );
     }
-    const scriptDef = scripts.get(finalScript);
+    const scriptDef = namedScripts?.get(finalScript);
 
     if (!scriptDef) {
       const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
@@ -5481,9 +5501,7 @@ async function executeLoopNode(
     docsDir,
     config,
     issueContext,
-    configuredCommandFolder,
     execContext,
-    workflowSourceRoots,
   } = ctx;
   const loop = node.loop;
   const retryConfig = getEffectiveNodeRetryConfig(node);
@@ -5710,14 +5728,7 @@ async function executeLoopNode(
       );
       return failLoopNode(errorMsg, { failureKind: 'config', data: { command: loop.command } });
     } else {
-      await assertNodeSourceReadable(workflowSourceRoots, stepName);
-      const promptResult = await loadCommandPrompt(
-        deps,
-        cwd,
-        loop.command,
-        configuredCommandFolder,
-        workflowSourceRoots
-      );
+      const promptResult = await loadNodeCommandPrompt(ctx, loop.command, stepName);
       if (!promptResult.success) {
         getLog().error(
           { nodeId: node.id, command: loop.command, error: promptResult.message },
@@ -7508,10 +7519,11 @@ async function executeApprovalNode(
       execContext
     );
 
-    const output = await runBudgetedAttempt(ctx, syntheticNode, () =>
+    const output = await runBudgetedAttempt(ctx, syntheticNode, reserve =>
       executeNodeInternal(
         ctx,
         syntheticNode,
+        reserve,
         provider,
         nodeOptions,
         undefined, // fresh session
@@ -8050,6 +8062,8 @@ export async function resolveFanOutChildDefinition(
       deps.providers,
       sourceRoots
     );
+    const readFailure = errors.find(error => isSourceReadFailure(error.cause));
+    if (readFailure !== undefined) throw readFailure.cause;
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
     // is reachable here only by the composition that names it.
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
@@ -8066,9 +8080,14 @@ export async function resolveFanOutChildDefinition(
       };
     }
     const commandContents = await resolveWorkflowCommandContents(sourceRoots, definitions);
+    for (const content of commandContents.values()) {
+      if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause)) {
+        throw content.cause;
+      }
+    }
     return { definition, definitions, commandContents };
   } catch (err) {
-    if (err instanceof WorkflowSourceIntegrityError) throw err;
+    if (err instanceof WorkflowSourceIntegrityError || isSourceReadFailure(err)) throw err;
     return { unresolved: (err as Error).message };
   }
 }
@@ -9170,10 +9189,28 @@ async function executeComposeFanOutNode(
         // Without a terminal record the resumed fan-out would find this instance started
         // and never finished, and refuse to replay it.
         if (error instanceof RunSourceUnreadableError) {
+          const rows = await deps.store.listWorkflowEvents(parentRun.id);
+          let start = rows.length - 1;
+          while (
+            start >= 0 &&
+            !(
+              rows[start].step_name === instanceScopeName &&
+              rows[start].event_type === 'node_started'
+            )
+          ) {
+            start--;
+          }
+          const usage = await foldDagResumeSnapshot(
+            rows.slice(start + 1).filter(row => row.step_name?.startsWith(instanceStepNamePrefix)),
+            parentRun.id
+          );
           const releasedRecord = finishNodeExecution(
             instanceExecution,
             { status: 'failed', error: error.message, failureKind: 'child_failed' },
             {
+              costUsd: usage.costUsd,
+              tokens: usage.tokens,
+              tokensUnknown: usage.tokensUnknown,
               output: { text: '' },
               diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
             }
@@ -10114,8 +10151,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.deps.store,
                     ctx.stepNamePrefix + node.id,
                     () =>
-                      runBudgetedAttempt(ctx, node, () =>
-                        executeBashNode(
+                      runBudgetedAttempt(ctx, node, async reserve => {
+                        await reserve();
+                        return executeBashNode(
                           ctx,
                           node,
                           ctx.config.envVars,
@@ -10124,8 +10162,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                           ctx.stepNamePrefix,
                           iteration,
                           ctx.bodyLoopUserInput ?? ''
-                        )
-                      ),
+                        );
+                      }),
                     iteration
                   );
                   return {
@@ -10158,10 +10196,11 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.deps.store,
                   ctx.stepNamePrefix + node.id,
                   () =>
-                    runBudgetedAttempt(ctx, node, () =>
+                    runBudgetedAttempt(ctx, node, reserve =>
                       executeScriptNode(
                         ctx,
                         node,
+                        reserve,
                         ctx.config.envVars,
                         ctx.config.protectedEnvKeys,
                         ctx.config.protectedCredentialValues,
@@ -10597,7 +10636,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
               () =>
-                runBudgetedAttempt(ctx, node, async () => {
+                runBudgetedAttempt(ctx, node, async reserve => {
                   // Fresh per attempt: an attempt after a transient failure observes
                   // artifacts published in the interval, and never reuses the
                   // listing handed to AI-configuration substitution above.
@@ -10608,6 +10647,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   return executeNodeInternal(
                     ctx,
                     node,
+                    reserve,
                     provider,
                     nodeOptions,
                     resumeSessionId,

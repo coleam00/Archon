@@ -405,6 +405,7 @@ export async function loadCommandPrompt(
       return {
         success: false,
         reason,
+        ...(err.code !== 'ENOENT' ? { cause: error } : {}),
         message:
           err.code === 'ENOENT'
             ? `Packaged command not found: ${filePath}`
@@ -454,6 +455,7 @@ export async function loadCommandPrompt(
         return {
           success: false,
           reason: 'permission_denied',
+          cause: error,
           message: `Permission denied reading command: ${commandName}.md`,
         };
       }
@@ -464,6 +466,7 @@ export async function loadCommandPrompt(
       return {
         success: false,
         reason: 'read_error',
+        cause: error,
         message: `Error reading command ${commandName}.md: ${err.message}`,
       };
     }
@@ -496,7 +499,12 @@ export async function loadCommandPrompt(
         } else {
           getLog().debug({ commandName }, 'command_app_default_not_found');
         }
-        // Fall through to not found
+        return {
+          success: false,
+          reason: 'read_error',
+          cause: error,
+          message: `Error reading app default command ${commandName}.md: ${err.message}`,
+        };
       }
     } else {
       getLog().debug({ commandName }, 'command_app_default_not_found');

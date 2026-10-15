@@ -255,6 +255,7 @@ async function loadWorkflowsFromDir(
           filename: entry,
           error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
           errorType: 'read_error',
+          cause: error,
         });
       }
     }
@@ -268,6 +269,7 @@ async function loadWorkflowsFromDir(
         filename: dirPath,
         error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
         errorType: 'read_error',
+        cause: error,
       });
     }
   }
@@ -305,6 +307,7 @@ async function loadPackWorkflows(
       filename: label,
       error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
       errorType: 'read_error',
+      cause: error,
     });
     return { files, errors };
   }
@@ -325,6 +328,7 @@ async function loadPackWorkflows(
           filename: `${label}/${workflowFolder}`,
           error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
           errorType: 'read_error',
+          cause: error,
         });
       }
       continue;
@@ -347,6 +351,7 @@ async function loadPackWorkflows(
         filename: `${label}/${workflowFolder}`,
         error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
         errorType: 'read_error',
+        cause: error,
       });
       continue;
     }
@@ -375,6 +380,7 @@ async function loadPackWorkflows(
         filename: `${label}/${workflowFolder}/${filename}`,
         error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
         errorType: 'read_error',
+        cause: error,
       });
       continue;
     }
@@ -425,6 +431,7 @@ async function loadPackagedWorkflowsFromDir(
       filename: workflowsRoot,
       error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
       errorType: 'read_error',
+      cause: error,
     });
     return { workflows, errors };
   }
@@ -441,6 +448,7 @@ async function loadPackagedWorkflowsFromDir(
           filename: pack,
           error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
           errorType: 'read_error',
+          cause: error,
         });
       }
       continue;
@@ -802,6 +810,7 @@ export async function discoverWorkflows(
           filename,
           error: `Script discovery failed: ${error instanceof Error ? error.message : String(error)}`,
           errorType: 'read_error',
+          cause: error,
         });
         files.delete(filename);
         continue;
@@ -833,6 +842,7 @@ export async function discoverWorkflows(
             filename,
             error: `Script file read error at '${script.path}': ${err.message} (${err.code ?? 'unknown'})`,
             errorType: 'read_error',
+            cause: error,
           });
           files.delete(filename);
           unreadable = true;
@@ -1166,6 +1176,7 @@ export async function discoverWorkflows(
             filename: appWorkflowsPath,
             error: err.message,
             errorType: 'read_error',
+            cause: error,
           });
         } else {
           getLog().debug({ appWorkflowsPath }, 'app_defaults_directory_not_found');
@@ -1206,6 +1217,7 @@ export async function discoverWorkflows(
         filename: homeWorkflowPath,
         error: err.message,
         errorType: 'read_error',
+        cause: error,
       });
     } else {
       getLog().debug({ homeWorkflowPath }, 'home_workflows_not_found');
