@@ -59,21 +59,47 @@ test('unusable receipts warn without blocking a healthy provider', async () => {
   const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
   const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
   try {
-    for (const value of [
-      { ...receipt, descriptor: { ...descriptor, id: 'other' } },
-      { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
-      { ...receipt, descriptor: { ...descriptor, id: 'claude' } },
-      {
-        ...receipt,
-        descriptor: {
-          ...descriptor,
-          credentials: {
-            kind: 'static',
-            specs: [{ vendor: 'unknown', displayName: 'Unknown', kinds: ['api_key'] }],
+    for (const [value, reason] of [
+      [{ ...receipt, descriptor: { ...descriptor, id: 'other' } }, 'descriptor id does not match'],
+      [
+        { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
+        'receipt does not own its executable',
+      ],
+      [
+        { ...receipt, descriptor: { ...descriptor, id: 'claude' } },
+        'maintained provider receipt is not first-party',
+      ],
+      [
+        {
+          ...receipt,
+          descriptor: {
+            ...descriptor,
+            credentials: {
+              kind: 'static',
+              specs: [{ vendor: 'unknown', displayName: 'Unknown', kinds: ['api_key'] }],
+            },
           },
         },
-      },
-    ]) {
+        'no credential delivery rule for unknown',
+      ],
+      [
+        {
+          ...receipt,
+          descriptor: {
+            ...descriptor,
+            config: {
+              ...descriptor.config,
+              run: {
+                type: 'object',
+                $defs: { model: ['SECRET_TOKEN_AND_MESSAGE'] },
+                allOf: [{ $ref: '#/$defs/model' }],
+              },
+            },
+          },
+        },
+        'provider descriptor failed schema validation',
+      ],
+    ] as const) {
       const contents = JSON.stringify({
         ...value,
         id: 'owner/broken',
@@ -86,13 +112,13 @@ test('unusable receipts warn without blocking a healthy provider', async () => {
         descriptor.id,
       ]);
       const warnings = JSON.stringify(warning.mock.calls);
+      expect(warnings).toContain(reason);
       expect(warnings).toContain(file);
       expect(warnings).toContain('archon plugin update owner/broken');
       expect(warnings).toContain('archon plugin remove owner/broken');
       expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
       expect(await readFile(file, 'utf8')).toBe(contents);
     }
-    expect(JSON.stringify(warning.mock.calls)).toContain('no credential delivery rule for unknown');
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();
