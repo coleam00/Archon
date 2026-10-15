@@ -3566,6 +3566,7 @@ async function executeBashNode(
       {
         cwd,
         timeout,
+        killTreeOnTimeout: true,
         env: subprocessEnv,
         protectedEnvKeys,
         protectedCredentialValues,
@@ -3602,7 +3603,7 @@ async function executeBashNode(
     // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
     // rejection. Report it verbatim and keep it outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
-    const isTimeout = !contractFailure && isSubprocessTimeout(err);
+    const isTimeout = !contractFailure && !err.cleanupError && isSubprocessTimeout(err);
     if (isTimeout && node.on_timeout === 'skip') {
       return recordExecTimeoutSkip(ctx, execution);
     }
@@ -3614,6 +3615,8 @@ async function executeBashNode(
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
+    } else if (err.cleanupError) {
+      errorMsg = `${label} failed during subprocess tree cleanup: ${err.cleanupError.message}`;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
@@ -3908,6 +3911,7 @@ async function executeScriptNode(
     const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
       cwd,
       timeout,
+      killTreeOnTimeout: true,
       env: subprocessEnv,
       protectedEnvKeys,
       protectedCredentialValues,
@@ -3940,7 +3944,7 @@ async function executeScriptNode(
     const err = error as RawSubprocessRejection;
     // See executeBashNode: a contract failure (#2453) stays outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
-    const isTimeout = !contractFailure && isSubprocessTimeout(err);
+    const isTimeout = !contractFailure && !err.cleanupError && isSubprocessTimeout(err);
     if (isTimeout && node.on_timeout === 'skip') {
       return recordExecTimeoutSkip(ctx, execution);
     }
@@ -3952,6 +3956,8 @@ async function executeScriptNode(
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
+    } else if (err.cleanupError) {
+      errorMsg = `${label} failed during subprocess tree cleanup: ${err.cleanupError.message}`;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (execContext.kind === 'host' && err.code === 'ENOENT') {

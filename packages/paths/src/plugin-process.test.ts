@@ -17,3 +17,13 @@ describe('terminateWindowsTree', () => {
     );
   });
 });
+
+test.skipIf(process.platform !== 'win32')(
+  'strict taskkill rejects even when the root has exited',
+  async () => {
+    const { forceTerminateWindowsTree } = await import('./plugin-process');
+    const child = Bun.spawn([process.execPath, '--no-env-file', '-e', '']);
+    await child.exited;
+    await expect(forceTerminateWindowsTree(child.pid)).rejects.toBeDefined();
+  }
+);

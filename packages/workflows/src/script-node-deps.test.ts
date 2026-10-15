@@ -1,29 +1,23 @@
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
- * These tests mock @archon/git's execFileAsync to verify command construction
+ * These tests spy on the host node runner to verify command construction
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
+import { hostNodeSubprocess } from './subprocess';
 import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-// --- Mock @archon/git BEFORE any imports that depend on it ---
-
-const mockExecFileAsync = mock(
-  async (_cmd: string, _args: string[], _opts?: unknown) =>
-    ({ stdout: '', stderr: '' }) as { stdout: string; stderr: string }
-);
-
-mock.module('@archon/git', () => ({
-  execFileAsync: mockExecFileAsync,
-  mkdirAsync: mock(async () => undefined),
-}));
+const nodeExecSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+  stdout: '',
+  stderr: '',
+});
 
 // --- Mock logger (MUST come before module-under-test imports) ---
 
@@ -423,7 +417,7 @@ describe('script node deps field — command construction', () => {
       `script-deps-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
     );
     await mkdir(testDir, { recursive: true });
-    mockExecFileAsync.mockClear();
+    nodeExecSpy.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
   });
@@ -454,10 +448,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'uv');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('uv');
     expect(args[0]).toBe('run');
     expect(args).toContain('--with');
@@ -487,10 +482,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'uv');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('uv');
     expect(args).toEqual(['run', 'python', '-c', 'print("hello")']);
   });
@@ -513,10 +509,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'uv');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('uv');
     expect(args).toEqual(['run', 'python', '-c', 'print("no deps")']);
   });
@@ -539,10 +536,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'bun');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('bun');
     // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
     expect(args).toEqual(['--no-env-file', '-e', node.script]);
@@ -567,10 +565,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'bun');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('bun');
     expect(args).toEqual(['--no-env-file', '-e', 'console.log("hello")']);
   });
@@ -599,10 +598,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'uv');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('uv');
     expect(args[0]).toBe('run');
     expect(args).toContain('--with');
@@ -638,10 +638,11 @@ describe('script node deps field — command construction', () => {
       })
     );
 
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
+    const calls = nodeExecSpy.mock.calls;
+    const scriptCall = calls.find(c => c[0] === 'uv');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    if (!scriptCall) throw new Error('script was not dispatched');
+    const [cmd, args] = scriptCall;
     expect(cmd).toBe('uv');
     expect(args).not.toContain('--with');
     // uv run <path>

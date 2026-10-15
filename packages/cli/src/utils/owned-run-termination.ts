@@ -19,8 +19,7 @@ export interface OwnedRunTerminationInput {
   /**
    * End the in-flight node process trees on interrupt, so a resume does not overlap the
    * interrupted attempt (#3552); a descendant that calls `setsid` still escapes. False for
-   * a detached owner: `archon workflow cancel` ends its nodes by killing the owner's process
-   * group, which a recorded node escapes.
+   * a detached owner: node bodies watch for owner death when cancellation ends the owner.
    */
   endNodeProcessTrees: boolean;
   /**

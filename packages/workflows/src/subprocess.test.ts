@@ -1,10 +1,12 @@
-import { expect, test } from 'bun:test';
+import * as pluginProcess from '@archon/paths/plugin-process';
+import { expect, test, spyOn } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   isSubprocessTimeout,
+  redactSubprocessError,
   recordNodeProcessTrees,
   runSubprocess,
   type RawSubprocessRejection,
@@ -192,3 +194,412 @@ test.skipIf(process.platform === 'win32')(
     expect(result.stderr).toBe('');
   }
 );
+
+for (const recorded of [false, true]) {
+  test(`node timeout stops a wrapper's grandchild (recorded=${recorded})`, async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-tree-')));
+    const marker = join(dir, 'marker');
+    const ready = join(dir, 'ready');
+    const worker = join(dir, 'worker.js');
+    writeFileSync(
+      worker,
+      `import {writeFileSync} from 'node:fs';
+      writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+      setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+    );
+    const trees = recorded ? recordNodeProcessTrees() : undefined;
+    try {
+      const result = runSubprocess(
+        { kind: 'host' },
+        process.execPath,
+        [
+          '--no-env-file',
+          '-e',
+          `require('node:child_process').spawn(process.execPath, ['--no-env-file', ${JSON.stringify(worker)}], {stdio: 'inherit'}); setInterval(() => {}, 1000);`,
+        ],
+        {
+          cwd: dir,
+          timeout: 1000,
+          env: {},
+          retention: { standalone: true },
+          ...{ killTreeOnTimeout: true },
+        }
+      ).catch((error: unknown) => error as RawSubprocessRejection);
+      await waitUntil('grandchild readiness', () => existsSync(ready));
+      const error = (await result) as RawSubprocessRejection;
+      expect(isSubprocessTimeout(error)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 1800));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      trees?.release();
+      if (existsSync(ready)) {
+        const pid = Number(readFileSync(ready, 'utf8'));
+        if (processExists(pid)) process.kill(pid, 'SIGKILL');
+      }
+    }
+  });
+}
+
+function runNode(script: string, timeout = 5000): ReturnType<typeof runSubprocess> {
+  return runSubprocess({ kind: 'host' }, process.execPath, ['--no-env-file', '-e', script], {
+    cwd: import.meta.dir,
+    timeout,
+    env: {},
+    retention: { standalone: true },
+    killTreeOnTimeout: true,
+  });
+}
+
+posixOnly('node timeout escalates only while its leader remains alive', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-escalate-')));
+  const ready = join(dir, 'ready');
+  const node = runNode(
+    `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''); setInterval(() => {}, 1000);`,
+    1000
+  ).catch((e: unknown) => e as RawSubprocessRejection);
+  await waitUntil('TERM handler', () => existsSync(ready));
+  const start = Date.now();
+  const error = (await node) as RawSubprocessRejection;
+  expect(error.cleanupError).toBeUndefined();
+  expect(error).toMatchObject({
+    killed: true,
+    timedOut: true,
+    code: null,
+    signal: 'SIGTERM',
+    observedExit: { code: null, signal: 'SIGKILL' },
+  });
+  expect(Date.now() - start).toBeLessThan(3200);
+});
+
+posixOnly(
+  'an exited leader with a surviving descendant fails cleanup without a late group kill',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-orphan-')));
+    const ready = join(dir, 'ready');
+    const worker = join(dir, 'worker.js');
+    writeFileSync(
+      worker,
+      `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`
+    );
+    const node = runNode(
+      `require('node:child_process').spawn(process.execPath, ['--no-env-file', ${JSON.stringify(worker)}], {stdio:'inherit'}); setInterval(() => {}, 1000);`,
+      1000
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    try {
+      await waitUntil('TERM-ignoring descendant', () => existsSync(ready));
+      const error = (await node) as RawSubprocessRejection;
+      expect(error.cleanupError?.message).toContain('still running');
+      expect(error.observedExit?.signal).toBe('SIGTERM');
+      const pid = Number(readFileSync(ready, 'utf8'));
+      expect(processExists(pid)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      expect(processExists(pid)).toBe(true);
+    } finally {
+      if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
+    }
+  }
+);
+
+posixOnly(
+  'an already-exited root holding output cannot be cleaned up by a stale group signal',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-held-')));
+    const ready = join(dir, 'ready');
+    const node = runSubprocess(
+      { kind: 'host' },
+      '/bin/bash',
+      ['-c', `/bin/sleep 30 & echo $! > '${ready}'`],
+      {
+        cwd: dir,
+        env: {},
+        timeout: 500,
+        killTreeOnTimeout: true,
+        retention: { standalone: true },
+      }
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    try {
+      await waitUntil('background child', () => existsSync(ready));
+      const error = (await node) as RawSubprocessRejection;
+      expect(error.observedExit?.code).toBe(0);
+      expect(error.cleanupError?.message).toContain('still running');
+      expect(processExists(Number(readFileSync(ready, 'utf8')))).toBe(true);
+    } finally {
+      if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
+    }
+  }
+);
+
+for (const recorded of [false, true]) {
+  posixOnly(`owner death ends node body trees (recorded=${recorded})`, async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-owner-')));
+    const ready = join(dir, 'ready');
+    const ownerFile = join(dir, 'owner.ts');
+    writeFileSync(
+      ownerFile,
+      `import {runSubprocess, recordNodeProcessTrees} from ${JSON.stringify(join(import.meta.dir, 'subprocess.ts'))};
+      ${recorded ? 'recordNodeProcessTrees();' : ''}
+      await runSubprocess({kind:'host'}, '/bin/bash', ['-c', ${JSON.stringify(`/bin/sleep 30 & echo $! > '${ready}'; wait`)}], {
+        cwd: ${JSON.stringify(dir)}, env:{}, timeout:30000, killTreeOnTimeout:true, retention:{standalone:true}
+      });`
+    );
+    const owner = Bun.spawn([process.execPath, '--no-env-file', ownerFile], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    try {
+      await waitUntil('owned descendant', () => existsSync(ready));
+      const descendant = Number(readFileSync(ready, 'utf8'));
+      owner.kill('SIGKILL');
+      await owner.exited;
+      await waitUntil('owned descendant to exit', () => !processExists(descendant));
+    } finally {
+      owner.kill('SIGKILL');
+      await owner.exited;
+      if (existsSync(ready)) {
+        const descendant = Number(readFileSync(ready, 'utf8'));
+        if (processExists(descendant)) process.kill(descendant, 'SIGKILL');
+      }
+    }
+  });
+}
+
+test('node bodies preserve output, numeric exit, spawn errno, and the stream bound', async () => {
+  expect(await runNode(`process.stdout.write('out'); process.stderr.write('err')`)).toMatchObject({
+    stdout: 'out',
+    stderr: 'err',
+  });
+  const exit = await runNode(`process.stdout.write('out'); process.exit(7)`).catch(
+    (e: unknown) => e as RawSubprocessRejection
+  );
+  expect(exit).toMatchObject({ code: 7, stdout: 'out', timedOut: false });
+  await expect(
+    runSubprocess({ kind: 'host' }, '/nonexistent/archon-test-executable', [], {
+      cwd: import.meta.dir,
+      timeout: 1000,
+      env: {},
+      killTreeOnTimeout: true,
+      retention: { standalone: true },
+    })
+  ).rejects.toMatchObject({ code: 'ENOENT' });
+  const overflow = await runNode(
+    `process.stdout.write('x'.repeat(2*1024*1024)); setInterval(() => {}, 1000)`
+  ).catch((e: unknown) => e as RawSubprocessRejection);
+  expect(overflow).toMatchObject({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+  expect((overflow as RawSubprocessRejection).stdout?.length).toBe(1024 * 1024);
+});
+
+posixOnly(
+  'a denied group signal settles with its termination error even while output stays open',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-denied-')));
+    const ready = join(dir, 'ready');
+    const kill = process.kill.bind(process);
+    const error = Object.assign(new Error('group signal denied'), { code: 'EPERM' });
+    const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid < 0 && signal !== 0) throw error;
+      return kill(pid, signal);
+    });
+    const started = Date.now();
+    const node = runNode(
+      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+      500
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    try {
+      await waitUntil('root readiness', () => existsSync(ready));
+      const rejection = (await node) as RawSubprocessRejection;
+      expect(rejection.cleanupError).toBe(error);
+      expect(Date.now() - started).toBeLessThan(1500);
+    } finally {
+      killSpy.mockRestore();
+      if (existsSync(ready)) kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
+    }
+  }
+);
+
+posixOnly('group confirmation preserves a probe permission error', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-probe-')));
+  const ready = join(dir, 'ready');
+  const kill = process.kill.bind(process);
+  const denied = Object.assign(new Error('group probe denied'), { code: 'EPERM' });
+  const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+    if (pid < 0 && signal === 0) throw denied;
+    return kill(pid, signal);
+  });
+  try {
+    const rejection = await runNode(
+      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+      500
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    expect((rejection as RawSubprocessRejection).cleanupError).toBe(denied);
+  } finally {
+    killSpy.mockRestore();
+    if (existsSync(ready)) {
+      const pid = Number(readFileSync(ready, 'utf8'));
+      if (processExists(pid)) kill(pid, 'SIGKILL');
+    }
+  }
+});
+
+for (const fails of [false, true]) {
+  test(`Windows timeout requires successful tree termination (taskkill fails=${fails})`, async () => {
+    const platform = process.platform;
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-windows-')));
+    const ready = join(dir, 'ready');
+    const taskkillError = Object.assign(new Error('taskkill could not prove cleanup'), {
+      code: 'ENOENT',
+    });
+    const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockImplementation(
+      async pid => {
+        process.kill(pid, 'SIGKILL');
+        await Bun.sleep(50);
+        if (fails) throw taskkillError;
+      }
+    );
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const rejection = (await runNode(
+        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+        500
+      ).catch((e: unknown) => e as RawSubprocessRejection)) as RawSubprocessRejection;
+      expect(taskkill).toHaveBeenCalledTimes(1);
+      expect(rejection).toMatchObject({
+        code: null,
+        signal: 'SIGTERM',
+        killed: true,
+        timedOut: true,
+      });
+      expect(rejection.observedExit).toBeDefined();
+      expect(rejection.cleanupError).toBe(fails ? taskkillError : undefined);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      taskkill.mockRestore();
+      if (existsSync(ready)) {
+        const pid = Number(readFileSync(ready, 'utf8'));
+        if (processExists(pid)) process.kill(pid, 'SIGKILL');
+      }
+    }
+  });
+}
+
+posixOnly(
+  'a node body leaves stdin open and disarms its watcher without ending a successful background job',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-background-')));
+    const ready = join(dir, 'ready');
+    const release = join(dir, 'release');
+    const node = runSubprocess(
+      { kind: 'host' },
+      '/bin/bash',
+      [
+        '-c',
+        `/bin/sleep 30 >/dev/null 2>&1 & echo "$$ $!" > '${ready}'; while [ ! -e '${release}' ]; do /bin/sleep 0.05; done`,
+      ],
+      {
+        cwd: dir,
+        env: {},
+        timeout: 5000,
+        killTreeOnTimeout: true,
+        retention: { standalone: true },
+      }
+    );
+    try {
+      await waitUntil(
+        'background job',
+        () => existsSync(ready) && readFileSync(ready, 'utf8').trim().split(' ').length === 2
+      );
+      const [root, job] = readFileSync(ready, 'utf8').trim().split(' ').map(Number);
+      expect(lifelineWatches(root)).toBe(true);
+      writeFileSync(release, '');
+      await node;
+      await waitUntil('watcher disarm', () => !lifelineWatches(root));
+      expect(processExists(job)).toBe(true);
+      const stdin = await runNode(
+        `let eof = false; process.stdin.on('end', () => {eof=true}); process.stdin.resume(); setTimeout(() => { console.log(eof); process.exit(0) }, 50)`
+      );
+      expect(stdin.stdout.trim()).toBe('false');
+    } finally {
+      if (existsSync(ready)) {
+        const job = Number(readFileSync(ready, 'utf8').trim().split(' ')[1]);
+        if (processExists(job)) process.kill(job, 'SIGKILL');
+      }
+    }
+  }
+);
+
+posixOnly('deadline and owner stop share one tree operation and clear later timers', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-race-')));
+  const ready = join(dir, 'ready');
+  const trees = recordNodeProcessTrees();
+  const kill = process.kill.bind(process);
+  const signals: number[] = [];
+  const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+    if (pid < 0 && signal === 'SIGTERM') signals.push(pid);
+    return kill(pid, signal);
+  });
+  try {
+    const node = runNode(
+      `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+      500
+    ).catch((e: unknown) => e as RawSubprocessRejection);
+    await waitUntil('node readiness', () => existsSync(ready));
+    await waitUntil('deadline termination', () => signals.length > 0);
+    await trees.end();
+    const error = (await node) as RawSubprocessRejection;
+    expect(error.cleanupError).toBeUndefined();
+    expect(error.timedOut).toBe(true);
+    expect(signals).toHaveLength(1);
+    await Bun.sleep(100);
+    expect(signals).toHaveLength(1);
+    await expect(runNode(`console.log('must not start')`)).rejects.toThrow('owner is terminating');
+  } finally {
+    killSpy.mockRestore();
+    trees.release();
+    if (existsSync(ready)) {
+      const pid = Number(readFileSync(ready, 'utf8'));
+      if (processExists(pid)) kill(pid, 'SIGKILL');
+    }
+  }
+});
+
+test('cleanup error redaction covers nested termination evidence', () => {
+  const secret = 'termination-error-secret';
+  const cleanupError = Object.assign(new Error(`denied ${secret}`), {
+    cmd: `taskkill ${secret}`,
+    spawnargs: [secret],
+    stdout: secret,
+    stderr: secret,
+  });
+  const rejection = Object.assign(new Error(`failed ${secret}`), { cleanupError });
+  redactSubprocessError(rejection, [secret]);
+  for (const value of [
+    cleanupError.message,
+    cleanupError.stack,
+    cleanupError.cmd,
+    ...cleanupError.spawnargs,
+    cleanupError.stdout,
+    cleanupError.stderr,
+  ]) {
+    expect(value).not.toContain(secret);
+    expect(value).toContain('[REDACTED]');
+  }
+});
+
+test('Windows taskkill success without an observed root exit is a bounded cleanup failure', async () => {
+  const platform = process.platform;
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-unconfirmed-')));
+  const ready = join(dir, 'ready');
+  const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockResolvedValue(undefined);
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    const started = Date.now();
+    const error = (await runNode(
+      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+      500
+    ).catch((e: unknown) => e as RawSubprocessRejection)) as RawSubprocessRejection;
+    expect(error.cleanupError?.message).toContain('did not exit after taskkill');
+    expect(Date.now() - started).toBeLessThan(2500);
+  } finally {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    taskkill.mockRestore();
+    if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
+  }
+});

@@ -1,3 +1,4 @@
+import { hostNodeSubprocess } from './subprocess';
 import { providerRegistry } from '@archon/providers';
 import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
@@ -3615,7 +3616,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('passes config.envVars to bash subprocesses', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('bash-env-run-id');
@@ -3693,7 +3697,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('passes user message through env vars, not string substitution, preventing shell injection', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -3758,7 +3765,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('bun script delivers the user message via env var, never spliced into source', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const workflowRun = makeWorkflowRun('script-inject-bun', {
         workflow_name: 'script-inject',
@@ -3804,7 +3814,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('leaves a literal $ARGUMENTS in the script body inert (not substituted)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const workflowRun = makeWorkflowRun('script-literal', {
         workflow_name: 'script-literal',
@@ -3839,7 +3852,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('uv/python script delivers the user message and issue context via env vars', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const workflowRun = makeWorkflowRun('script-inject-uv', {
         workflow_name: 'script-inject-uv',
@@ -3882,7 +3898,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('a configured project env var cannot shadow an engine-reserved value (#2115)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const workflowRun = makeWorkflowRun('script-env-collision', {
         workflow_name: 'script-env-collision',
@@ -3930,7 +3949,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
 
   it('still substitutes $nodeId.output raw into the script source (item 3 preserved)', async () => {
     // upstream bash → 'UPSTREAM_RAW'; downstream bun script assigns $upstream.output directly.
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(
       async (_cmd: string, args: string[]) =>
         args[0] === '-c'
           ? { stdout: 'UPSTREAM_RAW\n', stderr: '' } // bash upstream
@@ -3976,7 +3995,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('warns when a script body still uses a literal user-controlled variable', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun('script-warn', {
@@ -4016,7 +4038,10 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('does not warn when the script reads values from the environment (correct form)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     try {
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun('script-nowarn', {
@@ -22070,7 +22095,10 @@ describe('executeDagWorkflow -- script nodes', () => {
   });
 
   it('passes config.envVars to script subprocesses', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+    });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('script-env-run-id');
@@ -22100,6 +22128,14 @@ describe('executeDagWorkflow -- script nodes', () => {
     execSpy.mockRestore();
   });
 });
+
+function endTimeoutFixture(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
 
 describe('executeDagWorkflow -- exec timeout outcomes', () => {
   let testDir: string;
@@ -22227,6 +22263,204 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
     expect(events.some(event => event.event_type === 'node_skipped')).toBe(false);
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
+
+  it.each(['sh', 'bun'] as const)(
+    '%s cleanup failure cannot skip and respects authored recovery joins',
+    async runtime => {
+      const secret = 'cleanup-credential-value';
+      const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async (_cmd, args) => {
+        if (args.some(arg => arg.includes('cleanup-test-failure'))) {
+          throw Object.assign(new Error('tree cleanup failed'), {
+            timedOut: true,
+            killed: true,
+            code: null,
+            signal: 'SIGTERM',
+            stdout: 'partial output',
+            stderr: 'partial diagnostic',
+            cleanupError: Object.assign(new Error(`taskkill denied ${secret}`), {
+              code: 'ENOENT',
+              cmd: `taskkill ${secret}`,
+              spawnargs: [secret],
+              stdout: secret,
+              stderr: secret,
+            }),
+          });
+        }
+        return { stdout: 'recovery ran', stderr: '' };
+      });
+      try {
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(`cleanup-failure-${runtime}`),
+            config: { ...minimalConfig, envVars: { CLEANUP_SECRET: secret } },
+            workflow: {
+              name: 'cleanup-failure',
+              nodes: [
+                dagNodeSchema.parse({
+                  id: 'slow',
+                  ...(runtime === 'sh'
+                    ? { bash: 'echo cleanup-test-failure' }
+                    : { script: 'console.log("cleanup-test-failure")', runtime }),
+                  on_timeout: 'skip',
+                }),
+                dagNodeSchema.parse({ id: 'ready', bash: 'echo ready' }),
+                dagNodeSchema.parse({
+                  id: 'sensitive',
+                  bash: 'echo sensitive',
+                  depends_on: ['slow'],
+                }),
+                dagNodeSchema.parse({
+                  id: 'done',
+                  bash: 'echo done',
+                  depends_on: ['slow'],
+                  trigger_rule: 'all_done',
+                }),
+                dagNodeSchema.parse({
+                  id: 'one',
+                  bash: 'echo one',
+                  depends_on: ['slow', 'ready'],
+                  trigger_rule: 'one_success',
+                }),
+                dagNodeSchema.parse({
+                  id: 'none',
+                  bash: 'echo none',
+                  depends_on: ['slow'],
+                  trigger_rule: 'one_success',
+                }),
+              ],
+            },
+          })
+        );
+        const events = persistedEvents(store);
+        const failed = events.find(
+          event => event.event_type === 'node_failed' && event.step_name === 'slow'
+        );
+        expect(failed?.data?.failure_kind).toBe('exec_failed');
+        expect(failed?.data?.error).toContain('taskkill denied [REDACTED]');
+        expect(JSON.stringify(events)).not.toContain(secret);
+        expect(
+          events.some(event => event.event_type === 'node_skipped' && event.step_name === 'slow')
+        ).toBe(false);
+        for (const id of ['sensitive', 'none']) {
+          expect(
+            events.some(event => event.event_type === 'node_skipped' && event.step_name === id)
+          ).toBe(true);
+        }
+        for (const id of ['done', 'one']) {
+          expect(
+            events.some(event => event.event_type === 'node_completed' && event.step_name === id)
+          ).toBe(true);
+        }
+        expect(JSON.stringify(mockLogFn.mock.calls)).not.toContain(secret);
+      } finally {
+        execSpy.mockRestore();
+      }
+    }
+  );
+
+  it.each(['sh', 'bun'] as const)(
+    '%s cleanup failure retains authored on_error: all retries',
+    async runtime => {
+      let attempts = 0;
+      const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async () => {
+        attempts++;
+        if (attempts === 1)
+          throw Object.assign(new Error('tree cleanup failed'), {
+            timedOut: true,
+            cleanupError: new Error('termination denied'),
+          });
+        return { stdout: 'recovered', stderr: '' };
+      });
+      try {
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(`cleanup-retry-${runtime}`),
+            workflow: {
+              name: 'cleanup-retry',
+              nodes: [
+                dagNodeSchema.parse({
+                  id: 'slow',
+                  ...(runtime === 'sh'
+                    ? { bash: 'echo slow' }
+                    : { runtime, script: 'console.log("slow")' }),
+                  on_timeout: 'skip',
+                  retry: { max_attempts: 1, delay_ms: 1000, on_error: 'all' },
+                }),
+              ],
+            },
+          })
+        );
+        expect(attempts).toBe(2);
+        expect(persistedEvents(store)).toContainEqual(
+          expect.objectContaining({ event_type: 'node_completed', step_name: 'slow' })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+    }
+  );
+
+  it.each(['sh', 'bun'] as const)(
+    '%s node timeout stops real wrapper grandchildren before reporting',
+    async runtime => {
+      const ready = join(testDir, 'ready');
+      const marker = join(testDir, 'marker');
+      const worker = join(testDir, 'worker.cjs');
+      const wrapper = join(testDir, 'wrapper.cjs');
+      await writeFile(
+        worker,
+        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+      );
+      await writeFile(
+        wrapper,
+        `require('node:child_process').spawn(process.execPath, ['--no-env-file', ${JSON.stringify(worker)}], {stdio:'inherit'}); setInterval(() => {}, 1000);`
+      );
+      const store = createMockStore();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(`real-tree-${runtime}`),
+            config: {
+              ...minimalConfig,
+              envVars: { TREE_BUN: process.execPath, TREE_WRAPPER: wrapper },
+            },
+            workflow: {
+              name: 'real-tree',
+              nodes: [
+                dagNodeSchema.parse({
+                  id: 'slow',
+                  timeout: 1000,
+                  ...(runtime === 'sh'
+                    ? { bash: '"$TREE_BUN" --no-env-file "$TREE_WRAPPER"' }
+                    : { script: 'require(process.env.TREE_WRAPPER)', runtime }),
+                }),
+              ],
+            },
+          })
+        );
+        expect(existsSync(ready)).toBe(true);
+        const failed = persistedEvents(store).find(
+          event => event.event_type === 'node_failed' && event.step_name === 'slow'
+        );
+        expect(failed?.data?.failure_kind).toBe('timeout');
+        await Bun.sleep(1800);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        if (existsSync(ready)) {
+          const pid = Number(await readFile(ready, 'utf8'));
+          endTimeoutFixture(pid);
+        }
+      }
+    }
+  );
 
   it('does not misclassify a non-timeout failure whose diagnostic mentions a timeout', async () => {
     const store = createMockStore();
@@ -24842,8 +25076,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   });
 
   afterEach(async () => {
-    // The bash-timeout case can leave its killed shell's `sleep` holding the directory on
-    // Windows; a raw rm fails that passing test with EBUSY.
     await removeTempTree(testDir);
   });
 
@@ -25545,7 +25777,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     let outerGatesRun = 0;
     const exitCodeErr = (code: number) =>
       Object.assign(new Error(`exit ${String(code)}`), { code });
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_cmd, args) => {
+    const execute = async (_cmd: string, args: string[]) => {
       const script = String(args?.[1] ?? '');
       observedScripts.push(script);
       if (script === `echo "inner's ready"`) return { stdout: "inner's ready\n", stderr: '' };
@@ -25564,7 +25796,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
         throw exitCodeErr(1); // first seed output -> repeat the enclosing group
       }
       throw new Error(`unexpected bash subprocess while pinning #2623 substitutions: '${script}'`);
-    });
+    };
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(execute);
+    const probeSpy = spyOn(git, 'execFileAsync').mockImplementation(execute);
 
     let store!: ReturnType<typeof createMockStore>;
     let result: Awaited<ReturnType<typeof executeDagWorkflow>>;
@@ -25581,6 +25815,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       );
     } finally {
       execSpy.mockRestore();
+      probeSpy.mockRestore();
     }
 
     // Every fork the executor makes carries exactly the scoped values #2623 fixes: the
@@ -25756,7 +25991,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Resumed interactive group: the approval-gate free-text must reach the body script
     // as an env var, not as text interpolated into the executed TS source.
     const injection = '"); process.exit(1); //';
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'DONE\n',
+      stderr: '',
+    });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -25831,7 +26069,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // indirect env read behaves — which the splice cannot touch and which previously read
     // as empty because executeBashNode's subprocess env hardcoded LOOP_USER_INPUT: ''.
     const feedback = 'looks good, ship it';
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockResolvedValue({
+      stdout: 'DONE\n',
+      stderr: '',
+    });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -29443,8 +29684,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
       const realSetTimeout = globalThis.setTimeout;
       globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
       let calls = 0;
-      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async command => {
-        if (command === 'git') return { stdout: '', stderr: '' };
+      const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async () => {
         calls++;
         if (calls % 2 === 1)
           throw Object.assign(new Error('opaque failure'), {
@@ -33173,7 +33413,7 @@ describe('subprocess credential redaction', () => {
     let rejection:
       | (Error & { code: number; killed: boolean; cmd: string; stdout: string; stderr: string })
       | undefined;
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(
       async (command: string, args: string[]) => {
         const commandLine = [command, ...args].join(' ');
         rejection = Object.assign(
@@ -33754,7 +33994,7 @@ describe('retained exec output', () => {
     // Node reports a timeout kill as `code: null` with the signal set. Falling back
     // straight to 'unknown' would erase the most operationally interesting failure —
     // and an `until_bash` probe has no sibling node_error row to say it timed out.
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async () => {
+    const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async () => {
       throw Object.assign(new Error('Command failed: bash -c sleep 999'), {
         code: null,
         signal: 'SIGTERM',

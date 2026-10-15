@@ -29,7 +29,7 @@ export async function terminateTree(pid: number): Promise<void> {
 
 export async function terminateWindowsTree(
   pid: number,
-  taskkill: (pid: number) => Promise<unknown> = runTaskkill
+  taskkill: (pid: number) => Promise<unknown> = forceTerminateWindowsTree
 ): Promise<void> {
   try {
     await taskkill(pid);
@@ -41,7 +41,7 @@ export async function terminateWindowsTree(
   }
 }
 
-function runTaskkill(pid: number): Promise<unknown> {
+export function forceTerminateWindowsTree(pid: number): Promise<unknown> {
   const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
   return execFileAsync(
     join(systemRoot, 'System32', 'taskkill.exe'),
