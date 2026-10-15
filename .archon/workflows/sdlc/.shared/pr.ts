@@ -105,8 +105,7 @@ function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
       is_draft: row?.isDraft,
       state,
       head_repo: headPath === undefined ? null : { host: repo.host, path: headPath },
-      head_revision:
-        typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
+      head_revision: typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
       // gh does not report the base revision; the record keeps that absence explicit.
       base_revision: null,
       maintainer_can_modify:
@@ -239,9 +238,7 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   }
   const body = readFileSync(intent.bodyPath, 'utf8');
   const sameRepository = intent.headRepo.path === intent.repo.path;
-  const head = sameRepository
-    ? intent.head
-    : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
+  const head = sameRepository ? intent.head : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
   const created = gh(
     'pr',
     'create',
@@ -407,7 +404,9 @@ export function upsertComment(
   }
   const observed = ghIssueComments(ref).find(comment => comment.id === String(id));
   if (observed?.body !== body) {
-    throw new Error(`comment ${String(id)} does not read back as written; it may need reconciling`);
+    throw new Error(
+      `comment ${String(id)} does not read back as written; it may need reconciling`
+    );
   }
   return { url: observed.url };
 }
