@@ -545,7 +545,11 @@ describe('bundled-defaults', () => {
       if (headCheck?.kind !== 'exec' || headCheck.output_format === undefined) {
         throw new Error('head-check has no target schema');
       }
-      expect(scopeSchema.properties).toMatchObject(headCheck.output_format.properties);
+      const targetProperties = headCheck.output_format.properties;
+      if (typeof targetProperties !== 'object' || targetProperties === null) {
+        throw new Error('head-check target schema has no properties');
+      }
+      expect(scopeSchema.properties).toMatchObject(targetProperties);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
