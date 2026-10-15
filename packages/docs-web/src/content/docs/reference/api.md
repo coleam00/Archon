@@ -392,7 +392,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -F "conversationId=conv-123" \
   -F "message=fix #2482" \
-  -F 'config={"docs":{"path":"handbook"},"workflows":{"quotaMaxAttempts":3}}'
+  -F 'config={"docs":{"path":"handbook"},"workflows":{"toolCallAttentionMs":600000}}'
 ```
 
 Supported inline keys are `assistant` or `defaultAssistant`, `assistants`, `tiers`, `aliases`, `workflows`, `docs.path`, and `env`. Unknown or ineffective keys fail with `400` and name the key. `configPath` is always rejected: HTTP callers cannot ask the server to read a filesystem path. Run metadata stores sealed replay content plus redacted source/key attribution, and resume uses the original layer without accepting replacement content.

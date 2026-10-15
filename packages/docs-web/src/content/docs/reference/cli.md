@@ -604,7 +604,8 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
-  `wait: attention` waiting for its answer), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
+  usage limit; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
@@ -893,6 +894,8 @@ the host the run recorded and says when it is not this one.
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.
+- `usage_limit` — node `nodeId` hit a provider usage limit. Nothing needs an answer: the
+  run continues by itself at `resumeAt`. Cancel or abandon it to stop it instead.
 - `unreadable` — the run is parked but cannot describe itself (corrupt gate metadata, a
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
 
