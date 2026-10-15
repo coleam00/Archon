@@ -46,6 +46,7 @@ async function setup(): Promise<void> {
           throw new Error('unused');
         },
         updateStatus: async () => {},
+        markWorktreeDestroyed: async () => {},
         updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,
       },

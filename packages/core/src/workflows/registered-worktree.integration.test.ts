@@ -363,3 +363,46 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
   });
   expectAdoptionWarning(observed.branch_name, observed.working_path, 'legacy-merge');
 });
+
+test('a worktree whose record cannot be written is removed and the insert error rethrown', async () => {
+  const insertError = new Error('database is locked');
+  const failing = { create: async (): Promise<never> => Promise.reject(insertError) };
+  const input = {
+    request: {
+      workflowType: 'task' as const,
+      identifier: 'unrecorded',
+      codebaseId,
+      codebaseName: 'test/repo',
+      canonicalRepoPath: toRepoPath(repo),
+    },
+    createdByPlatform: 'cli',
+  };
+
+  await expect(createRegisteredWorktree(failing, input)).rejects.toBe(insertError);
+
+  expect(git('worktree', 'list', '--porcelain')).not.toContain('unrecorded');
+  expect(git('branch', '--list')).not.toContain('unrecorded');
+  expect(await isolation.countActiveByCodebase(codebaseId)).toBe(0);
+});
+
+test('a reused worktree stays when its re-registration cannot be written', async () => {
+  const input = {
+    request: {
+      workflowType: 'task' as const,
+      identifier: 'kept',
+      codebaseId,
+      codebaseName: 'test/repo',
+      canonicalRepoPath: toRepoPath(repo),
+    },
+    createdByPlatform: 'cli',
+  };
+  const first = await createRegisteredWorktree(isolation, input);
+  const insertError = new Error('database is locked');
+
+  await expect(
+    createRegisteredWorktree({ create: async () => Promise.reject(insertError) }, input)
+  ).rejects.toBe(insertError);
+
+  expect(git('worktree', 'list', '--porcelain')).toContain(first.env.workingPath);
+  expect((await isolation.getById(first.envId))?.status).toBe('active');
+});

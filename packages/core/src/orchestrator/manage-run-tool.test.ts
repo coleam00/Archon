@@ -1206,6 +1206,7 @@ describe('manage_run authorization refusal', () => {
             findActiveByWorkflow: unexpected,
             create: unexpected,
             updateStatus: unexpected,
+            markWorktreeDestroyed: unexpected,
             updateMetadata: unexpected,
             countActiveByCodebase: unexpected,
           },

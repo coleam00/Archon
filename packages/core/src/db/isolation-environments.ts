@@ -7,7 +7,10 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
-import { WORKTREE_REGISTRATION_ID } from '@archon/isolation/types';
+import {
+  WORKTREE_REGISTRATION_ID,
+  WorktreeRegistrationChangedError,
+} from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -17,7 +20,6 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
-import { WorktreeRegistrationChangedError } from './codebase-delete-error';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -218,20 +220,76 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');
 }
 
-/** Mark only the observed worktree resource destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(
-  env: Pick<IsolationEnvironmentRow, 'id' | 'working_path' | 'branch_name' | 'metadata'>
-): Promise<void> {
-  const registrationId = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
+/**
+ * SQL that holds only while the row is still the observed active worktree registration.
+ * Placeholders start at `$${first}`. Older writers do not rotate a registration token,
+ * so a tokenless observation is fenced with the whole observed snapshot instead.
+ */
+function observedRegistrationPredicate(
+  observed: IsolationEnvironmentRow,
+  first: number
+): { sql: string; params: unknown[] } {
+  const $ = (offset: number): string => `$${String(first + offset)}`;
+  const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
+  const sqlite = getDatabaseType() === 'sqlite';
+  const sql = ` AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
+       AND working_path = ${$(1)}${
+         legacy
+           ? `
+       AND branch_name = ${$(2)}
+       AND ${sqlite ? `julianday(created_at) = julianday(${$(3)})` : `date_trunc('milliseconds', created_at) = ${$(3)}::timestamptz`}
+       AND ${
+         sqlite
+           ? `NOT EXISTS (
+         WITH current_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(metadata)
+         ), observed_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(${$(4)})
+         )
+         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
+         UNION ALL
+         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
+       )`
+           : `metadata = ${$(4)}::jsonb`
+       }
+       AND codebase_id = ${$(5)} AND workflow_type = ${$(6)} AND workflow_id = ${$(7)}
+       AND created_by_platform IS NOT DISTINCT FROM ${$(8)} AND created_by_user_id IS NOT DISTINCT FROM ${$(9)}`
+           : ''
+       }`;
+  const params: unknown[] = [
+    observed.metadata[WORKTREE_REGISTRATION_ID] ?? '',
+    observed.working_path,
+  ];
+  if (legacy) {
+    params.push(
+      observed.branch_name,
+      observed.created_at.toISOString(),
+      JSON.stringify(observed.metadata),
+      observed.codebase_id,
+      observed.workflow_type,
+      observed.workflow_id,
+      observed.created_by_platform,
+      observed.created_by_user_id
+    );
+  }
+  return { sql, params };
+}
+
+/** Mark only the observed worktree registration destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+  const predicate = observedRegistrationPredicate(observed, 2);
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
-     WHERE id = $1 AND provider = 'worktree' AND status = 'active'
-       AND COALESCE(${registrationId}, '') = $2`,
-    [env.id, env.metadata[WORKTREE_REGISTRATION_ID] ?? '']
+     WHERE id = $1${predicate.sql}`,
+    [observed.id, ...predicate.params]
   );
   if (result.rowCount !== 1) {
-    throw new WorktreeRegistrationChangedError(env.id);
+    throw new WorktreeRegistrationChangedError(observed.id);
   }
+  getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
 }
 
 /**
@@ -242,62 +300,12 @@ export async function updateMetadata(
   metadata: Record<string, unknown>,
   observed?: IsolationEnvironmentRow
 ): Promise<void> {
-  const dialect = getDialect();
-  // Older writers do not rotate a token; fence those rows with the observed snapshot.
-  const legacy = observed && typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
+  const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
-     SET metadata = ${dialect.jsonMerge('metadata', 1)}
-     WHERE id = $2${
-       observed
-         ? ` AND provider = 'worktree' AND status = 'active'
-       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3
-       AND working_path = $4${
-         legacy
-           ? `
-       AND branch_name = $5
-       AND ${getDatabaseType() === 'sqlite' ? 'julianday(created_at) = julianday($6)' : "date_trunc('milliseconds', created_at) = $6::timestamptz"}
-       AND ${
-         getDatabaseType() === 'sqlite'
-           ? `NOT EXISTS (
-         WITH current_metadata AS (
-           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
-           FROM json_tree(metadata)
-         ), observed_metadata AS (
-           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
-           FROM json_tree($7)
-         )
-         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
-         UNION ALL
-         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
-       )`
-           : 'metadata = $7::jsonb'
-       }
-       AND codebase_id = $8 AND workflow_type = $9 AND workflow_id = $10
-       AND created_by_platform IS NOT DISTINCT FROM $11 AND created_by_user_id IS NOT DISTINCT FROM $12`
-           : ''
-       }`
-         : ''
-     }`,
-    [
-      JSON.stringify(metadata),
-      id,
-      ...(observed
-        ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? '', observed.working_path]
-        : []),
-      ...(legacy
-        ? [
-            observed.branch_name,
-            observed.created_at.toISOString(),
-            JSON.stringify(observed.metadata),
-            observed.codebase_id,
-            observed.workflow_type,
-            observed.workflow_id,
-            observed.created_by_platform,
-            observed.created_by_user_id,
-          ]
-        : []),
-    ]
+     SET metadata = ${getDialect().jsonMerge('metadata', 1)}
+     WHERE id = $2${predicate?.sql ?? ''}`,
+    [JSON.stringify(metadata), id, ...(predicate?.params ?? [])]
   );
 
   if (result.rowCount === 0) {
@@ -548,6 +556,7 @@ export function createIsolationStore(): IIsolationStore {
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
     updateMetadata,
+    markWorktreeDestroyed,
     countActiveByCodebase,
   };
 }

@@ -1712,6 +1712,7 @@ describe('WorktreeProvider', () => {
           throw new Error('DB constraint violation');
         },
         updateStatus: async () => undefined,
+        markWorktreeDestroyed: async () => undefined,
         updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,
       };

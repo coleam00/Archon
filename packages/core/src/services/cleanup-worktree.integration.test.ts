@@ -24,7 +24,9 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { getGitCheckoutIdentity, readWorktreeLock, toRepoPath, toBranchName } from '@archon/git';
 import {
+  IsolationResolver,
   WorktreeProvider,
+  WorktreeRegistrationChangedError,
   configureIsolation,
   getIsolationProvider,
   worktreeRegistrationMetadata,
@@ -607,3 +609,139 @@ async function seedMissingPathContainer(): Promise<IsolationEnvironmentRow> {
   if (!row) throw new Error('Container fixture missing');
   return row;
 }
+
+/**
+ * A worktree cleanup observes a registration, then retires it. These tests
+ * re-register the same workflow between the two (an upsert keeps the row id), and
+ * expect the replacement to stay active after the cleanup's retire write.
+ */
+describe('cleanup retires only the registration it observed', () => {
+  const reRegister = (): Promise<IsolationEnvironmentRow> =>
+    isolationDb.create({
+      codebase_id: env.codebase_id,
+      workflow_type: env.workflow_type,
+      workflow_id: env.workflow_id,
+      working_path: env.working_path,
+      branch_name: toBranchName(env.branch_name),
+      metadata: env.metadata,
+    });
+
+  /** A real store that re-registers the environment just before its first retire write. */
+  function racingStore(): {
+    store: IIsolationStore;
+    afterRetire: () => IsolationEnvironmentRow | null | undefined;
+    replacement: () => IsolationEnvironmentRow | undefined;
+  } {
+    const real = isolationDb.createIsolationStore();
+    let replacement: IsolationEnvironmentRow | undefined;
+    let after: IsolationEnvironmentRow | null | undefined;
+    const race = async (write: () => Promise<void>): Promise<void> => {
+      if (replacement) return write();
+      replacement = await reRegister();
+      try {
+        await write();
+      } finally {
+        after = await isolationDb.getById(replacement.id);
+      }
+    };
+    return {
+      store: {
+        ...real,
+        updateStatus: (id, next) =>
+          next === 'destroyed'
+            ? race(() => real.updateStatus(id, next))
+            : real.updateStatus(id, next),
+        markWorktreeDestroyed: observed => race(() => real.markWorktreeDestroyed(observed)),
+      },
+      afterRetire: () => after,
+      replacement: () => replacement,
+    };
+  }
+
+  function expectReplacementActive(
+    after: IsolationEnvironmentRow | null | undefined,
+    replacement: IsolationEnvironmentRow | undefined
+  ): void {
+    expect(replacement?.id).toBe(env.id);
+    expect(after?.status).toBe('active');
+    expect(after?.metadata.worktree_registration_id).toBe(
+      replacement?.metadata.worktree_registration_id
+    );
+  }
+
+  test('removeEnvironment', async () => {
+    const provider = getIsolationProvider();
+    const destroy = provider.destroy.bind(provider);
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racing = spyOn(provider, 'destroy').mockImplementation(async (...args) => {
+      const result = await destroy(...args);
+      replacement = await reRegister();
+      return result;
+    });
+    try {
+      await expect(removeEnvironment(env.id)).rejects.toBeInstanceOf(
+        WorktreeRegistrationChangedError
+      );
+    } finally {
+      racing.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+  });
+
+  test('run reclaim of a vanished checkout', async () => {
+    await git(repo, 'worktree', 'remove', '--force', env.working_path);
+    const { store: racing, afterRetire, replacement } = racingStore();
+    await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+    expectReplacementActive(afterRetire(), replacement());
+  });
+
+  test('guarded run reclaim keeps the checkout', async () => {
+    const { store: racing, afterRetire, replacement } = racingStore();
+    await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+    expectReplacementActive(afterRetire(), replacement());
+    expect(existsSync(env.working_path)).toBe(true);
+  });
+
+  for (const lookup of ['existing', 'workflow', 'linked'] as const) {
+    test(`resolver ${lookup} lookup of a vanished checkout`, async () => {
+      if (lookup === 'linked') {
+        env = await isolationDb.create({
+          ...env,
+          workflow_type: 'issue',
+          workflow_id: '42',
+          branch_name: toBranchName(env.branch_name),
+          created_by_platform: undefined,
+          created_by_user_id: undefined,
+        });
+      }
+      await git(repo, 'worktree', 'remove', '--force', env.working_path);
+      const { store: racing, afterRetire, replacement } = racingStore();
+      const resolver = new IsolationResolver({ store: racing, provider: getIsolationProvider() });
+      await resolver.resolve({
+        existingEnvId: lookup === 'existing' ? env.id : null,
+        codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+        hints:
+          lookup === 'linked'
+            ? { workflowType: 'task', workflowId: 'linking', linkedIssues: [42] }
+            : { workflowType: env.workflow_type, workflowId: env.workflow_id },
+        platformType: 'cli',
+      });
+      expectReplacementActive(afterRetire(), replacement());
+    });
+  }
+
+  test('resolver release of an unlinked creation', async () => {
+    const { store: racing, afterRetire, replacement } = racingStore();
+    const resolver = new IsolationResolver({ store: racing, provider: getIsolationProvider() });
+    const created = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+      hints: { workflowType: 'task', workflowId: 'unlinked' },
+      platformType: 'cli',
+    });
+    if (created.status !== 'resolved') throw new Error('Expected creation');
+    env = created.env;
+    await resolver.releaseUnlinked(created);
+    expectReplacementActive(afterRetire(), replacement());
+  });
+});

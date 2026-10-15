@@ -360,6 +360,20 @@ export interface IsolationEnvironmentRow {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * The isolation record no longer holds the worktree registration a cleanup observed:
+ * it was re-registered (an upsert keeps the row id) or already retired. The cleanup
+ * leaves the current registration as it is rather than retire one it did not destroy.
+ */
+export class WorktreeRegistrationChangedError extends Error {
+  constructor(readonly environmentId: string) {
+    super(
+      `Worktree ${environmentId} changed during cleanup; its current registration was left as is. Inspect it and retry.`
+    );
+    this.name = 'WorktreeRegistrationChangedError';
+  }
+}
+
 export function sameWorktreeRegistration(
   current: IsolationEnvironmentRow,
   observed: IsolationEnvironmentRow

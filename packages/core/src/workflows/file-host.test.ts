@@ -164,6 +164,29 @@ test('file adoption metadata refuses a replaced registration, including the same
   }
 });
 
+test('file host retires only the observed worktree registration', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-retire-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const store = (await createFileWorkflowHost(join(home, 'store'))).records.isolation;
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  };
+  const observed = await store.create(input);
+  const replacement = await store.create(input);
+  expect(replacement.id).toBe(observed.id);
+  await expect(store.markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+  expect(await store.getById(observed.id)).toEqual(replacement);
+  await store.markWorktreeDestroyed(replacement);
+  expect((await store.getById(replacement.id))?.status).toBe('destroyed');
+  await expect(store.markWorktreeDestroyed(replacement)).rejects.toThrow('changed during cleanup');
+});
+
 test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'legacy-adoption-')));
   process.env.ARCHON_HOME = home;

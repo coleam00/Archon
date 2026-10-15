@@ -61,6 +61,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         branch_name: env.branch_name,
       }),
     updateStatus: async () => undefined,
+    markWorktreeDestroyed: async () => undefined,
     updateMetadata: async () => undefined,
     countActiveByCodebase: async () => 0,
     ...overrides,
@@ -660,12 +661,12 @@ describe('IsolationResolver', () => {
     const env = makeEnvRow();
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         getById: async () => env,
-        updateStatus: async (_id, status) => {
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -676,7 +677,7 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([env]);
   });
 
   test('findReusable marks stale DB record as destroyed when worktree gone', async () => {
@@ -684,15 +685,13 @@ describe('IsolationResolver', () => {
     // worktreeExists returns false — worktree is gone
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedId: string | null = null;
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '42' ? env : null,
-        updateStatus: async (id, status) => {
-          updatedId = id;
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -705,8 +704,7 @@ describe('IsolationResolver', () => {
     });
 
     // Should have cleaned up the stale record and then created a new environment
-    expect(updatedId as string | null).toBe('env-1');
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([env]);
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
       expect(result.method.type).toBe('created');
@@ -724,15 +722,13 @@ describe('IsolationResolver', () => {
     // worktreeExists returns false — worktree is gone
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedId: string | null = null;
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '10' ? linkedEnv : null,
-        updateStatus: async (id, status) => {
-          updatedId = id;
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -744,8 +740,7 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
-    expect(updatedId as string | null).toBe('env-linked');
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([linkedEnv]);
     // Should proceed to create new since linked env was stale
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
@@ -761,7 +756,7 @@ describe('IsolationResolver', () => {
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '42' ? env : null,
-        updateStatus: async () => {
+        markWorktreeDestroyed: async () => {
           throw new Error('DB connection lost');
         },
       }),
@@ -976,6 +971,9 @@ describe('IsolationResolver', () => {
         store: makeMockStore({
           updateStatus: async (...args) => {
             statusUpdates.push(args);
+          },
+          markWorktreeDestroyed: async observed => {
+            statusUpdates.push([observed.id, 'destroyed']);
           },
         }),
       });

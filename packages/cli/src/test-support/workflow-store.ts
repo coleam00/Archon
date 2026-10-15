@@ -114,6 +114,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       getById: unsupported,
       create: unsupported,
       updateStatus: unsupported,
+      markWorktreeDestroyed: unsupported,
       updateMetadata: unsupported,
       countActiveByCodebase: unsupported,
       findActiveByWorkflow: unsupported,

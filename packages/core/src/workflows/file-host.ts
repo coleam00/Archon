@@ -18,6 +18,7 @@ import {
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
   WORKTREE_REGISTRATION_ID,
+  WorktreeRegistrationChangedError,
   sameWorktreeRegistration,
   type IsolationEnvironmentRow,
 } from '@archon/isolation/types';
@@ -247,6 +248,16 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           const row = rows.find(row => row.id === id);
           if (!row) throw new Error(`Isolation environment ${id} not found`);
           row.status = status;
+          return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
+        }),
+      markWorktreeDestroyed: observed =>
+        commit(root, [], async () => {
+          const rows = await environments();
+          const row = rows.find(row => row.id === observed.id);
+          if (!row || !sameWorktreeRegistration(row, observed)) {
+            throw new WorktreeRegistrationChangedError(observed.id);
+          }
+          row.status = 'destroyed';
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       countActiveByCodebase: async id => (await records.isolation.listByCodebase(id)).length,
