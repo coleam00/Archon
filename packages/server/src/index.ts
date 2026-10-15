@@ -123,6 +123,8 @@ import {
   getSignupMode,
   isArchonOwnedAuthPath,
 } from './auth';
+// From the pure config module: tests mock './auth', and the header name must stay real.
+import { webAuthHeaderName } from './auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -897,7 +899,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Security guardrail (advisory): the web identity header (ARCHON_WEB_AUTH_HEADER,
-  // default X-Archon-User) is trusted as-is — Archon attributes web requests to
+  // see webAuthHeaderName) is trusted as-is — Archon attributes web requests to
   // whoever the header names. That is only sound when Archon is reachable SOLELY
   // through a reverse proxy that authenticates and sets the header (loopback bind).
   // On a non-loopback bind any client that can reach the port can forge it:
@@ -914,7 +916,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled() || isWebAuthEnabled();
   if (webAuthHeaderTrustActive && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     getLog().warn(
-      { hostname, headerName: process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User' },
+      { hostname, headerName: webAuthHeaderName() },
       'web_auth.header_trust_on_public_bind'
     );
   }
