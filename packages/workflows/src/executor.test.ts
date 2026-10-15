@@ -4378,6 +4378,7 @@ describe('executeWorkflow', () => {
       [500, '500ms'],
       [1500, '1.5s'],
       [90000, '1m30s'],
+      [119500, '2m0s'],
     ])('shows the shared duration policy for a blocker at %s ms', async (elapsed, expected) => {
       const now = Date.UTC(2026, 9, 15, 12);
       const clock = spyOn(Date, 'now').mockReturnValue(now);

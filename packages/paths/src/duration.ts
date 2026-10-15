@@ -3,7 +3,8 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const secs = Math.round(ms / 100) / 10;
   if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = Math.round(secs % 60);
+  const totalSeconds = Math.round(ms / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const remSecs = totalSeconds % 60;
   return `${mins}m${remSecs}s`;
 }
