@@ -53,7 +53,17 @@ import {
   waitRun,
 } from '../../.shared/bench.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { FINDINGS_FILE, type Finding, ITEM_FILE, type ItemRecord, readFindings, readItem, writeItem } from '../../.shared/review-item.ts';
+import {
+  FINDINGS_FILE,
+  type Finding,
+  ITEM_FILE,
+  type ItemDefect,
+  type ItemRecord,
+  type KnownDefect,
+  readFindings,
+  readItem,
+  writeItem,
+} from '../../.shared/review-item.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 import { isObject } from '../../.shared/typed.ts';
 
@@ -89,12 +99,9 @@ export const CLEAN = 'clean';
 /** Variants are authored as if by one developer; the identity says nothing about the bench. */
 const VARIANT_AUTHOR = { name: 'Developer', email: 'developer@example.com' };
 
-export interface Defect {
-  readonly id: string;
+export interface Defect extends ItemDefect {
   readonly class: DefectClass;
   readonly owner: Lens;
-  readonly claim: string;
-  readonly location: string;
 }
 
 export interface Variant {
@@ -116,7 +123,7 @@ export interface Case {
   readonly date: string;
   /** Absolute path of the work order file. */
   readonly work_order: string;
-  readonly known_defects: readonly { readonly id: string; readonly claim: string }[];
+  readonly known_defects: readonly KnownDefect[];
   readonly variants: readonly Variant[];
 }
 
@@ -828,6 +835,7 @@ export interface SampleLine extends Omit<JudgedSample, 'item'> {
   /** Absent when the run left nothing the bench could collect. */
   readonly item: string | null;
   readonly cost_usd: number | null;
+  readonly cost_partial: boolean;
   readonly duration_ms: number | null;
   /** Why the sample does not count: its hard-check problems, or what stopped it. */
   readonly problems: readonly string[];
@@ -853,6 +861,7 @@ export function readSamples(outDir: string): SampleLine[] {
         passed: line.passed === true,
         item: typeof line.item === 'string' ? line.item : null,
         cost_usd: number(line.cost_usd),
+        cost_partial: line.cost_partial === true,
         duration_ms: number(line.duration_ms),
         problems,
       },
@@ -904,7 +913,8 @@ function unaccounted(sample: BatchSample): Finding[] {
 }
 
 const cell = (text: string): string => text.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
-const money = (usd: number | null): string => (usd === null ? 'not reported' : `$${usd.toFixed(2)}`);
+const money = ({ cost_usd: usd, cost_partial: partial }: SampleLine): string =>
+  usd === null ? 'not reported' : `${partial ? 'at least ' : ''}$${usd.toFixed(2)}`;
 const minutes = (ms: number | null): string => (ms === null ? 'unknown' : `${(ms / 60_000).toFixed(1)} min`);
 const sampleName = (line: SampleLine): string => `${line.label} #${line.sample}`;
 
@@ -970,7 +980,7 @@ export function renderPage(caseId: string, judge: string, samples: readonly Batc
       '',
       table(columns, [
         ['Run', sample => sample.line.run_id],
-        ['Cost', sample => money(sample.line.cost_usd)],
+        ['Cost', sample => money(sample.line)],
         ['Time', sample => minutes(sample.line.duration_ms)],
         ['Hard checks', sample => (sample.line.passed ? 'passed' : 'FAILED')],
         ['Judgement', judgementLabel],

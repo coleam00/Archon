@@ -53,15 +53,20 @@ export function writeItem(dir: string, item: ItemRecord): void {
 const texts = (value: unknown, ...keys: string[]): value is Record<string, unknown> =>
   isObject(value) && keys.every(key => typeof value[key] === 'string');
 
+// Every field of a defect is text; typing the key lists by the interfaces makes a field
+// added to either one fail to compile here until `readItem` checks it.
+const ITEM_DEFECT_KEYS: Record<keyof ItemDefect, true> = { id: true, class: true, owner: true, claim: true, location: true };
+const KNOWN_DEFECT_KEYS: Record<keyof KnownDefect, true> = { id: true, claim: true };
+
 export function readItem(dir: string): ItemRecord {
   const file = join(dir, ITEM_FILE);
   const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
   if (
     !texts(raw, 'case', 'variant') ||
     !Array.isArray(raw.defects) ||
-    !raw.defects.every(defect => texts(defect, 'id', 'class', 'owner', 'claim', 'location')) ||
+    !raw.defects.every(defect => texts(defect, ...Object.keys(ITEM_DEFECT_KEYS))) ||
     !Array.isArray(raw.known_defects) ||
-    !raw.known_defects.every(defect => texts(defect, 'id', 'claim')) ||
+    !raw.known_defects.every(defect => texts(defect, ...Object.keys(KNOWN_DEFECT_KEYS))) ||
     !isObject(raw.lenses) ||
     !Object.values(raw.lenses).every(path => typeof path === 'string')
   ) {

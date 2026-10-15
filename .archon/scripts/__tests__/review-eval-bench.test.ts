@@ -27,6 +27,7 @@ import {
   type RunDetail,
   type RunNode,
   EFFORTS,
+  type FindingMark,
   TIERS,
   type TierBinding,
   agentBinding,
@@ -44,10 +45,12 @@ import {
   ensureOrigin,
   hardChecks,
   loadSet,
+  mergeMarks,
   prepareCase,
   type ReviewItem,
   runCost,
   validateJudgement,
+  writeBatch,
 } from '../../workflows/sdlc/review-eval/scripts/bench';
 import type { Finding, ItemRecord } from '../../workflows/sdlc/.shared/review-item';
 
@@ -491,6 +494,29 @@ describe('latestLines', () => {
       ['a', { k: 'a', n: 4 }],
       ['b', { k: 'b', n: 2 }],
     ]);
+  });
+});
+
+describe('the batch page and marks', () => {
+  it('shows a cost that is only a floor as at least that much', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-page-')));
+    const sample = { case: 'counting', variant: 'v1', run_id: 'run-1', version: { label: 'v' }, passed: true };
+    appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 1, cost_usd: 1.5, cost_partial: true });
+    appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 2, run_id: 'run-2', cost_usd: 2, cost_partial: false });
+    writeBatch(out, 'counting', 'opus');
+    expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Cost | at least $1.50 | $2.00 |');
+  });
+
+  it('keeps a marked or annotated entry a re-judge no longer calls for, and drops an unmarked one', () => {
+    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-bench-marks-'))), 'marks.yaml');
+    const at = { run_id: 'run-1', version: 'v', variant: 'clean', sample: 1 };
+    const finding = (id: string, mark: FindingMark | null, note: string | null) => ({ ...at, finding: id, sources: ['code'], claim: 'Unrelated.', mark, note });
+    const marked = finding('R1', 'false_positive', null);
+    const annotated = finding('R2', null, 'Look again.');
+    const corrected = { ...at, defect: 'K1', judge: { caught_by: [], finding: null }, mark: null, note: null, caught_by: ['code'] };
+    writeFileSync(file, Bun.YAML.stringify([marked, annotated, corrected, finding('R3', null, null)], null, 2));
+    const regenerated = finding('R4', null, null);
+    expect(mergeMarks(file, [regenerated])).toEqual([regenerated, marked, annotated, corrected]);
   });
 });
 
