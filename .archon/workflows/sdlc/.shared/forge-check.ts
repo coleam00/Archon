@@ -7,7 +7,7 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, forgeSource, readRepositoryLabels, type ForgeSource } from './forge.ts';
+import { archonCommand, forgeSource, invokeForge, type ForgeSource } from './forge.ts';
 import { note } from './io.ts';
 import { remoteRepos } from './remote.ts';
 
@@ -61,22 +61,27 @@ function checkGh(): void {
 }
 
 /**
- * One authenticated read (`repo.labels.list`, which triage needs anyway) per
- * repository a remote names. The publish target is decided later, by an agent, but
- * it is always a repository some remote names, so one answer is enough; a mirror on
- * a host no plugin claims must not refuse a run its canonical remote can serve.
+ * One authenticated read per repository a remote names. The publish target is decided
+ * later, by an agent, but it is always a repository some remote names, so one answer
+ * is enough; a mirror on a host no plugin claims must not refuse a run its canonical
+ * remote can serve.
+ *
+ * The read is `pr.view` by head, which every released GitHub plugin supports. It
+ * answers null when no open pull request has that head, so any head proves the
+ * plugin, the token and read access. No forge operation reports what the token may
+ * write, so write access is first proven by the run's first write.
  */
 function checkForge(): void {
   // A host that published no command (a container execution) refuses once here, not
   // once per repository. A container receives only the project's configured env, never
-  // `~/.archon/.env`, so the gh switch has to go through the repository config.
+  // Archon's env file, so the gh switch has to go through the repository config.
   try {
     archonCommand();
   } catch (error) {
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}. ` +
         'To use the GitHub CLI in a container execution, set `env: { ARCHON_SDLC_FORGE: gh }` ' +
-        "in the repository's `.archon/config.yaml`; `~/.archon/.env` does not reach the container"
+        "in the repository's `.archon/config.yaml`; Archon's env file does not reach the container"
     );
   }
   const repos = remoteRepos();
@@ -88,7 +93,9 @@ function checkForge(): void {
   for (const repo of repos) {
     const name = `${repo.host}/${repo.path}`;
     try {
-      readRepositoryLabels(repo);
+      invokeForge('pr.view', {
+        selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
+      });
       answered.push(name);
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
@@ -97,6 +104,7 @@ function checkForge(): void {
   if (answered.length === 0) throw new Error(failures.join('\n'));
   note(
     `forge source answered for ${answered.join(', ')}` +
-      (failures.length === 0 ? '' : `; did not answer for ${failures.join('; ')}`)
+      (failures.length === 0 ? '' : `; did not answer for ${failures.join('; ')}`) +
+      '. Read access is verified; write access is not, until the first write.'
   );
 }

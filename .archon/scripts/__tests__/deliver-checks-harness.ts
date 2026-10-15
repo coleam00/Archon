@@ -99,8 +99,8 @@ export interface GhIssue {
 export type ForgeFake =
   /** No `ARCHON_CLI_COMMAND` at all. */
   | { readonly kind: 'no-host' }
-  /** The real CLI with an empty Archon home: no forge plugin is installed. */
-  | { readonly kind: 'no-plugin' }
+  /** The real CLI with a scratch Archon home whose config holds this `forge:` section. */
+  | { readonly kind: 'home'; readonly config: Readonly<Record<string, unknown>> }
   /** This exact host command, as the CLI and server would publish it. */
   | { readonly kind: 'command'; readonly argv: readonly string[] }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
@@ -390,9 +390,10 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     ),
   };
   const forge = options.forge ?? { kind: 'fake' };
-  if (forge.kind === 'no-plugin') {
+  if (forge.kind === 'home') {
     const home = join(root, 'home');
     mkdirSync(home);
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify({ forge: forge.config }));
     Object.assign(env, {
       ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, '--no-env-file', CLI_ENTRY]),
       ARCHON_HOME: home,

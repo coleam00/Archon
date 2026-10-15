@@ -98,34 +98,43 @@ describe('checkGithubForge', () => {
   it('passes when the plugin answers an authenticated read', async () => {
     const runForge = mock(answering({ ok: true }));
     expect((await checkGithubForge({ GH_TOKEN: 'ghp_x' }, runForge)).status).toBe('pass');
-    expect(runForge).toHaveBeenCalledWith('repo.labels.list', {
-      repo: { host: 'github.com', path: 'coleam00/Archon' },
+    const repo = { host: 'github.com', path: 'coleam00/Archon' };
+    expect(runForge).toHaveBeenCalledWith('pr.view', {
+      selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
     });
   });
 
   it('skips naming both steps when no plugin is installed', async () => {
-    const result = await checkGithubForge({ GH_TOKEN: 'ghp_x' }, refusing('no_plugin_for_host'));
+    const result = await checkGithubForge(
+      { GH_TOKEN: 'ghp_x', ARCHON_HOME: '/srv/archon' },
+      refusing('no_plugin_for_host')
+    );
     expect(result.status).toBe('skip');
     expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
-    expect(result.message).toContain('GH_TOKEN in ~/.archon/.env');
+    expect(result.message).toContain(`GH_TOKEN in ${join('/srv/archon', '.env')}`);
   });
 
   it('warns about a missing token, unless GitHub App mode supplies it in runs', async () => {
-    const withoutApp = await checkGithubForge({}, refusing('no_credential'));
+    const withoutApp = await checkGithubForge(
+      { ARCHON_HOME: '/srv/archon' },
+      refusing('no_credential')
+    );
     expect(withoutApp.status).toBe('warn');
-    expect(withoutApp.message).toContain('GH_TOKEN in ~/.archon/.env');
+    expect(withoutApp.message).toContain(`GH_TOKEN in ${join('/srv/archon', '.env')}`);
     expect((await checkGithubForge({ GITHUB_APP_ID: '1' }, refusing('no_credential'))).status).toBe(
       'skip'
     );
   });
 
-  it('warns with the update command when the installed plugin lacks the operation', async () => {
+  it('warns with the update command and the gh switch when the plugin lacks the read', async () => {
     const result = await checkGithubForge(
       { GH_TOKEN: 'ghp_x' },
-      refusing('unsupported_op', 'plugin github does not support repo.labels.list')
+      refusing('unsupported_op', 'plugin github does not support pr.view')
     );
     expect(result.status).toBe('warn');
     expect(result.message).toContain('archon plugin update coleam00/Archon/plugins/forge-github');
+    expect(result.message).toContain('may not support it either');
+    expect(result.message).toContain('ARCHON_SDLC_FORGE=gh');
   });
 
   it('reads plugins and config from the diagnostic environment, not the ambient one', async () => {

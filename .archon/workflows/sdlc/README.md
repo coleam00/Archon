@@ -98,7 +98,9 @@ the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
 `archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
 can act before any agent spends: on `forge`, one authenticated repository read for
-the repositories the checkout's remotes name, at least one of which must answer; on
+the repositories the checkout's remotes name, at least one of which must answer
+(`pr.view` by head, which every released GitHub plugin supports; it proves read
+access, not write access); on
 `gh`, `gh auth status --active --hostname` for each host a remote names, one of which must
 pass, after refusing a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
 otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file

@@ -276,6 +276,9 @@ async function runForgeCommand(
  * Whether the SDLC workflows' default forge path works: the GitHub forge plugin is
  * installed and accepts the configured token. A missing plugin is skipped and a missing
  * token warns, since an install that never runs the SDLC workflows needs neither.
+ *
+ * The read is the SDLC preflight's: `pr.view` by head, which every released GitHub
+ * plugin supports. It answers null when no open pull request has that head.
  */
 export async function checkGithubForge(
   env: NodeJS.ProcessEnv,
@@ -294,9 +297,11 @@ export async function checkGithubForge(
     };
   }
   const appMode = Boolean(env.GITHUB_APP_ID);
+  const envFile = join(getArchonHome(env), '.env');
   // A public repository, the plugin's own source, so any valid token can read it.
-  const response = await runForge('repo.labels.list', {
-    repo: { host: 'github.com', path: 'coleam00/Archon' },
+  const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  const response = await runForge('pr.view', {
+    selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
   });
   if (response.ok) return { label, status: 'pass', message: 'installed; the token is accepted' };
   const { kind, message } = response.error;
@@ -306,14 +311,14 @@ export async function checkGithubForge(
     return {
       label,
       status: 'skip',
-      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ~/.archon/.env (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
+      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ${envFile} (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
     };
   }
   if (kind === 'unsupported_op') {
     return {
       label,
       status: 'warn',
-      message: `${message}: the installed plugin predates the SDLC workflows. Run \`archon plugin update ${FORGE_GITHUB_PLUGIN}\`.`,
+      message: `${message}. \`archon plugin update ${FORGE_GITHUB_PLUGIN}\` installs the latest released plugin, which may not support it either; ARCHON_SDLC_FORGE=gh uses gh instead.`,
     };
   }
   if (kind === 'no_credential') {
@@ -326,7 +331,7 @@ export async function checkGithubForge(
       : {
           label,
           status: 'warn',
-          message: 'installed, but no token. Set GH_TOKEN in ~/.archon/.env.',
+          message: `installed, but no token. Set GH_TOKEN in ${envFile}.`,
         };
   }
   return { label, status: 'fail', message };

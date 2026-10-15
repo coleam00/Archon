@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   forgeOperation,
@@ -12,11 +14,12 @@ import {
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
 
-const LABELS = forgeOperation('repo.labels.list', { repo: PR.repo, labels: [{ name: 'area' }] });
+const ANSWERED = forgeOperation('pr.view', null);
+const ARCHON_HOME = join(tmpdir(), 'archon-home-elsewhere');
 const SETUP = [
   'archon plugin add coleam00/Archon/plugins/forge-github',
   'GH_TOKEN',
-  '~/.archon/.env',
+  join(ARCHON_HOME, '.env'),
   'archon auth github',
   'ARCHON_SDLC_FORGE=gh',
 ];
@@ -31,17 +34,23 @@ function check(options: ScriptOptions & { mirror?: boolean } = {}) {
   if (mirror === true) {
     spawnSync('git', ['remote', 'add', 'mirror', 'https://mirror.example.com/example/repo.git'], { cwd });
   }
-  return runPackScript('deliver/scripts/forge-check', { cwd, ...rest });
+  return runPackScript('deliver/scripts/forge-check', {
+    cwd,
+    ...rest,
+    inputs: { ARCHON_HOME, ...rest.inputs },
+  });
 }
 
 describe('forge-check refuses a run whose forge source cannot act', () => {
   it('reads through the forge plugin when no source is selected', () => {
-    const run = check({ forge: { kind: 'fake', response: LABELS } });
+    const run = check({ forge: { kind: 'fake', response: ANSWERED } });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
     expect(run.gh).toEqual([]);
-    expect(run.forge).toEqual([expect.stringContaining('forge repo.labels.list')]);
-    expect(JSON.parse(run.forgeRequests[0] ?? '')).toEqual({ repo: PR.repo });
+    expect(run.forge).toEqual([expect.stringContaining('forge pr.view')]);
+    expect(JSON.parse(run.forgeRequests[0] ?? '')).toEqual({
+      selector: { kind: 'head', repo: PR.repo, headRepo: PR.repo, head: 'archon-forge-check' },
+    });
   });
 
   it('names both setup steps when no plugin claims the host', () => {
@@ -71,23 +80,25 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.stderr).toContain("`env: { ARCHON_SDLC_FORGE: gh }` in the repository's `.archon/config.yaml`");
   });
 
-  it('names the update when the installed plugin lacks the read', () => {
+  it('names the update and the gh switch when the installed plugin lacks the read', () => {
     const run = check({
-      forge: { kind: 'fake', response: refusal('unsupported_op', 'plugin github does not support repo.labels.list') },
+      forge: { kind: 'fake', response: refusal('unsupported_op', 'plugin github does not support pr.view') },
     });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('archon plugin update coleam00/Archon/plugins/forge-github');
+    expect(run.stderr).toContain('may not support this operation either');
+    expect(run.stderr).toContain('ARCHON_SDLC_FORGE=gh');
   });
 
   it('passes when a mirror on an unclaimed host sits beside a remote that answers', () => {
     const run = check({
       mirror: true,
-      forge: { kind: 'fake', response: [LABELS, refusal('no_plugin_for_host', 'no forge plugin claims mirror.example.com')] },
+      forge: { kind: 'fake', response: [ANSWERED, refusal('no_plugin_for_host', 'no forge plugin claims mirror.example.com')] },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(run.forge).toHaveLength(2);
     expect(run.stderr).toContain('forge source answered for ghe.example.com/example/repo');
-    expect(run.stderr).toContain('mirror.example.com/example/repo: forge repo.labels.list failed');
+    expect(run.stderr).toContain('mirror.example.com/example/repo: forge pr.view failed');
   });
 
   it('checks gh authentication, never the forge, when gh is selected', () => {
@@ -130,5 +141,43 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.stderr).toContain('ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "gitlab"');
     expect(run.gh).toEqual([]);
     expect(run.forge).toEqual([]);
+  });
+});
+
+describe('forge-check with the GitHub plugin release v0.11.1 shipped', () => {
+  const released = {
+    kind: 'home',
+    config: {
+      scanPath: false,
+      plugins: [
+        {
+          plugin: 'github',
+          command: process.execPath,
+          args: ['--no-env-file', join(import.meta.dir, 'fixtures/released-github-plugin.ts')],
+        },
+      ],
+    },
+  } as const;
+  const withToken = (GH_TOKEN: string) =>
+    check({ forge: released, inputs: { GH_TOKEN, GITHUB_TOKEN: '' } });
+
+  it('passes when the plugin accepts the token', () => {
+    const run = withToken('accepted');
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
+    expect(run.stderr).toContain('write access');
+  });
+
+  it('refuses without a token, naming the setup', () => {
+    const run = withToken('');
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('credential environment GH_TOKEN or GITHUB_TOKEN is not set');
+    expect(run.stderr).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+  });
+
+  it('refuses a token the forge rejects', () => {
+    const run = withToken('revoked');
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('Bad credentials');
   });
 });

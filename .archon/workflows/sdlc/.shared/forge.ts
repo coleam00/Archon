@@ -13,7 +13,7 @@
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
@@ -29,13 +29,33 @@ export function forgeSource(): ForgeSource {
   throw new Error(`ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"`);
 }
 
+/**
+ * The env file the host loads, resolved as its `getArchonHome` resolves the Archon home;
+ * forge-contract.test.ts holds the two together.
+ */
+export function archonEnvFile(env: NodeJS.ProcessEnv = process.env): string {
+  const docker =
+    env.WORKSPACE_PATH === '/workspace' ||
+    (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
+    env.ARCHON_DOCKER === 'true';
+  const configured = env.ARCHON_HOME;
+  const home = docker
+    ? '/.archon'
+    : configured
+      ? configured.startsWith('~')
+        ? join(homedir(), configured.slice(1).replace(/^[/\\]/, ''))
+        : configured
+      : join(homedir(), '.archon');
+  return join(home, '.env');
+}
+
 const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 // Per-user GitHub mode scrubs the shared token from a run started by a user who has
 // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
 const SETUP =
   'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
   '`archon plugin add coleam00/Archon/plugins/forge-github`, and set `GH_TOKEN` in ' +
-  "Archon's env file `~/.archon/.env` or configure GitHub App mode. When per-user GitHub " +
+  `Archon's env file \`${archonEnvFile()}\` or configure GitHub App mode. When per-user GitHub ` +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
   '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
   USE_GH;
@@ -48,7 +68,8 @@ export const REMEDY = {
   no_plugin_for_host: SETUP,
   no_credential: SETUP,
   unsupported_op:
-    'For github.com, update the plugin with `archon plugin update coleam00/Archon/plugins/forge-github`. ' +
+    'For github.com, `archon plugin update coleam00/Archon/plugins/forge-github` installs the ' +
+    'latest released plugin, which may not support this operation either. ' +
     USE_GH,
 } as const;
 
