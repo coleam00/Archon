@@ -8,3 +8,13 @@ export class ActiveContainerEnvironmentsError extends Error {
     this.name = 'ActiveContainerEnvironmentsError';
   }
 }
+
+export class ActiveWorktreeEnvironmentsError extends Error {
+  constructor(readonly environmentIds: readonly string[]) {
+    super(
+      `Active worktree environments remain: ${environmentIds.join(', ')}. ` +
+        'Project kept. Retry deletion to clean up these worktrees.'
+    );
+    this.name = 'ActiveWorktreeEnvironmentsError';
+  }
+}

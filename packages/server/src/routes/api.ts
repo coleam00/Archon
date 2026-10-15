@@ -1,4 +1,7 @@
-import { ActiveContainerEnvironmentsError } from '@archon/core/db/codebase-delete-error';
+import {
+  ActiveContainerEnvironmentsError,
+  ActiveWorktreeEnvironmentsError,
+} from '@archon/core/db/codebase-delete-error';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
@@ -920,7 +923,7 @@ const deleteCodebaseRoute = createRoute({
       description: 'Deleted',
     },
     404: jsonError('Not found'),
-    409: jsonError('Active container environments require explicit cleanup'),
+    409: jsonError('Active container environments or newly registered worktrees require cleanup'),
     500: jsonError('Server error'),
   },
 });
@@ -3397,16 +3400,38 @@ export function registerApiRoutes(
       }
 
       const environments = await isolationEnvDb.listByCodebase(id);
-      await codebaseDb.deleteCodebase(id);
+      const containers = environments.filter(env => env.provider === 'container');
+      if (containers.length > 0) {
+        throw new ActiveContainerEnvironmentsError(containers.map(env => env.id));
+      }
       for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
-          await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
+          const exists = await stat(env.working_path).then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return false;
+              throw error;
+            }
+          );
+          if (exists) {
+            await removeWorktree(
+              toRepoPath(codebase.default_cwd),
+              toWorktreePath(env.working_path)
+            );
+          }
+          await isolationEnvDb.updateStatus(env.id, 'destroyed');
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
-          // Worktree may already be gone — log but continue
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Failed to clean up worktree ${env.id}. Project kept; resolve the cleanup failure and retry deletion.`
+          );
         }
       }
+
+      await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
 
       // Remove workspace directory from disk — only for Archon-managed repos
       const normalizedCwd = normalize(codebase.default_cwd);
@@ -3424,7 +3449,10 @@ export function registerApiRoutes(
 
       return c.json({ success: true });
     } catch (error) {
-      if (error instanceof ActiveContainerEnvironmentsError) {
+      if (
+        error instanceof ActiveContainerEnvironmentsError ||
+        error instanceof ActiveWorktreeEnvironmentsError
+      ) {
         return apiError(c, 409, error.message);
       }
       getLog().error({ err: error }, 'delete_codebase_failed');

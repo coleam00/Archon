@@ -128,3 +128,36 @@ test('a concurrent registration invalidates the SQLite snapshot and deletion ret
     ).rows[0]?.status
   ).toBe('active');
 });
+
+test('workspace deletion refuses a worktree registered during cleanup and succeeds after cleanup', async () => {
+  const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
+  const project = await createCodebase({
+    name: 'late-worktree',
+    default_cwd: '/repos/late-worktree',
+  });
+  afterContainerRead = async () => {
+    await registrar.query(
+      `INSERT INTO remote_agent_isolation_environments
+       (id, codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, status)
+       VALUES ('late-worktree', $1, 'test', 'workflow', 'worktree', '/repos/late-worktree/branch', 'branch', 'active')`,
+      [project.id]
+    );
+  };
+  await expect(deleteCodebase(project.id, { requireWorktreeCleanup: true })).rejects.toThrow(
+    'late-worktree'
+  );
+  expect(afterContainerRead).toBeUndefined();
+  expect(await getCodebase(project.id)).not.toBeNull();
+  expect(
+    (
+      await db.query<{ status: string }>(
+        "SELECT status FROM remote_agent_isolation_environments WHERE id = 'late-worktree'"
+      )
+    ).rows[0]?.status
+  ).toBe('active');
+  await db.query(
+    "UPDATE remote_agent_isolation_environments SET status = 'destroyed' WHERE id = 'late-worktree'"
+  );
+  await deleteCodebase(project.id, { requireWorktreeCleanup: true });
+  expect(await getCodebase(project.id)).toBeNull();
+});

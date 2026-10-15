@@ -1,9 +1,16 @@
-import { ActiveContainerEnvironmentsError } from '@archon/core/db/codebase-delete-error';
-import { mkdtemp, writeFile } from 'fs/promises';
+import {
+  ActiveContainerEnvironmentsError,
+  ActiveWorktreeEnvironmentsError,
+} from '@archon/core/db/codebase-delete-error';
+import { mkdtemp, writeFile, unlink, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { findRepoRoot as realFindRepoRoot } from '@archon/git';
+import {
+  findRepoRoot as realFindRepoRoot,
+  removeWorktree as realRemoveWorktree,
+} from '@archon/git';
+import type { deleteCodebase } from '@archon/core/db/codebases';
 import { ProjectRegistrationError } from '@archon/core/handlers/clone';
 import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
@@ -20,6 +27,7 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 
 // Capture before Bun replaces the shared export with the route mock.
 const detectRealRepoRoot = realFindRepoRoot;
+const removeRealWorktree = realRemoveWorktree;
 
 const mockGetCodebase = mock(
   async (_id: string) =>
@@ -38,7 +46,7 @@ type MockCodebase = Omit<typeof MOCK_CODEBASE, 'repository_url'> & {
   repository_url: string | null;
 };
 const mockListCodebases = mock(async () => [] as MockCodebase[]);
-const mockDeleteCodebase = mock(async (_id: string) => {});
+const mockDeleteCodebase = mock<typeof deleteCodebase>(async () => {});
 const mockRenameCodebase = mock(async (_id: string, _name: string) => ({
   ...MOCK_CODEBASE,
   name: _name,
@@ -62,7 +70,7 @@ const mockRegisterFolder = mock(async (_path: string) => ({
 // registerRepository. Folder-fallback tests override this to resolve null.
 const mockFindRepoRoot = mock(async (p: string) => p as string | null);
 const mockListByCodebase = mock(async (_id: string) => [] as unknown[]);
-const mockRemoveWorktree = mock(async () => {});
+const mockRemoveWorktree = mock<typeof realRemoveWorktree>(async () => {});
 const mockUpdateStatus = mock(async (_id: string, _status: string) => {});
 
 const mockInspectBaseBranch = mock(
@@ -824,6 +832,7 @@ describe('DELETE /api/codebases/:id', () => {
     mockDeleteCodebase.mockReset();
     mockListByCodebase.mockReset();
     mockRemoveWorktree.mockReset();
+    mockRemoveWorktree.mockResolvedValue(undefined);
     mockUpdateStatus.mockReset();
   });
 
@@ -838,7 +847,9 @@ describe('DELETE /api/codebases/:id', () => {
 
     const body = (await response.json()) as { success: boolean };
     expect(body.success).toBe(true);
-    expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1');
+    expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1', {
+      requireWorktreeCleanup: true,
+    });
   });
 
   test('refuses deletion before any cleanup when active containers remain', async () => {
@@ -848,9 +859,6 @@ describe('DELETE /api/codebases/:id', () => {
       { ...MOCK_ENV, id: 'container-one', provider: 'container' },
       { ...MOCK_ENV, id: 'container-two', provider: 'container' },
     ]);
-    mockDeleteCodebase.mockRejectedValueOnce(
-      new ActiveContainerEnvironmentsError(['container-one', 'container-two'])
-    );
     const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
       method: 'DELETE',
     });
@@ -861,42 +869,122 @@ describe('DELETE /api/codebases/:id', () => {
     expect(body.error).toContain('archon isolation cleanup 0');
     expect(mockRemoveWorktree).not.toHaveBeenCalled();
     expect(mockUpdateStatus).not.toHaveBeenCalled();
-    expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1');
+    expect(mockDeleteCodebase).not.toHaveBeenCalled();
   });
 
-  test('removes worktrees after guarded database deletion', async () => {
-    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
-    mockListByCodebase.mockImplementationOnce(async () => [MOCK_ENV]);
-    mockRemoveWorktree.mockImplementationOnce(async () => {});
-    mockUpdateStatus.mockImplementationOnce(async () => {});
-    mockDeleteCodebase.mockImplementationOnce(async () => {});
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases/codebase-uuid-1', { method: 'DELETE' });
-    expect(response.status).toBe(200);
-
-    expect(mockRemoveWorktree).toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
-  });
-
-  test('continues deletion even if worktree removal fails', async () => {
-    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
-    mockListByCodebase.mockImplementationOnce(async () => [MOCK_ENV]);
-    mockRemoveWorktree.mockImplementationOnce(async () => {
-      throw new Error('worktree already gone');
+  test('removes worktrees and marks them destroyed before guarded database deletion', async () => {
+    mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+    mockListByCodebase.mockResolvedValueOnce([{ ...MOCK_ENV, working_path: process.cwd() }]);
+    mockDeleteCodebase.mockImplementationOnce(async () => {
+      expect(mockRemoveWorktree).toHaveBeenCalledWith(MOCK_CODEBASE.default_cwd, process.cwd());
+      expect(mockUpdateStatus).toHaveBeenCalledWith(MOCK_ENV.id, 'destroyed');
     });
-    mockUpdateStatus.mockImplementationOnce(async () => {});
-    mockDeleteCodebase.mockImplementationOnce(async () => {});
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases/codebase-uuid-1', { method: 'DELETE' });
-    // Should still succeed — worktree removal failure is logged and skipped
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+      method: 'DELETE',
+    });
     expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { success: boolean };
-    expect(body.success).toBe(true);
-    expect(mockDeleteCodebase).toHaveBeenCalled();
+    expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1', {
+      requireWorktreeCleanup: true,
+    });
   });
+
+  test('keeps the project and cleanup handle if worktree removal fails', async () => {
+    mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+    mockListByCodebase.mockResolvedValueOnce([{ ...MOCK_ENV, working_path: process.cwd() }]);
+    mockRemoveWorktree.mockRejectedValueOnce(new Error('dirty worktree'));
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { error: string }).error).toContain(MOCK_ENV.id);
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockDeleteCodebase).not.toHaveBeenCalled();
+  });
+
+  test('retries a real dirty linked worktree without losing its cleanup handle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-delete-worktree-'));
+    const repo = join(root, 'repo');
+    const checkout = join(root, 'checkout');
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(['git', ...args]);
+      expect(result.exitCode).toBe(0);
+    };
+    try {
+      git('init', repo);
+      git(
+        '-C',
+        repo,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'initial'
+      );
+      git('-C', repo, 'worktree', 'add', '-b', 'cleanup-test', checkout);
+      const dirtyFile = join(checkout, 'untracked.txt');
+      await writeFile(dirtyFile, 'keep until the operator resolves it');
+      mockGetCodebase.mockResolvedValue({ ...MOCK_CODEBASE, default_cwd: repo });
+      mockListByCodebase.mockResolvedValue([{ ...MOCK_ENV, working_path: checkout }]);
+      mockRemoveWorktree.mockImplementation(removeRealWorktree);
+      const app = makeApp();
+      expect(
+        (await app.request('/api/codebases/codebase-uuid-1', { method: 'DELETE' })).status
+      ).toBe(500);
+      expect(await Bun.file(dirtyFile).text()).toContain('keep until');
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockDeleteCodebase).not.toHaveBeenCalled();
+
+      await unlink(dirtyFile);
+      expect(
+        (await app.request('/api/codebases/codebase-uuid-1', { method: 'DELETE' })).status
+      ).toBe(200);
+      expect(await stat(checkout).catch(error => error.code)).toBe('ENOENT');
+      expect((await stat(repo)).isDirectory()).toBe(true);
+      expect(mockUpdateStatus).toHaveBeenCalledWith(MOCK_ENV.id, 'destroyed');
+      expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1', {
+        requireWorktreeCleanup: true,
+      });
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  test('finishes tracking an already removed worktree on retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-delete-missing-'));
+    try {
+      mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+      mockListByCodebase.mockResolvedValueOnce([
+        { ...MOCK_ENV, working_path: join(root, 'missing') },
+      ]);
+      const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(200);
+      expect(mockRemoveWorktree).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).toHaveBeenCalledWith(MOCK_ENV.id, 'destroyed');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  for (const failure of [
+    new ActiveContainerEnvironmentsError(['new-container']),
+    new ActiveWorktreeEnvironmentsError(['new-worktree']),
+  ]) {
+    test(`returns the transactional refusal: ${failure.name}`, async () => {
+      mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+      mockListByCodebase.mockResolvedValueOnce([]);
+      mockDeleteCodebase.mockRejectedValueOnce(failure);
+      const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toBe(failure.message);
+    });
+  }
 
   test('returns 404 when codebase not found', async () => {
     mockGetCodebase.mockImplementationOnce(async () => null);

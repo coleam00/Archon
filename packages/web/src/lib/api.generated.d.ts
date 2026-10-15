@@ -1293,7 +1293,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description Active container environments require explicit cleanup */
+        /** @description Active container environments or newly registered worktrees require cleanup */
         409: {
           headers: {
             [name: string]: unknown;
