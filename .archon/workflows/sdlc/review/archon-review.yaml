@@ -151,7 +151,7 @@ nodes:
 
   # Resolves the review target deterministically and refuses a PR whose head is not
   # the commit under review, before any lens runs. Its output is the PR this round
-  # reviews and its live diff base, both null for a working diff; publish writes to
+  # reviews and its base branch, both null for a working diff; publish writes to
   # that PR and nothing else.
   - id: head-check
     script: check-review-head
@@ -175,12 +175,7 @@ nodes:
               required: [host, path]
             number: { type: integer, minimum: 1 }
           required: [repo, number]
-        base:
-          type: [object, 'null']
-          properties:
-            branch: { type: string, pattern: '\S' }
-            revision: { type: string, pattern: '\S' }
-          required: [branch, revision]
+        base: { type: [string, 'null'], pattern: '\S' }
       required: [pr, base]
 
   # The lens decision is quick and separate from scope: a small model reads the diff

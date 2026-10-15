@@ -50,6 +50,8 @@ export interface GhFake {
   readonly pr?: GhPr;
   /** No pull request matches `gh pr list --head` until one is created. */
   readonly noOpenPr?: boolean;
+  /** stderr for a refused `gh pr list`, as when gh cannot query the remote's host. */
+  readonly listFail?: string;
   /** Existing issue comments, in listing order. */
   readonly comments?: readonly GhCommentRow[];
   /** stderr for a refused write (`pr create`, `pr edit`, or a comment write). */
@@ -236,6 +238,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     return result(0, '');
   }
   if (text.startsWith('pr list')) {
+    if (fake.listFail !== undefined) return result(1, '', fake.listFail);
     // gh applies the head and state filters server side.
     const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
     return result(0, JSON.stringify(listed ? [project()] : []));

@@ -5,7 +5,7 @@
  * branch, or empty for the current branch's open PR) through the forge, not from
  * anything the scope agent says about it. A PR review proceeds only when the PR's
  * head is the commit this round fixed; otherwise the node refuses with retry
- * commands for the PR's head. The output is the PR and its live diff base, which
+ * commands for the PR's head. The output is the PR and its base branch, which
  * publication checks again before its public write.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
@@ -19,12 +19,7 @@ import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { forgeSource, sameRepo, type PrRecord } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { findRemote } from '../../.shared/remote.ts';
-import {
-  liveReviewBase,
-  resolveReviewPr,
-  retainedReviewRef,
-  reviewHead,
-} from '../../.shared/review-target.ts';
+import { resolveReviewPr, retainedReviewRef, reviewHead } from '../../.shared/review-target.ts';
 
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -80,7 +75,7 @@ try {
       );
     }
     note('check-review-head: the PR head is the commit under review.');
-    emit({ pr: { repo: pr.repo, number: pr.number }, base: liveReviewBase(pr) });
+    emit({ pr: { repo: pr.repo, number: pr.number }, base: pr.base });
   }
 } catch (error) {
   refuse(`check-review-head: ${error instanceof Error ? error.message : String(error)}`);

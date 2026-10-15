@@ -84,7 +84,7 @@ test("archon-review's head-check pr schema admits exactly what parseQualifiedPr 
     { repo: { ...repo, path: '' }, number: 1 },
     { repo: { ...repo, path: '\t' }, number: 1 },
   ];
-  const base = { branch: 'dev', revision: 'base-sha' };
+  const base = 'dev';
   expect(validateStructuredOutput({ pr: null, base: null }, schema).valid).toBe(true);
   const verdicts = candidates.map(pr => {
     let parserAccepts = true;

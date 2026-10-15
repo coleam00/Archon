@@ -8,6 +8,7 @@ import {
   type QualifiedPr,
 } from './forge.ts';
 import { git } from './git.ts';
+import { note } from './io.ts';
 import { findOpenPrByHead, viewPr } from './pr.ts';
 import { findRemote, urlRepo } from './remote.ts';
 
@@ -78,9 +79,20 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
       throw new Error(`git branch discovery failed: ${branch.stderr}`);
     }
     const matches: PrRecord[] = [];
+    const unanswered: string[] = [];
     for (const repo of repos) {
       for (const headRepo of repos) {
-        const pr = findOpenPrByHead(repo, headRepo, branch.stdout, source)?.pr;
+        let pr: PrRecord | undefined;
+        try {
+          pr = findOpenPrByHead(repo, headRepo, branch.stdout, source)?.pr;
+        } catch (error) {
+          // Nothing asked for a PR, so a remote the forge cannot answer for (another
+          // host, no auth, offline) leaves the working diff; the note keeps it visible.
+          unanswered.push(
+            `${repo.host}/${repo.path}: ${error instanceof Error ? error.message : String(error)}`
+          );
+          continue;
+        }
         if (!pr) continue;
         if (
           !sameRepo(pr.repo, repo) ||
@@ -98,6 +110,12 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
       throw new Error(
         'more than one open pull request matches; retry with --input scope=<full-PR-URL>'
       );
+    if (unanswered.length > 0) {
+      note(
+        `Open-PR discovery could not query ${unanswered.join('; ')}. ` +
+          'Pass --input scope=<full-PR-URL> to review a PR there.'
+      );
+    }
     return matches[0];
   }
   if (repos.length !== 1) {
@@ -157,29 +175,4 @@ export function reviewHead(pr: PrRecord): string {
       { cause: error }
     );
   }
-}
-
-/** The PR's diff base: its live base branch and that branch's revision on the base remote. */
-export interface ReviewBase {
-  branch: string;
-  revision: string;
-}
-
-export function liveReviewBase(pr: PrRecord): ReviewBase {
-  const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
-  const ref = `refs/heads/${pr.base}`;
-  const lookup = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
-  const rows = lookup.stdout.split('\n');
-  const [revision, name] = rows[0]?.split('\t') ?? [];
-  if (
-    lookup.code !== 0 ||
-    rows.length !== 1 ||
-    name !== ref ||
-    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision ?? '')
-  ) {
-    throw new Error(
-      `the PR base revision could not be established (lookup exited ${String(lookup.code)})`
-    );
-  }
-  return { branch: pr.base, revision };
 }

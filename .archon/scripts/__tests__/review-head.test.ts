@@ -35,10 +35,8 @@ function check(options: ScriptOptions = {}) {
   });
 }
 
-/** The PR and live diff base a passing check hands to publication. */
-function prTarget(cwd: string) {
-  return { pr: PR, base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') } };
-}
+/** The PR and base branch a passing check hands to publication. */
+const PR_TARGET = { pr: PR, base: 'dev' };
 
 function view(overrides: Record<string, unknown> = {}) {
   return {
@@ -53,7 +51,7 @@ describe('review head boundary', () => {
       const cwd = gitCheckout({}, track);
       const run = check({ cwd, source, forge: view() });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual(prTarget(cwd));
+      expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
     });
     it(`refuses a different live head through ${source} before lenses, with retry commands`, () => {
       const cwd = gitCheckout({}, track);
@@ -136,22 +134,6 @@ describe('review head boundary', () => {
     expect(run.stderr).toContain('does not match');
   });
 
-  for (const baseRevision of ['stale', null]) {
-    it(`records the remote base revision when the forge reports ${String(baseRevision)}`, () => {
-      const cwd = gitCheckout({}, track);
-      writeFileSync(join(cwd, 'base.txt'), 'new base');
-      git(cwd, 'add', 'base.txt');
-      git(cwd, 'commit', '-qm', 'advance remote base');
-      git(cwd, 'push', '-q', 'upstream', 'HEAD:dev');
-      const run = check({ cwd, source: 'forge', forge: view({ base_revision: baseRevision }) });
-      expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout).base).toEqual({
-        branch: 'dev',
-        revision: git(cwd, 'rev-parse', 'HEAD'),
-      });
-    });
-  }
-
   for (const remotes of ['none', 'local', 'fork']) {
     it(`allows an empty-scope working diff with ${remotes} remotes`, () => {
       const cwd = gitCheckout({}, track);
@@ -171,6 +153,53 @@ describe('review head boundary', () => {
       expect(run.stderr).toContain('working diff');
     });
   }
+
+  for (const source of ['gh', 'forge']) {
+    it(`reviews the working diff with a note when ${source} cannot query the remote and nothing names a PR`, () => {
+      const run = check({
+        source,
+        gh: { listFail: 'none of the git remotes configured point to a known GitHub host' },
+        forge: { kind: 'fake' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+      });
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual({ pr: null, base: null });
+      expect(run.stderr).toContain(
+        `Open-PR discovery could not query ${PR.repo.host}/${PR.repo.path}: `
+      );
+      expect(run.stderr).toContain(source === 'gh' ? 'known GitHub host' : 'plugin unavailable');
+    });
+  }
+
+  it('still refuses an explicit PR the forge cannot query', () => {
+    const run = check({ source: 'forge', forge: { kind: 'fake' } });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('plugin unavailable');
+  });
+
+  it('keeps a PR one remote answers for when another remote cannot be queried', () => {
+    const cwd = gitCheckout({}, track);
+    const fork = { ...PR.repo, path: 'contributor/repo' };
+    git(cwd, 'remote', 'add', 'fork', `https://${fork.host}/${fork.path}.git`);
+    const failed = JSON.stringify({ operationId: 'op', ok: false, error: 'unreachable' });
+    const run = check({
+      cwd,
+      source: 'forge',
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+      forge: {
+        kind: 'fake',
+        response: [
+          forgeOperation('pr.view', { pr: forgePrRecord() }),
+          failed,
+          failed,
+          failed,
+        ],
+      },
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
+    expect(run.stderr).toContain('Open-PR discovery could not query');
+  });
 
   it('discovers a unique fork PR across upstream and fork remotes', () => {
     const cwd = gitCheckout({}, track);
@@ -282,7 +311,7 @@ describe('review head boundary', () => {
             inputs: { INPUTS_SCOPE: scope, INPUTS_SELECTOR: scope },
           });
           expect(run.code).toBe(matching ? 0 : 1);
-          if (matching) expect(JSON.parse(run.stdout)).toEqual(prTarget(cwd));
+          if (matching) expect(JSON.parse(run.stdout)).toEqual(PR_TARGET);
           else {
             expect(run.stderr).toContain(`the checkout is at ${HEAD}, but`);
             expect(run.stderr).toContain(

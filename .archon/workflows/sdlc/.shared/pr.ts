@@ -107,7 +107,7 @@ function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
       head_repo: headPath === undefined ? null : { host: repo.host, path: headPath },
       head_revision:
         typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
-      // A PR's base OID can lag the live branch; review checks the Git ref directly.
+      // gh does not report the base revision; the record keeps that absence explicit.
       base_revision: null,
       maintainer_can_modify:
         typeof row?.maintainerCanModify === 'boolean' ? row.maintainerCanModify : null,

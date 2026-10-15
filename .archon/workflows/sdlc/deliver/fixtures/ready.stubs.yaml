@@ -12,7 +12,7 @@ pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__head-check:
-  base: { branch: dev, revision: cafe }
+  base: dev
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 review__scope:
   selector: "https://github.com/example/repo/pull/1"
@@ -45,7 +45,7 @@ reshape__implement:
 reshape__assert-changed: "1 file changed"
 rereview__mode: '{"continuation":true,"light":true,"head":"fixturehead2","cursor":"fixturehead","risks":"fixture-owned-policy","execution":{"path":"rereview__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
 rereview__head-check:
-  base: { branch: dev, revision: cafe }
+  base: dev
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 rereview__scope:
   selector: "https://github.com/example/repo/pull/1"
