@@ -62,6 +62,8 @@ export const safeConfigSchema = z
     tierDefaults: tiersConfigSchema.optional(),
     // Configured @custom model aliases (merged repo > global). Not secrets.
     aliases: z.record(z.string(), tierEntrySchema).optional(),
+  } satisfies {
+    [K in keyof SafeConfig]-?: z.ZodType<SafeConfig[K]>;
   })
   .openapi('SafeConfig');
 
