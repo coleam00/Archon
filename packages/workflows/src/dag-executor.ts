@@ -3346,7 +3346,12 @@ function providerReportedFailure(
       message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
       break;
     case 'quota_exhausted':
-      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      // With a reported reset the run usually waits for it and continues by itself, so the
+      // text gives no resume advice: resuming before the reset spends a provider call.
+      message =
+        failure.resetAt !== undefined
+          ? `${subject} failed: the provider's usage or credit limit is used up until ${failure.resetAt}: ${failure.evidence}`
+          : `${subject} failed: the provider's usage or credit limit is used up. Resume the run once it reopens: ${failure.evidence}`;
       break;
     default:
       message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;

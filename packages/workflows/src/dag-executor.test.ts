@@ -17271,7 +17271,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       expect(events).not.toContain('node_completed');
       const failedEvent = eventCalls.find(c => c[0].event_type === 'node_failed');
       expect(failedEvent?.[0].data?.error).toBe(
-        `Node 'investigate' failed: the provider's usage or credit limit is used up${resetAt !== undefined ? ` (resets ${resetAt})` : ''}. Resume the run once it reopens: You've hit your session limit`
+        resetAt !== undefined
+          ? `Node 'investigate' failed: the provider's usage or credit limit is used up until ${resetAt}: You've hit your session limit`
+          : "Node 'investigate' failed: the provider's usage or credit limit is used up. Resume the run once it reopens: You've hit your session limit"
       );
       expect(failedEvent?.[0].data?.provider_failure).toEqual({
         class: 'quota_exhausted',
@@ -17378,6 +17380,52 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       'credit-wait-group-run',
       expect.objectContaining({ kind: 'quota', nodeId: 'refine', resumeAt: resetAt }),
       { kind: 'started', stepName: 'refine' }
+    );
+  });
+
+  it('waits for the latest reset when several nodes hit usage limits', async () => {
+    const sooner = new Date(Date.now() + 10 * 60_000).toISOString();
+    const later = new Date(Date.now() + 60 * 60_000).toISOString();
+    // The later reset is the first node, so a pass that kept the first or the earliest
+    // reset would wait on the wrong one.
+    useQuery(
+      mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* (prompt) {
+        yield {
+          type: 'result',
+          isError: true,
+          sessionId: 'dag-session-credit',
+          failure: {
+            class: 'quota_exhausted',
+            evidence: "You've hit your session limit",
+            resetAt: prompt.includes('later') ? later : sooner,
+          },
+        };
+      })
+    );
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-wait-latest',
+          nodes: [
+            { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'later' } },
+            { id: 'second', kind: 'agent', source: { kind: 'inline', prompt: 'sooner' } },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-wait-latest-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-latest-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'first', resumeAt: later }),
+      { kind: 'started', stepName: 'first' }
     );
   });
 
