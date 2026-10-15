@@ -35,17 +35,7 @@ import type { WebAdapter } from '../adapters/web';
 import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
-import {
-  rm,
-  rmdir,
-  readFile,
-  writeFile,
-  unlink,
-  mkdir,
-  readdir,
-  realpath,
-  stat,
-} from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -2747,23 +2737,11 @@ export function registerApiRoutes(
     return false;
   }
 
-  /**
-   * Persist multipart-uploaded files to the conversation's upload directory.
-   * Called from /api/workflows/:name/run; /api/conversations/:id/message still
-   * inlines the same validate-write-rollback logic and could migrate to this
-   * helper as a separate hygiene pass.
-   *
-   * Returns either { ok: true, savedFiles, uploadDir } or a structured error
-   * the caller forwards via apiError; on the success path the caller passes
-   * savedFiles + uploadDir to dispatchToOrchestrator so cleanup happens
-   * inside the lock handler.
-   */
   async function persistUploadedFiles(
     conversationId: string,
     fileEntries: File[]
   ): Promise<
-    | { ok: true; savedFiles: AttachedFile[]; uploadDir: string }
-    | { ok: false; status: 400 | 500; error: string }
+    { ok: true; savedFiles: AttachedFile[] } | { ok: false; status: 400 | 500; error: string }
   > {
     if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
       return {
@@ -2831,14 +2809,14 @@ export function registerApiRoutes(
       };
     }
 
-    return { ok: true, savedFiles, uploadDir };
+    return { ok: true, savedFiles };
   }
 
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
     extraContext: Omit<HandleMessageContext, 'isolationHints'>,
-    filesToCleanup?: { files: AttachedFile[]; uploadDir: string }
+    filesToCleanup?: AttachedFile[]
   ): Promise<{ accepted: boolean; status: string }> {
     const result = await lockManager.acquireLock(conversationId, async () => {
       // Emit lock:true at handler start so the UI knows processing has begun.
@@ -2869,23 +2847,15 @@ export function registerApiRoutes(
         // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
         // has had a chance to read them. Doing this in the HTTP handler's finally block
         // would delete files while the fire-and-forget lock handler is still running.
+        // The directory is shared with uploads that have not written their first file yet.
         if (filesToCleanup) {
-          for (const f of filesToCleanup.files) {
+          for (const f of filesToCleanup) {
             await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
               if (err.code !== 'ENOENT') {
                 getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
               }
             });
           }
-          // Other requests can already have uploads here while waiting for this lock.
-          await rmdir(filesToCleanup.uploadDir).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT' && err.code !== 'ENOTEMPTY' && err.code !== 'EEXIST') {
-              getLog().warn(
-                { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                'upload.dir_cleanup_failed'
-              );
-            }
-          });
         }
       }
     });
@@ -3221,7 +3191,6 @@ export function registerApiRoutes(
 
     let message: string;
     let savedFiles: AttachedFile[] = [];
-    let uploadDir = '';
 
     const contentType = c.req.header('content-type') ?? '';
 
@@ -3257,7 +3226,6 @@ export function registerApiRoutes(
           return c.json({ error: result.error }, result.status);
         }
         savedFiles = result.savedFiles;
-        uploadDir = result.uploadDir;
         getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
     } else {
@@ -3287,18 +3255,14 @@ export function registerApiRoutes(
         await messageDb.addMessage(conv.id, 'user', message, meta, userId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
-        try {
-          await webAdapter.emitSSE(
-            conversationId,
-            JSON.stringify({
-              type: 'warning',
-              message: 'Message could not be saved to history',
-              timestamp: Date.now(),
-            })
-          );
-        } catch (sseErr: unknown) {
-          getLog().error({ err: sseErr, conversationId: conv?.id }, 'sse_warning_double_failure');
+        for (const file of savedFiles) {
+          await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT') {
+              getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
+            }
+          });
         }
+        return apiError(c, 500, 'Failed to save message to history');
       }
       webAdapter.setConversationDbId(conversationId, conv.id);
     }
@@ -3310,10 +3274,7 @@ export function registerApiRoutes(
       actor,
       ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
     };
-    let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
-    if (savedFiles.length > 0) {
-      filesToCleanup = { files: savedFiles, uploadDir };
-    }
+    const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
     const result = await dispatchToOrchestrator(
       conversationId,
       message,
@@ -3978,14 +3939,12 @@ export function registerApiRoutes(
     const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     let savedFiles: AttachedFile[] = [];
-    let uploadDir = '';
     if (fileEntries.length > 0) {
       const result = await persistUploadedFiles(conversationId, fileEntries);
       if (!result.ok) {
         return apiError(c, result.status, result.error);
       }
       savedFiles = result.savedFiles;
-      uploadDir = result.uploadDir;
       getLog().info(
         { conversationId, fileCount: savedFiles.length, workflowName },
         'run_workflow.files_uploaded'
@@ -4054,7 +4013,7 @@ export function registerApiRoutes(
         ...(adoptRunId ? { workflowAdoptRunId: adoptRunId } : {}),
         ...(supersedesRunId ? { workflowSupersedesRunId: supersedesRunId } : {}),
       };
-      const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
+      const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
         message,
