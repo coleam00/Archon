@@ -25,7 +25,7 @@ import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
-  hasUncommittedChanges,
+  hasUncommittedChangesStrict,
   isWorktreeRegistered,
   worktreeExists,
   getDefaultBranch,
@@ -451,7 +451,7 @@ export async function removeEnvironment(
   try {
     // If path exists, check for uncommitted changes (unless force)
     if (pathExists && !options?.force) {
-      const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
+      const hasChanges = await hasUncommittedChangesStrict(toWorktreePath(env.working_path));
       if (hasChanges) {
         getLog().warn({ envId, workingPath: env.working_path }, 'env_has_uncommitted_changes');
         return { ...noopResult, skippedReason: 'has uncommitted changes' };
@@ -638,8 +638,8 @@ async function checkRemoval(
   repoPath: RepoPath,
   settlement: CleanupSettlement
 ): Promise<RemovalCheck> {
-  const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
-  if (hasChanges) {
+  const workingPath = toWorktreePath(env.working_path);
+  if ((await worktreeExists(workingPath)) && (await hasUncommittedChangesStrict(workingPath))) {
     return { blocker: { reason: 'uncommitted_changes', display: 'has uncommitted changes' } };
   }
   const lock = await getCleanupRunLock(env, repoPath, settlement);

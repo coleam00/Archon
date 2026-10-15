@@ -21,7 +21,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { execFileAsync, resolveBashPath, toBranchName, toRepoPath } from '@archon/git';
+import {
+  execFileAsync,
+  hasUncommittedChangesStrict,
+  resolveBashPath,
+  toBranchName,
+  toRepoPath,
+  toWorktreePath,
+} from '@archon/git';
 import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
@@ -351,6 +358,8 @@ describe('WorktreeProvider against real git', () => {
         if (kind === 'untracked')
           await git(created.workingPath, 'config', 'status.showUntrackedFiles', 'no');
 
+        expect(await hasUncommittedChangesStrict(toWorktreePath(created.workingPath))).toBe(true);
+
         await expect(provider.destroy(created.workingPath, options)).rejects.toBeInstanceOf(
           WorktreeUncommittedChangesError
         );
@@ -367,6 +376,7 @@ describe('WorktreeProvider against real git', () => {
       'removes a clean checkout or explicitly forced dirty checkout (force: %s)',
       async force => {
         const { created, options } = await createOwned();
+        expect(await hasUncommittedChangesStrict(toWorktreePath(created.workingPath))).toBe(false);
         if (force) await writeFile(join(created.workingPath, 'new-file'), 'discard by request');
         const result = await provider.destroy(created.workingPath, { ...options, force });
         expect(result.worktreeRemoved).toBe(true);

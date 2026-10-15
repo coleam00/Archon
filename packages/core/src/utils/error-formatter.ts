@@ -16,6 +16,7 @@ import {
 } from '@archon/paths/credential-redaction';
 
 const SHOWN_EVIDENCE_MAX_CHARS = 600;
+const CREDENTIAL_MARKERS = ['password', 'token', 'secret', 'key='];
 
 /**
  * The vendor's words, unless they carry anything that looks like a credential, cut to a
@@ -25,7 +26,7 @@ function shownEvidence(evidence: string): string | undefined {
   const text = evidence.trim();
   if (text.length === 0) return undefined;
   const lower = text.toLowerCase();
-  if (['password', 'token', 'secret', 'key='].some(marker => lower.includes(marker))) {
+  if (CREDENTIAL_MARKERS.some(marker => lower.includes(marker))) {
     return undefined;
   }
   return text.length > SHOWN_EVIDENCE_MAX_CHARS
@@ -102,13 +103,14 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
     return `⚠️ ${message}`;
   }
 
-  const safeMessage = redactCredentialValues(message, collectCredentialValues(process.env));
-  const lower = safeMessage.toLowerCase();
+  const lower = message.toLowerCase();
   if (
-    safeMessage.trim().length === 0 ||
-    ['password', 'token', 'secret', 'key=', 'api key'].some(marker => lower.includes(marker))
+    message.trim().length === 0 ||
+    CREDENTIAL_MARKERS.some(marker => lower.includes(marker)) ||
+    lower.includes('api key')
   ) {
     return '⚠️ An unexpected error occurred.';
   }
+  const safeMessage = redactCredentialValues(message, collectCredentialValues(process.env));
   return `⚠️ Error: ${safeMessage}`;
 }

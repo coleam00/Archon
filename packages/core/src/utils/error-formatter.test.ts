@@ -51,6 +51,22 @@ describe('classifyAndFormatError', () => {
     expect(classifyAndFormatError(new Error(message))).toBe('⚠️ An unexpected error occurred.');
   });
 
+  test.each(['password', 'token', 'secret', 'key=', 'api key'])(
+    'suppresses credentials even when redaction would erase the marker: %s',
+    marker => {
+      const previous = process.env.ARCHON_FORMATTER_TEST_SECRET;
+      process.env.ARCHON_FORMATTER_TEST_SECRET = marker;
+      try {
+        expect(classifyAndFormatError(new Error(`invalid ${marker} abc123`))).toBe(
+          '⚠️ An unexpected error occurred.'
+        );
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_FORMATTER_TEST_SECRET;
+        else process.env.ARCHON_FORMATTER_TEST_SECRET = previous;
+      }
+    }
+  );
+
   test('redacts known credentials even without their key names', () => {
     const previous = process.env.ARCHON_FORMATTER_TEST_TOKEN;
     process.env.ARCHON_FORMATTER_TEST_TOKEN = 'private-credential-value';
@@ -164,8 +180,11 @@ describe('formatProviderFailure', () => {
     );
   });
 
-  test('never shows evidence that looks like it carries a credential', () => {
-    const message = formatProviderFailure({ class: 'unknown', evidence: 'bad token sk-ant-123' });
-    expect(message).toBe('⚠️ AI error. Try /reset if issue persists.');
-  });
+  test.each(['password', 'token', 'secret', 'key='])(
+    'never shows evidence carrying a shared credential marker: %s',
+    marker => {
+      const message = formatProviderFailure({ class: 'unknown', evidence: `bad ${marker} abc123` });
+      expect(message).toBe('⚠️ AI error. Try /reset if issue persists.');
+    }
+  );
 });

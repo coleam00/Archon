@@ -149,7 +149,7 @@ mock.module('@archon/paths', () => ({
 const mockExecFileAsync = mock<typeof Git.execFileAsync>(() =>
   Promise.resolve({ stdout: '', stderr: '' })
 );
-const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChanges>(() =>
+const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>(() =>
   Promise.resolve(false)
 );
 const mockWorktreeExists = mock<typeof Git.worktreeExists>(() => Promise.resolve(false));
@@ -173,7 +173,7 @@ const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFr
 mock.module('@archon/git', () => ({
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
   execFileAsync: mockExecFileAsync,
-  hasUncommittedChanges: mockHasUncommittedChanges,
+  hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
   isBranchMerged: mockIsBranchMerged,
@@ -764,6 +764,18 @@ describe('cleanup-service', () => {
       expect(result.skippedReason).toBe('has uncommitted changes');
     });
 
+    test('a failed removal status query propagates without destroying or marking dirty', async () => {
+      mockGetById.mockResolvedValueOnce(makeEnvironment());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockWorktreeExists.mockResolvedValue(true);
+      const failure = new Error('status unavailable');
+      mockHasUncommittedChanges.mockRejectedValueOnce(failure);
+
+      await expect(removeEnvironment('env-1')).rejects.toBe(failure);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
     test('skippedReason is a closed vocabulary callers can branch on', () => {
       // Callers decide cleanup outcomes by comparing reasons, so an unlisted
       // reason must fail type-check instead of silently missing those branches.
@@ -1116,12 +1128,10 @@ describe('runScheduledCleanup', () => {
         metadata: {},
       }),
     ]);
-    // worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
+    mockWorktreeExists.mockResolvedValue(true);
     // getDefaultBranch returns 'main' (default)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
-    // Has uncommitted changes
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const report = await runScheduledCleanup();
@@ -1131,6 +1141,20 @@ describe('runScheduledCleanup', () => {
       reason: 'merged but has uncommitted changes',
     });
     expect(report.removed).toHaveLength(0);
+  });
+
+  test('reports a status failure as an error rather than a dirty skip', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeEnvironmentWithCodebase()]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockIsBranchMerged.mockResolvedValueOnce(true);
+    mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
+
+    const report = await runScheduledCleanup();
+
+    expect(report.errors).toEqual([{ id: 'env-1', error: 'status unavailable' }]);
+    expect(report.skipped).toEqual([]);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
 
   test('skips merged branches with a live owning run and a live-run reason', async () => {
@@ -2166,9 +2190,8 @@ describe('cleanupMergedWorktrees', () => {
         status: 'active',
       })
     );
-    // removeEnvironment: worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
-    // removeEnvironment: hasUncommittedChanges returns false (default)
+    mockWorktreeExists.mockResolvedValue(true);
+    // removeEnvironment: hasUncommittedChangesStrict returns false (default)
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
@@ -2272,7 +2295,7 @@ describe('cleanupMergedWorktrees', () => {
     // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
-    // Has uncommitted changes
+    mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
@@ -3210,9 +3233,8 @@ describe('cleanupStaleWorktrees', () => {
         status: 'active',
       })
     );
-    // removeEnvironment: worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
-    // removeEnvironment: hasUncommittedChanges returns false (default)
+    mockWorktreeExists.mockResolvedValue(true);
+    // removeEnvironment: hasUncommittedChangesStrict returns false (default)
 
     const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
 
@@ -3275,7 +3297,7 @@ describe('cleanupStaleWorktrees', () => {
       }),
     ]);
 
-    // Has uncommitted changes
+    mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');

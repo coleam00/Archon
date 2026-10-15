@@ -122,7 +122,8 @@ mock.module('@archon/core/operations/isolation-operations', () => ({
   cleanupMergedEnvironments: mockCleanupMergedEnvironments,
 }));
 
-const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChanges>(() =>
+const mockWorktreeExists = mock<typeof Git.worktreeExists>(() => Promise.resolve(true));
+const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>(() =>
   Promise.resolve(false)
 );
 // Default: gh returns empty PR array and git reports no unpushed commits.
@@ -137,12 +138,12 @@ const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>(() =>
 const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>(() => Promise.resolve(false));
 
 mock.module('@archon/git', () => ({
-  hasUncommittedChanges: mockHasUncommittedChanges,
+  hasUncommittedChangesStrict: mockHasUncommittedChanges,
   execFileAsync: mockExecFileAsync,
   toWorktreePath: mock((p: string) => p),
   toRepoPath: mock((p: string) => p),
   toBranchName: mock((b: string) => b),
-  worktreeExists: mock(() => Promise.resolve(true)),
+  worktreeExists: mockWorktreeExists,
   getUniqueCommitCount: mockGetUniqueCommitCount,
   getDefaultBranch: mockGetDefaultBranch,
   isPatchEquivalent: mockIsPatchEquivalent,
@@ -202,6 +203,7 @@ describe('isolationCompleteCommand', () => {
     consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     mockFindActiveByBranchName.mockReset();
     mockRemoveEnvironment.mockReset();
+    mockWorktreeExists.mockReset().mockResolvedValue(true);
     mockHasUncommittedChanges.mockReset();
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockGetLiveRunBlocker.mockReset();
@@ -255,6 +257,34 @@ describe('isolationCompleteCommand', () => {
       '  Not found: nonexistent-branch (no active isolation environment)'
     );
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 0 failed, 1 not found');
+  });
+
+  it('does not query status for an absent checkout', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    mockWorktreeExists.mockResolvedValueOnce(false);
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      warnings: [],
+    });
+
+    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+
+    expect(mockHasUncommittedChanges).not.toHaveBeenCalled();
+    expect(mockRemoveEnvironment).toHaveBeenCalled();
+  });
+
+  it('blocks a failed status query without calling it uncommitted changes', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
+
+    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '    ✗ could not verify uncommitted changes (worktree path may be missing)'
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
   });
 
   it('blocks when env has uncommitted changes without --force', async () => {
