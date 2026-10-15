@@ -331,6 +331,16 @@ To remove a registered project:
 IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
 
   if (channel === 'tools') {
+    const invokeExample = {
+      workflow: 'archon-ship',
+      project: 'my-project',
+      prompt: exampleTask,
+    } satisfies Record<keyof typeof INVOKE_WORKFLOW_SCHEMA.properties, string>;
+    const registerExample = {
+      name: 'my-new-app',
+      path: `${workspaces}/user/my-new-app/source`,
+      folder: false,
+    } satisfies Record<keyof typeof REGISTER_PROJECT_SCHEMA.properties, string | boolean>;
     return `${routingRules}
 
 ## Invoking a Workflow
@@ -351,7 +361,7 @@ Routing behavior:
 Example (clear intent):
 User: "Fix issue #42, the login form rejects valid emails"
 Response: I'll take issue #42 through to a reviewed pull request.
-invoke_workflow(${INVOKE_WORKFLOW_SCHEMA.required.map((name, index) => `${name}: ${JSON.stringify(['archon-ship', 'my-project', exampleTask][index])}`).join(', ')})
+invoke_workflow(${INVOKE_WORKFLOW_SCHEMA.required.map(name => `${name}: ${JSON.stringify(invokeExample[name])}`).join(', ')})
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
@@ -368,7 +378,7 @@ When a user asks to clone a new repository:
 1. Clone the repository into ${workspaces}/:
    git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
 2. Register it by calling \`register_project\` with the project name and the path to \`source\`, e.g.
-   register_project(${REGISTER_PROJECT_SCHEMA.required.map((name, index) => `${name}: ${JSON.stringify(['my-new-app', `${workspaces}/user/my-new-app/source`][index])}`).join(', ')})
+   register_project(${REGISTER_PROJECT_SCHEMA.required.map(name => `${name}: ${JSON.stringify(registerExample[name])}`).join(', ')})
 
 ${projectMaintenance}`;
   }
