@@ -3259,13 +3259,16 @@ branch refs/heads/feature/auth
       async fail => {
         execSpy.mockRestore();
         const realExec = git.execFileAsync;
-        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-atomic-')));
+        const root = trackTempRoot(
+          (await mkdtemp(join(tmpdir(), 'git-safe-atomic-'))).replaceAll('\\', '/')
+        );
         const config = join(root, 'gitconfig');
         const previousConfig = process.env.GIT_CONFIG_GLOBAL;
         process.env.GIT_CONFIG_GLOBAL = config;
         try {
           await realExec('git', ['init', root]);
-          await writeFile(config, `[safe]\n directory = ${root}\n directory = \n`);
+          await realExec('git', ['config', '--global', '--add', 'safe.directory', root]);
+          await realExec('git', ['config', '--global', '--add', 'safe.directory', '']);
           const checkTrust = async (): Promise<void> => {
             await realExec('git', ['-C', root, 'status', '--porcelain'], {
               env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
