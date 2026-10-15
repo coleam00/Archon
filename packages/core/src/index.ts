@@ -269,7 +269,6 @@ export {
   cancelOAuth,
   type ResolvedCredential,
   type DeliveryResult,
-  type DeliveryOptions,
   type OAuthCredentials,
   type VendorCatalogEntry,
   type AgentCredentialStatus,
