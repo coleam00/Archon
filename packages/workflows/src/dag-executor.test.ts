@@ -20,7 +20,7 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
@@ -77,7 +77,11 @@ import {
   registerPiProvider,
   registerOpencodeProvider,
 } from '@archon/providers/in-process';
-import type { ProviderFailure } from '@archon/provider-contract';
+import type {
+  ProviderCapabilities,
+  ProviderRegistry,
+  ProviderFailure,
+} from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
@@ -259,6 +263,9 @@ function createMockStore(): MockWorkflowStore {
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
+      throw new Error('Unexpected hasStartReceiptForDelivery');
+    }),
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
@@ -300,6 +307,12 @@ function createMockStore(): MockWorkflowStore {
     }),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
+    }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
     }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
@@ -402,6 +415,7 @@ function createMockStore(): MockWorkflowStore {
         completedNodeOutputs: new Map<string, { output: string }>(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })
@@ -449,29 +463,242 @@ function authoredOutcomeWrites(
     .filter((outcome): outcome is 'succeeded' | 'failed' => outcome !== undefined);
 }
 
-/** All-true capabilities for Claude mock */
-const mockClaudeCapabilities = () => ({
-  backgroundWork: 'unobserved' as const,
-  sessionResume: true,
-  sessionFork: true,
-  mcp: true,
-  hooks: true,
-  skills: true,
-  plugins: true,
-  agents: true,
-  toolRestrictions: true,
-  structuredOutput: 'enforced' as const,
-  envInjection: true,
-  costControl: true,
-  costReporting: true,
-  effortControl: true,
-  fallbackModel: true,
-  sandbox: true,
-  settingSources: true,
-  nativeTools: true,
-  containerExec: true,
-  requiresAllPropertiesRequired: false,
+describe('executor capability ownership', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'dag-capabilities-'));
+  });
+
+  afterEach(async () => {
+    await removeTempTree(cwd);
+  });
+
+  it('reads capabilities only from the injected descriptors', async () => {
+    const source = await readFile(new URL('./dag-executor.ts', import.meta.url), 'utf8');
+    expect(source.includes('getCapabilities')).toBe(false);
+  });
+
+  for (const kind of ['agent', 'loop'] as const) {
+    it(`rejects unsupported descriptor capabilities before creating a ${kind} provider`, async () => {
+      const store = createMockStore();
+      const deps = createMockDeps(
+        store,
+        withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          skills: false,
+        })
+      );
+      const factory = mock<WorkflowDeps['getAgentProvider']>(() => {
+        throw new Error('Rejected capabilities must not create a provider');
+      });
+      deps.getAgentProvider = factory;
+      const node: DagNode =
+        kind === 'agent'
+          ? {
+              id: 'work',
+              kind,
+              source: { kind: 'inline', prompt: 'work' },
+              skills: ['required-skill'],
+            }
+          : {
+              id: 'work',
+              kind,
+              skills: ['required-skill'],
+              loop: {
+                prompt: 'work',
+                fresh_context: false,
+                max_iterations: 1,
+                until: 'COMPLETE',
+              },
+            };
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-admission', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        )
+      ).rejects.toThrow(
+        "Node 'work' (provider 'claude') names skills, but that provider cannot load what the node names."
+      );
+      expect(factory).not.toHaveBeenCalled();
+    });
+
+    for (const structuredOutput of ['best-effort', 'enforced'] as const) {
+      it(`uses the descriptor's ${structuredOutput} reask policy in a ${kind} node`, async () => {
+        let calls = 0;
+        const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+          async function* () {
+            calls++;
+            yield {
+              type: 'result',
+              sessionId: 'owner-session',
+              structuredOutput: calls === 1 ? { invalid: true } : { done: true },
+            };
+            yield { type: 'settled' };
+          }
+        );
+        const store = createMockStore();
+        const providers = withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          structuredOutput,
+        });
+        const deps = createMockDeps(store, providers);
+        const factory = mock<WorkflowDeps['getAgentProvider']>(() => ({
+          sendQuery,
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          getType: () => 'claude',
+          getCapabilities: () => {
+            throw new Error('Instance capabilities are not the executor owner');
+          },
+        }));
+        deps.getAgentProvider = factory;
+        const output_format = {
+          type: 'object',
+          properties: { done: { type: 'boolean' } },
+          required: ['done'],
+          additionalProperties: false,
+        };
+        const node: DagNode =
+          kind === 'agent'
+            ? {
+                id: 'work',
+                kind,
+                source: { kind: 'inline', prompt: 'work' },
+                output_format,
+                retry: { max_attempts: 0 },
+              }
+            : {
+                id: 'work',
+                kind,
+                output_format,
+                retry: { max_attempts: 0 },
+                loop: {
+                  prompt: 'work',
+                  fresh_context: false,
+                  max_iterations: 1,
+                  until_field: 'done',
+                },
+              };
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-reasks', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        );
+        expect(factory).toHaveBeenCalledTimes(1);
+        expect(sendQuery).toHaveBeenCalledTimes(structuredOutput === 'best-effort' ? 2 : 1);
+        expect(
+          persistedEvents(store).some(
+            event =>
+              event.event_type ===
+              (structuredOutput === 'best-effort' ? 'node_completed' : 'node_failed')
+          )
+        ).toBe(true);
+      });
+    }
+
+    for (const reports of [false, true]) {
+      it(`records descriptor reporting availability (${reports}) in a ${kind} node`, async () => {
+        const store = createMockStore();
+        const deps = createMockDeps(
+          store,
+          withProviderCapabilities(mockProviderRegistry, 'claude', {
+            ...mockClaudeCapabilities(),
+            costReporting: reports,
+            tokenReporting: reports,
+            turnCountReporting: reports,
+            stopReasonReporting: reports,
+            resolvedModelReporting: reports,
+          })
+        );
+        deps.getAgentProvider = mock<WorkflowDeps['getAgentProvider']>(() => ({
+          sendQuery: async function* () {
+            yield {
+              type: 'result',
+              sessionId: 'owner-session',
+              text: '<promise>COMPLETE</promise>',
+            };
+            yield { type: 'settled' };
+          },
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          getType: () => 'claude',
+          getCapabilities: () => {
+            throw new Error('Instance capabilities are not the executor owner');
+          },
+        }));
+        const node: DagNode =
+          kind === 'agent'
+            ? { id: 'work', kind, source: { kind: 'inline', prompt: 'work' } }
+            : {
+                id: 'work',
+                kind,
+                loop: {
+                  prompt: 'work',
+                  fresh_context: false,
+                  max_iterations: 1,
+                  until: 'COMPLETE',
+                },
+              };
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd,
+            workflow: { name: 'descriptor-reporting', nodes: [node] },
+            workflowRun: makeWorkflowRun(),
+          })
+        );
+        const completed = persistedEvents(store).find(
+          event => event.event_type === 'node_completed'
+        );
+        expect(completed).toBeDefined();
+        const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+        const unavailable = {
+          source: 'unavailable',
+          reason: reports ? 'not_reported' : 'unsupported',
+        } as const;
+        expect(record?.metadata?.spend.costUsd).toEqual(unavailable);
+        expect(record?.metadata?.spend.tokens).toEqual(unavailable);
+        expect(record?.metadata?.spend.numTurns).toEqual(unavailable);
+        expect(record?.metadata?.spend.stopReason).toEqual(unavailable);
+        expect(record?.metadata?.binding.model?.resolved).toEqual(unavailable);
+        expect(deps.getAgentProvider).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
 });
+
+function withProviderCapabilities(
+  providers: ProviderRegistry,
+  provider: string,
+  capabilities: ProviderCapabilities
+): ProviderRegistry {
+  const descriptor = providers.get(provider);
+  if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
+  const replacement = { ...descriptor, capabilities };
+  return {
+    get: id => (id === provider ? replacement : providers.get(id)),
+    list: () => providers.list().map(entry => (entry.id === provider ? replacement : entry)),
+    unavailable: id => providers.unavailable?.(id),
+  };
+}
+
+const mockClaudeCapabilities = (): ProviderCapabilities => ({
+  ...getProviderCapabilities('claude'),
+  backgroundWork: 'unobserved',
+});
+
+const mockProviderRegistry = withProviderCapabilities(
+  providerRegistry,
+  'claude',
+  mockClaudeCapabilities()
+);
+
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
   getProviderCapabilities('codex');
@@ -501,14 +728,23 @@ type MockWorkflowDeps<TStore extends IWorkflowStore> = Omit<
 };
 
 function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
-  storeOverride?: TStore
+  storeOverride?: TStore,
+  providers: ProviderRegistry = mockProviderRegistry
 ): MockWorkflowDeps<TStore> {
   const store = storeOverride ?? createMockStore();
   return {
-    providers: providerRegistry,
+    providers,
     store: store as TStore,
     // Mock providers settle like real ones; see settlingProvider.
-    getAgentProvider: provider => settlingProvider(mockGetAgentProviderDag(provider)),
+    getAgentProvider: provider =>
+      settlingProvider({
+        ...mockGetAgentProviderDag(provider),
+        getCapabilities: () => {
+          const descriptor = providers.get(provider);
+          if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
+          return descriptor.capabilities;
+        },
+      }),
     loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
       assistant: 'claude' as const,
       commands: {},
@@ -4651,6 +4887,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
       unfinishedInvocations: new Map([[nodeInvocationKey('work', []), original]]),
     });
@@ -8448,10 +8685,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
             yield { type: 'settled' };
           });
           const store = createMockStore();
-          const deps = createMockDeps(store);
+          const deps = createMockDeps(
+            store,
+            withProviderCapabilities(mockProviderRegistry, 'claude', {
+              ...mockClaudeCapabilities(),
+              backgroundWork,
+            })
+          );
           deps.getAgentProvider = () => ({
             ...mockGetAgentProviderDag('claude'),
-            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork }),
+            getCapabilities: () => {
+              throw new Error('Instance capabilities are not the executor owner');
+            },
           });
           await executeDagWorkflow(
             dagOptions({
@@ -8503,10 +8748,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
       const store = createMockStore();
       const platform = createMockPlatform();
-      const mockDeps = createMockDeps(store);
+      const mockDeps = createMockDeps(
+        store,
+        withProviderCapabilities(mockProviderRegistry, 'claude', {
+          ...mockClaudeCapabilities(),
+          backgroundWork: 'reported',
+        })
+      );
       mockDeps.getAgentProvider = () => ({
         ...mockGetAgentProviderDag('claude'),
-        getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
+        getCapabilities: () => {
+          throw new Error('Instance capabilities are not the executor owner');
+        },
       });
       await executeDagWorkflow(
         dagOptions({
@@ -8567,7 +8820,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           const deps = createMockDeps(store);
           deps.getAgentProvider = () => ({
             ...mockGetAgentProviderDag('claude'),
-            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'unobserved' }),
+            getCapabilities: () => {
+              throw new Error('Instance capabilities are not the executor owner');
+            },
           });
           await executeDagWorkflow(
             dagOptions({
@@ -15128,11 +15383,13 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
       yield { type: 'settled', reason: 'turn_complete' };
     });
-    const deps = createMockDeps(store);
-    deps.getAgentProvider = () => ({
-      ...mockGetAgentProviderDag(provider),
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
-    });
+    const deps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, provider, {
+        ...getProviderCapabilities(provider),
+        backgroundWork: 'reported',
+      })
+    );
     const config = {
       ...minimalConfig,
       workflows: {
@@ -17698,6 +17955,54 @@ describe('executeDagWorkflow -- durable wait node', () => {
         kind: 'attention',
         form: 'select',
         options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
+  });
+
+  it('resolves label values when the wait pauses', async () => {
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-labels',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-labels-test',
+          nodes: [
+            {
+              id: 'plan',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"cause":"other"}'`,
+              output_format: {
+                type: 'object',
+                properties: { cause: { type: 'string' } },
+                required: ['cause'],
+              },
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['plan'],
+              wait: {
+                attention: 'CI is red. Retry?',
+                labels: { ci: '$plan.output.cause', area: 'delivery' },
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-labels'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-labels',
+      expect.objectContaining({
+        kind: 'attention',
+        labels: { ci: 'other', area: 'delivery' },
       }),
       { kind: 'started', stepName: 'ask' }
     );
@@ -24123,20 +24428,15 @@ describe('executeDagWorkflow -- persist_session', () => {
   });
 
   it('persist_session: true on non-resume-capable provider → throws clear error', async () => {
-    // Provider with sessionResume: false
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'no-resume',
-      getCapabilities: () => ({
-        ...mockClaudeCapabilities(),
-        backgroundWork: 'unobserved' as const,
-        sessionResume: false,
-      }),
-    }));
-
     const store = createMockStore();
-    const mockDeps = createMockDeps(store);
+    const mockDeps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionResume: false,
+        sessionFork: false,
+      })
+    );
     const platform = createMockPlatform();
 
     await executeDagWorkflow(
@@ -24169,6 +24469,7 @@ describe('executeDagWorkflow -- persist_session', () => {
         'sessionResume capability.'
     );
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
   });
 
   it('workflow.persist_sessions: true + node unset → node inherits persistence', async () => {
@@ -24405,13 +24706,13 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       const sessionId = opts.plannerSessionId(run);
       yield sessionId === undefined ? { type: 'result' } : { type: 'result', sessionId };
     });
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: opts.sessionFork }),
-    }));
-    const deps = createMockDeps(store);
+    const deps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionFork: opts.sessionFork,
+      })
+    );
     const platforms = { a: createMockPlatform(), b: createMockPlatform() };
     const start = (run: 'a' | 'b'): Promise<unknown> =>
       executeDagWorkflow(
@@ -29528,11 +29829,12 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     nodes: DagNode[],
     store = createMockStore(),
     priorCompletedNodes?: Map<string, PersistedNodeOutput>,
-    priorNodeSessions?: readonly WorkflowRunNodeSession[]
+    priorNodeSessions?: readonly WorkflowRunNodeSession[],
+    providers: ProviderRegistry = mockProviderRegistry
   ): Promise<MockWorkflowStore> {
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: createMockDeps(store, providers),
         conversationId: 'conv-addressable',
         cwd: testDir,
         workflow: { name: 'addressable', nodes },
@@ -30623,15 +30925,18 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(mismatchStore.failWorkflowRun).toHaveBeenCalled();
 
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: false }),
-    }));
-    const capabilityStore = await runAddressableWorkflow(nodes, createMockStore(), priorCompleted, [
-      { ...priorSession, provider: 'claude' },
-    ]);
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
+    const capabilityStore = await runAddressableWorkflow(
+      nodes,
+      createMockStore(),
+      priorCompleted,
+      [{ ...priorSession, provider: 'claude' }],
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        sessionFork: false,
+      })
+    );
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(capabilityStore.failWorkflowRun).toHaveBeenCalled();
   });
@@ -39694,6 +39999,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       ]),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39744,6 +40050,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), snapshots]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39795,6 +40102,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot!]]]),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -39844,6 +40152,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
       unresolvedNodeStarts: new Set([`${composeScope()}__${snapshot.identity}`]),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -40379,6 +40688,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs,
       fanOutSnapshots,
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
     parentPaused = false;
@@ -40797,6 +41107,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs,
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     }));
 
@@ -41018,6 +41329,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       completedNodeOutputs: stale,
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     }));
 
@@ -42085,6 +42397,7 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
       ]),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
     });
 
@@ -42885,5 +43198,540 @@ describe('executeDagWorkflow -- substituted values reach the node verbatim (#404
 
     expect(prompts()).toEqual(['Prior: []', `Prior: [${quoted}]`]);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- run budget (#2814)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-budget-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  const ai = (id: string, depends_on?: string[], extra?: Partial<AgentNode>): AgentNode => ({
+    id,
+    kind: 'agent',
+    source: { kind: 'inline', prompt: `Do ${id}` },
+    ...(depends_on ? { depends_on } : {}),
+    ...extra,
+  });
+  const sh = (id: string, depends_on?: string[]): DagNode => ({
+    id,
+    kind: 'exec',
+    runtime: 'sh',
+    script: 'echo ok',
+    ...(depends_on ? { depends_on } : {}),
+  });
+
+  /** Every provider call reports `cost` (or none when undefined). */
+  function providerCosts(cost: number | undefined): void {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: 's', ...(cost !== undefined ? { cost } : {}) };
+    });
+  }
+
+  /** A store whose resume read folds the rows written so far, as the real stores do. */
+  function durableStore(): MockWorkflowStore {
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    return store;
+  }
+
+  async function run(
+    workflow: TestWorkflowDefinition,
+    store = durableStore(),
+    extra: Partial<DagOptionsOverrides> = {}
+  ): Promise<MockWorkflowStore> {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('budget-run'),
+        ...extra,
+      })
+    );
+    return store;
+  }
+
+  const refusals = (store: MockWorkflowStore) =>
+    persistedEvents(store).filter(e => e.event_type === 'run_budget_refused');
+  const started = (store: MockWorkflowStore, step: string) =>
+    persistedEvents(store).filter(e => e.event_type === 'node_started' && e.step_name === step);
+  const exitReason = (store: MockWorkflowStore) =>
+    (store.failWorkflowRun.mock.calls[0]?.[2] as { exitReason?: string } | undefined)?.exitReason;
+
+  /** What a cold resume hands the executor, read through the same store handoff. */
+  async function resumeOptions(store: MockWorkflowStore): Promise<Partial<DagOptionsOverrides>> {
+    const inspection = await inspectResumableRun(
+      createMockDeps(store),
+      makeWorkflowRun('budget-run')
+    );
+    if (!inspection) throw new Error('Expected the refused run to be resumable');
+    return {
+      priorCompletedNodes: inspection.priorCompletedNodes,
+      priorUsage: inspection.priorUsage,
+    };
+  }
+
+  it('refuses the next attempt once the work ceiling is reached, before it starts', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'units',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(started(store, 'c')).toHaveLength(0);
+    expect(
+      persistedEvents(store).some(e => e.step_name === 'c' && e.event_type === 'node_failed')
+    ).toBe(false);
+    expect(refusals(store)).toHaveLength(1);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'work_units_exhausted',
+      node: 'c',
+      consumed: { work_units: 2 },
+    });
+  });
+
+  it('lets an admitted attempt overshoot the spend ceiling and refuses the next one', async () => {
+    providerCosts(0.6);
+    const store = await run({
+      name: 'spend',
+      budget: { max_spend_usd: 1 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'spend_exhausted',
+      node: 'c',
+      consumed: { work_units: 2, spend_usd: 1.2 },
+    });
+  });
+
+  it('counts a retry as a work unit and refuses it once the spend is gone', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['crash'],
+        failure: { class: 'transient', evidence: 'crash' },
+        sessionId: 's',
+        cost: 0.6,
+      };
+    });
+    const store = await run({
+      name: 'retry',
+      budget: { max_spend_usd: 0.5 },
+      nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(refusals(store)[0].data).toMatchObject({ reason: 'spend_exhausted', node: 'a' });
+    // The refused retry's earlier attempt still counts toward the run's recorded spend.
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.6);
+  });
+
+  it('admits exactly the remaining units from a parallel layer and lets them finish', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'parallel',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b'), ai('c')],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(persistedEvents(store).filter(e => e.event_type === 'node_completed')).toHaveLength(2);
+    expect(
+      persistedEvents(store).filter(e => e.event_type === 'run_budget_work_unit')
+    ).toHaveLength(2);
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('fails a spend-limited run as soon as an attempt reports no cost', async () => {
+    providerCosts(undefined);
+    const store = await run({
+      name: 'unknown-cost',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(started(store, 'b')).toHaveLength(0);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'not_reported' },
+    });
+
+    // A work ceiling alone does not need cost, so the same run completes.
+    const unitsOnly = await run({
+      name: 'unknown-cost-units',
+      budget: { max_work_units: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(unitsOnly.completeWorkflowRun).toHaveBeenCalled();
+    expect(refusals(unitsOnly)).toHaveLength(0);
+  });
+
+  it('treats an attempt that reported only part of its cost as unknown', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: 's', cost: 0.2 };
+      yield { type: 'result', sessionId: 's' };
+    });
+    const store = await run({
+      name: 'partial',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    });
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'partial' },
+    });
+    const completed = persistedEvents(store).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'a'
+    );
+    expect(completed?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.2, partial: true },
+    });
+    // Run telemetry keeps the reported value exactly as before.
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.2);
+  });
+
+  it('rebuilds the same totals on cold resume and refuses again without calling the provider', async () => {
+    providerCosts(0.1);
+    const workflow = {
+      name: 'resume-units',
+      budget: { max_work_units: 2 },
+      nodes: [ai('a'), ai('b', ['a']), ai('c', ['b'])],
+    };
+    const store = await run(workflow);
+    const consumed = refusals(store)[0].data?.consumed;
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'budget-run');
+    expect({ work_units: snapshot.budget.workUnits, spend_usd: snapshot.budget.spendUsd }).toEqual(
+      consumed as { work_units: number; spend_usd: number }
+    );
+
+    // Cold resume: a new pass over the same durable rows.
+    store.failWorkflowRun.mockClear();
+    await run(workflow, store, await resumeOptions(store));
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('refuses a resumed spend-limited run at start when recorded spend is unknown', async () => {
+    providerCosts(undefined);
+    const workflow = {
+      name: 'resume-unknown',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a'), ai('b', ['a'])],
+    };
+    const store = await run(workflow);
+    store.failWorkflowRun.mockClear();
+    mockSendQueryDag.mockClear();
+    await run(workflow, store, await resumeOptions(store));
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(exitReason(store)).toBe('budget_refused');
+  });
+
+  it('treats an attempt that started and never finished as unknown spend on resume', async () => {
+    providerCosts(0.1);
+    const seeded = createMockStore();
+    const workflow = {
+      name: 'interrupted',
+      budget: { max_spend_usd: 5 },
+      nodes: [ai('a')],
+    };
+    // A first pass that stopped after `a` started: its unit and start row, no terminal.
+    await run({ ...workflow, budget: { max_work_units: 99 } }, seeded);
+    const rows = persistedEvents(seeded).filter(
+      e => e.event_type === 'run_budget_work_unit' || e.event_type === 'node_started'
+    );
+
+    const spendLimited = durableStore();
+    spendLimited.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(rows, id)
+    );
+    mockSendQueryDag.mockClear();
+    await run(workflow, spendLimited, { priorCompletedNodes: new Map() });
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(refusals(spendLimited)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'interrupted' },
+    });
+
+    const unitsOnly = durableStore();
+    unitsOnly.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
+    await run({ ...workflow, budget: { max_work_units: 5 } }, unitsOnly, {
+      priorCompletedNodes: new Map(),
+    });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(unitsOnly.completeWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('never starts an attempt whose work-unit record cannot be written', async () => {
+    providerCosts(0.1);
+    const store = durableStore();
+    store.persistWorkflowEvent.mockImplementation(async event => {
+      if (event.event_type === 'run_budget_work_unit') throw new Error('disk full');
+      await store.createWorkflowEvent(event);
+    });
+    await expect(
+      run({ name: 'required-write', budget: { max_work_units: 3 }, nodes: [ai('a')] }, store)
+    ).rejects.toBeInstanceOf(NodeEventWriteError);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(started(store, 'a')).toHaveLength(0);
+  });
+
+  it('counts deterministic nodes as work but charges them no spend', async () => {
+    const free = await run({
+      name: 'bash-spend',
+      budget: { max_spend_usd: 0.01 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(free.completeWorkflowRun).toHaveBeenCalled();
+
+    const counted = await run({
+      name: 'bash-units',
+      budget: { max_work_units: 1 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(refusals(counted)[0].data).toMatchObject({ reason: 'work_units_exhausted', node: 'y' });
+  });
+
+  it('admits an approval rework attempt like any other attempt', async () => {
+    providerCosts(0.1);
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async () => ({
+      completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
+      costUsd: 0.1,
+      budget: { workUnits: 1, spendUsd: 0.1 },
+    }));
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'rework',
+          budget: { max_work_units: 1 },
+          nodes: [
+            {
+              id: 'review',
+              kind: 'gate',
+              message: 'Approve?',
+              decisions: [
+                { id: 'approve' },
+                { id: 'reject', rework: { prompt: 'Fix: $REJECTION_REASON', maxAttempts: 3 } },
+              ],
+              captureResponse: false,
+              decisionsAuthored: false,
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('rework-run', {
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'review',
+              message: 'Approve?',
+              onRejectPrompt: 'Fix: $REJECTION_REASON',
+              onRejectMaxAttempts: 3,
+            },
+            rejection_reason: 'wrong',
+            rejection_count: 1,
+          },
+        }),
+      })
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('charges an attempt once on resume when its failure is recorded twice', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['crash'],
+        failure: { class: 'transient', evidence: 'crash' },
+        sessionId: 's',
+        cost: 0.1,
+      };
+    });
+    const store = durableStore();
+    // The status read before the retry fails, so the dispatch catch re-finishes the
+    // attempt's start record: a second `node_failed` row for the same attempt id.
+    // The retry wait's own read tolerates a failure; the one before the attempt does not.
+    let readsAfterFailure = 0;
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      if (
+        persistedEvents(store).some(e => e.event_type === 'node_failed') &&
+        ++readsAfterFailure === 2
+      ) {
+        throw new Error('store unavailable');
+      }
+      return 'running';
+    });
+    await run(
+      {
+        name: 'double-terminal',
+        budget: { max_spend_usd: 5 },
+        nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+      },
+      store
+    );
+    expect(
+      persistedEvents(store).filter(e => e.event_type === 'node_failed' && e.step_name === 'a')
+    ).toHaveLength(2);
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'budget-run');
+    expect(snapshot.budget).toEqual({ workUnits: 1, spendUsd: 0.1 });
+  });
+
+  it('refuses later work in the same pass after an attempt throws once started', async () => {
+    providerCosts(0.1);
+    const nodes = [ai('a'), ai('b', ['a'], { trigger_rule: 'all_done' })];
+    // Throws inside node `a`'s attempt, after its execution has begun.
+    const throwingPlatform = () => {
+      const platform = createMockPlatform();
+      platform.getStreamingMode.mockImplementationOnce(() => {
+        throw new Error('platform gone');
+      });
+      return platform;
+    };
+
+    const spendLimited = await run(
+      { name: 'thrown', budget: { max_spend_usd: 5 }, nodes },
+      durableStore(),
+      { platform: throwingPlatform() }
+    );
+    expect(started(spendLimited, 'b')).toHaveLength(0);
+    expect(refusals(spendLimited)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      node: 'b',
+      cost_unavailable: { node: 'a', reason: 'interrupted' },
+    });
+
+    const unitsOnly = await run(
+      { name: 'thrown-units', budget: { max_work_units: 5 }, nodes },
+      durableStore(),
+      { platform: throwingPlatform() }
+    );
+    expect(started(unitsOnly, 'b')).toHaveLength(1);
+    expect(refusals(unitsOnly)).toHaveLength(0);
+  });
+
+  it('treats an attempt whose later pass ended without a result as partial cost', async () => {
+    // A best-effort provider re-asks after invalid structured output; the re-ask
+    // stream ends without a result, so 0.2 is only a floor of what the attempt spent.
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'result', sessionId: 's1', structuredOutput: { other: 'x' }, cost: 0.2 };
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'thinking' };
+    });
+    const store = await run(
+      {
+        name: 'no-result-pass',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          ai('a', undefined, {
+            provider: 'pi',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          }),
+          ai('b', ['a'], { trigger_rule: 'all_done' }),
+        ],
+      },
+      durableStore(),
+      { workflowProvider: 'pi', config: { ...minimalConfig, assistant: 'pi' } }
+    );
+    expect(started(store, 'b')).toHaveLength(0);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'partial' },
+    });
+  });
+
+  it('charges no spend for an agent attempt that failed before calling its provider', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'missing-command',
+      budget: { max_spend_usd: 5 },
+      nodes: [
+        { ...ai('a'), source: { kind: 'command', name: 'missing-command' } },
+        ai('b', ['a'], { trigger_rule: 'all_done' }),
+      ],
+    });
+    expect(refusals(store)).toHaveLength(0);
+    expect(started(store, 'b')).toHaveLength(1);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const failed = persistedEvents(store).find(
+      e => e.step_name === 'a' && e.event_type === 'node_failed'
+    );
+    expect(failed?.data).not.toHaveProperty('cost_usd');
+    const record = failed && readNodeRecordEvent({ ...failed, data: failed.data });
+    expect(record?.metadata?.spend.costUsd).toEqual({
+      source: 'unavailable',
+      reason: 'not_applicable',
+    });
+  });
+
+  it('keeps an operator cancel instead of failing the run for its budget', async () => {
+    providerCosts(0.1);
+    const store = durableStore();
+    store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
+    // One parallel layer, so the second node is refused inside the layer, before any
+    // between-layer stop.
+    await run(
+      { name: 'cancelled', budget: { max_work_units: 1 }, nodes: [ai('a'), ai('b')] },
+      store
+    );
+    expect(persistedEvents(store).filter(e => e.event_type === 'node_started')).toHaveLength(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(refusals(store)).toHaveLength(0);
+  });
+
+  it('records no run cost when a run without AI attempts is refused', async () => {
+    const store = await run({
+      name: 'bash-refused',
+      budget: { max_work_units: 1 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(runUsageWrites(store).some(write => 'total_cost_usd' in write)).toBe(false);
+  });
+
+  it('leaves an unbudgeted run untouched', async () => {
+    providerCosts(0.1);
+    const store = await run({ name: 'plain', nodes: [ai('a'), ai('b', ['a'])] });
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store).filter(
+        e => e.event_type === 'run_budget_work_unit' || e.event_type === 'run_budget_refused'
+      )
+    ).toHaveLength(0);
+    expect(store.getDagResumeSnapshot).not.toHaveBeenCalled();
   });
 });

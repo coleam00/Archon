@@ -55,7 +55,7 @@ import {
 import { createHash } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join, sep } from 'path';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';

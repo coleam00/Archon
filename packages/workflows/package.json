@@ -12,6 +12,8 @@
     "./router": "./src/router.ts",
     "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
+    "./attention-queue": "./src/attention-queue.ts",
+    "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
@@ -64,7 +66,6 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/plugin-manifest": "workspace:*",
-    "@hono/zod-openapi": "^1.4.0",
     "zod": "^4.4.3",
     "ajv": "^8.20.0"
   },
@@ -103,6 +104,9 @@
     ],
     [
       "src/output-ref.test.ts"
+    ],
+    [
+      "src/run-budget.test.ts"
     ],
     [
       "src/event-emitter.test.ts"
@@ -148,6 +152,7 @@
     ],
     [
       "src/schemas.test.ts",
+      "src/attention-queue.test.ts",
       "src/deprecation.test.ts",
       "src/command-validation.test.ts",
       "src/packaged-workflow.test.ts"

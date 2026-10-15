@@ -801,7 +801,7 @@ describe('waitForRunAttention', () => {
 
       expect(await wait('r0')).toMatchObject({
         kind: 'attention',
-        attention: { kind: 'unreadable', reason: 'child_chain_too_deep' },
+        attention: { kind: 'unreadable', runId: 'r0', reason: 'child_chain_too_deep' },
       });
     });
   });

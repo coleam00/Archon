@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { describeWorkflowStoreConformance } from '../store-conformance';
+import { CONFORMANCE_CODEBASE_ID, describeWorkflowStoreConformance } from '../store-conformance';
 import * as telemetry from '../run-terminal-telemetry';
 import { createFileWorkflowStore } from './store';
 import { commit } from './commit';
@@ -19,7 +19,20 @@ describeWorkflowStoreConformance('files', async () => {
     reports.push(run.id);
   });
   restore = () => spy.mockRestore();
-  const store = await createFileWorkflowStore({ root });
+  const store = await createFileWorkflowStore({
+    root,
+    // The host's codebase records, as every conformance target registers them.
+    getCodebase: async id =>
+      id === CONFORMANCE_CODEBASE_ID
+        ? {
+            id,
+            name: 'conformance',
+            repository_url: null,
+            default_cwd: '/conformance',
+            kind: 'repo',
+          }
+        : null,
+  });
   return {
     store,
     backdate: (id, dates) =>

@@ -88,7 +88,7 @@ if (process.env.MY_PLATFORM_TOKEN) {
 
 The adapter must supply `ctx.platformUserId` from its authenticated sender. Resolve it with `resolveUserId(platform, platformUserId, displayName)` before dispatch. That helper wraps `findOrCreateUserByPlatformIdentity` and returns `undefined` when resolution fails; pass `{ kind: 'unidentified' }` then, so run actions are refused. Chat adapters never pass `operator`.
 
-Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds all fresh runs, including workflows that can pause. Pauses wait in the attention queue until answered. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
 
 Hosts must set the complete offline policy set before loading config or running cleanup, even when credentials are absent or the transport is disabled. Cleanup throws until this is called; include policies for non-chat surfaces too, and pass `[]` only when the host has no platforms. Each call replaces the whole set.
 

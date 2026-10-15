@@ -66,6 +66,7 @@ import { createLogger } from '@archon/paths';
 import {
   validateDagStructure,
   validateLoopGroupProseCompletion,
+  validateRunBudgetShape,
   validateWorkflowOutcomeDeclaration,
 } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
@@ -353,7 +354,7 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
  * workflow-level layer be REMOVED afterwards (see `collapseWorkflowScope`).
  *
  * Absent on purpose:
- *   - Run-owned fields (`worktree`, `container`, `evidence_policy`,
+ *   - Run-owned fields (`worktree`, `container`, `evidence_policy`, `budget`,
  *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
  *     file that happens to hold a node. These stay workflow-level and are warned about
  *     when a composed workflow declares them.
@@ -1330,6 +1331,10 @@ export function expandWorkflowIncludes(
     const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(authoredResult);
     if (outcomeDeclarationError !== null) {
       throw new IncludeExpansionError(outcomeDeclarationError);
+    }
+    const runBudgetShapeError = validateRunBudgetShape(authoredResult);
+    if (runBudgetShapeError !== null) {
+      throw new IncludeExpansionError(runBudgetShapeError);
     }
     const result = resolveWorkflow(authoredResult);
     memo.set(name, result);

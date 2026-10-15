@@ -12,6 +12,11 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  */
 import { z } from '@hono/zod-openapi';
 import {
+  attentionQueueCountsSchema,
+  attentionQueueItemSchema,
+} from '@archon/workflows/attention-queue';
+import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
@@ -30,8 +35,9 @@ import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
-export const workflowDefinitionSchema =
-  engineWorkflowDefinitionSchema.openapi('WorkflowDefinition');
+export const workflowDefinitionSchema = engineWorkflowDefinitionSchema.meta({
+  id: 'WorkflowDefinition',
+});
 
 /** A workflow load error entry returned in GET /api/workflows `errors` field. */
 export const workflowLoadErrorSchema = z
@@ -46,7 +52,7 @@ export const workflowLoadErrorSchema = z
  * Workflow source — project-defined, bundled default, or home-scoped (global).
  * Precedence for same-named entries: `bundled` < `global` < `project`.
  */
-export const workflowSourceSchema = engineWorkflowSourceSchema.openapi('WorkflowSource');
+export const workflowSourceSchema = engineWorkflowSourceSchema.meta({ id: 'WorkflowSource' });
 
 /** A workflow entry in the list response, including its source. */
 export const workflowListEntrySchema = z
@@ -140,11 +146,12 @@ export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema
   .openapi('WorkflowRunOutcome');
 
 /** Persisted durable-wait cursor exposed to API clients without erasing its discriminants. */
-export const workflowWaitContextSchema =
-  engineWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
+export const workflowWaitContextSchema = engineWorkflowWaitContextSchema.meta({
+  id: 'WorkflowWaitContext',
+});
 
 /** Why a run stopped, as the engine recorded it on the run row. */
-export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
+export const runStopReasonSchema = engineRunStopReasonSchema.meta({ id: 'RunStopReason' });
 
 /**
  * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
@@ -222,8 +229,9 @@ export const workflowRunDetailSchema = z
  * envelope, with its run and node. Derived from the engine schema the store validates
  * against, so the served shape cannot drift from the persisted one.
  */
-export const providerEventRecordSchema =
-  engineProviderEventRecordSchema.openapi('ProviderEventRecord');
+export const providerEventRecordSchema = engineProviderEventRecordSchema.meta({
+  id: 'ProviderEventRecord',
+});
 
 /** GET /api/workflows/runs/:runId/provider-events query. */
 export const providerEventsQuerySchema = z
@@ -341,11 +349,57 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   })
   .openapi('DashboardWorkflowRun');
 
+/**
+ * GET /api/runs/attention query. A server has no working directory, so without
+ * `project` the queue is install-wide; `all=true` says so explicitly. `label` repeats.
+ */
+export const attentionQueueQuerySchema = z.object({
+  project: z.string().optional(),
+  all: z.enum(['true', 'false']).optional(),
+  label: z.union([z.string(), z.array(z.string())]).optional(),
+  sort: z.string().optional(),
+  countBy: z.string().optional(),
+});
+
+/**
+ * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
+ * as dashboard rows for the console.
+ */
 export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
+    items: z.array(attentionQueueItemSchema.meta({ id: 'AttentionQueueItem' })),
   })
   .openapi('RunsNeedingAttentionResponse');
+
+/** GET /api/runs/attention response when `countBy` is given. */
+export const attentionQueueCountsResponseSchema = z
+  .object({ counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }) })
+  .openapi('AttentionQueueCountsResponse');
+
+/** GET /api/runs/{runId}/attention response: null when the run needs no one now. */
+export const attentionQueueItemResponseSchema = z
+  .object({ item: attentionQueueItemSchema.nullable() })
+  .openapi('AttentionQueueItemResponse');
+
+/** POST /api/runs/{runId}/attention/labels body. */
+export const labelAttentionBodySchema = z
+  .object({
+    occurrence: z.string(),
+    set: attentionLabelsSchema.optional(),
+    unset: z.array(attentionLabelKeySchema).optional(),
+  })
+  .openapi('LabelAttentionBody');
+
+/** POST /api/runs/{runId}/attention/labels response. */
+export const labelAttentionResponseSchema = z
+  .object({
+    runId: z.string(),
+    occurrence: z.string(),
+    revision: z.number().int(),
+    labels: attentionLabelsSchema,
+  })
+  .openapi('LabelAttentionResponse');
 
 /** GET /api/dashboard/runs response. */
 export const dashboardRunsResponseSchema = z

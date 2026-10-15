@@ -1,5 +1,5 @@
 /** Private provider session handles produced by nodes within one workflow run. */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 export const workflowRunNodeSessionSchema = z.object({
   workflow_run_id: z.string(),

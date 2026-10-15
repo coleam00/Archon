@@ -7,7 +7,7 @@
  * supports session resume. It records the provider's session ID so the executor
  * can pass it back as `resumeSessionId` on a later run with the same scope.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { WorkflowRun } from './workflow-run';
 
 export const workflowNodeSessionSchema = z.object({

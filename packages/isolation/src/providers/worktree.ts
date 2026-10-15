@@ -169,7 +169,7 @@ const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
  *
  * The path is returned trimmed. The caller composes it via `join(repoRoot, result)`.
  */
-function resolveRepoLocalOverride(
+export function resolveRepoLocalOverride(
   rawPath: string | undefined,
   repoRoot: string
 ): string | undefined {
