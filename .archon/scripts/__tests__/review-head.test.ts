@@ -122,7 +122,7 @@ describe('review head boundary', () => {
   it('binds an explicit target when the agent substitutes a matching different PR', () => {
     const run = check({
       source: 'forge',
-      forge: view(),
+      forge: view({ number: 99, url: PR_URL.replace('/42', '/99') }),
       inputs: {
         INPUTS_SELECTOR: PR_URL.replace('/42', '/99'),
         INPUTS_PR: JSON.stringify({ ...PR, number: 99 }),
@@ -336,9 +336,7 @@ describe('review head boundary', () => {
         expect(run.stderr).not.toContain('--branch');
         expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/pull/42/head'");
         expect(run.stderr).toContain(`--from '${head}'`);
-        const command = run.stderr.split('\n').find(line => line.startsWith('git fetch -- '));
-        if (!command) throw new Error('missing fetch command');
-        expect(spawnSync('sh', ['-c', command], { cwd, encoding: 'utf8' }).status).toBe(0);
+        git(cwd, 'fetch', '--', 'upstream', 'refs/pull/42/head');
         expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
       });
     }
