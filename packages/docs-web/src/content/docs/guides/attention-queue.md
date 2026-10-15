@@ -161,14 +161,20 @@ nodes:
     depends_on: [decide]
     bash: |
       answers=$decide.output.answers
-      printf '%s' "$answers" | jq -c '.[]' | while read -r item; do
+      failed=0
+      while read -r item; do
         if ! result=$(archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
           --occurrence "$(jq -r .occurrence <<<"$item")" --json); then
           printf '%s\n' "$result" >&2
-          exit 1
+          failed=1
+          continue
         fi
-        printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null || exit 1
-      done
+        if ! printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null; then
+          printf '%s\n' "$result" >&2
+          failed=1
+        fi
+      done < <(printf '%s' "$answers" | jq -c '.[]')
+      exit "$failed"
 ```
 
 Answer commands exit non-zero when an answer is refused, including with `--json`

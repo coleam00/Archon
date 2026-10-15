@@ -6002,7 +6002,7 @@ export async function workflowResumeCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean
-): Promise<void> {
+): Promise<number> {
   const { resumeWorkflow: resumeWorkflowOp } = host.operations;
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
@@ -6011,7 +6011,7 @@ export async function workflowResumeCommand(
   // Composes with --json (structured ack; nothing executes here).
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       // The inline path below refuses a run with no recorded working path, or one
       // whose checkout is gone. Check both here too, on the run the precheck already
@@ -6026,7 +6026,6 @@ export async function workflowResumeCommand(
       assertResumeWorkingPathExists(run.working_path);
       return run;
     });
-    return;
   }
 
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
@@ -6053,7 +6052,7 @@ export async function workflowResumeCommand(
     } catch (error) {
       await printJsonWriteError(runId, 'resume', error);
     }
-    return;
+    return 0;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6096,6 +6095,7 @@ export async function workflowResumeCommand(
       cause: err,
     });
   }
+  return 0;
 }
 
 /**

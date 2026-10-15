@@ -143,7 +143,14 @@ test('pause, approve in another process, and resume without any SQL connection',
   const id = rows[0].id;
   const approved = await cli(f, ['workflow', 'approve', id, 'Ship it', '--json']);
   expect(approved.code).toBe(0);
-  expect(JSON.parse(approved.output)).toMatchObject({ action: 'approve', resumable: true });
+  expect(JSON.parse(approved.output)).toEqual({
+    ok: true,
+    runId: id,
+    action: 'approve',
+    type: 'approval_gate',
+    workflowName: 'portable',
+    resumable: true,
+  });
   const resumed = await cli(f, ['workflow', 'resume', id]);
   expect(resumed.error).not.toContain('SQL open trap');
   expect(resumed.code).toBe(0);
@@ -173,6 +180,20 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 60000);
+test('detached JSON resume returns a refusal status to the process', async () => {
+  const f = fixture();
+  const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const id = randomUUID();
+  const result = await cli(f, ['workflow', 'resume', id, '--detach', '--json']);
+  expect(result.code).toBe(1);
+  expect(JSON.parse(result.output)).toEqual({
+    ok: false,
+    runId: id,
+    action: 'resume',
+    error: `Workflow run not found: ${id}`,
+  });
+}, 30000);
 test.each([
   {
     config: 'store: files\n',
@@ -530,6 +551,60 @@ nodes:
 }, 30000);
 
 for (const action of ['answer', 'respond', 'approve', 'reject'] as const) {
+  test(`${action} preserves its JSON answer acknowledgment fields`, async () => {
+    const f = fixture();
+    writeFileSync(
+      join(f.project, '.archon/workflows/portable.yaml'),
+      `name: portable
+description: JSON answer acknowledgment
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    wait:
+      attention: Continue?
+      form: select
+      options:
+        - { id: approve }
+        - { id: reject }
+        - { id: retry }
+`
+    );
+    const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+    const {
+      runs: [run],
+    } = await store.listWorkflowRuns();
+    if (!run) throw new Error('Missing paused run');
+    const attention = runAttention(run);
+    if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
+    const result = await cli(f, [
+      'workflow',
+      action,
+      run.id,
+      ...(action === 'answer' ? ['--choose', 'approve'] : action === 'respond' ? ['retry'] : []),
+      '--occurrence',
+      attention.occurrence,
+      '--json',
+    ]);
+    expect(result, result.output + result.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(result.output)).toEqual({
+      ok: true,
+      runId: run.id,
+      action,
+      workflowName: 'portable',
+      resumable: true,
+      ...(action === 'answer'
+        ? { answer: { decision: 'approve', text: '' } }
+        : action === 'approve'
+          ? { type: 'attention' }
+          : action === 'reject'
+            ? { cancelled: false, maxAttemptsReached: false }
+            : { decision: 'retry' }),
+    });
+  }, 30000);
+
   test(`${action} accepts an answer at capacity and refuses stale answers in both modes`, async () => {
     const f = fixture();
     f.env.LOG_LEVEL = 'error';

@@ -438,7 +438,7 @@ Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error (logged to stderr, including not in git repo) |
+| 1 | Error or refusal. Human-mode diagnostics go to stderr; JSON refusals emit `ok: false` with the reason on stdout. |
 
 ---
 

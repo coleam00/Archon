@@ -108,9 +108,9 @@ async function runForeground(fixture: Fixture, name: string, options: WorkflowRu
 }
 
 async function resumeForeground(fixture: Fixture, id: string) {
-  return captureWorkflowCommand(fixture.archonHome, host =>
-    workflowResumeCommand(host, id, false, fixture.repo)
-  );
+  return captureWorkflowCommand(fixture.archonHome, async host => {
+    await workflowResumeCommand(host, id, false, fixture.repo);
+  });
 }
 
 interface ThreadState {

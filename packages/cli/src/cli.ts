@@ -1031,14 +1031,13 @@ async function main(): Promise<number> {
             if (!resumeRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow resume <run-id>');
             }
-            await workflowResumeCommand(
+            return await workflowResumeCommand(
               workflowHost,
               resumeRunId,
               jsonFlag,
               effectiveCwd,
               detachFlag
             );
-            break;
           }
 
           case 'abandon': {
