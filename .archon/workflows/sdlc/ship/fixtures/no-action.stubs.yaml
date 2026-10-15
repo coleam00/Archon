@@ -1,7 +1,9 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. Triage is explicit,
 # every delivery node stays skipped, and the real outcome node returns the reason.
 triage__triage:
-  decision: { contract: NO_ACTION }
+  decision:
+    contract: NO_ACTION
+    closure: { kind: delivered, url: "https://github.com/example/repo/pull/3" }
   type: { value: feature, reason: "stub: asks for new behavior" }
   size: { value: s, reason: "stub: size" }
   complexity: { value: low, reason: "stub: complexity" }
