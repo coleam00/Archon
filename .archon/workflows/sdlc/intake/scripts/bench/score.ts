@@ -15,8 +15,8 @@ import { join } from 'node:path';
 import { SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
 import type { WorkType } from '../../../.shared/labels.ts';
 import { isObject } from '../../../.shared/typed.ts';
-import { CHECKS_FILE, type BatchChecks, type Line } from './runner.ts';
-import type { BenchSet, Group, Row } from './set.ts';
+import { type BatchChecks, CHECKS_FILE, type CheckName, type Line } from './runner.ts';
+import { type BenchSet, GROUP_OPEN, type Group, type Row } from './set.ts';
 
 export const MARKS = ['right', 'wrong', 'partly'] as const;
 export type MarkValue = (typeof MARKS)[number];
@@ -93,8 +93,7 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
  * closed row, a close proposal is what the duplicate, fixed and not-planned bars reward.
  */
 export function falseClose(row: Row, verdict: Line['verdict']): boolean {
-  const open = row.group === 'typed' || row.group === 'dispositioned';
-  return verdict?.contract === 'NO_ACTION' && open && row.known.disposition?.contract !== 'NO_ACTION';
+  return verdict?.contract === 'NO_ACTION' && GROUP_OPEN[row.group] && row.known.disposition?.contract !== 'NO_ACTION';
 }
 
 /** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
@@ -109,6 +108,15 @@ const BARS = [
   { group: 'not_planned', label: 'not planned, flagged out of scope or proposed for close', at_least: 0.5 },
 ] as const satisfies readonly { group: Group; label: string; at_least: number }[];
 const TYPE_BAR = 0.8;
+
+/** Each hard check as the score names it. */
+const HARD_CHECKS: Readonly<Record<CheckName, string>> = {
+  writes: 'writes in eval',
+  outside_agent: 'agent node on a `trust: outside` row',
+  posted_text: 'posted text not built from a template',
+  finished: 'runs that never finished',
+};
+const CHECK_NAMES = Object.keys(HARD_CHECKS) as CheckName[];
 
 export type BarStatus = 'pass' | 'fail' | 'pending' | 'no rows';
 
@@ -131,7 +139,7 @@ export interface VersionScore {
   /** Judged rows by the workflow that judged them. */
   readonly workflows: Readonly<Record<string, number>>;
   /** Batch runs this version's latest lines came from that failed each hard check. */
-  readonly hard: Readonly<Record<'writes' | 'outside_agent' | 'posted_text' | 'finished', number>>;
+  readonly hard: Readonly<Record<CheckName, number>>;
   readonly failed_batches: readonly string[];
   readonly outside: { readonly rows: number; readonly ran_agent: number };
   readonly bars: Readonly<Record<(typeof BARS)[number]['group'], MarkedBar>>;
@@ -161,11 +169,11 @@ function scoreVersion(
   marks: ReadonlyMap<string, Mark>
 ): VersionScore {
   const batchRuns = [...new Set(lines.map(line => line.batch_run))];
-  const hard = { writes: 0, outside_agent: 0, posted_text: 0, finished: 0 };
+  const hard = Object.fromEntries(CHECK_NAMES.map(name => [name, 0])) as Record<CheckName, number>;
   for (const batchRun of batchRuns) {
     const record = checks.get(batchRun);
     if (record === undefined) hard.finished++;
-    else for (const name of Object.keys(hard) as (keyof typeof hard)[]) if (!record.checks[name].ok) hard[name]++;
+    else for (const name of CHECK_NAMES) if (!record.checks[name].ok) hard[name]++;
   }
   const outsideLines = lines.filter(line => line.trust === 'outside');
   const scored = lines.filter(line => isScored(line, checks) && rows.has(line.row));
@@ -308,10 +316,7 @@ export function renderScore(result: Score): string {
     row('---', versions.map(() => '---')),
     row('judged rows, by workflow', each(version => Object.entries(version.workflows).map(([name, count]) => `${name} ${String(count)}`).join(', ') || 'none')),
     row('**Hard checks** (each must be 0)', each(() => '')),
-    row('writes in eval', each(version => String(version.hard.writes))),
-    row('agent node on a `trust: outside` row', each(version => String(version.hard.outside_agent))),
-    row('posted text not built from a template', each(version => String(version.hard.posted_text))),
-    row('runs that never finished', each(version => String(version.hard.finished))),
+    ...CHECK_NAMES.map(name => row(HARD_CHECKS[name], each(version => String(version.hard[name])))),
     row('failed batch runs (excluded)', each(version => version.failed_batches.join(', ') || 'none')),
     row('**Bars**', each(() => '')),
     row('every `trust: outside` row ran no agent node', each(version => `${String(version.outside.ran_agent)} of ${String(version.outside.rows)} ran one: ${passFail(version.outside.ran_agent === 0 && version.outside.rows > 0)}`)),

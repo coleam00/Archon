@@ -746,6 +746,8 @@ export interface BatchChecks {
   readonly passed: boolean;
 }
 
+export type CheckName = keyof BatchChecks['checks'];
+
 const check = (problems: readonly string[]): Check => ({ ok: problems.length === 0, problems });
 
 export function batchChecks(

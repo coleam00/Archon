@@ -20,8 +20,10 @@ import { readMaintainers } from '../../../.shared/workitem.ts';
 
 type Repo = QualifiedPr['repo'];
 
-export const GROUPS = ['duplicate', 'fixed', 'not_planned', 'typed', 'dispositioned'] as const;
-export type Group = (typeof GROUPS)[number];
+/** Each group, and whether its issues were still open when the set was pinned. */
+export const GROUP_OPEN = { duplicate: false, fixed: false, not_planned: false, typed: true, dispositioned: true } as const;
+export type Group = keyof typeof GROUP_OPEN;
+export const GROUPS = Object.keys(GROUP_OPEN) as Group[];
 export const WORKFLOWS = { intake: 'archon-intake', triage: 'archon-triage' } as const;
 export type BenchWorkflow = keyof typeof WORKFLOWS;
 
