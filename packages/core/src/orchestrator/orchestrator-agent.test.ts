@@ -665,7 +665,9 @@ mock.module('../utils/workflow-source-root', () => ({
   resolveWorkflowSourceRoot: mockResolveWorkflowSourceRoot,
 }));
 
+const mockGetCurrentBranchStrict = mock(async (): Promise<string | null> => 'feature/adopted');
 mock.module('@archon/git', () => ({
+  getCurrentBranchStrict: mockGetCurrentBranchStrict,
   verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
@@ -2584,7 +2586,7 @@ describe('workflow dispatch routing', () => {
     ).toHaveLength(1);
   });
 
-  test.each(['missing', 'mismatched', 'replaced'] as const)(
+  test.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
     'foreground adoption refuses a %s environment before capture',
     async reason => {
       mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -2597,6 +2599,9 @@ describe('workflow dispatch routing', () => {
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       });
+      if (reason === 'switched' || reason === 'detached') {
+        mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
+      }
       mockAdoptedEnvironment.mockResolvedValueOnce(
         reason === 'missing'
           ? null
@@ -2605,7 +2610,9 @@ describe('workflow dispatch routing', () => {
                 working_path: '/wt/adopted',
                 metadata: { worktree_registration_id: 'replacement' },
               })
-            : makeIsolationEnvironment()
+            : makeIsolationEnvironment({
+                working_path: reason === 'mismatched' ? '/wt/from-branch' : '/wt/adopted',
+              })
       );
       mockPrepareWorkflowSource.mockClear();
       mockAdoptionMetadata.mockClear();
@@ -2622,7 +2629,9 @@ describe('workflow dispatch routing', () => {
             ? 'Isolation environment env-1 not found'
             : reason === 'replaced'
               ? 'changed during adoption'
-              : 'does not match'
+              : reason === 'switched' || reason === 'detached'
+                ? 'expected branch'
+                : 'does not match'
         )
       );
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
