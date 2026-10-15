@@ -165,9 +165,13 @@ describe('the decision record', () => {
       'key first-key has an unfinished filing; it can only be filed',
     ]);
     const unposted = new Map([['first-key', stored('first-key', { kind: 'tracked', issue: ISSUE, comment: 'evidence' })]]);
-    expect(checkDecisions(queued, [drop('first-key', queued)], unposted)).toEqual([
-      'key first-key has an unposted evidence comment; it can only be tracked',
-    ]);
+    const elsewhere: AgentDecision = { outcome: 'track', key: 'first-key', refs: queued, title: 't', issue: { ...ISSUE, number: 8 }, comment: null, reason: 'r' };
+    for (const decision of [drop('first-key', queued), elsewhere]) {
+      expect(checkDecisions(queued, [decision], unposted)).toEqual([
+        'key first-key has an unposted evidence comment; it can only be tracked on the same issue',
+      ]);
+    }
+    expect(checkDecisions(queued, [{ ...elsewhere, issue: ISSUE }], unposted)).toEqual([]);
   });
 
   test("the decide node's output schema admits exactly the agent's outcomes", () => {
@@ -385,6 +389,21 @@ describe('the discoveries scripts', () => {
     expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
     expect(state(at, 'discoveries/decisions/new-defect')).toMatchObject({ decision: { issue: { number: 100 } } });
     expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({ decision: { comment: null } });
+  }, 60_000);
+
+  test('a rediscovery tracked with no new evidence keeps an owed evidence comment, and posts it', () => {
+    const at = install();
+    runArtifacts(at.outputRoot, RUN, { verdict: [record('covered'), record('covered again')] });
+    seed(at, { ...stored('covered-defect', { kind: 'tracked', issue: ISSUE, comment: 'A new reproduction.' }), refs: [`${RUN}:review#0`] });
+    const { outcome } = decide(at, { runId: 'pass-2', runs: [RUN] }, refs => [
+      { outcome: 'track', key: 'covered-defect', refs, title: 'Covered', issue: ISSUE, comment: null, reason: 'rediscovered' },
+    ]);
+    ok(outcome, 'outcome');
+    expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
+    expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({
+      decision: { comment: null },
+      refs: [`${RUN}:review#0`, `${RUN}:review#1`],
+    });
   }, 60_000);
 
   test('a refused pass writes nothing: a second issue for a key, a closed tracking issue, a missing ref', () => {

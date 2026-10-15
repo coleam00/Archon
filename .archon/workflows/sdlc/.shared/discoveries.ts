@@ -221,7 +221,7 @@ function outcomeText(decided: Decision): string {
     case 'filed':
       return decided.issue === null ? 'filed, issue not yet created' : `filed ${issueText(decided.issue)}`;
     case 'tracked':
-      return `tracked by ${issueText(decided.issue)}`;
+      return `tracked by ${issueText(decided.issue)}${decided.comment === null ? '' : ', evidence comment not yet posted'}`;
     case 'dropped':
       return 'dropped';
     case 'asked':
@@ -337,12 +337,17 @@ export function checkDecisions(
     if (decision.outcome === 'file' && issued) {
       problems.push(`key ${decision.key} already has an issue; it is never filed again`);
     }
-    // A decision that replaced an unfinished write would lose it.
-    if (decision.outcome !== 'file' && prior?.kind === 'filed' && prior.issue === null) {
-      problems.push(`key ${decision.key} has an unfinished filing; it can only be filed`);
-    }
-    if (decision.outcome !== 'track' && prior?.kind === 'tracked' && prior.comment !== null) {
-      problems.push(`key ${decision.key} has an unposted evidence comment; it can only be tracked`);
+    // A decision that replaced a write the record still owes would lose it.
+    if (prior !== undefined && unfinished(prior)) {
+      if (prior.kind === 'filed' && decision.outcome !== 'file') {
+        problems.push(`key ${decision.key} has an unfinished filing; it can only be filed`);
+      }
+      if (
+        prior.kind === 'tracked' &&
+        (decision.outcome !== 'track' || decision.issue.number !== prior.issue.number)
+      ) {
+        problems.push(`key ${decision.key} has an unposted evidence comment; it can only be tracked on the same issue`);
+      }
     }
   }
   for (const ref of queued) if (!seen.has(ref)) problems.push(`${ref} has no decision`);

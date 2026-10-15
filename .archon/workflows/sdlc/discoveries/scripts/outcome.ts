@@ -36,6 +36,7 @@ import {
   type Queue,
   refRun,
   runName,
+  unfinished,
 } from '../../.shared/discoveries.ts';
 import { forgeSource, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
@@ -77,15 +78,24 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
   ].join('\n');
 }
 
-function decided(decision: AgentDecision, sha: string): { decision: Decision; reason: string } {
+function decided(
+  decision: AgentDecision,
+  prior: Decision | undefined,
+  sha: string
+): { decision: Decision; reason: string } {
   switch (decision.outcome) {
     case 'file':
       return { decision: { kind: 'filed', issue: null, body: issueBody(decision, sha) }, reason: decision.reason };
-    case 'track':
+    case 'track': {
+      // New evidence replaces an owed comment; no new evidence keeps it owed. The
+      // check already refused a track on another issue while one is owed.
+      const fresh = decision.comment?.trim() || null;
+      const owed = prior?.kind === 'tracked' ? prior.comment : null;
       return {
-        decision: { kind: 'tracked', issue: decision.issue, comment: decision.comment?.trim() ?? null },
+        decision: { kind: 'tracked', issue: decision.issue, comment: fresh ?? owed },
         reason: decision.reason,
       };
+    }
     case 'drop':
       return { decision: { kind: 'dropped' }, reason: decision.reason };
     case 'ask':
@@ -160,7 +170,7 @@ function main(): void {
       version: 1,
       key: decision.key,
       title: decision.title,
-      ...decided(decision, sha),
+      ...decided(decision, before?.record.decision, sha),
       verified_at: sha,
       at,
       refs: [...new Set([...(before?.record.refs ?? []), ...decision.refs])],
@@ -181,12 +191,13 @@ function main(): void {
   const source = forgeSource();
   for (const { record } of stored.values()) {
     const owed = record.decision;
+    if (!unfinished(owed)) continue;
     const marker = discoveryMarker(record.key);
-    if (owed.kind === 'filed' && owed.issue === null) {
+    if (owed.kind === 'filed') {
       const created = createIssue(repo, record.title, owed.body, marker);
       statePatch(decisionName(record.key), [{ op: 'set', path: '/decision/issue', value: created.issue }]);
       written.push({ key: record.key, outcome: 'file', url: created.url });
-    } else if (owed.kind === 'tracked' && owed.comment !== null) {
+    } else if (owed.kind === 'tracked') {
       // One marked comment per key: later evidence replaces it in place.
       const comment = upsertComment({ kind: 'issue', ref: owed.issue }, marker, `${marker}\n${owed.comment}`, source);
       statePatch(decisionName(record.key), [{ op: 'set', path: '/decision/comment', value: null }]);
@@ -194,7 +205,7 @@ function main(): void {
     }
   }
   for (const decision of decisions) {
-    if (decision.outcome === 'track' && decision.comment === null) {
+    if (decision.outcome === 'track' && !written.some(entry => entry.key === decision.key)) {
       written.push({ key: decision.key, outcome: 'track', url: issueUrl(decision.issue) });
     }
   }
