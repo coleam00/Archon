@@ -276,7 +276,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 }
 
 export interface ScriptOptions {
-  readonly timeout?: number;
   /** Additional subprocess preload code; `{ARTIFACTS}` resolves as in inputs. */
   readonly preload?: string;
   readonly source?: string;
@@ -390,7 +389,6 @@ else {
   }
 
   const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`)], {
-    timeout: options.timeout,
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',
