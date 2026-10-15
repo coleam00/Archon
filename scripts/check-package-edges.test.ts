@@ -351,23 +351,33 @@ describe('package layering', () => {
   test('the package table in .archon/architecture.md equals PACKAGE_LAYERING', () => {
     const doc = readFileSync(new URL('../.archon/architecture.md', import.meta.url), 'utf8');
     const table = doc.split('### Packages')[1]?.split('\n### ')[0] ?? '';
-    const names = (cell: string | undefined): string[] =>
-      [...(cell ?? '').matchAll(/`([^`]+)`/g)].map(match => match[1]).sort();
-    const rows = Object.fromEntries(
-      table
-        .split('\n')
-        .filter(line => line.startsWith('| `'))
-        .map(line => {
-          const [name, , runtime, testOnly] = line.split('|').slice(1, -1);
-          return [names(name)[0], { runtime: names(runtime), test: names(testOnly) }];
-        })
-    );
-    const expected = Object.fromEntries(
-      Object.entries(PACKAGE_LAYERING).map(([name, row]) => [
-        name,
-        { runtime: [...row.runtime].sort(), test: [...(row.test ?? [])].sort() },
+    const rows = table
+      .trim()
+      .split('\n\n')[0]
+      .split('\n')
+      .slice(2)
+      .map(line => {
+        const cells = line
+          .split('|')
+          .slice(1, -1)
+          .map(cell => cell.trim());
+        expect(cells).toHaveLength(4);
+        const [name, , runtime, testOnly] = cells;
+        return [name, runtime, testOnly];
+      })
+      .sort(([a], [b]) => a.localeCompare(b));
+    const imports = (names: readonly string[]): string =>
+      [...names]
+        .sort()
+        .map(name => `\`${name}\``)
+        .join(', ');
+    const expected = Object.entries(PACKAGE_LAYERING)
+      .map(([name, row]) => [
+        `\`${name}\``,
+        imports(row.runtime) || 'none',
+        imports(row.test ?? []),
       ])
-    );
+      .sort(([a], [b]) => a.localeCompare(b));
     expect(rows).toEqual(expected);
   });
 });

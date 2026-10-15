@@ -22,7 +22,7 @@ A map of the code as it is, where it is going, and the boundaries that hold whil
 | `chat-slack` | The maintained Slack chat plugin | `chat-contract` | |
 | `server` | HTTP API, the Web adapter, webhooks, SSE, the chat plugin host, serving the console | `adapters`, `chat-contract`, `core`, `git`, `paths`, `provider-contract`, `providers`, `workflows` | |
 | `cli` | The `archon` command and the CLI adapter | `adapters`, `chat-contract`, `core`, `forge`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
-| `web` | The console | none; it reads the API through generated types | |
+| `web` | The console; reads the API through generated types | none | |
 | `docs-web` | The docs site | `plugin-manifest` | |
 
 The import columns are each package's declared `@archon/*` dependencies, and `check:package-edges` fails when a `package.json` disagrees with them. The allowed edges live in `PACKAGE_LAYERING` ([`scripts/check-package-edges.ts`](../scripts/check-package-edges.ts)); its test keeps this table equal to it.
