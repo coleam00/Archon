@@ -113,7 +113,7 @@ test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
   '%s plugin model rules normalize credential preflight without unrelated run fields',
   async composition => {
     const modelRule = normalizedConfigString(
-      z.string().regex(/^\s*[a-z]+\s*\//),
+      z.string().regex(/^\s*openai\s*\//),
       'slash-separated'
     );
     const fields = z.toJSONSchema(z.strictObject({ model: modelRule, region: z.literal('eu') }), {
@@ -154,6 +154,10 @@ test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
       model: 'openai/gpt',
       region: 'eu',
     });
+    expect(() => registration.parseConfig({ model: 'anthropic/gpt', region: 'eu' }, 'run')).toThrow(
+      InvalidProviderRunConfigError
+    );
+    expect(registration.credentials.vendorFor('anthropic/gpt')).toBeUndefined();
     expect(registration.credentials.vendorFor(model)).toBe('openai');
     expect(registration.credentials.vendorFor('invalid')).toBeUndefined();
     const checkCredential = mock(async () => ({
