@@ -1167,6 +1167,26 @@ describe('lookups', () => {
     expect([answer.answered, answer.live]).toEqual([[4, 5], []]);
   });
 
+  it('retains live evidence for the second requested node despite an answered sibling', async () => {
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: '{ nodes(ids: ["I_4", "I_5"]) { ... on Issue { body state } } sibling: node(id: "I_5") { ... on Issue { body state } } }' }),
+    }), REPO, new Map([[4, view(4)], [5, view(5)]]), async () => Response.json({ data: {
+      nodes: [
+        { _archonBenchIssueId: 'I_4', body: 'Fixed first', state: 'CLOSED' },
+        { body: 'Fixed second', state: 'CLOSED' },
+      ],
+      sibling: { _archonBenchIssueId: 'I_5', body: 'Fixed second', state: 'CLOSED' },
+    } }));
+    expect(await answer.response.json()).toEqual({ data: {
+      nodes: [
+        { body: 'As opened.', state: 'OPEN' },
+        { body: 'Fixed second', state: 'CLOSED' },
+      ],
+      sibling: { body: 'As opened.', state: 'OPEN' },
+    } });
+    expect([answer.answered, answer.live]).toEqual([[4, 5], [5]]);
+  });
+
   it('respects skip and include directives when projecting synthetic connections', async () => {
     for (const directive of ['@skip(if: true)', '@include(if: false)', '@skip(if: $omit)', '@include(if: $keep)']) {
       const query = `query($omit: Boolean!, $keep: Boolean!) { repository(owner: "o", name: "r") { issue(number: 4) {
