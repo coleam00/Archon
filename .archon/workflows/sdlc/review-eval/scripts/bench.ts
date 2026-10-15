@@ -1092,14 +1092,19 @@ function entryKey(entry: Record<string, unknown>): string {
 export function mergeMarks(file: string, generated: readonly (DefectEntry | FindingEntry)[]): unknown[] {
   const existing: unknown = existsSync(file) ? Bun.YAML.parse(readFileSync(file, 'utf8')) : [];
   if (existing !== null && !Array.isArray(existing)) throw new Error(`${file} is not a list of marks; fix it before the bench rewrites it`);
-  const kept = new Map<string, Record<string, unknown>>();
+  const kept = new Map<string, Record<string, unknown>[]>();
   for (const entry of existing ?? []) {
     if (!isObject(entry)) throw new Error(`${file} holds an entry that is not a mapping; fix it before the bench rewrites it`);
-    if ((entry.mark ?? null) !== null || (entry.note ?? null) !== null || entry.caught_by !== undefined) kept.set(entryKey(entry), entry);
+    if ((entry.mark ?? null) !== null || (entry.note ?? null) !== null || entry.caught_by !== undefined) {
+      const key = entryKey(entry);
+      const entries = kept.get(key);
+      if (entries === undefined) kept.set(key, [entry]);
+      else entries.push(entry);
+    }
   }
-  const merged: unknown[] = generated.map(entry => kept.get(entryKey({ ...entry })) ?? entry);
+  const merged = generated.flatMap<unknown>(entry => kept.get(entryKey({ ...entry })) ?? [entry]);
   const fresh = new Set(generated.map(entry => entryKey({ ...entry })));
-  for (const [key, entry] of kept) if (!fresh.has(key)) merged.push(entry);
+  for (const [key, entries] of kept) if (!fresh.has(key)) merged.push(...entries);
   return merged;
 }
 

@@ -702,6 +702,45 @@ describe('the batch page and marks', () => {
     expect(mergeMarks(file, [fresh])).toEqual([fresh, marked]);
   });
 
+  it.each([
+    { mark: 'right', note: null },
+    { mark: null, note: 'Check this verdict.' },
+    { mark: null, note: null, caught_by: ['seams'] },
+  ])('retains all annotated historical rows with equivalent verdicts: %j', annotation => {
+    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-equivalent-history-'))), 'marks.yaml');
+    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: ['code', 'seams'], finding: 'R1' }, mark: null, note: null };
+    for (const lenses of [['seams', 'code'], ['code', 'seams', 'code']]) {
+      const history = [
+        { ...fresh, mark: 'wrong', note: 'Original decision.' },
+        { ...fresh, judge: { ...fresh.judge, caught_by: lenses }, ...annotation },
+      ];
+      for (const generated of [[fresh], []]) {
+        writeFileSync(file, Bun.YAML.stringify(history, null, 2));
+        for (let regeneration = 0; regeneration < 2; regeneration++) {
+          const merged = mergeMarks(file, generated);
+          expect(merged).toEqual(history);
+          writeFileSync(file, Bun.YAML.stringify(merged, null, 2));
+        }
+      }
+    }
+  });
+
+  it('keeps equivalent annotated history through repeated batch writes', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-history-write-')));
+    const batch = join(out, 'batches', 'counting');
+    const marks = join(batch, 'marks.yaml');
+    const entry = { run_id: 'run-1', judged_by: testJudge, defect: 'D1', mark: 'right', note: 'First decision.' };
+    const history = [
+      { ...entry, judge: { caught_by: ['code', 'seams'], finding: 'R1' } },
+      { ...entry, judge: { caught_by: ['seams', 'code'], finding: 'R1' }, mark: 'wrong', note: 'Second decision.' },
+    ];
+    write(batch, 'marks.yaml', Bun.YAML.stringify(history, null, 2));
+    for (let regeneration = 0; regeneration < 2; regeneration++) {
+      writeBatch(out, 'counting', testJudge);
+      expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual(history);
+    }
+  });
+
   it('leaves both batch outputs unchanged when saved marks are malformed', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-marks-refusal-')));
     const batch = join(out, 'batches', 'counting');
