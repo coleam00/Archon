@@ -1082,9 +1082,9 @@ export function writeBatch(outDir: string, caseId: string, judge: string): void 
   const dir = join(outDir, 'batches', caseId);
   mkdirSync(dir, { recursive: true });
   const samples = batchSamples(outDir, caseId, judge);
-  writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
   const marks = join(dir, 'marks.yaml');
   const merged = mergeMarks(marks, markEntries(samples));
+  writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
   writeFileSync(marks, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
 }

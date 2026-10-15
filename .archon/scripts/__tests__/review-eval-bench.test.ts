@@ -609,6 +609,16 @@ describe('the batch page and marks', () => {
     expect(marks.map(entry => entry.defect ?? entry.finding)).toEqual(['K1', 'R2']);
   });
 
+  it('leaves both batch outputs unchanged when saved marks are malformed', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-marks-refusal-')));
+    const batch = join(out, 'batches', 'counting');
+    write(batch, 'page.md', 'Previous page.');
+    write(batch, 'marks.yaml', 'not_a_list: true');
+    expect(() => writeBatch(out, 'counting', 'opus')).toThrow('is not a list of marks');
+    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toBe('Previous page.');
+    expect(readFileSync(join(batch, 'marks.yaml'), 'utf8')).toBe('not_a_list: true');
+  });
+
   it('keeps a marked or annotated entry a re-judge no longer calls for, and drops an unmarked one', () => {
     const file = join(track(mkdtempSync(join(tmpdir(), 'archon-bench-marks-'))), 'marks.yaml');
     const at = { run_id: 'run-1', version: 'v', variant: 'clean', sample: 1 };
