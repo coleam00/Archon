@@ -35,6 +35,7 @@ import {
   runAttention,
   gateOccurrence,
   legacyOccurrenceStep,
+  attentionChoiceProblem,
   attentionForm,
   attentionLabels,
   attentionOptions,
@@ -571,9 +572,8 @@ export function assertLabelable(
 }
 
 /**
- * The answer `request` gives `wait`, validated against its form: a message takes only
- * text; approval and select take exactly one declared option; multi_select takes one or
- * more distinct declared options. An undeclared option is refused on every surface.
+ * The answer `request` gives `wait`, validated against its form by
+ * `attentionChoiceProblem`. An undeclared option is refused on every surface.
  */
 export function attentionAnswerFor(
   run: WorkflowRun,
@@ -583,26 +583,12 @@ export function attentionAnswerFor(
   const form = attentionForm(wait);
   const text = request.text ?? '';
   const declared = attentionOptions(wait).map(option => option.id);
-  const refuse = (problem: string): Error =>
-    new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
-  if (form === 'message') {
-    if (request.choose.length > 0) throw refuse('takes only text, not an option.');
-    return { text };
-  }
-  const undeclared = request.choose.filter(id => !declared.includes(id));
-  if (undeclared.length > 0)
-    throw refuse(
-      `does not declare option '${undeclared.join("', '")}'. Declared options: ${declared.join(', ')}.`
-    );
-  if (form === 'multi_select') {
-    if (request.choose.length === 0) throw refuse('needs at least one option.');
-    if (new Set(request.choose).size !== request.choose.length)
-      throw refuse('takes each option at most once.');
-    return { decisions: [...request.choose], text };
-  }
+  const problem = attentionChoiceProblem(form, declared, request.choose);
+  if (problem !== undefined)
+    throw new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
+  if (form === 'message') return { text };
+  if (form === 'multi_select') return { decisions: [...request.choose], text };
   const [decision] = request.choose;
-  if (decision === undefined || request.choose.length > 1)
-    throw refuse(`takes exactly one option. Declared options: ${declared.join(', ')}.`);
   return { decision, text };
 }
 

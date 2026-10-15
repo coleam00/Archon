@@ -9613,6 +9613,7 @@ describe('pendingDurableWait — which pauses this process owns', () => {
 });
 
 describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand — detach', () => {
+  const trackTempRoot = trackTempRoots();
   let consoleSpy: ReturnType<typeof spyOn>;
   let warnSpy: ReturnType<typeof spyOn>;
   let stdoutSpy: ReturnType<typeof spyOn>;
@@ -10038,6 +10039,53 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     }
   });
 
+  it('resume --detach refuses a run whose worktree is gone and spawns nothing (#4090)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...pausedRun,
+      status: 'failed',
+      working_path: join(tmpdir(), 'archon-removed-worktree-4090'),
+    });
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    try {
+      await expect(
+        workflowResumeCommand(createTestWorkflowHost(), 'run-123', undefined, undefined, true)
+      ).rejects.toThrow('the working path from the run no longer exists');
+      expect(spawnSpy.mock.calls.length).toBe(0);
+    } finally {
+      spawnSpy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'resume --detach reports an unreadable worktree as a filesystem error, not as removed (#4090)',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-unreadable-worktree-'));
+      const workingPath = join(root, 'worktree');
+      mkdirSync(workingPath);
+      chmodSync(root, 0o000);
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        ...pausedRun,
+        status: 'failed',
+        working_path: workingPath,
+      });
+      const child = createDetachedChildFixture();
+      const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+      try {
+        await expect(
+          workflowResumeCommand(createTestWorkflowHost(), 'run-123', undefined, undefined, true)
+        ).rejects.toMatchObject({ code: 'EACCES' });
+        expect(spawnSpy.mock.calls.length).toBe(0);
+      } finally {
+        spawnSpy.mockRestore();
+        chmodSync(root, 0o700);
+        await removeTempTree(root);
+      }
+    }
+  );
+
   it('reject --detach refuses a child_workflow-blocked parent but TOLERATES missing context', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -10140,6 +10188,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       ...pausedRun,
       status: 'failed',
+      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-detach-'))),
     });
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
@@ -10190,6 +10239,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       ...pausedRun,
       status: 'failed',
+      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-detach-'))),
     });
 
     // Bun's failed spawn: no pid and no receipt pipe; the ENOENT arrives later as an event.
@@ -10376,6 +10426,7 @@ describe('resolveDetachedRunEncryptionEnv', () => {
 });
 
 describe('workflowResumeCommand', () => {
+  const trackTempRoot = trackTempRoots();
   let consoleSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
@@ -10457,7 +10508,7 @@ describe('workflowResumeCommand', () => {
       workflow_name: 'implement',
       status: 'failed',
       user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
+      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-codebase-'))),
       codebase_id: 'cb-existing',
     });
 
@@ -10564,7 +10615,7 @@ describe('workflowResumeCommand', () => {
       workflow_name: 'my-approval-workflow',
       status: 'failed',
       user_message: 'go',
-      working_path: '/tmp/worktree-without-yaml',
+      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-worktree-without-yaml-'))),
       codebase_id: 'cb-with-yaml',
     });
 
@@ -10597,12 +10648,13 @@ describe('workflowResumeCommand', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
+    const worktree = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-old-worktree-')));
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-no-codebase',
       workflow_name: 'legacy',
       status: 'failed',
       user_message: 'go',
-      working_path: '/tmp/old-worktree',
+      working_path: worktree,
       codebase_id: null,
     });
 
@@ -10617,11 +10669,7 @@ describe('workflowResumeCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith(
-      '/tmp/old-worktree',
-      expect.any(Function),
-      providerRegistry
-    );
+    expect(discoverSpy).toHaveBeenCalledWith(worktree, expect.any(Function), providerRegistry);
   });
 
   it('resolves a resumed worktree through its Git-proven source checkout (#2127)', async () => {
@@ -10629,7 +10677,7 @@ describe('workflowResumeCommand', () => {
     const codebaseDb = await import('@archon/core/db/codebases');
     const git = await import('@archon/git');
     const { registerRepository } = await import('@archon/core');
-    const worktree = '/registered/root/worktrees/feat';
+    const worktree = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-2127-')));
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-2127',
       workflow_name: 'implement',
@@ -10653,15 +10701,37 @@ describe('workflowResumeCommand', () => {
     (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockClear();
     (registerRepository as ReturnType<typeof mock>).mockClear();
     try {
-      await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-2127')).rejects.toThrow(
-        'the working path from the run no longer exists'
-      );
+      await workflowResumeCommand(createTestWorkflowHost(), 'run-2127').catch(() => {
+        // Only the codebase resolution is under test; what runs after it is not.
+      });
       expect(exact).toHaveBeenCalledWith('/registered/root');
       expect(codebaseDb.findCodebaseByPathPrefix).toHaveBeenCalledWith(worktree);
       expect(registerRepository).not.toHaveBeenCalled();
     } finally {
       exact.mockReset().mockResolvedValue(null);
     }
+  });
+
+  // Cleanup removes a failed run's worktree once its outcome is settled (#4090). Codebase
+  // resolution on the missing path used to fail first, as "Database lookup failed".
+  it('refuses a run whose worktree is gone before resolving its codebase (#4090)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const git = await import('@archon/git');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-4090',
+      workflow_name: 'implement',
+      status: 'failed',
+      user_message: 'go',
+      working_path: join(tmpdir(), 'archon-removed-worktree-4090'),
+      codebase_id: null,
+    });
+    const findRepoRoot = git.findRepoRoot as ReturnType<typeof mock>;
+    findRepoRoot.mockClear();
+
+    await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-4090')).rejects.toThrow(
+      'the working path from the run no longer exists'
+    );
+    expect(findRepoRoot).not.toHaveBeenCalled();
   });
 });
 

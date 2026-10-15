@@ -13,9 +13,9 @@ nodes:
     depends_on: []
     bash: |
       set -euo pipefail
-      git diff "$INPUTS.base"...HEAD --stat
+      git diff $INPUTS.base...HEAD --stat
       echo '---'
-      git diff "$INPUTS.base"...HEAD | head -400
+      git diff $INPUTS.base...HEAD | head -400
 
   - id: critique
     depends_on: [gather]

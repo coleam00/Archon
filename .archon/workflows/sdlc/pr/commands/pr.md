@@ -30,7 +30,8 @@ You do not look up whether this branch already has a pull request. The publishin
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - Link the issue with a non-closing reference (`Refs #N`), never a closing keyword, even where the template offers a `Closes #` line. A pull request closes its issue only when a review's contract coverage marks the required outcome and every acceptance item met, and no review has judged this work yet; delivery applies the closing keyword after its final review. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.
-- Write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository. It is published only when a new pull request opens; an existing one keeps its body.
+- When this run continues an existing pull request, the body is its current description brought up to date for this round: read it with `gh pr view <number> --repo <owner>/<repo> --json body`, naming the repository because `gh` resolves it from the working directory's git remotes, and `$ARTIFACTS_DIR` is not a checkout. Keep a person's edits and every claim that is still true; change what this round falsified or added.
+- Write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository — with your file-writing tool or a quoted heredoc, not by redirecting a command's output: a pipeline whose first command fails can leave the file empty and still exit 0. Then read the file back. It must hold the whole body, with the template's required sections. If you cannot produce that body, stop and report why; never declare the pointer below for a file you have not read back.
 
 ## 4. Declare the target
 
