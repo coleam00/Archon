@@ -74,6 +74,7 @@ const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot
     completedNodeOutputs: new Map(),
     fanOutSnapshots: new Map(),
     unresolvedNodeStarts: new Set(),
+    budget: { workUnits: 0, spendUsd: 0 },
     tokens: { input: 0, output: 0 },
     costUsd: 0,
   })
@@ -334,6 +335,7 @@ describe('createWorkflowStore', () => {
       completedNodeOutputs: new Map([['step1', { output: 'output text' }]]),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 40, output: 4 },
       costUsd: 0,
     };

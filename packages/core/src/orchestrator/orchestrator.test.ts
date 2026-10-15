@@ -10,7 +10,7 @@ mock.module('../workflows/branch-launch-source', () => ({
 }));
 import * as git from '@archon/git';
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
-import { mkdtemp, realpath } from 'fs/promises';
+import { mkdtemp, realpath, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -53,9 +53,12 @@ async function canonicalizeForTest(p: string): Promise<string> {
   const absolute = resolve(p);
   return await realpath(absolute).catch(() => absolute);
 }
+const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 const mockCanonicalizeProjectPath = mock(canonicalizeForTest);
 mock.module('@archon/paths', () => ({
   canonicalizeProjectPath: mockCanonicalizeProjectPath,
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -118,6 +121,9 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
@@ -132,6 +138,7 @@ mock.module('../db/codebases', () => ({
     })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
 }));
 
 const mockGetActiveSession = mock<typeof SessionDb.getActiveSession>(() => Promise.resolve(null));
@@ -342,10 +349,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createCodebaseChildResolver, which imports
-  // loadRepoConfig by name. This factory replaces the module process-wide, so
-  // omitting it fails that import at module-eval even though no test calls it.
-  loadRepoConfig: mock(() => Promise.resolve(null)),
+  loadRepoConfig: mock<typeof ConfigLoader.loadRepoConfig>(() => Promise.resolve({})),
 }));
 
 // Workflow source root: undefined = "read the cwd", the non-worktree behavior.
@@ -650,6 +654,7 @@ function clearAllMocks(): void {
   mockLoadConfig.mockClear();
   mockExistsSync.mockClear();
   mockUpdateCodebase.mockClear();
+  mockRepairCodebaseRegistration.mockClear();
   // Reset, not clear: a `mockImplementationOnce` that its test never reached
   // (because the handler returned early) would otherwise be consumed by the
   // next test and report a second, misleading failure.
@@ -1865,40 +1870,225 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Project Registration ──────────────────────────────────────────────
 
   describe('project registration', () => {
-    test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
-      // Use a REAL non-git temp dir so findRepoRoot returns null via the
-      // definitive "not a git repository" path (deterministic) — not the
-      // exception-fallback branch a fake/nonexistent path would take.
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
-      const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+    for (const failure of [
+      'invalid gitfile',
+      'missing gitdir',
+      'not a git repository-bad-config',
+    ]) {
+      for (const repair of [false, true]) {
+        test(`/register-project refuses ${failure} during ${repair ? 'repair' : 'creation'}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), `archon-${failure}-`));
+          try {
+            if (failure.endsWith('bad-config')) {
+              const init = Bun.spawn(['git', '-C', projectPath, 'init'], {
+                stdout: 'ignore',
+                stderr: 'pipe',
+              });
+              expect(await init.exited).toBe(0);
+              await writeFile(join(projectPath, '.git', 'config'), 'invalid config line\n');
+            } else {
+              await writeFile(
+                join(projectPath, '.git'),
+                failure === 'missing gitdir'
+                  ? `gitdir: ${join(projectPath, 'missing')}\n`
+                  : 'invalid gitfile\n'
+              );
+            }
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue(
+              repair
+                ? [{ ...mockCodebase, name: 'my-app', default_cwd: 'legacy/path', kind: 'folder' }]
+                : []
+            );
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('Nothing was registered')
+            );
+            expect(mockCreateCodebase).not.toHaveBeenCalled();
+            expect(mockUpdateCodebase).not.toHaveBeenCalled();
+            expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
+          } finally {
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
+
+    for (const mode of ['stream', 'batch'] as const) {
+      test(`agent ${mode} project registration reports detection failure without persistence`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
+        try {
+          await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+          platform.getStreamingMode.mockReturnValue(mode);
+          mockClient.sendQuery.mockImplementation(async function* () {
+            yield {
+              type: 'agent_message_chunk',
+              text: `/register-project my-app ${projectPath}\n`,
+            };
+            yield { type: 'result', sessionId: 'session-id' };
+          });
+          await handleMessage(platform, 'chat-456', 'Register my app', { actor: operator });
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('Nothing was registered')
+          );
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
+        } finally {
+          await removeTempTree(projectPath);
+        }
+      });
+    }
+
+    test('/register-project refuses a path that disappears during detection', async () => {
+      const canonicalPath = await canonicalizeForTest('/vanished/path');
+      const repoSpy = spyOn(git, 'findRepoRoot').mockImplementation(async () => {
+        mockExistsSync.mockReturnValue(false);
+        throw new Error('git: cannot change directory');
+      });
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: canonicalPath,
-        });
-
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+        await handleMessage(platform, 'chat-456', '/register-project my-app /vanished/path', {
           actor: operator,
-        });
-
-        expect(mockCreateCodebase).toHaveBeenCalledWith({
-          name: 'my-app',
-          default_cwd: canonicalPath,
-          default_branch: null,
-          kind: 'folder',
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          expect.stringContaining('registered successfully')
+          `Path does not exist: ${canonicalPath}`
         );
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
       } finally {
-        await removeTempTree(projectPath);
+        repoSpy.mockRestore();
+        mockExistsSync.mockReturnValue(true);
       }
     });
+
+    for (const kind of ['repo', 'folder'] as const) {
+      test(`/register-project reports a persistence refusal when repairing to ${kind}`, async () => {
+        const canonicalPath = await canonicalizeForTest('/new/path');
+        const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
+          kind === 'repo' ? git.toRepoPath(canonicalPath) : null
+        );
+        try {
+          mockRepairCodebaseRegistration.mockRejectedValueOnce(
+            new Error('would move its Archon storage')
+          );
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([
+            {
+              ...mockCodebase,
+              name: 'my-app',
+              default_cwd: 'legacy/path',
+              kind: kind === 'repo' ? 'folder' : 'repo',
+            },
+          ]);
+          await handleMessage(platform, 'chat-456', '/register-project my-app /new/path', {
+            actor: operator,
+          });
+          expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith(mockCodebase.id, {
+            default_cwd: canonicalPath,
+            kind,
+          });
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('would move its Archon storage')
+          );
+        } finally {
+          repoSpy.mockRestore();
+        }
+      });
+    }
+
+    for (const trace of [
+      '',
+      'GIT_TRACE',
+      'GIT_TRACE_PERFORMANCE',
+      'GIT_TRACE2',
+      'GIT_TRACE2_EVENT',
+      'GIT_TRACE2_PERF',
+      'GIT_TRACE_SETUP',
+    ]) {
+      test(`/register-project on a real non-git dir creates a folder project with ${trace || 'no tracing'}`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
+        const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+        const previousTrace = trace ? process.env[trace] : undefined;
+        if (trace) process.env[trace] = '1';
+        try {
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+          mockCreateCodebase.mockResolvedValue({
+            ...mockCodebase,
+            id: 'new-id',
+            name: 'my-app',
+            default_cwd: canonicalPath,
+          });
+
+          await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+            actor: operator,
+          });
+
+          expect(mockCreateCodebase).toHaveBeenCalledWith({
+            name: 'my-app',
+            default_cwd: canonicalPath,
+            default_branch: null,
+            kind: 'folder',
+          });
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('registered successfully')
+          );
+        } finally {
+          if (trace) {
+            if (previousTrace === undefined) delete process.env[trace];
+            else process.env[trace] = previousTrace;
+          }
+          await removeTempTree(projectPath);
+        }
+      });
+    }
+
+    for (const target of ['normalTarget', 'eventTarget', 'perfTarget']) {
+      for (const destination of [1, 2]) {
+        test(`/register-project registers a non-git folder with global trace2.${target}=${destination}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), 'archon-global-trace-'));
+          const configPath = join(projectPath, 'gitconfig');
+          const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+          await writeFile(configPath, `[trace2]\n${target} = ${destination}\n`);
+          process.env.GIT_CONFIG_GLOBAL = configPath;
+          try {
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue([]);
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(mockCreateCodebase).toHaveBeenCalledWith({
+              name: 'my-app',
+              default_cwd: await mockCanonicalizeProjectPath(projectPath),
+              default_branch: null,
+              kind: 'folder',
+            });
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('registered successfully')
+            );
+          } finally {
+            if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+            else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
 
     test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));

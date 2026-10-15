@@ -62,6 +62,7 @@ import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '../utils/command-args';
 
 const operator: RunActor = { kind: 'operator' };
 
@@ -151,8 +152,11 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 // Tests below derive their expected path from it rather than from a POSIX
 // literal: it makes a path absolute, and on Windows `resolve('/path')` is
 // drive-qualified (`D:\path`).
-const { canonicalizeProjectPath } = await import('@archon/paths');
+const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
+  await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -193,6 +197,9 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 const mockDeleteCodebase = mock<typeof CodebaseDb.deleteCodebase>(() => Promise.resolve());
 class MockCodebaseNotFoundError extends Error {
@@ -213,6 +220,7 @@ mock.module('../db/codebases', () => ({
     })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
   deleteCodebase: mockDeleteCodebase,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
@@ -262,9 +270,13 @@ const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
   args: [],
 }));
+const mockStartWorkflow = mock<typeof CommandHandler.startWorkflow>(() =>
+  Promise.resolve({ success: true, message: 'ok' })
+);
 mock.module('../handlers/command-handler', () => ({
   parseCommand: mockParseCommand,
   handleCommand: mockHandleCommand,
+  startWorkflow: mockStartWorkflow,
 }));
 
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
@@ -2408,6 +2420,8 @@ describe('workflow dispatch routing', () => {
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
     );
+    mockParseCommand.mockClear();
+    mockStartWorkflow.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockGetCodebase.mockReset();
@@ -3493,6 +3507,37 @@ describe('workflow dispatch routing', () => {
   // -------------------------------------------------------------------------
   // Declared inputs supplied by the run route (#2554)
   // -------------------------------------------------------------------------
+
+  test('context.workflowName starts that workflow with the message verbatim, never parsed as a command', async () => {
+    // A message that would be a command, and would set --force, if it were parsed (#4159).
+    const message = '/detach-project "acme" --force\n  keep this indent';
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockStartWorkflow.mockReturnValueOnce(Promise.resolve(makeWorkflowResult({ args: message })));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', message, {
+      actor: operator,
+      workflowName: 'test-workflow',
+      workflowInputs: { diff: 'D1' },
+    });
+
+    expect(mockParseCommand).not.toHaveBeenCalled();
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockStartWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: makeDispatchConversation().id }),
+      'test-workflow',
+      message,
+      false,
+      platform
+    );
+    const ctx = mockDispatchBackgroundWorkflow.mock.calls[0][0] as {
+      originalMessage: string;
+      inputs?: Record<string, string>;
+    };
+    expect(ctx.originalMessage).toBe(message);
+    expect(ctx.inputs).toEqual({ diff: 'D1' });
+  });
 
   test('threads context.workflowInputs into executeWorkflow for a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
@@ -7605,14 +7650,20 @@ describe('handleMessage — legacy registration recovery', () => {
       { ...makeNamedCodebase('other'), default_cwd: 'other/path' },
       { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
     ]);
+    const repairRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-legacy-repair-')));
+    const replacement = join(repairRoot, 'repo');
+    await mkdir(replacement, { recursive: true });
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
-      {
-        default_cwd: await canonicalizeProjectPath('/'),
-      }
+    await handleMessage(
+      platform,
+      'conv-1',
+      `/register-project My-App ${quoteCommandArg(replacement)}`,
+      { actor: operator }
     );
+    expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith('id-my-app', {
+      default_cwd: await canonicalizeProjectPath(replacement),
+      kind: 'repo',
+    });
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'

@@ -14,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'packages/docs-web/**'
+      - 'packages/web/src/lib/api.generated.d.ts'
       - 'packages/plugin-manifest/**'
       - 'bun.lock'
       - '.github/workflows/docs-build.yml'
@@ -39,6 +40,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Check API reference coverage
+        run: bun run --cwd packages/docs-web test src/api.test.ts
 
       # A declared exclusion from `bun run validate` (scripts/validate-ci-parity.test.ts):
       # the gate must run on a Bun-only checkout, and this build needs the Node setup above.

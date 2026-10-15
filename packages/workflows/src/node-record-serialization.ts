@@ -3,7 +3,7 @@ import {
   rootOutputFields,
   type DeclaredOutputPaths,
 } from './output-ref';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { TokenUsage } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';

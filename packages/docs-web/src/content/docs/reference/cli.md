@@ -675,6 +675,19 @@ categorical `reason` and the `signal` that arrived. Resuming the run clears it, 
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.
 
+After recording why the run stopped, the owner ends the process tree of every `bash:` or
+`script:` node still running, including an `until_bash` check, so a resume does not overlap the
+interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
+`trigger execute`. A node counts as running until its output closes, so a background job that
+still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
+their own session during a foreground run, so they have no controlling terminal, and a small
+watcher process ends the node's process group if the owner dies before its teardown does (a
+terminal hangup, a second Ctrl-C, `kill -9`); a run whose stop was never recorded stays
+`running`. A process that starts its own session or process group (`setsid`, a daemon)
+escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
+root already exited is not reached, and an owner killed before its teardown leaves the tree
+running.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`
@@ -1340,15 +1353,15 @@ Groups by codebase, shows branch, workflow type, platform, and days since activi
 
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
 (branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`) — they are tracked and cleaned
-up exactly like top-level run worktrees. Avoid `cleanup`/`complete` on one while its run tree
-is still resumable: a resume reuses the child's recorded worktree and fails if it has been
-removed.
+up exactly like top-level run worktrees. Avoid `complete` on one while its run tree is still
+resumable: a resume reuses the child's recorded worktree and fails if it has been removed.
+`cleanup` removes it only under the run-lock rule below.
 
 ### `isolation cleanup [days]`
 
 To explicitly discard a resumable run and remove the worktree it created, use
-`archon workflow abandon <run-id>`. Ordinary cleanup keeps resumable runs protected.
-Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
+`archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
+of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
@@ -1415,13 +1428,24 @@ as `merge state unverifiable` rather than removed on an unverified guess.
 By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
 those up as well. Branches with an **OPEN** PR are always skipped.
 
-An environment a workflow run can still claim is never removed by either mode,
-regardless of age or merge state — the same live-run lock the scheduled sweep applies.
-That covers running, pending and paused runs, and also **failed** runs: a failed run
-stays resumable, and removing its environment deletes the local branch that
-`workflow run --resume` and `--adopt` need. Stale environments with quiet
-conversations still pass the activity filter; the live-run lock is what keeps them on
-disk until no run can claim them.
+A running, pending, or paused run keeps its environment in both modes, regardless of
+age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the same
+run lock. Stale environments with quiet conversations still pass the activity filter;
+the run lock is what keeps them on disk.
+
+A **failed** run keeps its environment only until its outcome is settled:
+
+- `--merged` (and the server's scheduled cleanup) removes it once its branch is merged
+  or its PR is merged. `--include-closed` also removes it once its PR is closed.
+- The stale sweep removes it once the run has been inactive since it failed for longer
+  than the stale window (`[days]` here; `STALE_THRESHOLD_DAYS` for the server and chat).
+  An environment whose worktree HEAD or branch holds a commit on no remote is kept and
+  reported as `failed run <id> has <n> unpushed commit(s)`.
+
+The output names each failed run whose environment it removed, with the reason:
+`merged`, `PR closed`, or `stale`. Removal leaves the run's status unchanged. Resuming
+it afterwards fails with `the working path from the run no longer exists`; start a
+fresh run. To discard a failed run sooner, use `workflow abandon`.
 
 ### `validate workflows [name]`
 
@@ -1467,14 +1491,20 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+
+Without `--force`, completion refuses an environment a workflow run can still claim, the
+same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
+failed run that can still be resumed. Unlike `isolation cleanup`, completion never
+releases a failed run's lock by merge state or age. If that lookup fails, completion
+refuses rather than skipping the check.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone
@@ -1591,10 +1621,13 @@ When using `--branch`, workflows run inside the worktree directory.
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
 
 Legacy registrations with a relative stored project path fail with a project-named
-error. Repair them in Archon chat with
+error. Attempt repair in Archon chat with
 `/register-project "project-name" /absolute/path/to/project`; changing the CLI's
-working directory does not repair the stored path. Re-registration preserves the
-existing project's identity and history.
+working directory does not repair the stored path. Repair refuses a replacement
+path or kind that would move managed storage or worktrees. A successful repair
+preserves the existing project's identity and history. See
+[Stored project path is relative](/reference/troubleshooting/#stored-project-path-is-relative)
+for recovery details.
 
 ## Environment
 
