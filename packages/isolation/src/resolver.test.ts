@@ -1,3 +1,5 @@
+import { IsolationFailure } from './errors';
+import { GitFailure } from '@archon/git';
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
@@ -601,12 +603,48 @@ describe('IsolationResolver', () => {
     );
   });
 
+  test.each(['timeout', 'permission denied', 'cannot adopt'])(
+    'unclassified git %s blocks while a programming failure with the same text crashes',
+    async text => {
+      for (const failure of [
+        new GitFailure(
+          'unclassified',
+          `git fetch failed: ${text}`,
+          Object.assign(new Error(text), { code: 128, stderr: text })
+        ),
+        new TypeError(text),
+      ]) {
+        const resolver = createResolver({
+          provider: {
+            ...makeMockProvider(),
+            create: async () => {
+              throw failure;
+            },
+          },
+        });
+        const result = resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          platformType: 'web',
+          hints: { workflowType: 'issue', workflowId: '4271' },
+        });
+        if (!(failure instanceof GitFailure)) await expect(result).rejects.toBe(failure);
+        else {
+          const resolved = await result;
+          expect(resolved.status).toBe('blocked');
+          if (resolved.status !== 'blocked') throw new Error('expected blocked failure');
+          expect(resolved.userMessage).toContain(failure.message);
+        }
+      }
+    }
+  );
+
   test('creation error — returns blocked with creation_failed', async () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
         create: async () => {
-          throw new Error('permission denied');
+          throw new IsolationFailure('permission_denied', 'permission denied');
         },
       },
     });
@@ -809,7 +847,7 @@ describe('IsolationResolver', () => {
       provider: {
         ...makeMockProvider(),
         create: async () => {
-          throw new Error('permission denied');
+          throw new IsolationFailure('permission_denied', 'permission denied');
         },
       },
     });

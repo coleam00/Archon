@@ -1,3 +1,5 @@
+export { GitFailure } from './errors';
+export type { GitFailureKind } from './errors';
 // Types
 export type {
   RepoPath,
@@ -74,7 +76,7 @@ export {
   getRemoteUrl,
   listChildRepos,
   syncWorkspace,
-  fetchWithRefLockRetry,
+  fetchRemote,
   cloneRepository,
   validateCloneUrl,
   syncRepository,

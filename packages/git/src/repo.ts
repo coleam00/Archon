@@ -150,54 +150,20 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
   }
 }
 
-const MAX_FETCH_RETRIES = 3;
-
-/**
- * Run `git fetch <remote> <refspec>` with bounded retry on Git's ref-lock race.
- *
- * Two concurrent fetches that write the same named ref — a remote-tracking ref,
- * or a local branch via a `pull/N/head:branch` refspec — collide on Git's shared
- * lock file and fail transiently with `cannot lock ref ... unable to update local
- * ref`. This helper owns the single ref-lock classifier and backoff budget for
- * the codebase: race failures are retried up to MAX_FETCH_RETRIES times with
- * 50ms doubling backoff, then the original error object is rethrown untouched
- * (stderr preserved for callers). Any other failure is rethrown immediately —
- * unrelated git errors are attempted once and stay loud.
- */
-export async function fetchWithRefLockRetry(
+/** Git does not expose a distinct ref-lock exit code; unclassified failures are never retried. */
+export async function fetchRemote(
   repoPath: RepoPath,
   remote: string,
   refspec: string | undefined,
   options?: { timeoutMs?: number }
 ): Promise<{ stdout: string; stderr: string }> {
-  const args =
-    refspec === undefined
-      ? ['-C', repoPath, 'fetch', remote]
-      : ['-C', repoPath, 'fetch', remote, refspec];
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await execFileAsync('git', args, {
-        timeout: options?.timeoutMs,
-      });
-    } catch (error) {
-      const err = error as Error;
-      const errorMessage = err.message.toLowerCase();
-      const isRefLockRace =
-        errorMessage.includes('cannot lock ref') &&
-        errorMessage.includes('unable to update local ref');
-
-      if (!isRefLockRace || attempt >= MAX_FETCH_RETRIES) {
-        throw error;
-      }
-
-      const backoffMs = 50 * Math.pow(2, attempt);
-      getLog().debug(
-        { err, attempt: attempt + 1, backoffMs, remote, refspec },
-        'git.fetch_ref_lock_retry'
-      );
-      await new Promise(resolve => setTimeout(resolve, backoffMs));
+  return execFileAsync(
+    'git',
+    ['-C', repoPath, 'fetch', remote, ...(refspec === undefined ? [] : [refspec])],
+    {
+      timeout: options?.timeoutMs,
     }
-  }
+  );
 }
 
 /**
@@ -233,10 +199,8 @@ export async function syncWorkspace(
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
-  // Concurrent fetches of the same remote-tracking ref can collide on Git's
-  // shared ref lock; fetchWithRefLockRetry owns the bounded retry.
   try {
-    await fetchWithRefLockRetry(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
+    await fetchRemote(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {
@@ -285,7 +249,9 @@ export async function syncWorkspace(
       );
     } catch (error) {
       const err = error as Error;
-      throw new Error(`Fast-forward to ${remote}/${branchToSync} failed: ${err.message}`);
+      throw new Error(`Fast-forward to ${remote}/${branchToSync} failed: ${err.message}`, {
+        cause: err,
+      });
     }
 
     const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -312,7 +278,7 @@ export async function syncWorkspace(
     );
   } catch (error) {
     const err = error as Error;
-    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`);
+    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`, { cause: err });
   }
 
   const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -569,7 +535,7 @@ export async function cloneRepository(
  * Uses execFileAsync (no shell interpolation) for safety.
  *
  * Note: the reset uses the `cwd` option; the fetch goes through
- * fetchWithRefLockRetry, which uses `-C`. Both are functionally equivalent.
+ * fetchRemote, which uses `-C`. Both are functionally equivalent.
  *
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
@@ -582,7 +548,7 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await fetchWithRefLockRetry(repoPath, remote, undefined, { timeoutMs: 60000 });
+    await fetchRemote(repoPath, remote, undefined, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
@@ -743,6 +709,6 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');
-    throw new Error(`Failed to add safe directory '${path}': ${err.message}`);
+    throw new Error(`Failed to add safe directory '${path}': ${err.message}`, { cause: err });
   }
 }

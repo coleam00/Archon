@@ -1,3 +1,4 @@
+import { GitFailure } from './errors';
 import { readFile, access, realpath } from 'fs/promises';
 import * as nodePath from 'path';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
@@ -157,7 +158,7 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
       return false;
     }
     getLog().error({ worktreePath, err, code: err.code }, 'worktree.existence_check_failed');
-    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`);
+    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`, { cause: err });
   }
 
   // Step 2: Check if .git entry exists (directory exists at this point)
@@ -173,7 +174,7 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
       return false;
     }
     getLog().error({ worktreePath, err, code: err.code }, 'worktree.existence_check_failed');
-    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`);
+    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`, { cause: err });
   }
 }
 
@@ -208,23 +209,9 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
 
     return worktrees;
   } catch (error) {
-    const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // ENOENT on repo path itself — distinct from "not a git repository"
-    if (errorText.includes('No such file or directory')) {
-      getLog().warn({ repoPath }, 'worktree.list_repo_missing');
-      return [];
-    }
-
-    // Expected: not a git repository - return empty list
-    if (errorText.includes('not a git repository')) {
-      return [];
-    }
-
-    // Unexpected error - log and throw
-    getLog().error({ repoPath, err, code: err.code, stderr: err.stderr }, 'worktree.list_failed');
-    throw new Error(`Failed to list worktrees for ${repoPath}: ${err.message}`);
+    if (error instanceof GitFailure && error.kind === 'not_repository') return [];
+    getLog().error({ repoPath, err: error }, 'worktree.list_failed');
+    throw error;
   }
 }
 
@@ -479,13 +466,6 @@ export async function getCanonicalRepoPath(path: string): Promise<RepoPath> {
  *
  * Git's common-directory paths are normalized with `resolve()` before
  * comparison to handle trailing slashes and relative components.
- *
- * Error classification (surfaced via `classifyIsolationError` in
- * `@archon/isolation/errors.ts`):
- *   - "path contains a full git checkout" → EISDIR
- *   - "Cannot verify worktree ownership" → ENOENT / EACCES / EIO
- *   - "not a git-worktree reference" → submodule pointer or malformed
- *   - "belongs to a different clone" → cross-checkout
  */
 export async function verifyWorktreeOwnership(
   worktreePath: WorktreePath,
@@ -496,32 +476,32 @@ export async function verifyWorktreeOwnership(
     gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    // Preserve the original errno on the wrapped error so downstream
-    // classifiers can match by `.code` instead of substring — resilient to
-    // Node.js message format changes. The original error is also kept via
-    // `cause` for debugging.
-    const wrap = (message: string): Error => {
-      const wrapped = new Error(message, { cause: err });
-      if (err.code) (wrapped as NodeJS.ErrnoException).code = err.code;
-      return wrapped;
-    };
     // EISDIR: .git is a directory — path holds a full checkout, not a
     // worktree. Refusing adoption prevents accidentally treating an
     // unrelated repo at this path as ours.
     if (err.code === 'EISDIR') {
-      throw wrap(
-        `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`
+      throw new GitFailure(
+        'adoption_refused',
+        `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`,
+        err
       );
     }
     // ENOENT: .git file missing despite worktreeExists() reporting true —
     // a TOCTOU race or filesystem corruption. Fail fast.
     // EACCES/EIO/etc.: cannot verify ownership — fail fast rather than
     // defaulting to permissive adoption.
-    throw wrap(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
+    throw new GitFailure(
+      'ownership_unverified',
+      `Cannot verify worktree ownership at ${worktreePath}: ${err.message}`,
+      err
+    );
   }
 
   if (!gitContent.startsWith('gitdir:')) {
-    throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
+    throw new GitFailure(
+      'adoption_refused',
+      `Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`
+    );
   }
 
   let worktreeIdentity: GitCheckoutIdentity;
@@ -532,23 +512,26 @@ export async function verifyWorktreeOwnership(
       getGitCheckoutIdentity(expectedRepo),
     ]);
   } catch (error) {
-    throw new Error(
+    throw new GitFailure(
+      'ownership_unverified',
       `Cannot verify worktree ownership at ${worktreePath}: ${(error as Error).message}`,
-      {
-        cause: error,
-      }
+      error
     );
   }
   if (!worktreeIdentity.linkedWorktree) {
     // Not a git-worktree pointer (e.g., submodule pointer, or malformed).
     // We cannot confirm this is our worktree, so refuse adoption.
-    throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
+    throw new GitFailure(
+      'adoption_refused',
+      `Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`
+    );
   }
 
   // Compare resolved common-directory paths: the primary checkout and every
   // linked worktree share this Git identity, while separate clones differ.
   if (resolve(worktreeIdentity.commonGitDir) !== resolve(expectedIdentity.commonGitDir)) {
-    throw new Error(
+    throw new GitFailure(
+      'different_clone',
       `Worktree at ${worktreePath} belongs to a different clone (${worktreeIdentity.commonGitDir}). ` +
         'Remove it from that clone or use a different codebase registration.'
     );

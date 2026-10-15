@@ -1,3 +1,4 @@
+import { GitFailure } from './errors';
 import { inspectRemoteBranches } from './remote-branches';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
@@ -16,9 +17,11 @@ export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): P
   const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
   if (result.status === 'available' && result.defaultBranch) return result.defaultBranch;
   const reason = result.status === 'unavailable' ? result.evidence : `${remote}/HEAD is not known`;
-  throw new Error(
+  throw new GitFailure(
+    result.status === 'unavailable' ? 'unclassified' : 'default_branch_missing',
     `Cannot detect default branch for ${repoPath}: ${reason}. ` +
-      'Pass --base, set worktree.baseBranch in .archon/config.yaml, or set the codebase default_branch field.'
+      'Pass --base, set worktree.baseBranch in .archon/config.yaml, or set the codebase default_branch field.',
+    result.status === 'unavailable' ? result.failure : undefined
   );
 }
 

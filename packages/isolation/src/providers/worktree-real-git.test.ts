@@ -36,6 +36,8 @@ import { WorktreeProvider } from './worktree';
 import type { IsolationRequest } from '../types';
 import {
   classifyIsolationError,
+  isKnownIsolationError,
+  IsolationFailure,
   ExistingBranchDivergedError,
   MissingProjectDirectoryError,
   WorktreeUncommittedChangesError,
@@ -866,6 +868,28 @@ describe('WorktreeProvider against real git', () => {
     if (!empty) expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');
   });
 
+  test('a missing checkout registered by Git is refused with a typed kind', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const attempt: IsolationRequest = {
+      codebaseId: request.codebaseId,
+      codebaseName: request.codebaseName,
+      canonicalRepoPath: request.canonicalRepoPath,
+      workflowType: 'issue',
+      identifier: '4271',
+      baseBranch: toBranchName('main'),
+    };
+    const target = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
+    await git(repoPath, 'worktree', 'add', '-q', '--detach', target);
+    await git(repoPath, 'worktree', 'lock', '--reason', 'operator lock', target);
+    await rm(target, { recursive: true });
+    const failure = await provider.create(attempt).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(IsolationFailure);
+    if (!(failure instanceof IsolationFailure)) throw new Error('expected registration refusal');
+    expect(failure.kind).toBe('worktree_registered');
+    expect(isKnownIsolationError(failure)).toBe(true);
+    expect(await registeredWorktrees()).toContain(resolve(target));
+  });
+
   test('an add that creates nothing reports only the original failure', async () => {
     const missingBranchRequest: IsolationRequest = {
       ...request,
@@ -1090,6 +1114,27 @@ describe('WorktreeProvider against real git', () => {
         expect(env.metadata).not.toHaveProperty('cutFromCommit');
       }
     );
+
+    test('an existing branch containing timeout keeps its cause and is blocked', async () => {
+      const branch = 'fix/timeout-retry';
+      await git(repoPath, 'branch', branch);
+      const error = await provider
+        .create({
+          ...attempt,
+          workflowType: 'task',
+          taskBranch: {
+            kind: 'new',
+            branch: toBranchName(branch),
+            fromBranch: toBranchName('main'),
+          },
+        })
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected existing-branch refusal');
+      expect(classifyIsolationError(error)).toContain(`Branch "${branch}" already exists`);
+      expect(classifyIsolationError(error)).not.toContain('Timed out');
+      expect(isKnownIsolationError(error)).toBe(true);
+    });
 
     test('an existing remote-only PR branch is checked out at its head', async () => {
       const tip = await commitOn(PR_BRANCH, 'one');

@@ -345,10 +345,42 @@ describe('ContainerBackend.destroy', () => {
     expect(store.rows.get(prepared.envId as string)?.status).toBe('destroyed');
   });
 
+  test.each(['container', 'volume'])(
+    'a misleading not-found error cannot hide a surviving %s',
+    async resource => {
+      const store = fakeStore();
+      const docker = fakeDocker(args => {
+        if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
+        if (args[0] === 'container' && args[1] === 'ls')
+          return {
+            stdout: `cid\t${String(store.created?.metadata?.containerName)}\trunning`,
+            stderr: '',
+          };
+        if (args[0] === 'volume' && args[1] === 'ls')
+          return { stdout: String(store.created?.metadata?.volume), stderr: '' };
+        if (
+          (resource === 'container' && args[0] === 'rm') ||
+          (resource === 'volume' && args[0] === 'volume' && args[1] === 'rm')
+        )
+          throw new Error(`No such ${resource}: timeout permission denied`);
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.prepare({ codebase: FOLDER });
+      await expect(backend.destroy(prepared.envId!)).rejects.toThrow(`No such ${resource}`);
+      expect(store.rows.get(prepared.envId!)?.status).toBe('active');
+    }
+  );
+
   test('THROWS and leaves the row active on a GENUINE docker rm failure', async () => {
     const store = fakeStore();
     const docker = fakeDocker(args => {
       if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
+      if (args[0] === 'container')
+        return {
+          stdout: `cid\t${String(store.created?.metadata?.containerName)}\trunning`,
+          stderr: '',
+        };
       if (args[0] === 'rm') {
         const err = new Error('rm failed') as Error & { stderr?: string };
         err.stderr = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock';
@@ -440,8 +472,9 @@ describe('ContainerBackend.suspend', () => {
   test('is idempotent when the container is already gone', async () => {
     const store = fakeStore();
     seedContainerRow(store);
-    const docker = fakeDocker(() => {
-      throw new Error('Error: No such container: archon-res-1');
+    const docker = fakeDocker(args => {
+      if (args[0] === 'container') return { stdout: '', stderr: '' };
+      throw new Error('arbitrary vendor wording');
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     await expect(backend.suspend('env-c')).resolves.toBeUndefined();
@@ -463,8 +496,8 @@ describe('ContainerBackend.resumeEnv', () => {
     const store = fakeStore();
     seedContainerRow(store);
     const docker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        return { stdout: 'true\n', stderr: '' };
+      if (args[0] === 'container' && args[1] === 'ls') {
+        return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
       }
       if (args[0] === 'inspect' && args.includes('{{.Id}}'))
         return { stdout: 'cid-run\n', stderr: '' };
@@ -480,8 +513,8 @@ describe('ContainerBackend.resumeEnv', () => {
     const store = fakeStore();
     seedContainerRow(store);
     const docker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        return { stdout: 'false\n', stderr: '' };
+      if (args[0] === 'container' && args[1] === 'ls') {
+        return { stdout: 'cid-orig\tarchon-res-1\texited\n', stderr: '' };
       }
       if (args[0] === 'inspect' && args.includes('{{.Id}}'))
         return { stdout: 'cid-started\n', stderr: '' };
@@ -500,10 +533,12 @@ describe('ContainerBackend.resumeEnv', () => {
     seedContainerRow(store);
     let ran = false;
     const docker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        throw new Error('Error: No such object: archon-res-1');
-      }
-      if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: '[]', stderr: '' }; // volume exists
+      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
+      if (args[0] === 'volume' && args[1] === 'ls')
+        return {
+          stdout: String(store.created?.metadata?.volume ?? 'archon-res-1-upper'),
+          stderr: '',
+        }; // volume exists
       if (args[0] === 'run') {
         ran = true;
         return { stdout: 'cid-recreated\n', stderr: '' };
@@ -521,9 +556,7 @@ describe('ContainerBackend.resumeEnv', () => {
     const store = fakeStore();
     seedContainerRow(store);
     const docker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        throw new Error('Error: No such object: archon-res-1');
-      }
+      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
       if (args[0] === 'volume' && args[1] === 'inspect') {
         throw new Error('Error: No such volume: archon-res-1-upper');
       }
@@ -637,10 +670,12 @@ describe('ContainerBackend source mount', () => {
     const prepared = await backend.prepare({ codebase: FOLDER, sourceMount: SOURCE_MOUNT });
 
     const resumeDocker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        throw new Error('Error: No such object: archon-res-1'); // container gone
-      }
-      if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: '[]', stderr: '' };
+      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
+      if (args[0] === 'volume' && args[1] === 'ls')
+        return {
+          stdout: String(store.created?.metadata?.volume ?? 'archon-res-1-upper'),
+          stderr: '',
+        };
       if (args[0] === 'run') return { stdout: 'recreatedid\n', stderr: '' };
       if (args[0] === 'exec') return { stdout: '', stderr: '' };
       return { stdout: '', stderr: '' };
@@ -766,10 +801,12 @@ describe('ContainerBackend artifacts mount', () => {
     const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
 
     const resumeDocker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        throw new Error('Error: No such object: archon-res-1'); // container gone
-      }
-      if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: '[]', stderr: '' };
+      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
+      if (args[0] === 'volume' && args[1] === 'ls')
+        return {
+          stdout: String(store.created?.metadata?.volume ?? 'archon-res-1-upper'),
+          stderr: '',
+        };
       if (args[0] === 'run') return { stdout: 'recreatedid\n', stderr: '' };
       if (args[0] === 'exec') return { stdout: '', stderr: '' };
       return { stdout: '', stderr: '' };
@@ -865,10 +902,12 @@ describe('ContainerBackend artifacts mount', () => {
     const prepared = await backend.prepare({ codebase: FOLDER, sourceMount: SOURCE_MOUNT });
 
     const resumeDocker = fakeDocker(args => {
-      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
-        throw new Error('Error: No such object: archon-res-1'); // container gone
-      }
-      if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: '[]', stderr: '' };
+      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
+      if (args[0] === 'volume' && args[1] === 'ls')
+        return {
+          stdout: String(store.created?.metadata?.volume ?? 'archon-res-1-upper'),
+          stderr: '',
+        };
       if (args[0] === 'run') return { stdout: 'recreatedid\n', stderr: '' };
       if (args[0] === 'exec') return { stdout: '', stderr: '' };
       return { stdout: '', stderr: '' };

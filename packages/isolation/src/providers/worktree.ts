@@ -13,13 +13,14 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  GitFailure,
   hasUncommittedChangesStrict,
   addSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
   isWorktreeRegistered,
   readWorktreeRegistration,
-  fetchWithRefLockRetry,
+  fetchRemote,
   findWorktreeByBranch,
   getCanonicalRepoPath,
   getCurrentBranchStrict,
@@ -43,6 +44,7 @@ import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo, WorktreePath } from '@archon/git';
 import {
   ExistingBranchDivergedError,
+  IsolationFailure,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
   WorktreeUncommittedChangesError,
@@ -516,9 +518,11 @@ export class WorktreeProvider implements IIsolationProvider {
       const marker = await readFile(join(identity.gitDir, CREATION_MARKER), 'utf8');
       if (marker !== creationId) throw new Error('Worktree creation identity changed');
     } catch (error) {
-      throw new Error(`Cannot verify worktree ownership at ${path}: ${(error as Error).message}`, {
-        cause: error,
-      });
+      throw new IsolationFailure(
+        'ownership_unverified',
+        `Cannot verify worktree ownership at ${path}: ${(error as Error).message}`,
+        error
+      );
     }
   }
 
@@ -548,23 +552,27 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().debug({ repoPath, branchName }, 'branch_deleted');
       return true;
     } catch (error) {
-      const err = error as Error & { stderr?: string };
-      const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-      if (errorText.includes('not found') || errorText.includes('did not match any')) {
-        getLog().debug({ repoPath, branchName }, 'branch_already_deleted');
-        return true; // Already gone counts as success
-      } else if (errorText.includes('checked out at')) {
-        const warning = `Cannot delete branch '${branchName}': branch is checked out elsewhere`;
-        getLog().warn({ repoPath, branchName }, 'branch_checked_out_elsewhere');
-        result.warnings.push(warning);
-        return false;
-      } else {
-        const warning = `Unexpected error deleting branch '${branchName}': ${err.message}`;
-        getLog().error({ err: error, repoPath, branchName }, 'branch_delete_failed');
-        result.warnings.push(warning);
-        return false;
+      const err = error as Error;
+      try {
+        if (!(await this.localBranchExists(repoPath, branchName))) return true;
+        const checkedOut = (await listWorktrees(toRepoPath(repoPath))).some(
+          w => w.branch === branchName
+        );
+        if (checkedOut) {
+          result.warnings.push(
+            `Cannot delete branch '${branchName}': branch is checked out elsewhere`
+          );
+          return false;
+        }
+      } catch (inspectionError) {
+        getLog().warn(
+          { err: inspectionError, repoPath, branchName },
+          'branch_delete_inspection_failed'
+        );
       }
+      result.warnings.push(`Unexpected error deleting branch '${branchName}': ${err.message}`);
+      getLog().error({ err, repoPath, branchName }, 'branch_delete_failed');
+      return false;
     }
   }
 
@@ -585,21 +593,18 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
       return true;
     } catch (error) {
-      const err = error as Error & { stderr?: string };
-      const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-      if (
-        errorText.includes('remote ref does not exist') ||
-        errorText.includes("couldn't find remote ref")
-      ) {
-        getLog().debug({ repoPath, branchName }, 'remote_branch_already_deleted');
-        return true; // Already gone counts as success
-      } else {
-        const warning = `Failed to delete remote branch '${branchName}': ${err.message}`;
-        getLog().error({ err: error, repoPath, branchName }, 'remote_branch_delete_failed');
-        result.warnings.push(warning);
-        return false;
+      const err = error as Error;
+      try {
+        if (!(await this.remoteBranchExists(repoPath, remote, branchName))) return true;
+      } catch (inspectionError) {
+        getLog().warn(
+          { err: inspectionError, repoPath, branchName },
+          'remote_branch_delete_inspection_failed'
+        );
       }
+      result.warnings.push(`Failed to delete remote branch '${branchName}': ${err.message}`);
+      getLog().error({ err, repoPath, branchName }, 'remote_branch_delete_failed');
+      return false;
     }
   }
 
@@ -694,13 +699,7 @@ export class WorktreeProvider implements IIsolationProvider {
       repoPath = (await getGitCommandAnchors(path)).active;
       worktrees = await listWorktrees(repoPath);
     } catch (error) {
-      const err = error as Error;
-      // "not a git repository" is an expected case — return null
-      if (err.message.toLowerCase().includes('not a git repository')) {
-        getLog().debug({ path }, 'worktree_adopt_not_git_repo');
-        return null;
-      }
-      // Unexpected errors (permission denied, I/O) should propagate
+      if (error instanceof GitFailure && error.kind === 'not_repository') return null;
       throw error;
     }
 
@@ -954,7 +953,8 @@ export class WorktreeProvider implements IIsolationProvider {
   private async refuseUnfinishedWorktree(worktreePath: string): Promise<void> {
     const lock = await readWorktreeLock(toWorktreePath(worktreePath));
     if (lock?.reason === RELEASE_LOCK_REASON) {
-      throw new Error(
+      throw new IsolationFailure(
+        'setup_unfinished',
         `Cannot adopt the worktree at ${worktreePath}: an abandoned run is removing it. Retry once the removal finishes.`
       );
     }
@@ -962,7 +962,8 @@ export class WorktreeProvider implements IIsolationProvider {
       return;
     }
     getLog().warn({ worktreePath }, 'worktree.adoption_refused_setup_unfinished');
-    throw new Error(
+    throw new IsolationFailure(
+      'setup_unfinished',
       `Cannot adopt the worktree at ${worktreePath}: its setup did not finish. ` +
         'Another run may be creating it right now — retry once that run ends. ' +
         `Otherwise remove it with \`git worktree remove --force --force ${worktreePath}\`.`
@@ -987,7 +988,8 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeCreationResult> {
     const repoPath = request.canonicalRepoPath;
     if (await this.directoryExists(worktreePath)) {
-      throw new Error(
+      throw new IsolationFailure(
+        'path_exists',
         `Cannot create worktree at ${worktreePath}: a pre-existing directory occupies this path. ` +
           'It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
       );
@@ -1400,12 +1402,6 @@ export class WorktreeProvider implements IIsolationProvider {
    *
    * All sync failures are fatal — creating a worktree from an unknown
    * start-point risks branching from the wrong commit.
-   *
-   * Error classification (for user-facing messages):
-   * - Permission denied → file permission hint
-   * - Not a git repository → workspace integrity hint
-   * - Configured base branch missing → config fix hint
-   * - Network errors, timeouts → connectivity hint
    */
   private async syncWorkspaceBeforeCreate(
     repoPath: RepoPath,
@@ -1428,30 +1424,11 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().debug({ repoPath, branch, remote }, 'workspace_synced');
       return branch;
     } catch (error) {
-      const err = error as Error & { code?: string };
-      const errorMessage = err.message.toLowerCase();
-
-      // Fatal errors - throw to prevent confusing downstream failures
-      if (err.code === 'EACCES' || errorMessage.includes('permission denied')) {
-        throw new Error(
-          `Permission denied accessing repository at ${repoPath}. ` +
-            'Check file permissions and try again.'
-        );
-      } else if (errorMessage.includes('not a git repository')) {
-        throw new Error(
-          `${repoPath} is not a valid git repository. ` +
-            'Ensure the workspace was cloned correctly.'
-        );
-      } else if (errorMessage.includes('configured base branch')) {
-        // Configured branch errors are fatal - user needs to fix their config
-        throw err;
-      } else {
-        // Network errors, timeouts — cannot guarantee correct start-point
-        throw new Error(
-          `Failed to fetch base branch from '${remote}': ${err.message}. ` +
-            'Check your network connection and remote configuration.'
-        );
-      }
+      const err = error instanceof Error ? error : new Error(String(error));
+      throw new Error(
+        `Failed to fetch base branch from '${remote}': ${err.message}. Check your network connection and remote configuration.`,
+        { cause: err }
+      );
     }
   }
 
@@ -1591,6 +1568,12 @@ export class WorktreeProvider implements IIsolationProvider {
     setupLockReason: string,
     args: string[]
   ): Promise<void> {
+    if (await readWorktreeRegistration(toRepoPath(repoPath), worktreePath)) {
+      throw new IsolationFailure(
+        'worktree_registered',
+        `Worktree at ${worktreePath} is already registered. Inspect its registration before retrying.`
+      );
+    }
     await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, setupLockReason, async () => {
       await addSafeDirectory(toRepoPath(worktreePath));
       try {
@@ -1642,10 +1625,6 @@ export class WorktreeProvider implements IIsolationProvider {
     setupLockReason: string,
     remote = 'origin'
   ): Promise<boolean> {
-    // Fetch the PR's actual branch. Delegate to syncWorkspace so the bounded
-    // ref-lock retry lives in one place — concurrent same-repo launches collide
-    // on Git's shared remote-tracking ref lock file, and the @archon/git owner
-    // already owns the predicate and backoff.
     try {
       await syncWorkspace(toRepoPath(repoPath), toBranchName(prBranch), {
         mode: 'fetch-only',
@@ -1653,13 +1632,7 @@ export class WorktreeProvider implements IIsolationProvider {
       });
     } catch (error) {
       const err = error as Error;
-      // syncWorkspace wraps fetch errors as
-      // `Sync fetch from <remote>/<branch> failed: <original>`. Strip that
-      // wrapper so the inner wrap keeps `Fetch <remote>/<branch> failed: <original>`
-      // and operators can still distinguish fetch failures from worktree-add
-      // failures inside the surrounding `createFromPR` prefix.
-      const original = err.message.replace(/^Sync fetch from .+? failed: /, '');
-      throw new Error(`Fetch ${remote}/${prBranch} failed: ${original}`);
+      throw new Error(`Fetch ${remote}/${prBranch} failed: ${err.message}`, { cause: err });
     }
 
     const branchExisted = await this.localBranchExists(repoPath, prBranch);
@@ -1684,10 +1657,6 @@ export class WorktreeProvider implements IIsolationProvider {
 
   /**
    * Create worktree for fork PR using synthetic review branch
-   *
-   * Handles stale branches: If a branch already exists from a previous worktree
-   * that was deleted, we delete the stale branch and retry. The no-SHA fetch
-   * retries transient ref-lock races via fetchWithRefLockRetry.
    */
   private async createFromForkPR(
     request: PRIsolationRequest,
@@ -1702,8 +1671,6 @@ export class WorktreeProvider implements IIsolationProvider {
 
     if (prSha) {
       // SHA provided: create at specific commit for reproducible reviews.
-      // No colon refspec: git writes only FETCH_HEAD and locks no named ref,
-      // so this fetch cannot hit the ref-lock race and needs no retry.
       await execFileAsync('git', ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head`], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
@@ -1726,20 +1693,9 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       );
     } else {
-      // No SHA: fetch and create review branch. The refspec's destination is the
-      // local branch refs/heads/pr-<n>-review, so concurrent fork-PR launches
-      // race on its ref lock; fetchWithRefLockRetry owns the bounded retry.
-      await this.createBranchWithStaleRetry(
-        repoPath,
-        () =>
-          fetchWithRefLockRetry(
-            toRepoPath(repoPath),
-            remote,
-            `pull/${prNumber}/head:${reviewBranch}`,
-            { timeoutMs: GIT_OPERATION_TIMEOUT_MS }
-          ),
-        reviewBranch
-      );
+      await fetchRemote(toRepoPath(repoPath), remote, `pull/${prNumber}/head:${reviewBranch}`, {
+        timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+      });
 
       try {
         await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
@@ -1762,31 +1718,6 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     return null;
-  }
-
-  /**
-   * Execute a git command that creates a branch, with retry logic for stale branches.
-   * If the branch already exists, delete it and retry the command.
-   */
-  private async createBranchWithStaleRetry(
-    repoPath: string,
-    createCommand: () => Promise<{ stdout: string; stderr: string }>,
-    branchName: string
-  ): Promise<void> {
-    try {
-      await createCommand();
-    } catch (error) {
-      const err = error as Error & { stderr?: string };
-      if (err.stderr?.includes('already exists')) {
-        getLog().debug({ repoPath, branchName }, 'stale_branch_retry');
-        await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        });
-        await createCommand();
-      } else {
-        throw error;
-      }
-    }
   }
 
   /** Materialize an existing local branch without changing its history. */
@@ -1862,7 +1793,8 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     if (fromBranch) {
-      throw new Error(
+      throw new IsolationFailure(
+        'branch_exists',
         `Branch "${branchName}" already exists. Cannot create it from "${fromBranch}". ` +
           'Either choose a different --branch name or omit --from.'
       );
@@ -1873,14 +1805,9 @@ export class WorktreeProvider implements IIsolationProvider {
     const remoteRefName = `refs/remotes/${remoteRef}`;
     let source: 'local' | 'remote' | 'fast_forwarded' = 'local';
     if (remoteExists) {
-      await fetchWithRefLockRetry(
-        toRepoPath(repoPath),
-        remote,
-        `+${localRefName}:${remoteRefName}`,
-        {
-          timeoutMs: GIT_OPERATION_TIMEOUT_MS,
-        }
-      );
+      await fetchRemote(toRepoPath(repoPath), remote, `+${localRefName}:${remoteRefName}`, {
+        timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+      });
       if (!localExists) {
         source = 'remote';
       } else {
@@ -1968,8 +1895,10 @@ export class WorktreeProvider implements IIsolationProvider {
         return;
       }
       getLog().error({ err, worktreePath }, 'worktree.submodule_check_failed');
-      throw new Error(
-        `Submodule initialization failed: cannot read .gitmodules (${err.code ?? 'unknown error'})`
+      throw new IsolationFailure(
+        'submodule_failed',
+        `Submodule initialization failed: cannot read .gitmodules (${err.code ?? 'unknown error'})`,
+        err
       );
     }
 
@@ -1984,7 +1913,11 @@ export class WorktreeProvider implements IIsolationProvider {
       const err = error as Error & { stderr?: string };
       getLog().error({ err, worktreePath }, 'worktree.submodule_init_failed');
       const detail = err.stderr?.trim() || err.message;
-      throw new Error(`Submodule initialization failed: ${detail}`);
+      throw new IsolationFailure(
+        'submodule_failed',
+        `Submodule initialization failed: ${detail}`,
+        err
+      );
     }
   }
 
@@ -2075,7 +2008,8 @@ export class WorktreeProvider implements IIsolationProvider {
         return false;
       }
       throw new Error(
-        `Failed to check directory at ${path}: ${err.message} (code: ${err.code ?? 'unknown'})`
+        `Failed to check directory at ${path}: ${err.message} (code: ${err.code ?? 'unknown'})`,
+        { cause: err }
       );
     }
   }

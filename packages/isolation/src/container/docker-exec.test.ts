@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { dockerPreflight, extractDockerError, type DockerRunner } from './docker-exec';
-import { classifyIsolationError } from '../errors';
+import { classifyIsolationError, isKnownIsolationError } from '../errors';
 
 describe('dockerPreflight', () => {
   test('resolves when daemon reachable and image present', async () => {
@@ -21,7 +21,7 @@ describe('dockerPreflight', () => {
       throw err;
     };
     await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
-      /Cannot connect to the Docker daemon/
+      /Cannot query the Docker daemon/
     );
   });
 
@@ -51,41 +51,41 @@ describe('dockerPreflight', () => {
       throw err;
     };
     const p = dockerPreflight('archon-runner:test', runner);
-    await expect(p).rejects.toThrow(/No such image: 'archon-runner:test'/);
+    await expect(p).rejects.toThrow(/Cannot inspect image 'archon-runner:test'/);
     await expect(p).rejects.toThrow(/docker build/);
   });
 });
 
 describe('extractDockerError', () => {
-  test('prefers the first stderr line', () => {
+  test('preserves full stderr', () => {
     const err = new Error('wrapper message') as Error & { stderr?: string };
     err.stderr = 'real docker error\nsecond line';
-    expect(extractDockerError(err)).toBe('real docker error');
+    expect(extractDockerError(err)).toBe('real docker error\nsecond line');
   });
 
   test('falls back to the error message when no stderr', () => {
-    expect(extractDockerError(new Error('boom\ntrace'))).toBe('boom');
+    expect(extractDockerError(new Error('boom\ntrace'))).toBe('boom\ntrace');
   });
 });
 
-describe('classifyIsolationError — docker patterns', () => {
-  test('daemon-down maps to an actionable message', () => {
-    const err = new Error('Cannot connect to the Docker daemon at unix:///var/run/docker.sock');
-    expect(classifyIsolationError(err)).toMatch(/Docker daemon/);
-    expect(classifyIsolationError(err)).toMatch(/Start Docker/);
-  });
-
-  test('image-missing maps to an image-agnostic build instruction (no hardcoded tag)', () => {
-    const err = new Error("No such image: 'archon-runner:test'");
-    const msg = classifyIsolationError(err);
-    expect(msg).toMatch(/runner image is missing/);
-    expect(msg).toMatch(/bun run build:runner-image/);
-    // Must NOT hardcode a specific tag that could contradict a custom container.image.
-    expect(msg).not.toMatch(/docker build -t archon-runner\b/);
-  });
-
-  test('docker permission maps to the docker-group hint', () => {
-    const err = new Error('permission denied while trying to connect to the Docker daemon socket');
-    expect(classifyIsolationError(err)).toMatch(/docker.*group/i);
+describe('Docker failure classification', () => {
+  test('an image inspection failure stays unclassified with its full evidence', async () => {
+    const stderr = 'permission denied\nNo such image: fix/timeout-retry';
+    const cause = Object.assign(new Error('image inspect failed'), { code: 1, stderr });
+    const runner: DockerRunner = async args => {
+      if (args[0] === 'version') return { stdout: '28', stderr: '' };
+      throw cause;
+    };
+    const error = await dockerPreflight('fix/timeout-retry', runner).catch(
+      (error: unknown) => error
+    );
+    if (!(error instanceof Error)) throw new Error('expected Docker failure');
+    expect(error.cause).toBe(cause);
+    expect(isKnownIsolationError(error)).toBe(true);
+    expect(classifyIsolationError(error)).toContain(stderr);
+    expect(classifyIsolationError(error)).toContain('exit code 1');
+    expect(classifyIsolationError(error)).toContain('Cannot inspect image');
+    expect(classifyIsolationError(error)).not.toContain('Timed out');
+    expect(classifyIsolationError(error)).not.toContain('runner image is missing');
   });
 });

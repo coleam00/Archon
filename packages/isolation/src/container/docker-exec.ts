@@ -12,6 +12,7 @@
  * mock-isolation rules).
  */
 
+import { IsolationFailure } from '../errors';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -62,6 +63,19 @@ export async function dockerCli(
     timeout: options?.timeout ?? DOCKER_DEFAULT_TIMEOUT,
     maxBuffer: options?.maxBuffer ?? DOCKER_DEFAULT_MAX_BUFFER,
     ...(options?.env ? { env: options.env } : {}),
+  }).catch((cause: unknown) => {
+    if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
+    const timedOut =
+      cause instanceof Error &&
+      'killed' in cause &&
+      cause.killed === true &&
+      'code' in cause &&
+      cause.code === null;
+    throw new IsolationFailure(
+      timedOut ? 'timeout' : 'unclassified',
+      `docker ${args[0] ?? ''} ${args[1] ?? ''} failed: ${extractDockerError(cause)}`,
+      cause
+    );
   });
   return {
     stdout: result.stdout ?? '',
@@ -74,8 +88,7 @@ export async function dockerCli(
  * any volume/container is created — so a missing daemon or image fails fast with
  * an actionable message instead of a half-created environment.
  *
- * Throws a plain `Error` whose message the isolation classifier recognizes
- * (daemon-down / image-missing patterns in `errors.ts`).
+ * Failures preserve Docker's evidence; a failed inspect alone does not prove an image is missing.
  */
 export async function dockerPreflight(
   image: string,
@@ -86,6 +99,7 @@ export async function dockerPreflight(
   try {
     await runner(['version', '--format', '{{.Server.Version}}'], { timeout: 10_000 });
   } catch (err) {
+    if (err instanceof TypeError || err instanceof RangeError) throw err;
     const detail = extractDockerError(err);
     // When Archon itself runs in Docker (the compose stack), the app image ships
     // no `docker` CLI and the daemon socket is deliberately NOT mounted — so
@@ -97,8 +111,10 @@ export async function dockerPreflight(
           'the --container backend is unavailable in a dockerized deploy. Run Archon directly ' +
           'on the host, or see deployment/docker.md.'
         : '';
-    throw new Error(
-      `Cannot connect to the Docker daemon. Is Docker running?${dockerizedHint} (${detail})`
+    throw new IsolationFailure(
+      'docker_unavailable',
+      `Cannot query the Docker daemon. Start Docker or check its configuration and permissions.${dockerizedHint} (${detail})`,
+      err
     );
   }
 
@@ -107,22 +123,24 @@ export async function dockerPreflight(
   try {
     await runner(['image', 'inspect', image], { timeout: 15_000 });
   } catch (err) {
+    if (err instanceof TypeError || err instanceof RangeError) throw err;
     const detail = extractDockerError(err);
-    throw new Error(
-      `No such image: '${image}'. Build the runner image first: ` +
-        `docker build -t ${image} -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker (${detail})`
+    throw new IsolationFailure(
+      'unclassified',
+      `Cannot inspect image '${image}'. Check Docker and the configured image, or build it: ` +
+        `docker build -t ${image} -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker (${detail})`,
+      err
     );
   }
 }
 
 /**
  * Pull the best available error text off a rejected `execFile` promise: the
- * child's stderr if present, else the error message. Used to enrich preflight
- * errors and to feed `classifyIsolationError`.
+ * child's full stderr if present, else the error message.
  */
 export function extractDockerError(err: unknown): string {
-  const e = err as Error & { stderr?: string; stdout?: string };
-  const stderr = (e.stderr ?? '').trim();
-  if (stderr) return stderr.split('\n')[0] ?? stderr;
-  return (e.message ?? String(err)).split('\n')[0] ?? String(err);
+  const e = err as Error & { stderr?: string; stdout?: string; code?: string | number };
+  const stderr = e.stderr ?? '';
+  const detail = stderr || e.message || String(err);
+  return typeof e.code === 'number' ? `${detail} (exit code ${e.code})` : detail;
 }

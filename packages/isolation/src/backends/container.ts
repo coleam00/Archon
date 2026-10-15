@@ -19,6 +19,7 @@
  * any node whose provider lacks the `containerExec` capability.
  */
 
+import { IsolationFailure } from '../errors';
 import { randomUUID } from 'crypto';
 import { isAbsolute, sep } from 'path';
 import type { BranchName } from '@archon/git';
@@ -381,12 +382,17 @@ export class ContainerBackend implements IIsolationBackend {
       log.info({ envId, handle }, 'isolation.container_suspended');
     } catch (err) {
       const detail = extractDockerError(err);
-      if (/no such container|is not running/i.test(detail)) {
+      const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
+      if (state === 'missing' || state === 'stopped') {
         log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
         return;
       }
       log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
-      throw new Error(`Failed to suspend container '${handle}' for env '${envId}': ${detail}`);
+      throw new IsolationFailure(
+        'unclassified',
+        `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
+        err
+      );
     }
   }
 
@@ -548,16 +554,6 @@ export class ContainerBackend implements IIsolationBackend {
       log.debug({ envId, handle, artifactsMount, owner }, 'isolation.container_artifacts_owned');
     } catch (err) {
       const detail = extractDockerError(err);
-      // A container that already stopped or vanished cannot run the chown; that is the
-      // normal destroy-after-suspend path, not a failed hand-back. Same reading of the
-      // daemon's answer that `suspend` uses.
-      if (/no such container|is not running/i.test(detail)) {
-        log.debug(
-          { envId, handle, artifactsMount, detail },
-          'isolation.container_artifacts_chown_skipped_stopped'
-        );
-        return;
-      }
       log.warn(
         { envId, handle, artifactsMount, owner, detail },
         'isolation.container_artifacts_chown_failed'
@@ -594,14 +590,21 @@ export class ContainerBackend implements IIsolationBackend {
    * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
    */
   private async describeContainer(nameOrId: string): Promise<'running' | 'stopped' | 'missing'> {
-    try {
-      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', nameOrId]);
-      return stdout.trim() === 'true' ? 'running' : 'stopped';
-    } catch (err) {
-      const detail = extractDockerError(err);
-      if (/no such (object|container)/i.test(detail)) return 'missing';
-      throw new Error(`Failed to inspect container '${nameOrId}': ${detail}`);
-    }
+    const { stdout } = await this.docker([
+      'container',
+      'ls',
+      '--all',
+      '--no-trunc',
+      '--format',
+      '{{.ID}}\t{{.Names}}\t{{.State}}',
+    ]);
+    const match = stdout
+      .trim()
+      .split('\n')
+      .map(line => line.split('\t'))
+      .find(([id, name]) => name === nameOrId || id === nameOrId);
+    if (!match) return 'missing';
+    return match[2] === 'running' ? 'running' : 'stopped';
   }
 
   private async getContainerId(nameOrId: string): Promise<string> {
@@ -610,14 +613,8 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   private async volumeExists(volume: string): Promise<boolean> {
-    try {
-      await this.docker(['volume', 'inspect', volume]);
-      return true;
-    } catch (err) {
-      const detail = extractDockerError(err);
-      if (/no such volume/i.test(detail)) return false;
-      throw new Error(`Failed to inspect volume '${volume}': ${detail}`);
-    }
+    const { stdout } = await this.docker(['volume', 'ls', '--format', '{{.Name}}']);
+    return stdout.trim().split('\n').includes(volume);
   }
 
   /**
@@ -631,7 +628,18 @@ export class ContainerBackend implements IIsolationBackend {
       return undefined;
     } catch (err) {
       const detail = extractDockerError(err);
-      if (/no such (container|volume)/i.test(detail)) {
+      const name = args.at(-1);
+      let missing = false;
+      try {
+        missing =
+          name !== undefined &&
+          (args[0] === 'volume'
+            ? !(await this.volumeExists(name))
+            : (await this.describeContainer(name)) === 'missing');
+      } catch (inspectionError) {
+        return `${detail}; could not verify removal: ${extractDockerError(inspectionError)}`;
+      }
+      if (missing) {
         log.debug({ args, detail }, 'isolation.container_destroy_already_gone');
         return undefined;
       }

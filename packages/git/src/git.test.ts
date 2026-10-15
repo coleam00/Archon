@@ -793,6 +793,53 @@ describe('git utilities', () => {
     });
   });
 
+  describe('Git failure evidence at the process boundary', () => {
+    test('a directory without repository markers has a typed cause regardless of its name', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-timeout-not-repository-')));
+      const failure = await git
+        .execFileAsync('git', ['-C', root, 'status'])
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('not_repository');
+      expect(failure.code).toBe(128);
+      expect(failure.stderr).toContain('not a git repository');
+    });
+
+    test('a vendor failure retains stderr and exit code without interpreting colliding text', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-failure-')));
+      await git.execFileAsync('git', ['init', '-q', root]);
+      const failure = await git
+        .execFileAsync('git', [
+          '-C',
+          root,
+          '-c',
+          'alias.failure=!printf "permission denied\\nsecond line: timeout\\n" >&2; exit 7',
+          'failure',
+        ])
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('unclassified');
+      expect(failure.code).toBe(7);
+      expect(failure.stderr).toBe('permission denied\nsecond line: timeout\n');
+      expect(failure.message).toContain('exit code 7');
+      expect(failure.cause).toBeInstanceOf(Error);
+    });
+
+    test('a timed out git invocation uses the process termination signal', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-timeout-')));
+      await git.execFileAsync('git', ['init', '-q', root]);
+      const failure = await git
+        .execFileAsync('git', ['-C', root, '-c', 'alias.wait=!sleep 1', 'wait'], { timeout: 30 })
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('timeout');
+      expect(failure.killed).toBe(true);
+    });
+  });
+
   describe('listWorktrees', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
@@ -826,72 +873,24 @@ branch refs/heads/feature/auth
       });
     });
 
-    test('returns empty array for "not a git repository" error', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
-
-      const result = await git.listWorktrees(repo('/path/to/repo'));
-      expect(result).toEqual([]);
+    test('returns empty array only for a typed non-repository failure', async () => {
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary vendor wording'));
+      expect(await git.listWorktrees(repo('/path/to/repo'))).toEqual([]);
     });
 
-    test('returns empty array and logs warning for "No such file or directory" error', async () => {
-      execSpy.mockRejectedValue(new Error('No such file or directory'));
-      mockLogger.warn.mockClear();
-
-      const result = await git.listWorktrees(repo('/path/to/repo'));
-      expect(result).toEqual([]);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ repoPath: '/path/to/repo' }),
-        'worktree.list_repo_missing'
+    test.each([
+      'not a git repository',
+      'No such file or directory',
+      'permission denied',
+      'timeout',
+    ])('does not suppress unclassified failure containing %s', async text => {
+      const error = new git.GitFailure(
+        'unclassified',
+        text,
+        Object.assign(new Error(text), { code: 128, stderr: text })
       );
-    });
-
-    test('throws for unexpected errors', async () => {
-      execSpy.mockRejectedValue(new Error('git not found'));
-
-      await expect(git.listWorktrees(repo('/path/to/repo'))).rejects.toThrow(
-        'Failed to list worktrees for /path/to/repo: git not found'
-      );
-    });
-
-    test('returns empty array when expected error pattern is in stderr', async () => {
-      const error = new Error('Command failed') as Error & { stderr?: string };
-      error.stderr = 'fatal: not a git repository (or any parent up to mount point /)';
       execSpy.mockRejectedValue(error);
-
-      const result = await git.listWorktrees(repo('/path/to/repo'));
-      expect(result).toEqual([]);
-    });
-
-    test('returns empty array and logs warning when "No such file or directory" is in stderr', async () => {
-      const error = new Error('Command failed') as Error & { stderr?: string };
-      error.stderr = 'No such file or directory';
-      execSpy.mockRejectedValue(error);
-      mockLogger.warn.mockClear();
-
-      const result = await git.listWorktrees(repo('/path/to/repo'));
-      expect(result).toEqual([]);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ repoPath: '/path/to/repo' }),
-        'worktree.list_repo_missing'
-      );
-    });
-
-    test('throws and logs for unexpected git errors', async () => {
-      const mockError = new Error('permission denied') as Error & { stderr?: string };
-      mockError.stderr = 'fatal: permission denied';
-      execSpy.mockRejectedValue(mockError);
-      mockLogger.error.mockClear();
-
-      await expect(git.listWorktrees(repo('/path/to/repo'))).rejects.toThrow(
-        'Failed to list worktrees'
-      );
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPath: '/path/to/repo',
-          stderr: 'fatal: permission denied',
-        }),
-        'worktree.list_failed'
-      );
+      await expect(git.listWorktrees(repo('/path/to/repo'))).rejects.toBe(error);
     });
   });
 
@@ -2507,57 +2506,7 @@ branch refs/heads/feature/auth
       ).rejects.toThrow('Sync fetch from mar/main failed');
     });
 
-    test('retries on concurrent ref-lock race and both calls succeed', async () => {
-      // Simulate two concurrent syncWorkspace calls racing on the same remote ref.
-      // The first fetch attempt for each call fails with the lock-race error;
-      // the retry loop absorbs it and both calls eventually succeed.
-      const raceError = new Error(
-        "error: cannot lock ref 'refs/remotes/origin/dev': is at de581e24 but expected 8eaa8d42\n" +
-          '! 8eaa8d420..de581e24b dev -> origin/dev (unable to update local ref)'
-      );
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          fetchCalls++;
-          // First two fetch attempts fail with the race error; all others succeed
-          if (fetchCalls <= 2) {
-            throw raceError;
-          }
-          return { stdout: '', stderr: '' };
-        }
-        if (args.includes('status')) return { stdout: '', stderr: '' };
-        if (args.includes('rev-parse') && args.includes('--short=8')) {
-          return { stdout: 'abc12345\n', stderr: '' };
-        }
-        if (args.includes('rev-parse') && args.includes('HEAD')) {
-          return { stdout: 'abc12345abcdef\n', stderr: '' };
-        }
-        if (args.includes('rev-parse') && args.includes('origin/dev')) {
-          return { stdout: 'abc12345abcdef\n', stderr: '' };
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      const [a, b] = await Promise.all([
-        git.syncWorkspace(repo('/workspace/repo'), branch('dev')),
-        git.syncWorkspace(repo('/workspace/repo'), branch('dev')),
-      ]);
-
-      for (const result of [a, b]) {
-        expect(result.synced).toBe(true);
-        expect(result.branch).toBe(branch('dev'));
-      }
-
-      // At least one retry happened: fetch was called more than the minimum 2
-      // (one successful call per Promise.all entry).
-      expect(fetchCalls).toBeGreaterThan(2);
-    });
-
-    test('throws after exhausting retry budget on persistent lock-race error', async () => {
-      // When every fetch attempt fails with the lock-race error, the function
-      // must throw after 4 total attempts (1 initial + 3 retries), not hang or
-      // retry indefinitely.
+    test('preserves an unclassified fetch failure without retrying', async () => {
       const raceError = new Error(
         "error: cannot lock ref 'refs/remotes/origin/dev': is at de581e24 but expected 8eaa8d42\n" +
           '! 8eaa8d420..de581e24b dev -> origin/dev (unable to update local ref)'
@@ -2578,7 +2527,7 @@ branch refs/heads/feature/auth
         'Sync fetch from origin/dev failed'
       );
 
-      expect(fetchCalls).toBe(4); // 1 initial + 3 retries
+      expect(fetchCalls).toBe(1);
     });
 
     test('does not retry non-race fetch errors', async () => {
@@ -2615,87 +2564,23 @@ branch refs/heads/feature/auth
     });
   });
 
-  describe('fetchWithRefLockRetry', () => {
-    let execSpy: Mock<typeof git.execFileAsync>;
-
-    beforeEach(() => {
-      execSpy = spyOn(git, 'execFileAsync');
-    });
-
-    afterEach(() => {
-      execSpy.mockRestore();
-    });
-
-    test('retries the ref-lock race and succeeds on a later attempt', async () => {
-      const raceError = new Error(
-        "error: cannot lock ref 'refs/heads/pr-42-review': is at de581e24 but expected 8eaa8d42\n" +
-          '! 8eaa8d420..de581e24b pr-42-review -> pr-42-review (unable to update local ref)'
-      );
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        expect(args).toEqual([
-          '-C',
-          '/workspace/repo',
-          'fetch',
-          'origin',
-          'pull/42/head:pr-42-review',
-        ]);
-        fetchCalls++;
-        if (fetchCalls === 1) {
-          throw raceError;
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await expect(
-        git.fetchWithRefLockRetry(repo('/workspace/repo'), 'origin', 'pull/42/head:pr-42-review')
-      ).resolves.toEqual({ stdout: '', stderr: '' });
-
-      expect(fetchCalls).toBe(2);
-    });
-
-    test('rethrows the original error object after exhausting the budget', async () => {
-      const raceText =
-        "error: cannot lock ref 'refs/heads/pr-42-review': is at de581e24 but expected 8eaa8d42\n" +
-        '! 8eaa8d420..de581e24b pr-42-review -> pr-42-review (unable to update local ref)';
-      const raceError = Object.assign(new Error(raceText), { stderr: 'original stderr evidence' });
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async () => {
-        fetchCalls++;
-        throw raceError;
-      });
-
-      let caught: unknown;
+  describe('fetchRemote', () => {
+    test.each([
+      'already exists',
+      'cannot lock ref: unable to update local ref',
+      'permission denied',
+      'timeout',
+    ])('does not retry or replace a failure containing %s', async text => {
+      const error = Object.assign(new Error(text), { code: 128, stderr: `full stderr: ${text}` });
+      const spy = spyOn(git, 'execFileAsync').mockRejectedValue(error);
       try {
-        await git.fetchWithRefLockRetry(
-          repo('/workspace/repo'),
-          'origin',
-          'pull/42/head:pr-42-review'
+        await expect(git.fetchRemote(repo('/workspace/repo'), 'origin', 'main')).rejects.toBe(
+          error
         );
-      } catch (error) {
-        caught = error;
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
       }
-
-      // Original object identity: stderr evidence survives for callers
-      expect(caught).toBe(raceError);
-      expect(fetchCalls).toBe(4); // 1 initial + 3 retries
-    });
-
-    test('attempts non-race errors exactly once', async () => {
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async () => {
-        fetchCalls++;
-        throw new Error("fatal: 'origin' does not appear to be a git repository");
-      });
-
-      await expect(
-        git.fetchWithRefLockRetry(repo('/workspace/repo'), 'origin', 'main')
-      ).rejects.toThrow("fatal: 'origin' does not appear to be a git repository");
-
-      expect(fetchCalls).toBe(1);
     });
   });
 
@@ -3126,31 +3011,7 @@ branch refs/heads/feature/auth
       });
     });
 
-    // syncRepository is reachable concurrently from the forge adapters on PR
-    // events, and its bare fetch updates every configured remote-tracking ref —
-    // the same contention syncWorkspace and the fork-PR path already survive.
-    test('absorbs a ref-lock race on the bare fetch and still resets', async () => {
-      const raceError = Object.assign(
-        new Error(
-          "error: cannot lock ref 'refs/remotes/origin/main': is at aaa but expected bbb\n" +
-            ' ! aaa..bbb  main -> origin/main  (unable to update local ref)'
-        ),
-        { stderr: 'unable to update local ref' }
-      );
-      execSpy.mockRejectedValueOnce(raceError).mockResolvedValue({ stdout: '', stderr: '' });
-
-      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
-
-      expect(result).toEqual({ ok: true, value: undefined });
-      const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
-      expect(fetches).toHaveLength(2);
-      expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'origin/main'], {
-        cwd: '/workspace/repo',
-        timeout: 30000,
-      });
-    });
-
-    test('exhausts the shared budget on persistent contention and reports the original evidence', async () => {
+    test('reports contention without retrying or resetting', async () => {
       const raceError = Object.assign(
         new Error(
           "error: cannot lock ref 'refs/remotes/origin/main'\n (unable to update local ref)"
@@ -3168,7 +3029,7 @@ branch refs/heads/feature/auth
         expect(JSON.stringify(result.error)).toContain('cannot lock ref');
       }
       const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
-      expect(fetches).toHaveLength(4);
+      expect(fetches).toHaveLength(1);
       const resets = execSpy.mock.calls.filter(([, args]) => (args as string[])[0] === 'reset');
       expect(resets).toHaveLength(0);
     });

@@ -1,3 +1,6 @@
+import { stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { GitFailure } from './errors';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir as fsMkdir } from 'fs/promises';
@@ -64,6 +67,24 @@ export function resolveBashPath(): string {
   return 'bash';
 }
 
+async function hasRepositoryMarker(path: string): Promise<boolean> {
+  let current = resolve(path);
+  while (true) {
+    for (const marker of ['.git', 'HEAD']) {
+      try {
+        const entry = await stat(join(current, marker));
+        if (marker === '.git') return true;
+        if (entry.isFile() && (await stat(join(current, 'objects'))).isDirectory()) return true;
+      } catch (error) {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 /**
  * Wrapper around child_process.execFile for test mockability.
  *
@@ -97,7 +118,38 @@ export async function execFileAsync(
     killSignal?: NodeJS.Signals;
   }
 ): Promise<{ stdout: string; stderr: string }> {
-  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options });
+  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options }).catch(
+    async (cause: unknown) => {
+      if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
+      if (cmd !== 'git') throw cause;
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      let kind: 'unclassified' | 'not_repository' | 'timeout' = 'unclassified';
+      if (
+        cause instanceof Error &&
+        'killed' in cause &&
+        cause.killed === true &&
+        'code' in cause &&
+        cause.code === null &&
+        options?.timeout
+      )
+        kind = 'timeout';
+      const path = args[0] === '-C' ? args[1] : options?.cwd;
+      if (
+        path &&
+        cause instanceof Error &&
+        'code' in cause &&
+        cause.code === 128 &&
+        !(options?.env?.GIT_DIR ?? process.env.GIT_DIR)
+      ) {
+        try {
+          if (!(await hasRepositoryMarker(path))) kind = 'not_repository';
+        } catch {
+          // An unreadable marker cannot establish that a repository is absent.
+        }
+      }
+      throw new GitFailure(kind, detail, cause);
+    }
+  );
   // The `.toString()` these two lines used to carry is gone deliberately. Passing an
   // options OBJECT unconditionally (rather than possibly `undefined`) resolves
   // execFile to its string-encoding overload, so both fields are already strings and
