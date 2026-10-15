@@ -6225,12 +6225,11 @@ describe('credential preflight lifecycle', () => {
     const deps = makeDeps(store);
     deps.isPerUserProviderKeysEnabled = () => true;
     const { StoredCredentialDeliveryError } = await import('./run-preflight');
-    deps.getUserProviderCredential = mock(
-      async () =>
-        ({
-          kind: 'api_key',
-          getStatus: async () => ({ state: 'usable', source: 'archon' }),
-        }) as const
+    deps.getUserProviderCredential = mock<NonNullable<WorkflowDeps['getUserProviderCredential']>>(
+      async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({ state: 'usable', source: 'archon' }),
+      })
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
       expect(vendors).toEqual(['anthropic']);
