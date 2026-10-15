@@ -4172,6 +4172,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4221,6 +4222,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4276,6 +4278,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4328,6 +4331,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-valid',
       workflow_type: 'task',
       workflow_id: 'my-feature',
@@ -4386,6 +4390,7 @@ describe('workflowRunCommand', () => {
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
+      provider: 'worktree',
       branch_name: 'feature-old',
       workflow_type: 'task',
       workflow_id: 'my-feature',
