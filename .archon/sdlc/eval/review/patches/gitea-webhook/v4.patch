@@ -1,0 +1,16 @@
+diff --git a/packages/server/src/routes/webhooks.ts b/packages/server/src/routes/webhooks.ts
+index 843e85691..0662e3164 100644
+--- a/packages/server/src/routes/webhooks.ts
++++ b/packages/server/src/routes/webhooks.ts
+@@ -147,7 +147,10 @@ export function registerGiteaWebhookRoute(app: OpenAPIHono, gitea: GiteaWebhookT
+ 
+       const payload = await readBoundedBody(c.req.raw);
+       if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
+-      if (payload.kind === 'read_failed') throw payload.error;
++      if (payload.kind === 'read_failed') {
++        getLog().warn({ err: payload.error, eventType }, 'gitea_webhook_body_unreadable');
++        return c.text('OK', 200);
++      }
+ 
+       // Process async (fire-and-forget for fast webhook response)
+       gitea.handleWebhook(payload.bytes, signature).catch((error: unknown) => {
