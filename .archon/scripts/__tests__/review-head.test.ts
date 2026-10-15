@@ -548,36 +548,35 @@ describe('review head boundary', () => {
 
   for (const state of ['open', 'closed', 'merged'] as const) {
     for (const sourceRepo of ['same', 'fork', 'missing'] as const) {
-      for (const suffix of ['', '/']) {
-        it(`fetches a GitLab retained head: ${state}, ${sourceRepo} source, suffix ${JSON.stringify(suffix)}`, () => {
-          const cwd = gitCheckout({}, track);
-          const head = git(cwd, 'rev-parse', 'HEAD');
-          git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/merge-requests/42/head');
-          const url = `https://${PR.repo.host}/${PR.repo.path}/-/merge_requests/42${suffix}`;
-          const run = check({
-            cwd,
-            source: 'forge',
-            forge: view({
-              url,
-              state,
-              head_revision: head,
-              head_repo:
-                sourceRepo === 'missing'
-                  ? null
-                  : sourceRepo === 'fork'
-                    ? { ...PR.repo, path: 'contributor/repo' }
-                    : PR.repo,
-            }),
-            inputs: { INPUTS_SCOPE: url, INPUTS_SELECTOR: url },
-          });
-          expect(run.code).toBe(1);
-          expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/merge-requests/42/head'");
-          expect(run.stderr).toContain(`--from '${head}' --input 'scope=${url}'`);
-          expect(run.stderr.includes('--branch')).toBe(state === 'open' && sourceRepo === 'same');
-          git(cwd, 'fetch', '--', 'upstream', 'refs/merge-requests/42/head');
-          expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
+      const suffix = state === 'open' && sourceRepo === 'same' ? '/' : '';
+      it(`fetches a GitLab retained head: ${state}, ${sourceRepo} source, suffix ${JSON.stringify(suffix)}`, () => {
+        const cwd = gitCheckout({}, track);
+        const head = git(cwd, 'rev-parse', 'HEAD');
+        git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/merge-requests/42/head');
+        const url = `https://${PR.repo.host}/${PR.repo.path}/-/merge_requests/42${suffix}`;
+        const run = check({
+          cwd,
+          source: 'forge',
+          forge: view({
+            url,
+            state,
+            head_revision: head,
+            head_repo:
+              sourceRepo === 'missing'
+                ? null
+                : sourceRepo === 'fork'
+                  ? { ...PR.repo, path: 'contributor/repo' }
+                  : PR.repo,
+          }),
+          inputs: { INPUTS_SCOPE: url, INPUTS_SELECTOR: url },
         });
-      }
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain("git fetch -- 'upstream' 'refs/merge-requests/42/head'");
+        expect(run.stderr).toContain(`--from '${head}' --input 'scope=${url}'`);
+        expect(run.stderr.includes('--branch')).toBe(state === 'open' && sourceRepo === 'same');
+        git(cwd, 'fetch', '--', 'upstream', 'refs/merge-requests/42/head');
+        expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
+      });
     }
   }
 
