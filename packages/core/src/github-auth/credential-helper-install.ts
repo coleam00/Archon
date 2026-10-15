@@ -38,11 +38,29 @@ export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
 
-/** Never throws. The caller serializes setup per repository. */
-export async function installCredentialHelper(
+/**
+ * Git takes `.git/config.lock` for each write and fails instead of waiting, so
+ * overlapping setup on one repository (the adapter and URL registration both
+ * call this) is chained per resolved path.
+ */
+const pendingInstalls = new Map<string, Promise<CredentialHelperInstallResult>>();
+
+/** Never throws. */
+export function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const repoPath = resolve(worktreePath);
+  const previous = pendingInstalls.get(repoPath) ?? Promise.resolve();
+  const pending = previous
+    .then(() => install(repoPath))
+    .finally(() => {
+      if (pendingInstalls.get(repoPath) === pending) pendingInstalls.delete(repoPath);
+    });
+  pendingInstalls.set(repoPath, pending);
+  return pending;
+}
+
+async function install(repoPath: string): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
   const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;

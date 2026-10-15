@@ -167,6 +167,17 @@ describe('installCredentialHelper', () => {
     }
   );
 
+  test('overlapping installs on one repository all succeed', async () => {
+    execSpy.mockRestore();
+    const repoPath = join(archonHome, 'shared-repo');
+    await git.execFileAsync('git', ['init', repoPath]);
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => installCredentialHelper(repoPath))
+    );
+    expect(results.filter(result => result.kind === 'failed')).toEqual([]);
+  });
+
   test('simultaneous installs configure each distinct repository', async () => {
     execSpy.mockRestore();
     const repoPaths = [join(archonHome, 'first-repo'), join(archonHome, 'second-repo')];
