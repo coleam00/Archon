@@ -155,7 +155,7 @@ Once enabled:
 
 - Run commits use the initiating connected user's GitHub login as author name and `<numeric_id>+<login>@users.noreply.github.com` as author email. The committer remains the ambient git identity. This applies to new and adopted worktrees, in-place runs, and folder projects without changing repository git config. Unconnected users and runs without an initiating user keep ambient authorship.
 - Workflows declaring `requires: [github]` **hard-block** unconnected users before any worktree/clone/AI cost.
-- An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
+- An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). The scrub also hides the host's stored logins: `gh` gets an empty config directory, so a `gh auth login` on the server is not used, and git's credential helpers (keychain, credential store, `gh auth git-credential`) are cleared. GitHub commands in such a run fail with an authentication error until the user connects. SSH remotes still use the host's SSH keys. Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates all stored user tokens — everyone must reconnect.
 
 This is fully backward compatible: leave the two vars unset and the App keeps working as the bot only. See the [configuration reference](/reference/configuration/#per-user-github-identity-app-mode-optional) for the full env var table.

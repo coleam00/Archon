@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -192,3 +192,38 @@ test.skipIf(process.platform === 'win32')(
     expect(result.stderr).toBe('');
   }
 );
+
+posixOnly('evidence keeps no GitHub App token a command obtained after it started', async () => {
+  // Stands in for the App-mode gh shim: the token is minted inside the child, so it is
+  // not among the credential values runSubprocess collected before spawning.
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-minted-token-')));
+  const helper = join(dir, 'git-credential-archon');
+  writeFileSync(helper, '#!/bin/sh\nprintf "password=ghs_%sMintedInsideTheChild0123\\n" "$$"\n', {
+    mode: 0o755,
+  });
+  const obtain = `token=$(printf 'host=github.com\\n\\n' | ${helper} get | sed -n 's/^password=//p')`;
+  const logDir = join(dir, 'logs');
+  const run = (script: string): ReturnType<typeof runSubprocess> =>
+    runSubprocess({ kind: 'host' }, '/bin/bash', ['-c', script], {
+      cwd: import.meta.dir,
+      timeout: 5000,
+      env: {},
+      retention: { logDir, workflowRunId: 'run-1', nodeId: 'node-1', label: 'bash' },
+    });
+
+  await run(`${obtain}; printf 'token=%s' "$token"; printf 'stderr %s' "$token" >&2`);
+  const failure = (await run(
+    `${obtain}; printf 'out %s' "$token"; printf 'auth failed with %s' "$token" >&2; exit 1`
+  ).catch((error: unknown) => error)) as RawSubprocessRejection;
+
+  expect(failure.stderr).toBe('auth failed with [REDACTED]');
+  expect(failure.stdout).toBe('out [REDACTED]');
+  expect(failure.message).not.toContain('ghs_');
+  const retained = readdirSync(logDir, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => readFileSync(join(entry.parentPath, entry.name), 'utf8'))
+    .join('\n');
+  expect(retained).toContain('token=[REDACTED]');
+  expect(retained).toContain('auth failed with [REDACTED]');
+  expect(retained).not.toContain('ghs_');
+});

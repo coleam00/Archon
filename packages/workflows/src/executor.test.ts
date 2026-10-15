@@ -4347,6 +4347,24 @@ describe('executeWorkflow', () => {
           expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
         });
       }
+
+      it('hides stored logins from the per-user scrub without redacting its config values', async () => {
+        const environment = await resolveWorkflowGithubEnvironment(
+          githubDeps({ token: undefined }),
+          'codebase-1',
+          'u-1',
+          {}
+        );
+        expect(environment.envVars?.GH_CONFIG_DIR).toContain('archon-gh-scrubbed-');
+        expect(environment.envVars?.GIT_CONFIG_KEY_0).toBe('credential.helper');
+        // Only secrets are protected: a protected `GIT_CONFIG_COUNT=1` would redact every
+        // `1` in node output.
+        expect(environment.protectedEnvKeys).toEqual([
+          'GH_TOKEN',
+          'GITHUB_TOKEN',
+          'COPILOT_GITHUB_TOKEN',
+        ]);
+      });
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {

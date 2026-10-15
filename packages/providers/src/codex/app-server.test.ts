@@ -130,6 +130,26 @@ describe('AppServerConnection', () => {
     ]);
   });
 
+  test('a ChatGPT token refresh request is declined as a refresh, not as an unknown method', async () => {
+    const fake = rawChild();
+    AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    fake.reply({
+      id: 7,
+      method: 'account/chatgptAuthTokens/refresh',
+      params: { reason: 'unauthorized', previousAccountId: 'acct-1' },
+    });
+    await tick();
+    expect(fake.sent()).toEqual([
+      {
+        id: 7,
+        error: {
+          code: -32000,
+          message: 'Archon cannot refresh the delivered ChatGPT token during a turn',
+        },
+      },
+    ]);
+  });
+
   test('the process ending fails pending requests and ends notifications after the last frame', async () => {
     const fake = rawChild();
     const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);

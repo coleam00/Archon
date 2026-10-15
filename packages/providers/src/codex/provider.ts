@@ -116,6 +116,17 @@ function resolveModelReasoningEffort(
   return clamped;
 }
 
+/**
+ * Why an auth failure happened on a managed ChatGPT login. Codex asks the client for a new
+ * token when its access token is rejected, and Archon answers that it has none (see
+ * `AppServerConnection`): the token is minted when a run starts or resumes, or per chat turn.
+ */
+const MANAGED_CHATGPT_TOKEN_REJECTED =
+  'The ChatGPT access token Archon delivered from the connected subscription was rejected ' +
+  '(expired or revoked), and Archon cannot refresh it during a turn. Resuming the run, or ' +
+  'sending the chat message again, delivers a fresh token; if this repeats, reconnect with ' +
+  '`archon ai login openai`.';
+
 /** A credential Archon hands the app-server in memory, never through the user's CODEX_HOME. */
 type CodexLogin = Extract<
   ParamsOf<'account/login/start'>,
@@ -826,10 +837,13 @@ function* completeTurn(
     const { failureClass, resetAt } = classifyTurnError(error.codexErrorInfo, state.rateLimits);
     const vendorText = [error.message, error.additionalDetails].filter(Boolean).join('\n');
     getLog().error({ failureClass, codexErrorInfo: error.codexErrorInfo }, 'codex.turn_failed');
+    const evidence = withModelAccessAdvice(vendorText, request.model);
     result = failureResult(
       failureClass,
       'codex_turn_failed',
-      withModelAccessAdvice(vendorText, request.model)
+      failureClass === 'auth' && request.login?.type === 'chatgptAuthTokens'
+        ? `${MANAGED_CHATGPT_TOKEN_REJECTED}\n\n${evidence}`
+        : evidence
     );
     if (resetAt && result.failure) result.failure.resetAt = resetAt;
   } else {

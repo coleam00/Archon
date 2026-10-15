@@ -100,28 +100,31 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   },
 ];
 
-/** Resolve forge-specific credentials without adding them to the repository URL. */
+/**
+ * Resolve forge-specific credentials without adding them to the repository URL.
+ * `url` is a clone URL that `validateCloneUrl` has normalized, so a bare
+ * `host/path` has already become `https://host/path`.
+ *
+ * A token goes only over the scheme it was configured for: HTTPS for the known
+ * forges, and the configured `*_URL`'s own scheme for a self-hosted forge. An
+ * `http://` clone of the same host would send it in cleartext.
+ */
 export function resolveForgeAuth(url: string): CloneCredentials | undefined {
-  // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
-  let hostname: string;
   const parsed = safeParseUrl(url);
-  if (parsed) {
-    hostname = parsed.hostname.toLowerCase();
-  } else {
-    // Bare host/path form: take everything before the first slash
-    hostname = url.split('/')[0].toLowerCase();
-  }
-  const authority = parsed?.host.toLowerCase() ?? hostname;
+  if (!parsed) return undefined;
+  const hostname = parsed.hostname.toLowerCase();
+  const authority = parsed.host.toLowerCase();
 
   // 1. Exact known-host match
   for (const entry of FORGE_AUTH) {
     if (hostname === entry.hostPattern) {
+      if (parsed.protocol !== 'https:') return undefined;
       const token = entry.resolveToken();
       return token ? entry.buildCredentials(token) : undefined;
     }
   }
 
-  // 2. Self-hosted: the clone authority must equal a configured *_URL authority.
+  // 2. Self-hosted: the clone scheme and authority must equal a configured *_URL's.
   //    A hostname that merely looks like a forge (gitlab.attacker.example) gets no
   //    token, because anyone who can submit a clone URL controls that hostname.
   const URL_FORGE: {
@@ -149,7 +152,10 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     const forgeUrl = process.env[entry.urlEnvVar];
     if (forgeUrl) {
       const forgeParsed = safeParseUrl(forgeUrl);
-      if (forgeParsed?.host.toLowerCase() === authority) {
+      if (
+        forgeParsed?.protocol === parsed.protocol &&
+        forgeParsed.host.toLowerCase() === authority
+      ) {
         const token = process.env[entry.tokenEnvVar];
         if (token) return entry.buildCredentials(token);
       }

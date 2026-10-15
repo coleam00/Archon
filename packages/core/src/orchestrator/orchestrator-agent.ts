@@ -15,7 +15,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
-import { providerRegistry } from '@archon/providers';
+import { getRegistration, providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
@@ -113,8 +113,12 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import { deliverCredential } from '../credentials/delivery';
-import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { deliverCredential, normalizeCredentialVendor } from '../credentials/delivery';
+import { ConnectedCredentialUnavailableError } from '../credentials/unavailable-error';
+import {
+  getDecryptedProviderCredential,
+  listUserProviderKeys,
+} from '../db/user-provider-key-store';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
@@ -472,31 +476,40 @@ function isCommandFullyParsed(accumulated: string): boolean {
 
 /**
  * Resolve the per-user AI-provider credential env for a direct-chat turn
- * (Phase 2). Every connected credential is delivered as env, the ChatGPT
+ * (Phase 2). Every usable connected credential is delivered as env, the ChatGPT
  * subscription included, so chat and workflows authenticate the same way.
  *
- * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
- * whatever process-global env was already in place.
+ * A connected credential that cannot be used is returned in `failed`, keyed by
+ * vendor, with a reason that is safe to show. The caller refuses a turn whose own
+ * vendor failed: running it would authenticate with the host's login instead of
+ * the user's. Throws when the user's credentials cannot be listed, for the same
+ * reason.
  */
-async function resolveUserProviderEnvForChat(userId: string): Promise<Record<string, string>> {
-  try {
-    const creds = await listDecryptedUserProviderCredentials(userId);
-    const env: Record<string, string> = {};
-    for (const { provider, cred } of creds) {
+async function resolveUserProviderEnvForChat(
+  userId: string
+): Promise<{ env: Record<string, string>; failed: Map<string, string> }> {
+  const env: Record<string, string> = {};
+  const failed = new Map<string, string>();
+  for (const { provider } of await listUserProviderKeys(userId)) {
+    const vendor = normalizeCredentialVendor(provider);
+    const stored = await getDecryptedProviderCredential(userId, provider);
+    if (stored.state === 'usable') {
       try {
-        Object.assign(env, deliverCredential(provider, cred).env);
+        Object.assign(env, deliverCredential(provider, stored.credential).env);
       } catch (err) {
         getLog().error(
           { err: err as Error, userId, provider },
           'orchestrator.provider_creds_deliver_failed'
         );
+        failed.set(vendor, (err as Error).message);
       }
+    } else if (stored.state !== 'not_connected') {
+      // `not_connected` here means the row was deleted after the listing: the user has
+      // no credential for this vendor, so the host login is theirs to use, as before.
+      failed.set(vendor, stored.evidence);
     }
-    return env;
-  } catch (err) {
-    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
-    return {};
   }
+  return { env, failed };
 }
 
 /**
@@ -2620,10 +2633,16 @@ export async function handleMessage(
     // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
     // so a connected user's keys win over file/db env. No-op when the feature is
     // disabled or no execution identity resolved (sender, else creator).
-    const userProviderEnv =
-      isPerUserProviderKeysEnabled() && executionUserId
-        ? await resolveUserProviderEnvForChat(executionUserId)
-        : {};
+    let userProviderEnv: Record<string, string> = {};
+    if (isPerUserProviderKeysEnabled() && executionUserId) {
+      const delivery = await resolveUserProviderEnvForChat(executionUserId);
+      const vendor = getRegistration(providerKey).credentials.vendorFor(chatRequest.model);
+      const reason = vendor !== undefined ? delivery.failed.get(vendor) : undefined;
+      if (vendor !== undefined && reason !== undefined) {
+        throw new ConnectedCredentialUnavailableError(vendor, reason);
+      }
+      userProviderEnv = delivery.env;
+    }
     const protectedEnvKeys = Object.keys(userProviderEnv);
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 

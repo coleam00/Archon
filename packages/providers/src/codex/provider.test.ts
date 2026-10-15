@@ -710,6 +710,28 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('a rejected managed ChatGPT token fails as auth and says Archon cannot refresh it', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' } })
+      );
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).toContain('cannot refresh it during a turn');
+      expect(failure?.evidence).toContain('401 Unauthorized');
+      expect(failure?.evidence).not.toContain('chatgpt-access');
+    });
+
+    test('an auth failure on the user’s own login carries no managed-token advice', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } }));
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).not.toContain('cannot refresh');
+    });
+
     test('managed ChatGPT tokens win over CODEX_API_KEY', async () => {
       const { provider, server } = providerWith();
       await run(provider, {

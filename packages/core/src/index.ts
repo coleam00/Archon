@@ -284,7 +284,6 @@ export {
   listUserProviderKeys,
   deleteUserProviderKey,
   getDecryptedProviderCredential,
-  listDecryptedUserProviderCredentials,
   getStoredCredentialStatus,
   type SaveUserProviderKeyParams,
   type StoredCredential,

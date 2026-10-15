@@ -43,6 +43,7 @@ import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 import { Semaphore } from './semaphore';
+import { PI_AUTH_PATH_ENV } from './auth-path-env';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -509,7 +510,7 @@ async function createPiModelRuntime(
 ): Promise<RequestModelRuntime> {
   return createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
-    authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined,
+    authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
     PI_PROVIDER_ENV_VARS[provider]
       ? undefined
       : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }
