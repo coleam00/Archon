@@ -610,12 +610,14 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion, judgin
   const checkout = join(outDir, 'checkouts', `eval-${version.label}`, bench.id);
   const hold = `${checkout}.run`;
   const workOrder = readFileSync(bench.work_order, 'utf8');
+  const nextSamples = new Map<string, number>();
   for (const variant of options.variants) {
     const expected = prepared.variants.get(variant) as string;
     const taken = options.savedSamples
       .filter(line => line.label === version.label && line.variant === variant)
       .map(line => line.sample);
-    const first = Math.max(0, ...taken) + 1;
+    const first = nextSamples.get(variant) ?? Math.max(0, ...taken) + 1;
+    nextSamples.set(variant, first + options.samples);
     for (let sample = first; sample < first + options.samples; sample++) {
       const name = `${version.label} ${bench.id}/${variant} #${sample}`;
       holdCheckout(hold, checkout);

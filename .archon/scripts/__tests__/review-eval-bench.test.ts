@@ -885,6 +885,8 @@ describe('bench run', () => {
       ['v1', 3, 'run-5', false],
     ]);
     expect(String(lines[0].error)).toContain('the field `terminal_record.nodes` is missing');
+    const repeated = run('--variant', 'v1', '--variant', 'v1');
+    expect(repeated.lines.slice(-2).map(line => line.sample)).toEqual([4, 5]);
   });
 
   it('stops the version, and keeps the checkout from any later bench, when a run does not finish', () => {
