@@ -230,7 +230,11 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
     return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
   }
   try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
+    // A bare `gh auth status` fails when any stored account is stale; only the active github.com
+    // login is the one gh commands use.
+    await execFileAsync('gh', ['auth', 'status', '--active', '--hostname', 'github.com'], {
+      timeout: 10_000,
+    });
     return { label, status: 'pass', message: 'authenticated' };
   } catch (err) {
     return {

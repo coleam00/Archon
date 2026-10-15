@@ -175,6 +175,7 @@ describe('checkGithubForge', () => {
 });
 
 describe('checkGhAuth', () => {
+  const GH_AUTH_STATUS = ['auth', 'status', '--active', '--hostname', 'github.com'];
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
 
   beforeEach(() => {
@@ -283,21 +284,21 @@ describe('checkGhAuth', () => {
     execSpy.mockRejectedValue(new Error('not logged in'));
     const result = await checkGhAuth({ ARCHON_SDLC_FORGE: 'gh' });
     expect(result.status).toBe('fail');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
+    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
   });
 
   it('runs gh auth check when only GH_TOKEN is set', async () => {
     execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
     const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
     expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
+    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
   });
 
   it('returns pass when gh auth status succeeds', async () => {
     execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
     const result = await checkGhAuth({ GITHUB_TOKEN: 'ghp_x' });
     expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
+    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
   });
 
   it('returns fail when gh auth status throws', async () => {
