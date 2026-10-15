@@ -10,6 +10,7 @@ import { chatPluginPolicies, loadPlatformPolicies, loadChatPlugins } from './cha
 import type { PlatformPolicy } from './types';
 
 const trackRoot = trackTempRoots();
+const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
 const receipt = {
   schemaVersion: 1,
   id: 'owner/chat-fixture',
@@ -23,7 +24,7 @@ const receipt = {
   tag: 'v1',
   commit: 'a'.repeat(40),
   installedAt: new Date(0).toISOString(),
-  files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+  files: [{ path: executable, sha256: 'b'.repeat(64) }],
   descriptor: {
     protocol: 'archon-chat/1',
     id: 'matrix-chat',
@@ -63,11 +64,7 @@ test('invalid receipts do not block valid chat policies or runtime loading', asy
   const valid = receiptPath(dir, receipt.id);
   await mkdir(dirname(file), { recursive: true });
   await mkdir(dirname(valid), { recursive: true });
-  const executable = receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
-  await writeFile(
-    valid,
-    JSON.stringify({ ...receipt, files: [{ path: executable, sha256: 'b'.repeat(64) }] })
-  );
+  await writeFile(valid, JSON.stringify(receipt));
   const logger = paths.createLogger('test');
   const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
   const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
@@ -119,33 +116,38 @@ test('receipt policies replace defaults and follow the remaining defaults in ord
   expect(defaults[1]).toEqual({ id: 'matrix-chat', workspaceRetention: 'age-based' });
 });
 
-test('chat runtime skips unowned executables while duplicate platform ids remain errors', async () => {
+test('unowned executables own neither a process nor a policy while duplicate platform ids remain errors', async () => {
   const dir = trackRoot(await mkdtemp(join(tmpdir(), 'chat-runtime-')));
   expect(await loadChatPlugins(dir)).toEqual([]);
   const file = receiptPath(dir, receipt.id);
   await mkdir(dirname(file), { recursive: true });
-  const executable = receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
-  const installed = { ...receipt, files: [{ path: executable, sha256: 'b'.repeat(64) }] };
-  await writeFile(file, JSON.stringify(installed));
+  await writeFile(file, JSON.stringify(receipt));
   expect(await loadChatPlugins(dir)).toEqual([
     { descriptor: receipt.descriptor, argv: [join(dir, executable)] },
   ]);
   await writeFile(
     file,
-    JSON.stringify({ ...installed, files: [{ path: 'other', sha256: 'b'.repeat(64) }] })
+    JSON.stringify({ ...receipt, files: [{ path: 'other', sha256: 'b'.repeat(64) }] })
   );
+  const defaults: readonly PlatformPolicy[] = [
+    { id: receipt.descriptor.id, workspaceRetention: 'age-based' },
+  ];
   const peer = receiptPath(dir, 'other/healthy');
-  await mkdir(dirname(peer), { recursive: true });
   const healthy = {
-    ...installed,
+    ...receipt,
     id: 'other/healthy',
-    descriptor: { ...installed.descriptor, id: receipt.descriptor.id },
+    descriptor: { ...receipt.descriptor, displayName: 'Healthy' },
   };
-  await writeFile(peer, JSON.stringify(healthy));
   const logger = paths.createLogger('test');
   const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
   const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
   try {
+    expect(await loadPlatformPolicies(dir, defaults)).toEqual([...defaults]);
+    await mkdir(dirname(peer), { recursive: true });
+    await writeFile(peer, JSON.stringify(healthy));
+    expect(await loadPlatformPolicies(dir, defaults)).toEqual([
+      { id: healthy.descriptor.id, ...healthy.descriptor.policy },
+    ]);
     expect(await loadChatPlugins(dir)).toEqual([
       { descriptor: healthy.descriptor, argv: [join(dir, executable)] },
     ]);
@@ -157,6 +159,6 @@ test('chat runtime skips unowned executables while duplicate platform ids remain
     loggerFactory.mockRestore();
     warning.mockRestore();
   }
-  await writeFile(file, JSON.stringify(installed));
+  await writeFile(file, JSON.stringify(receipt));
   await expect(loadChatPlugins(dir)).rejects.toThrow('Duplicate installed chat platform');
 });
