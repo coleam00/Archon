@@ -2757,6 +2757,32 @@ describe('WorktreeProvider', () => {
       expect(result.warnings).toHaveLength(0);
     });
 
+    for (const remote of [false, true]) {
+      test(`failed ${remote ? 'remote' : 'local'} deletion cannot hide a surviving ref behind not-found prose`, async () => {
+        const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/pr-99');
+        getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if ((remote && args.includes('push')) || (!remote && args.includes('-D'))) {
+            throw Object.assign(new Error('branch not found; remote ref does not exist'), {
+              stderr: "couldn't find remote ref; did not match any branch",
+            });
+          }
+          if (args.includes('ls-remote') || args.includes('rev-parse')) {
+            return { stdout: 'abc123\trefs/heads/feature-branch\n', stderr: '' };
+          }
+          return { stdout: '', stderr: '' };
+        });
+        const result = await provider.destroy(worktreePath, {
+          ...ownedDestroyOptions,
+          branchName: git.toBranchName('feature-branch'),
+          deleteRemoteBranch: remote,
+        });
+        expect(remote ? result.remoteBranchDeleted : result.branchDeleted).toBe(false);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain('feature-branch');
+      });
+    }
+
     test('returns remoteBranchDeleted=false with warning on network error', async () => {
       const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/pr-99');
       getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
@@ -3132,6 +3158,65 @@ describe('WorktreeProvider', () => {
 
       expect(copyWorktreeFilesSpy).not.toHaveBeenCalled();
     });
+
+    for (const path of ['canonicalization', 'config', 'ancestry']) {
+      test(`${path} preserves its infrastructure cause through the resolver`, async () => {
+        const cause =
+          path === 'ancestry'
+            ? new git.GitFailure(
+                'unclassified',
+                'merge-base failed',
+                Object.assign(new Error('ancestry command'), {
+                  code: 128,
+                  stderr: 'original git evidence',
+                })
+              )
+            : Object.assign(new Error('read denied'), { code: 'EACCES' });
+        provider = new WorktreeProvider(async () => {
+          if (path === 'config') throw cause;
+          return { baseBranch: git.toBranchName('main') };
+        });
+        if (path === 'canonicalization') {
+          getCanonicalRepoPathSpy.mockRestore();
+          mockReadFile.mockRejectedValue(cause);
+        }
+        if (path === 'ancestry') {
+          syncWorkspaceSpy.mockRestore();
+          execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+            if (args.includes('merge-base')) throw cause;
+            if (args.includes('rev-parse'))
+              return { stdout: args.includes('HEAD') ? 'local-sha' : 'remote-sha', stderr: '' };
+            return { stdout: '', stderr: '' };
+          });
+        }
+        const store: IIsolationStore = {
+          getById: async () => null,
+          findActiveByWorkflow: async () => null,
+          create: async () => {
+            throw new Error('must not persist a failed creation');
+          },
+          updateStatus: async () => undefined,
+          updateMetadata: async () => undefined,
+          countActiveByCodebase: async () => 0,
+        };
+        const resolver = new IsolationResolver({ store, provider });
+        const result = await resolver.resolve({
+          existingEnvId: null,
+          codebase: { id: 'cb-123', defaultCwd: '/workspace/repo', name: 'owner/repo' },
+          hints: { workflowType: 'issue', workflowId: '42' },
+          platformType: 'web',
+        });
+        expect(result.status).toBe('blocked');
+        if (result.status !== 'blocked') throw new Error('expected blocked result');
+        expect(result.userMessage).toContain(
+          path === 'ancestry' ? 'original git evidence' : 'Permission denied'
+        );
+        if (path === 'ancestry') {
+          expect(result.userMessage).toContain('exit code 128');
+          expect(result.userMessage).toContain('merge-base failed');
+        }
+      });
+    }
 
     test('throws with config error details when config load fails and no fromBranch', async () => {
       const configLoader: RepoConfigLoader = async () => {

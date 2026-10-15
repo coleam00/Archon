@@ -88,14 +88,16 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
     });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // If branch doesn't exist, create it
-    if (
-      errorText.includes('did not match any file') ||
-      errorText.includes('pathspec') ||
-      errorText.includes("doesn't exist")
-    ) {
+    const exists = await localBranchExists(repoPath, branchName).catch(
+      (inspectionError: unknown) => {
+        getLog().debug(
+          { err: inspectionError, repoPath, branchName },
+          'checkout_ref_inspection_failed'
+        );
+        return true;
+      }
+    );
+    if (!exists) {
       await execFileAsync('git', ['-C', repoPath, 'checkout', '-b', branchName], {
         timeout: 30000,
       });
@@ -104,7 +106,7 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
 
     // Unexpected error - surface it
     getLog().error({ repoPath, branchName, err, stderr: err.stderr }, 'checkout_failed');
-    throw new Error(`Failed to checkout branch ${branchName}: ${err.message}`);
+    throw new Error(`Failed to checkout branch ${branchName}: ${err.message}`, { cause: error });
   }
 }
 
@@ -134,9 +136,7 @@ export async function hasUncommittedChangesStrict(
 /**
  * Check if a git working directory has uncommitted changes
  *
- * FAIL-SAFE: Returns true (assume changes exist) on unexpected errors
- * to prevent data loss during worktree cleanup. Only returns false for
- * expected "path doesn't exist" scenarios.
+ * Returns true on failures unless Git establishes that no repository exists.
  */
 export async function hasUncommittedChanges(
   workingPath: RepoPath | WorktreePath
@@ -147,9 +147,8 @@ export async function hasUncommittedChanges(
   } catch (error) {
     const err = error as Error & { code?: string };
 
-    // Only return false for expected "path doesn't exist" scenarios
-    if (err.code === 'ENOENT' || err.message.includes('No such file or directory')) {
-      getLog().debug({ workingPath }, 'path_not_found_no_uncommitted_changes');
+    if (error instanceof GitFailure && error.kind === 'not_repository') {
+      getLog().debug({ workingPath }, 'repository_absent_no_uncommitted_changes');
       return false;
     }
 
@@ -172,28 +171,20 @@ export async function commitAllChanges(
   workingPath: RepoPath | WorktreePath,
   message: string
 ): Promise<boolean> {
-  const hasChanges = await hasUncommittedChanges(workingPath);
-  if (!hasChanges) {
-    return false;
-  }
-
   try {
+    if (!(await hasUncommittedChangesStrict(workingPath))) return false;
     await execFileAsync('git', ['-C', workingPath, 'add', '-A'], { timeout: 10000 });
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workingPath, 'diff', '--cached', '--name-only', '-z'],
+      { timeout: 10000 }
+    );
+    if (!stdout) return false;
     await execFileAsync('git', ['-C', workingPath, 'commit', '-m', message], { timeout: 10000 });
   } catch (error) {
     const err = error as Error & { stderr?: string; stdout?: string };
-    // git commit exits with code 1 and writes "nothing to commit" to stdout (not stderr)
-    // when git add -A normalizes line endings (e.g. CRLF→LF on Windows) and the result
-    // is identical to HEAD. Treat this as a no-op, not a failure.
-    const combinedOutput = `${err.stdout ?? ''} ${err.stderr ?? ''}`;
-    if (combinedOutput.toLowerCase().includes('nothing to commit')) {
-      getLog().debug({ workingPath }, 'commit_all_changes_nothing_to_commit');
-      return false;
-    }
     getLog().error({ workingPath, err, stderr: err.stderr }, 'commit_all_changes_failed');
-    throw new Error(
-      `Failed to commit changes in ${workingPath}: ${err.stderr?.trim() || err.message}`
-    );
+    throw new Error(`Failed to commit changes in ${workingPath}: ${err.message}`, { cause: error });
   }
 
   return true;
@@ -202,9 +193,7 @@ export async function commitAllChanges(
 /**
  * Check if a branch has been merged into main.
  *
- * Returns false for expected errors (branch/repo not found).
- * Throws for unexpected errors (permission denied, corruption) so callers
- * can report them rather than silently skipping cleanup.
+ * Returns false for a confirmed non-repository; other failures propagate.
  */
 export async function isBranchMerged(
   repoPath: RepoPath,
@@ -223,22 +212,13 @@ export async function isBranchMerged(
     return mergedBranches.includes(branchName);
   } catch (error) {
     const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
-
-    const isExpectedError =
-      errorText.includes('not a git repository') ||
-      errorText.includes('unknown revision') ||
-      errorText.includes('no such file') ||
-      err.code === 'ENOENT';
-
-    if (isExpectedError) {
-      return false;
-    }
+    if (error instanceof GitFailure && error.kind === 'not_repository') return false;
 
     // Unexpected errors (permission denied, corruption) - propagate so callers can report
     getLog().error({ err: error, repoPath, branchName, mainBranch }, 'branch_merge_check_failed');
     throw new Error(
-      `Failed to check if ${branchName} is merged into ${mainBranch}: ${err.message}`
+      `Failed to check if ${branchName} is merged into ${mainBranch}: ${err.message}`,
+      { cause: error }
     );
   }
 }
@@ -253,10 +233,8 @@ export async function isBranchMerged(
  * Returns true if every reported commit is patch-equivalent (or if there are no
  * commits to compare). Returns false if any commit is unmerged.
  *
- * Returns false for expected errors (branch/repo not found), unless callers
- * need those errors surfaced to distinguish an unmerged branch from an
- * unverifiable comparison.
- * Throws for unexpected errors (permission denied, corruption).
+ * A confirmed non-repository returns false unless the caller requires errors
+ * to surface. Other failures always propagate.
  */
 export async function isPatchEquivalent(
   repoPath: RepoPath | WorktreePath,
@@ -273,23 +251,20 @@ export async function isPatchEquivalent(
     return lines.every(line => line.startsWith('-'));
   } catch (error) {
     const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
-
-    const isExpectedError =
-      errorText.includes('not a git repository') ||
-      errorText.includes('unknown revision') ||
-      errorText.includes('bad revision') ||
-      errorText.includes('no such file') ||
-      err.code === 'ENOENT';
-
-    if (isExpectedError && !options.throwOnExpectedError) return false;
+    if (
+      error instanceof GitFailure &&
+      error.kind === 'not_repository' &&
+      !options.throwOnExpectedError
+    )
+      return false;
 
     getLog().error(
       { err: error, repoPath, branchName, baseRef },
       'branch.patch_equivalent_check_failed'
     );
     throw new Error(
-      `Failed to check if ${branchName} is patch-equivalent to ${baseRef}: ${err.message}`
+      `Failed to check if ${branchName} is patch-equivalent to ${baseRef}: ${err.message}`,
+      { cause: error }
     );
   }
 }
@@ -299,10 +274,8 @@ export async function isPatchEquivalent(
  *
  * Returns true if ancestorRef is an ancestor of HEAD (worktree is based on that branch).
  * Returns false if it is not (base branch mismatch detected).
- * Returns false for expected errors (branch not found, not a git repo).
- * Throws for unexpected errors (permission denied, corruption).
- * Kept apart from `isCommitAncestor`: its callers only warn about a base mismatch,
- * so a missing ref reading as "not an ancestor" is the intended, harmless answer.
+ * A confirmed non-repository returns false; missing refs and other failures
+ * propagate so callers can distinguish a mismatch from an unverifiable check.
  */
 export async function isAncestorOf(
   workingPath: RepoPath | WorktreePath,
@@ -321,18 +294,13 @@ export async function isAncestorOf(
   } catch (error) {
     const err = error as Error & { code?: number | string; stderr?: string };
     // exit code 1 = not an ancestor — expected case
-    if (err.code === 1) return false;
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
-    const isExpectedError =
-      errorText.includes('not a git repository') ||
-      errorText.includes('unknown revision') ||
-      errorText.includes('not a valid object name') ||
-      errorText.includes('no such file') ||
-      err.code === 'ENOENT';
-    if (isExpectedError) return false;
+    if (error instanceof GitFailure && error.code === 1) return false;
+    if (error instanceof GitFailure && error.kind === 'not_repository') return false;
+
     getLog().error({ err: error, workingPath, ancestorRef }, 'branch.ancestor_check_failed');
     throw new Error(
-      `Failed to check if ${ancestorRef} is ancestor of HEAD at ${workingPath}: ${(err as Error).message}`
+      `Failed to check if ${ancestorRef} is ancestor of HEAD at ${workingPath}: ${(err as Error).message}`,
+      { cause: error }
     );
   }
 }
@@ -550,8 +518,8 @@ export async function countCommitsMissingFromRemotes(
 /**
  * Get the last commit date for a repository or worktree.
  *
- * Returns null for expected errors (no commits, path not found).
- * Throws for unexpected errors (permission denied, corruption).
+ * Returns null for a confirmed non-repository or absent HEAD. Other failures
+ * propagate.
  */
 export async function getLastCommitDate(
   workingPath: RepoPath | WorktreePath
@@ -568,20 +536,19 @@ export async function getLastCommitDate(
     return date;
   } catch (error) {
     const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
-
-    const isExpectedError =
-      errorText.includes('not a git repository') ||
-      errorText.includes('does not have any commits') ||
-      errorText.includes('no such file') ||
-      err.code === 'ENOENT';
-
-    if (isExpectedError) {
-      return null;
+    if (error instanceof GitFailure && error.kind === 'not_repository') return null;
+    try {
+      await execFileAsync('git', ['-C', workingPath, 'rev-parse', '--verify', '--quiet', 'HEAD'], {
+        timeout: 10000,
+      });
+    } catch (inspectionError) {
+      if (inspectionError instanceof GitFailure && inspectionError.code === 1) return null;
     }
 
     // Unexpected errors (permission denied, corruption) - propagate
     getLog().error({ err: error, workingPath }, 'last_commit_date_check_failed');
-    throw new Error(`Failed to get last commit date for ${workingPath}: ${err.message}`);
+    throw new Error(`Failed to get last commit date for ${workingPath}: ${err.message}`, {
+      cause: error,
+    });
   }
 }

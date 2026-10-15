@@ -480,6 +480,20 @@ describe('ContainerBackend.suspend', () => {
     await expect(backend.suspend('env-c')).resolves.toBeUndefined();
   });
 
+  for (const state of ['paused', 'restarting']) {
+    test(`failed stop remains a failure when container is ${state}`, async () => {
+      const store = fakeStore();
+      seedContainerRow(store);
+      const docker = fakeDocker(args => {
+        if (args[0] === 'container')
+          return { stdout: `cid-orig\tarchon-res-1\t${state}\n`, stderr: '' };
+        throw new Error('stop failed');
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      await expect(backend.suspend('env-c')).rejects.toThrow(/Failed to suspend/);
+    });
+  }
+
   test('throws on a genuine docker failure (resources still consuming)', async () => {
     const store = fakeStore();
     seedContainerRow(store);

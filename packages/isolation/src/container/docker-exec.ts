@@ -94,12 +94,11 @@ export async function dockerPreflight(
   image: string,
   runner: DockerRunner = dockerCli
 ): Promise<void> {
-  // 1. Daemon reachable. `docker version --format {{.Server.Version}}` errors
-  //    with "Cannot connect to the Docker daemon" when the daemon is down.
   try {
     await runner(['version', '--format', '{{.Server.Version}}'], { timeout: 10_000 });
   } catch (err) {
     if (err instanceof TypeError || err instanceof RangeError) throw err;
+    if (err instanceof IsolationFailure && err.kind !== 'unclassified') throw err;
     const detail = extractDockerError(err);
     // When Archon itself runs in Docker (the compose stack), the app image ships
     // no `docker` CLI and the daemon socket is deliberately NOT mounted — so
@@ -112,8 +111,8 @@ export async function dockerPreflight(
           'on the host, or see deployment/docker.md.'
         : '';
     throw new IsolationFailure(
-      'docker_unavailable',
-      `Cannot query the Docker daemon. Start Docker or check its configuration and permissions.${dockerizedHint} (${detail})`,
+      'unclassified',
+      `docker version failed. Check Docker configuration and permissions.${dockerizedHint} (${detail})`,
       err
     );
   }
@@ -124,6 +123,7 @@ export async function dockerPreflight(
     await runner(['image', 'inspect', image], { timeout: 15_000 });
   } catch (err) {
     if (err instanceof TypeError || err instanceof RangeError) throw err;
+    if (err instanceof IsolationFailure && err.kind !== 'unclassified') throw err;
     const detail = extractDockerError(err);
     throw new IsolationFailure(
       'unclassified',

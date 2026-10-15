@@ -180,6 +180,7 @@ describe('git utilities', () => {
         await expect(git.isWorktreePath(testPath)).rejects.toThrow(
           `Cannot determine if ${testPath} is a worktree: Permission denied`
         );
+        await expect(git.isWorktreePath(testPath)).rejects.toHaveProperty('cause', eaccesError);
         expect(mockLogger.error).toHaveBeenCalledWith(
           expect.objectContaining({
             path: testPath,
@@ -941,6 +942,63 @@ branch refs/heads/feature/auth
   // branch.ts
   // ==========================================================================
 
+  describe('unclassified Git failures', () => {
+    test('clone and sync preserve unclassified evidence when paths resemble error labels', async () => {
+      const failure = new git.GitFailure(
+        'unclassified',
+        'git -C /no space/404-target failed',
+        Object.assign(new Error('config failure'), {
+          code: 128,
+          stderr: 'fatal: bad config line 1\noriginal stderr',
+        })
+      );
+      const exec = spyOn(git, 'execFileAsync').mockRejectedValue(failure);
+      try {
+        const results = [
+          await git.cloneRepository('https://example.com/repo.git', repo('/404-target')),
+          await git.syncRepository(repo('/no space'), branch('main')),
+        ];
+        for (const result of results) {
+          expect(result.ok).toBe(false);
+          if (result.ok || result.error.code !== 'unknown')
+            throw new Error('expected unclassified GitResult');
+          expect(result.error.message).toContain('bad config line 1\noriginal stderr');
+          expect(result.error.message).toContain('exit code 128');
+        }
+      } finally {
+        exec.mockRestore();
+      }
+    });
+
+    test('vendor prose cannot suppress failed operations', async () => {
+      const failure = new git.GitFailure(
+        'unclassified',
+        'not a git repository; unknown revision; no such file; nothing to commit; No such remote; pathspec',
+        Object.assign(new Error('hook failed'), { code: 128, stderr: 'original evidence' })
+      );
+      const exec = spyOn(git, 'execFileAsync').mockRejectedValue(failure);
+      try {
+        const calls = [
+          () => git.findRepoRoot('/repo'),
+          () => git.getRemoteUrl(repo('/repo')),
+          () => git.checkout(repo('/repo'), branch('feature')),
+          () => git.commitAllChanges(repo('/repo'), 'message'),
+          () => git.isBranchMerged(repo('/repo'), branch('feature'), branch('main')),
+          () => git.isPatchEquivalent(repo('/repo'), branch('feature'), 'main'),
+          () => git.isAncestorOf(repo('/repo'), 'main'),
+          () => git.getLastCommitDate(repo('/repo')),
+        ];
+        for (const call of calls) {
+          const error = await call().catch((error: unknown) => error);
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toHaveProperty('cause', failure);
+        }
+      } finally {
+        exec.mockRestore();
+      }
+    });
+  });
+
   describe('checkout', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
@@ -966,17 +1024,24 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('creates branch on "pathspec" error', async () => {
+    test('creates branch when exact ref is absent despite pathspec wording', async () => {
       execSpy.mockRejectedValueOnce(
         Object.assign(new Error('pathspec did not match'), {
           stderr: "error: pathspec 'new-branch' did not match any file(s) known to git",
         })
       );
+      execSpy.mockRejectedValueOnce(
+        new git.GitFailure(
+          'unclassified',
+          'absent exact ref',
+          Object.assign(new Error('ref lookup'), { code: 1 })
+        )
+      );
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(2);
+      expect(execSpy).toHaveBeenCalledTimes(3);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -986,17 +1051,24 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('creates branch on "doesn\'t exist" error', async () => {
+    test('creates branch when exact ref is absent despite missing-branch wording', async () => {
       execSpy.mockRejectedValueOnce(
         Object.assign(new Error("branch doesn't exist"), {
           stderr: "error: branch 'new-branch' doesn't exist",
         })
       );
+      execSpy.mockRejectedValueOnce(
+        new git.GitFailure(
+          'unclassified',
+          'absent exact ref',
+          Object.assign(new Error('ref lookup'), { code: 1 })
+        )
+      );
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(2);
+      expect(execSpy).toHaveBeenCalledTimes(3);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -1110,9 +1182,8 @@ branch refs/heads/feature/auth
       expect(result).toBe(false);
     });
 
-    test('returns false when path does not exist (ENOENT)', async () => {
-      const error = new Error('No such file or directory') as Error & { code: string };
-      error.code = 'ENOENT';
+    test('returns false for structured repository absence', async () => {
+      const error = new git.GitFailure('not_repository', 'absent checkout');
       execSpy.mockRejectedValue(error);
 
       const result = await git.hasUncommittedChanges(repo('/nonexistent'));
@@ -1121,7 +1192,9 @@ branch refs/heads/feature/auth
     });
 
     test('returns true (fail-safe) when git fails with unexpected error', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(
+        new git.GitFailure('unclassified', 'No such file or directory; not a git repository')
+      );
 
       const result = await git.hasUncommittedChanges(repo('/workspace/corrupted'));
 
@@ -1362,6 +1435,7 @@ branch refs/heads/feature/auth
         if (args.includes('status')) {
           return { stdout: ' M file.ts\n', stderr: '' };
         }
+        if (args.includes('diff')) return { stdout: 'file.ts\0', stderr: '' };
         return { stdout: '', stderr: '' };
       });
 
@@ -1387,30 +1461,35 @@ branch refs/heads/feature/auth
       expect(execSpy).toHaveBeenCalledTimes(1); // only hasUncommittedChanges
     });
 
-    test('returns false when git commit finds nothing to commit after add (CRLF normalization)', async () => {
+    test('returns false when staging normalizes all changes away', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => ({
+        stdout: args.includes('status') ? ' M file.ts\n' : '',
+        stderr: '',
+      }));
+      expect(await git.commitAllChanges(repo('/workspace/repo'), 'test commit')).toBe(false);
+      expect(execSpy.mock.calls.some(([, args]) => args.includes('commit'))).toBe(false);
+    });
+
+    test('a hook printing nothing to commit remains a failure', async () => {
+      const failure = new git.GitFailure(
+        'unclassified',
+        'hook failed',
+        Object.assign(new Error('commit'), {
+          code: 1,
+          stdout: 'nothing to commit',
+          stderr: 'hook rejected',
+        })
+      );
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('status')) {
-          // git status shows modified files (e.g. CRLF vs LF on Windows)
-          return { stdout: ' M file.ts\n', stderr: '' };
-        }
-        if (args.includes('add')) {
-          return { stdout: '', stderr: '' };
-        }
-        if (args.includes('commit')) {
-          // git commit exits 1 with "nothing to commit" on stdout (not stderr)
-          const err = Object.assign(new Error('Command failed: git commit'), {
-            stdout: 'On branch main\nnothing to commit, working tree clean\n',
-            stderr: '',
-          });
-          throw err;
-        }
+        if (args.includes('status') || args.includes('diff'))
+          return { stdout: 'file.ts\0', stderr: '' };
+        if (args.includes('commit')) throw failure;
         return { stdout: '', stderr: '' };
       });
-
-      const result = await git.commitAllChanges(repo('/workspace/repo'), 'test commit');
-
-      expect(result).toBe(false);
-      expect(execSpy).toHaveBeenCalledTimes(3); // status + add + commit
+      const error = await git
+        .commitAllChanges(repo('/workspace/repo'), 'message')
+        .catch((error: unknown) => error);
+      expect(error).toHaveProperty('cause', failure);
     });
 
     test('throws error when git add fails', async () => {
@@ -1418,6 +1497,7 @@ branch refs/heads/feature/auth
         if (args.includes('status')) {
           return { stdout: ' M file.ts\n', stderr: '' };
         }
+        if (args.includes('diff')) return { stdout: 'file.ts\0', stderr: '' };
         if (args.includes('add')) {
           throw new Error('git add failed');
         }
@@ -1434,6 +1514,7 @@ branch refs/heads/feature/auth
         if (args.includes('status')) {
           return { stdout: ' M file.ts\n', stderr: '' };
         }
+        if (args.includes('diff')) return { stdout: 'file.ts\0', stderr: '' };
         if (args.includes('add')) {
           return { stdout: '', stderr: '' };
         }
@@ -1503,7 +1584,7 @@ branch refs/heads/feature/auth
     });
 
     test('returns false on expected errors (not a git repo)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
 
       const result = await git.isBranchMerged(
         repo('/workspace/repo'),
@@ -1606,7 +1687,7 @@ branch refs/heads/feature/auth
     });
 
     test('returns false on expected errors (not a git repo)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
       const result = await git.isPatchEquivalent(
         repo('/workspace/repo'),
         branch('feature'),
@@ -1658,22 +1739,28 @@ branch refs/heads/feature/auth
     });
 
     test('returns null on expected errors (not a git repo)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
 
       const result = await git.getLastCommitDate(repo('/workspace/repo'));
       expect(result).toBeNull();
     });
 
     test('returns null on expected errors (no commits)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: does not have any commits yet'));
+      execSpy.mockRejectedValueOnce(new git.GitFailure('unclassified', 'log failed'));
+      execSpy.mockRejectedValueOnce(
+        new git.GitFailure(
+          'unclassified',
+          'unborn HEAD',
+          Object.assign(new Error('no HEAD'), { code: 1 })
+        )
+      );
 
       const result = await git.getLastCommitDate(repo('/workspace/repo'));
       expect(result).toBeNull();
     });
 
-    test('returns null on expected errors (ENOENT)', async () => {
-      const error = new Error('No such file') as Error & { code: string };
-      error.code = 'ENOENT';
+    test('returns null for structured repository absence', async () => {
+      const error = new git.GitFailure('not_repository', 'absent checkout');
       execSpy.mockRejectedValue(error);
 
       const result = await git.getLastCommitDate(repo('/nonexistent'));
@@ -1750,7 +1837,7 @@ branch refs/heads/feature/auth
     });
 
     test('returns null on any git error (detached HEAD, ENOENT, not a git repo)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
 
       expect(await git.getCurrentBranch('/workspace/repo' as git.RepoPath)).toBeNull();
     });
@@ -1909,7 +1996,11 @@ branch refs/heads/feature/auth
     });
 
     test('returns false when ref is not ancestor of HEAD (exit code 1)', async () => {
-      const err = Object.assign(new Error(''), { code: 1, stderr: '' });
+      const err = new git.GitFailure(
+        'unclassified',
+        'not ancestor',
+        Object.assign(new Error(''), { code: 1, stderr: '' })
+      );
       execSpy.mockRejectedValue(err);
 
       const result = await git.isAncestorOf(
@@ -1920,7 +2011,7 @@ branch refs/heads/feature/auth
     });
 
     test('returns false on expected errors (not a git repository)', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
 
       const result = await git.isAncestorOf(
         '/worktrees/feature' as git.WorktreePath,
@@ -1929,43 +2020,25 @@ branch refs/heads/feature/auth
       expect(result).toBe(false);
     });
 
-    test('returns false on expected errors (unknown revision)', async () => {
-      execSpy.mockRejectedValue(
-        Object.assign(new Error('unknown revision'), { stderr: 'unknown revision' })
-      );
-
-      const result = await git.isAncestorOf(
-        '/worktrees/feature' as git.WorktreePath,
-        'origin/missing'
-      );
-      expect(result).toBe(false);
-    });
-
-    test('returns false on expected errors (not a valid object name)', async () => {
-      execSpy.mockRejectedValue(
-        Object.assign(new Error('not a valid object name'), { stderr: 'not a valid object name' })
-      );
-
-      const result = await git.isAncestorOf(
-        '/worktrees/feature' as git.WorktreePath,
-        'origin/missing'
-      );
-      expect(result).toBe(false);
-    });
-
-    test('returns false on expected errors (no such file)', async () => {
-      execSpy.mockRejectedValue(new Error('no such file or directory'));
-
-      const result = await git.isAncestorOf('/nonexistent' as git.WorktreePath, 'origin/dev');
-      expect(result).toBe(false);
-    });
-
-    test('returns false when git binary not found (ENOENT)', async () => {
-      execSpy.mockRejectedValue(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }));
-
-      const result = await git.isAncestorOf('/worktrees/feature' as git.WorktreePath, 'origin/dev');
-      expect(result).toBe(false);
-    });
+    for (const message of [
+      'unknown revision',
+      'not a valid object name',
+      'no such file or directory',
+      'spawn git ENOENT',
+    ]) {
+      test(`unclassified ancestry error propagates: ${message}`, async () => {
+        const failure = new git.GitFailure(
+          'unclassified',
+          message,
+          Object.assign(new Error(message), { code: 128 })
+        );
+        execSpy.mockRejectedValue(failure);
+        const error = await git
+          .isAncestorOf(repo('/repo'), 'origin/missing')
+          .catch((error: unknown) => error);
+        expect(error).toHaveProperty('cause', failure);
+      });
+    }
 
     test('throws and logs on unexpected errors', async () => {
       mockLogger.error.mockClear();
@@ -2418,7 +2491,11 @@ branch refs/heads/feature/auth
           return { stdout: 'remote-sha\n', stderr: '' };
         }
         if (args.includes('merge-base')) {
-          throw Object.assign(new Error('fatal: bad object'), { code: 128, stderr: 'bad object' });
+          throw new git.GitFailure(
+            'unclassified',
+            'ancestry command failed',
+            Object.assign(new Error('fatal: bad object'), { code: 128, stderr: 'bad object' })
+          );
         }
         return { stdout: '', stderr: '' };
       });
@@ -2426,6 +2503,9 @@ branch refs/heads/feature/auth
       await expect(git.syncWorkspace(repo('/workspace/repo'), branch('main'))).rejects.toThrow(
         'Failed to compare git ancestry'
       );
+      await expect(
+        git.syncWorkspace(repo('/workspace/repo'), branch('main'))
+      ).rejects.toHaveProperty('cause.kind', 'unclassified');
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ workspacePath: '/workspace/repo' }),
         'workspace.merge_base_check_failed'
@@ -2928,7 +3008,7 @@ branch refs/heads/feature/auth
       expect(JSON.stringify(mockLogger.error.mock.calls)).toContain('***');
     });
 
-    test('returns not_a_repo error for 404', async () => {
+    test('keeps text-only repository-not-found failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('fatal: repository not found'));
 
       const result = await git.cloneRepository(
@@ -2938,11 +3018,11 @@ branch refs/heads/feature/auth
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('not_a_repo');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
-    test('returns permission_denied error for auth failure', async () => {
+    test('keeps text-only auth failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('fatal: Authentication failed'));
 
       const result = await git.cloneRepository(
@@ -2952,11 +3032,11 @@ branch refs/heads/feature/auth
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('permission_denied');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
-    test('returns no_space error when disk full', async () => {
+    test('keeps text-only disk failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('error: no space left on device'));
 
       const result = await git.cloneRepository(
@@ -2966,7 +3046,7 @@ branch refs/heads/feature/auth
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('no_space');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
@@ -3034,7 +3114,7 @@ branch refs/heads/feature/auth
       expect(resets).toHaveLength(0);
     });
 
-    test('attempts a non-contention fetch failure once and keeps its GitResult code', async () => {
+    test('attempts an unclassified fetch failure once', async () => {
       const authError = Object.assign(new Error('fatal: Authentication failed for repo'), {
         stderr: 'authentication failed',
       });
@@ -3044,7 +3124,7 @@ branch refs/heads/feature/auth
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('permission_denied');
+        expect(result.error.code).toBe('unknown');
       }
       const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
       expect(fetches).toHaveLength(1);
@@ -3082,45 +3162,37 @@ branch refs/heads/feature/auth
       expect(resetCalls).toHaveLength(0);
     });
 
-    test('returns not_a_repo error when fetch fails with "not a git repository"', async () => {
-      const error = new Error('Command failed') as Error & { stderr?: string };
-      error.stderr = 'fatal: not a git repository (or any parent up to mount point /)';
-      execSpy.mockRejectedValue(error);
-
-      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('not_a_repo');
-        if (result.error.code === 'not_a_repo') {
-          expect(result.error.path).toBe('/workspace/repo');
-        }
-      }
+    test('returns not_a_repo for a structured non-repository failure', async () => {
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
+      expect(await git.syncRepository(repo('/workspace/repo'), branch('main'))).toEqual({
+        ok: false,
+        error: { code: 'not_a_repo', path: '/workspace/repo' },
+      });
     });
 
-    test('returns permission_denied error when fetch fails with "authentication failed"', async () => {
+    test('keeps text-only fetch auth failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('fatal: Authentication failed for repository'));
 
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('permission_denied');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
-    test('returns no_space error when fetch fails with "no space"', async () => {
+    test('keeps text-only fetch disk failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('error: no space left on device'));
 
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('no_space');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
-    test('returns branch_not_found for invalid branch in reset', async () => {
+    test('keeps text-only reset failures unclassified', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('fetch')) {
           return { stdout: '', stderr: '' };
@@ -3135,7 +3207,7 @@ branch refs/heads/feature/auth
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('branch_not_found');
+        expect(result.error.code).toBe('unknown');
       }
     });
 
@@ -3445,15 +3517,9 @@ branch refs/heads/feature/auth
       expect(result).toBe(repo('/workspace/repo'));
     });
 
-    test('returns null for non-git directory', async () => {
-      execSpy.mockRejectedValue(
-        Object.assign(new Error('Command failed'), {
-          stderr: 'fatal: not a git repository (or any of the parent directories): .git\n',
-        })
-      );
-
-      const result = await git.findRepoRoot('/tmp/not-a-repo');
-      expect(result).toBeNull();
+    test('returns null for a structured non-repository failure', async () => {
+      execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
+      expect(await git.findRepoRoot('/tmp/not-a-repo')).toBeNull();
     });
 
     for (const stderr of [
@@ -3561,7 +3627,14 @@ branch refs/heads/feature/auth
     });
 
     test('returns null when no remote configured', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: No such remote'));
+      execSpy.mockRejectedValueOnce(new git.GitFailure('unclassified', 'remote lookup failed'));
+      execSpy.mockRejectedValueOnce(
+        new git.GitFailure(
+          'unclassified',
+          'missing config key',
+          Object.assign(new Error('absent'), { code: 1 })
+        )
+      );
 
       const result = await git.getRemoteUrl(repo('/workspace/repo'));
       expect(result).toBeNull();

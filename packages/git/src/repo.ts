@@ -1,3 +1,4 @@
+import { GitFailure } from './errors';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
@@ -35,35 +36,12 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
       ['-C', startPath, 'rev-parse', '--show-toplevel'],
       {
         timeout: 10000,
-        env: {
-          ...process.env,
-          // Trace output shares stderr with the discovery diagnostic; Trace2
-          // targets can also come from global config without environment keys.
-          ...Object.fromEntries(
-            Object.keys(process.env)
-              .filter(key => key.startsWith('GIT_TRACE'))
-              .map(key => [key, '0'])
-          ),
-          GIT_TRACE2: '0',
-          GIT_TRACE2_EVENT: '0',
-          GIT_TRACE2_PERF: '0',
-          LC_ALL: 'C',
-        },
       }
     );
     return toRepoPath(stdout.trim());
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    // Git uses the same exit code for failed discovery and broken metadata.
-    // Only its discovery diagnostic proves absence; the command echo and
-    // "not a git repository: <gitdir>" from a broken pointer do not.
-    const diagnostic = err.stderr?.trim();
-    if (
-      diagnostic === 'fatal: not a git repository (or any of the parent directories): .git' ||
-      diagnostic?.startsWith('fatal: not a git repository (or any parent up to mount point ')
-    ) {
-      return null;
-    }
+    if (error instanceof GitFailure && error.kind === 'not_repository') return null;
 
     // Unexpected error - surface it
     getLog().error({ startPath, err, stderr: err.stderr }, 'find_repo_root_failed');
@@ -134,19 +112,20 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
     return stdout.trim() || null;
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Expected: no remote with that name
-    if (
-      errorText.includes('No such remote') ||
-      errorText.includes('does not have a url configured')
-    ) {
-      return null;
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'config', '--get', `remote.${remote}.url`], {
+        timeout: 10000,
+      });
+    } catch (inspectionError) {
+      if (inspectionError instanceof GitFailure && inspectionError.code === 1) return null;
     }
 
     // Unexpected error - surface it
     getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'get_remote_url_failed');
-    throw new Error(`Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`);
+    throw new Error(
+      `Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`,
+      { cause: error }
+    );
   }
 }
 
@@ -377,7 +356,9 @@ async function isAncestor(
       { err, workspacePath, ancestor, descendant, stderr: err.stderr },
       'workspace.merge_base_check_failed'
     );
-    throw new Error(`Failed to compare git ancestry in ${workspacePath}: ${err.message}`);
+    throw new Error(`Failed to compare git ancestry in ${workspacePath}: ${err.message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -504,23 +485,6 @@ export async function cloneRepository(
     return { ok: true, value: undefined };
   } catch (error) {
     const sanitizedMessage = sanitizeGitError(error, options?.credentials);
-    const message = sanitizedMessage.toLowerCase();
-
-    if (message.includes('not found') || message.includes('404')) {
-      return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
-    }
-    if (
-      message.includes('authentication failed') ||
-      message.includes('could not read') ||
-      message.includes('access denied') ||
-      message.includes('403')
-    ) {
-      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
-    }
-    if (message.includes('no space')) {
-      return { ok: false, error: { code: 'no_space', path: targetPath } };
-    }
-
     getLog().error(
       { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
       'clone_repository_failed'
@@ -551,17 +515,9 @@ export async function syncRepository(
     await fetchRemote(repoPath, remote, undefined, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_fetch_failed');
-
-    if (errorText.includes('not a git repository')) {
+    if (error instanceof GitFailure && error.kind === 'not_repository') {
       return { ok: false, error: { code: 'not_a_repo', path: repoPath } };
-    }
-    if (errorText.includes('authentication failed') || errorText.includes('could not read')) {
-      return { ok: false, error: { code: 'permission_denied', path: repoPath } };
-    }
-    if (errorText.includes('no space')) {
-      return { ok: false, error: { code: 'no_space', path: repoPath } };
     }
     return { ok: false, error: { code: 'unknown', message: `Fetch failed: ${err.message}` } };
   }
@@ -573,12 +529,6 @@ export async function syncRepository(
     });
   } catch (error) {
     const err = error as Error;
-    const message = err.message.toLowerCase();
-
-    if (message.includes('unknown revision') || message.includes('not a valid object')) {
-      return { ok: false, error: { code: 'branch_not_found', branch } };
-    }
-
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_reset_failed');
     return { ok: false, error: { code: 'unknown', message: `Reset failed: ${err.message}` } };
   }

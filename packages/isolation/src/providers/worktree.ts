@@ -246,7 +246,7 @@ export class WorktreeProvider implements IIsolationProvider {
     } catch (error) {
       const err = error as Error;
       getLog().error({ err, repoPath: request.canonicalRepoPath }, 'repo_config_load_failed');
-      throw new Error(`Failed to load config: ${err.message}`);
+      throw new Error(`Failed to load config: ${err.message}`, { cause: error });
     }
 
     validateWorktreePostCreate(repoConfig);

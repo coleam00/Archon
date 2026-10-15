@@ -264,7 +264,7 @@ export async function isWorktreePath(path: string): Promise<boolean> {
     }
     // Unexpected error - throw since this affects critical path decisions
     getLog().error({ path, err, code: err.code }, 'worktree_status_check_failed');
-    throw new Error(`Cannot determine if ${path} is a worktree: ${err.message}`);
+    throw new Error(`Cannot determine if ${path} is a worktree: ${err.message}`, { cause: error });
   }
 }
 

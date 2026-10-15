@@ -95,8 +95,7 @@ export type IsolationFailureKind =
   | 'branch_exists'
   | 'path_exists'
   | 'worktree_registered'
-  | 'setup_unfinished'
-  | 'docker_unavailable';
+  | 'setup_unfinished';
 
 export class IsolationFailure extends Error {
   constructor(
@@ -137,7 +136,6 @@ const FAILURE_MESSAGES = {
   path_exists: undefined,
   worktree_registered: undefined,
   setup_unfinished: undefined,
-  docker_unavailable: undefined,
 } satisfies Record<IsolationFailureKind, string | undefined>;
 
 type ErrorWithCleanupFailure = Error & { cleanupFailure?: string };

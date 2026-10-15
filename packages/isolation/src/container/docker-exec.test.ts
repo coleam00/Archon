@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { dockerPreflight, extractDockerError, type DockerRunner } from './docker-exec';
-import { classifyIsolationError, isKnownIsolationError } from '../errors';
+import { IsolationFailure, classifyIsolationError, isKnownIsolationError } from '../errors';
 
 describe('dockerPreflight', () => {
   test('resolves when daemon reachable and image present', async () => {
@@ -14,14 +14,14 @@ describe('dockerPreflight', () => {
     expect(calls[1]).toEqual(['image', 'inspect', 'archon-runner:test']);
   });
 
-  test('throws a daemon-down error when version fails', async () => {
+  test('quotes an unclassified version failure', async () => {
     const runner: DockerRunner = async () => {
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock';
       throw err;
     };
     await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
-      /Cannot query the Docker daemon/
+      /docker version failed/
     );
   });
 
@@ -88,4 +88,41 @@ describe('Docker failure classification', () => {
     expect(classifyIsolationError(error)).not.toContain('Timed out');
     expect(classifyIsolationError(error)).not.toContain('runner image is missing');
   });
+});
+
+test('version preflight preserves typed timeout', async () => {
+  const failure = new IsolationFailure('timeout', 'version timed out');
+  const error = await dockerPreflight('image', async () => {
+    throw failure;
+  }).catch((error: unknown) => error);
+  expect(error).toBe(failure);
+  expect(classifyIsolationError(failure)).toContain('Timed out');
+});
+
+test('version preflight quotes unclassified exit evidence without guessing daemon status', async () => {
+  const cause = Object.assign(new Error('version failed'), {
+    code: 1,
+    stderr: 'timeout: Cannot connect to the Docker daemon\noriginal stderr',
+  });
+  const error = await dockerPreflight('image', async () => {
+    throw cause;
+  }).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(IsolationFailure);
+  if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+  expect(error.kind).toBe('unclassified');
+  expect(error.cause).toBe(cause);
+  expect(classifyIsolationError(error)).toContain('docker version');
+  expect(classifyIsolationError(error)).toContain('exit code 1');
+  expect(classifyIsolationError(error)).toContain(cause.stderr);
+  expect(classifyIsolationError(error)).not.toContain('Timed out creating workspace');
+});
+
+test('version preflight preserves structured permission guidance', async () => {
+  const cause = Object.assign(new Error('version spawn denied'), { code: 'EACCES' });
+  const error = await dockerPreflight('image', async () => {
+    throw cause;
+  }).catch((error: unknown) => error);
+  if (!(error instanceof Error)) throw new Error('expected error');
+  expect(error.cause).toBe(cause);
+  expect(classifyIsolationError(error)).toContain('Permission denied');
 });

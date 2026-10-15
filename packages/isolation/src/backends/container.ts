@@ -604,7 +604,19 @@ export class ContainerBackend implements IIsolationBackend {
       .map(line => line.split('\t'))
       .find(([id, name]) => name === nameOrId || id === nameOrId);
     if (!match) return 'missing';
-    return match[2] === 'running' ? 'running' : 'stopped';
+    switch (match[2]) {
+      case 'running':
+      case 'paused':
+      case 'restarting':
+        return 'running';
+      case 'created':
+      case 'exited':
+      case 'dead':
+      case 'removing':
+        return 'stopped';
+      default:
+        throw new IsolationFailure('unclassified', `Unknown Docker container state: ${match[2]}`);
+    }
   }
 
   private async getContainerId(nameOrId: string): Promise<string> {
