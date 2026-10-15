@@ -124,11 +124,13 @@ export function record(value: unknown): Record<string, unknown> | undefined {
  * `mutation` carries the evidence a write owes its caller: which of `refused`,
  * `verification_failed` or `outcome_unknown` happened, and what may remain on the
  * forge. A caller may report it; it may never retry past an unknown outcome.
+ * `kind` is the forge's typed error kind, such as `conflict`, when it sent one.
  */
 export class ForgeOperationError extends Error {
   constructor(
     message: string,
-    readonly mutation: Record<string, unknown> | undefined
+    readonly mutation: Record<string, unknown> | undefined,
+    readonly kind: string | undefined
   ) {
     super(message);
     this.name = 'ForgeOperationError';
@@ -177,7 +179,8 @@ export function invokeForge(
       const message = typeof error?.message === 'string' ? error.message : 'operation failed';
       throw new ForgeOperationError(
         `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
-        mutation
+        mutation,
+        typeof error?.kind === 'string' ? error.kind : undefined
       );
     }
     const body = record(response.result);

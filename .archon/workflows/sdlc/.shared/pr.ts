@@ -155,7 +155,10 @@ export function findOpenPrByHead(
   return matches[0];
 }
 
-/** Every open pull request the forge reports for `headRepo:head` in `repo`. */
+/**
+ * Every open pull request the forge reports for `headRepo:head` in `repo`. The
+ * forge source reports several as a `conflict` error instead of listing them.
+ */
 export function listOpenPrsByHead(
   repo: QualifiedPr['repo'],
   headRepo: QualifiedPr['repo'],

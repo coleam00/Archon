@@ -240,16 +240,30 @@ describe('review head boundary', () => {
     expect(run.stderr).toContain('more than one open pull request matches');
   });
 
-  it('refuses empty-scope discovery when one repository has several open PRs for the branch', () => {
-    const run = check({
-      gh: { duplicateOpenPr: true },
-      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+  for (const source of ['gh', 'forge']) {
+    it(`refuses empty-scope discovery when ${source} reports several open PRs for the branch in one repository`, () => {
+      const run = check({
+        source,
+        gh: { duplicateOpenPr: true },
+        forge: {
+          kind: 'fake',
+          response: JSON.stringify({
+            operationId: 'op-pr.view',
+            ok: false,
+            error: {
+              kind: 'conflict',
+              message: 'Pull request head selector matched more than one pull request',
+            },
+          }),
+        },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+      });
+      expect(run.code).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain('more than one open pull request matches');
+      expect(run.stderr).not.toContain('could not query');
     });
-    expect(run.code).toBe(1);
-    expect(run.stdout).toBe('');
-    expect(run.stderr).toContain('more than one open pull request matches');
-    expect(run.stderr).not.toContain('could not query');
-  });
+  }
 
   it('checks the live revision instead of the stale recorded revision', () => {
     const run = check({

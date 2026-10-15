@@ -1,4 +1,5 @@
 import {
+  ForgeOperationError,
   parseQualifiedPr,
   record,
   samePr,
@@ -78,6 +79,9 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
       if (branch.code === 1) return undefined;
       throw new Error(`git branch discovery failed: ${branch.stderr}`);
     }
+    const ambiguous = new Error(
+      'more than one open pull request matches; retry with --input scope=<full-PR-URL>'
+    );
     const matches: PrRecord[] = [];
     const unanswered: string[] = [];
     for (const repo of repos) {
@@ -86,6 +90,9 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
         try {
           views = listOpenPrsByHead(repo, headRepo, branch.stdout, source);
         } catch (error) {
+          // The forge answers a head matching several open PRs with `conflict` rather
+          // than listing them; that is an answer, not a remote it cannot query.
+          if (error instanceof ForgeOperationError && error.kind === 'conflict') throw ambiguous;
           // Nothing asked for a PR, so a remote the forge cannot answer for (another
           // host, no auth, offline) leaves the working diff; the note keeps it visible.
           unanswered.push(
@@ -107,10 +114,7 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
         }
       }
     }
-    if (matches.length > 1)
-      throw new Error(
-        'more than one open pull request matches; retry with --input scope=<full-PR-URL>'
-      );
+    if (matches.length > 1) throw ambiguous;
     if (unanswered.length > 0) {
       note(
         `Open-PR discovery could not query ${unanswered.join('; ')}. ` +
