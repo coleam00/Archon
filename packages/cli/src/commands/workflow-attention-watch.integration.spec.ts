@@ -107,8 +107,11 @@ type Line = Record<string, unknown> & { type: string; cursor?: string };
 interface Watcher {
   lines: Line[];
   next(what: string, match: (line: Line) => boolean, timeoutMs?: number): Promise<Line>;
-  /** SIGTERM, then the exit code and everything written to stderr. */
-  stop(): Promise<{ exitCode: number; stderr: string }>;
+  /**
+   * SIGTERM, which the watch answers by exiting 0. Windows has no signal to deliver: the
+   * kill terminates the child, so only POSIX proves the graceful exit.
+   */
+  stop(): Promise<void>;
 }
 
 /** Start `workflow attention --watch --json` and parse its stdout line by line. */
@@ -149,12 +152,12 @@ function startWatch(fixture: Fixture, extra: string[] = []): Watcher {
         await Bun.sleep(25);
       }
     },
-    async stop(): Promise<{ exitCode: number; stderr: string }> {
+    async stop(): Promise<void> {
       child.kill('SIGTERM');
       const exitCode = await child.exited;
       await stdout;
       watchers.delete(child);
-      return { exitCode, stderr: await stderr };
+      if (process.platform !== 'win32') expect(exitCode).toBe(0);
     },
   };
 }
@@ -206,8 +209,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   };
   expect(terminal).toMatchObject({ status: got.status, outcome: got.outcome });
 
-  const stopped = await watch.stop();
-  expect(stopped.exitCode).toBe(0);
+  await watch.stop();
   expect(
     JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout) as object
   ).toEqual(got);
@@ -217,7 +219,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   const replayed = await replay.next('replayed terminal', ofRun(runId, 'terminal'));
   expect(replayed).toEqual(terminal);
   expect(replay.lines.filter(ofRun(runId, 'attention'))).toEqual([]);
-  expect((await replay.stop()).exitCode).toBe(0);
+  await replay.stop();
 }, 180_000);
 
 test('the text stream exits 0 at its first line after the reader closes stdout', async () => {
@@ -276,7 +278,7 @@ test('an owner killed mid-run is reported once as owner_lost and the row stays r
   await Bun.sleep(3000);
   expect(watch.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
   await statusOf(fixture, runId, 'running');
-  expect((await watch.stop()).exitCode).toBe(0);
+  await watch.stop();
 
   const abandoned = await runCli(fixture, ['workflow', 'abandon', runId]);
   if (abandoned.exitCode !== 0) throw new Error(`abandon failed: ${abandoned.stderr}`);

@@ -124,7 +124,9 @@ archon workflow attention --json --all --count-by label:ci
 
 `--watch` turns the list into a stream of JSON lines, one object per line, across every run
 in scope, including runs that start after the stream does. It is the alternative to polling
-the list and diffing it.
+the list and diffing it. It runs until Ctrl-C, SIGTERM, or its reader closes stdout, and
+then exits 0. On Windows a process kill is not a signal: it ends the stream without that
+exit.
 
 ```bash
 archon workflow attention --watch --json --all
