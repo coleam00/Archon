@@ -9,6 +9,7 @@ import {
   attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type AttentionAnswer,
@@ -167,7 +168,7 @@ export type PauseCursor =
 export function continuablePauseCursor(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): PauseCursor | undefined {
-  if (run.metadata.isolation === 'container') return undefined;
+  if (isContainerRun(run)) return undefined;
   const wait = pendingWorkflowWaitDeadline(run);
   if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
   const pause = continuablePause(run);

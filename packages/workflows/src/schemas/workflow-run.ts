@@ -506,7 +506,7 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || run.metadata.isolation === 'container') return undefined;
+  if (run.status !== 'paused' || isContainerRun(run)) return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {
     if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)

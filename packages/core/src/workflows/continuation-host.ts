@@ -14,6 +14,7 @@ import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
@@ -47,7 +48,7 @@ export async function resumeWorkflowContinuation(
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
-  if (run.metadata.isolation === 'container') {
+  if (isContainerRun(run)) {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };
   }
   const context = await resolveContext(run);
