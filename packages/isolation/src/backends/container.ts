@@ -818,7 +818,8 @@ export class ContainerBackend implements IIsolationBackend {
       try {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
         return;
-      } catch {
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) throw error;
         // Not ready yet. ONLY fast-fail when the container has DEFINITELY exited
         // (`Running=false`) — a transient inspect error/timeout must NOT be read
         // as "stopped", or an infra blip would silently trigger the native +
@@ -832,7 +833,8 @@ export class ContainerBackend implements IIsolationBackend {
     try {
       const { stdout, stderr } = await this.docker(['logs', '--tail', '20', containerId]);
       logs = `${stdout}\n${stderr}`.trim();
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) throw error;
       // Best-effort — the timeout / exit is the real error.
     }
     throw new Error(
@@ -855,7 +857,8 @@ export class ContainerBackend implements IIsolationBackend {
       if (value === 'true') return 'running';
       if (value === 'false') return 'stopped';
       return 'unknown';
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) throw error;
       return 'unknown';
     }
   }

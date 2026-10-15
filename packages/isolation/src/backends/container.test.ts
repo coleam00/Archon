@@ -137,20 +137,26 @@ describe('ContainerBackend.prepare', () => {
     }
   );
 
-  test('propagates a programming failure without trying another overlay mode', async () => {
-    const failure = new TypeError('invalid Docker options');
-    const docker = fakeDocker(args => {
-      if (args[0] === 'run') throw failure;
-      return { stdout: '', stderr: '' };
-    });
-    const backend = new ContainerBackend({
-      store: fakeStore(),
-      config: CONFIG,
-      dockerRunner: docker,
-    });
-    await expect(backend.prepare({ codebase: FOLDER })).rejects.toBe(failure);
-    expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
-  });
+  test.each(['run', 'exec', 'inspect', 'logs'])(
+    'propagates a programming failure in %s without trying another overlay mode',
+    async phase => {
+      const failure = new TypeError('invalid Docker options');
+      const docker = fakeDocker(args => {
+        if (args[0] === phase) throw failure;
+        if (args[0] === 'run') return { stdout: 'cid', stderr: '' };
+        if (args[0] === 'exec') throw new Error('not ready');
+        if (args[0] === 'inspect') return { stdout: 'false', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({
+        store: fakeStore(),
+        config: CONFIG,
+        dockerRunner: docker,
+      });
+      await expect(backend.prepare({ codebase: FOLDER })).rejects.toBe(failure);
+      expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
+    }
+  );
 
   test('prefers fuse mode (no CAP_SYS_ADMIN) with labels, mounts, and resource limits', async () => {
     const store = fakeStore();
