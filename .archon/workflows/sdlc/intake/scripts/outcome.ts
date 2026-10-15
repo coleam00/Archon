@@ -1,14 +1,16 @@
 /**
  * Apply the facts node's decision: write the work item first, then the labels that
- * mirror it, then release the claim. A closed issue gets the document write only.
- * In eval mode nothing is read or written: the decision is applied to a fresh item
- * in memory and reported, with the label delta live would write, as `evaluation`.
+ * mirror it, then close an item triage found resolved, then release the claim. A
+ * closed issue gets the document write only. In eval mode nothing is read or
+ * written: the decision is applied to a fresh item in memory and reported, with the
+ * label delta live would write, as `evaluation`.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM, INPUTS_DECISION and INPUTS_SEEN from facts;
  * triage's verdict fields, each "null" when triage did not run; the workflow's
  * INPUTS_MODE and INPUTS_TRUST.
  */
 
+import { type Closure, closeResolved } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
@@ -48,6 +50,7 @@ function triageResult(): TriageResult | null {
     complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
     importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
     urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
+    closure: nullableJson(process.env.INPUTS_CLOSURE) as Closure | null,
     labels: nullableJson(process.env.INPUTS_LABELS) as string[],
     summary: nullableJson(process.env.INPUTS_SUMMARY) as string,
     report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
@@ -158,6 +161,8 @@ function main(): void {
 
   const delta = labelDelta(next, decision, triage, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
+  // A demoted item's verdict judged text no maintainer promoted, so it closes nothing.
+  if (!bodyMoved && triage?.closure) closeResolved(item, triage.closure);
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));

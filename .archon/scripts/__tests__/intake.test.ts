@@ -9,6 +9,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
 } from '../../../packages/workflows/src/schemas/workflow-run';
+import type { Closure } from '../../workflows/sdlc/.shared/close';
 import { BODY_SOURCES } from '../../workflows/sdlc/.shared/issue';
 import {
   assertNoSelfPromotion,
@@ -41,6 +42,7 @@ import {
   forgeOperation,
   gitCheckout,
   type GhApiIssue,
+  type GhIssue,
   PACK,
   packScriptRunner,
   PR,
@@ -462,6 +464,8 @@ interface Event {
   readonly statuses?: Record<string, string>;
   readonly state?: 'open' | 'closed';
   readonly writeLost?: boolean;
+  /** Other issues on the tracker, such as the original a duplicate links to. */
+  readonly others?: readonly GhIssue[];
 }
 
 function run(
@@ -483,6 +487,7 @@ function run(
       issueLabels: event.issueLabels ?? [],
       repositoryLabels: [],
       writeLost: event.writeLost,
+      issues: event.others,
     },
     inputs: {
       ...at.env,
@@ -521,6 +526,26 @@ const READY_VERDICT = {
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
+
+const ISSUE_URL = 'https://ghe.example.com/example/repo/issues/7';
+const ORIGINAL_URL = 'https://ghe.example.com/example/repo/issues/3';
+const ORIGINAL: GhIssue = { number: 3, title: 'The original', body: 'Its body', state: 'OPEN' };
+const MERGED_URL = 'https://ghe.example.com/example/repo/pull/5';
+
+function closeVerdict(closure: Closure): Record<string, string> {
+  return {
+    ...READY_VERDICT,
+    INPUTS_CONTRACT: '"NO_ACTION"',
+    INPUTS_ROUTE: '"no_action"',
+    INPUTS_LABELS: '["archon-close","archon-type-feature"]',
+    INPUTS_CLOSURE: JSON.stringify(closure),
+  };
+}
+const DUPLICATE_VERDICT = closeVerdict({
+  kind: 'duplicate',
+  url: ORIGINAL_URL,
+  original: { repo: PR.repo, number: 3 },
+});
 
 function outcome(
   at: Install,
@@ -922,7 +947,7 @@ describe('the intake scripts', () => {
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
   }, 60_000);
 
-  test('a promoted item whose body changes while triage runs is demoted and gets no route label', () => {
+  test('a promoted item whose body changes while triage runs is demoted, unlabelled and left open', () => {
     const at = install();
     const outside = { author: 'stranger' };
     expect(
@@ -946,20 +971,84 @@ describe('the intake scripts', () => {
 
     const applied = outcome(
       at,
-      { ...promote, runId: 'run-2', body: 'An edited body' },
+      { ...promote, runId: 'run-2', body: 'An edited body', others: [ORIGINAL] },
       decided,
-      READY_VERDICT
+      DUPLICATE_VERDICT
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
       'issue edit 7 --repo ghe.example.com/example/repo --remove-label archon-triage',
     ]);
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null, claim: null });
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'demoted',
       summary: expect.stringContaining('during triage'),
     });
+  }, 60_000);
+
+  test('a duplicate is closed as one, linked to its original, and the original links back', () => {
+    const at = install();
+    const event = { runId: 'run-1', others: [ORIGINAL] };
+    const applied = outcome(at, event, facts(at, event).output, DUPLICATE_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'duplicate' }]);
+    expect(applied.comments).toEqual([
+      { issue: 7, body: expect.stringContaining(ORIGINAL_URL) },
+      { issue: 3, body: expect.stringContaining(ISSUE_URL) },
+    ]);
+    expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
+  }, 60_000);
+
+  test('a delivered item is closed as completed, linked to the merged change', () => {
+    const at = install();
+    const applied = outcome(
+      at,
+      { runId: 'run-1' },
+      facts(at, { runId: 'run-1' }).output,
+      closeVerdict({ kind: 'delivered', url: MERGED_URL })
+    );
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);
+    expect(applied.comments).toEqual([{ issue: 7, body: expect.stringContaining(MERGED_URL) }]);
+  }, 60_000);
+
+  test('a duplicate whose declared URL is not its original closes nothing', () => {
+    const at = install();
+    const event = { runId: 'run-1', others: [ORIGINAL] };
+    const applied = outcome(
+      at,
+      event,
+      facts(at, event).output,
+      closeVerdict({
+        kind: 'duplicate',
+        url: 'https://ghe.example.com/example/repo/issues/4',
+        original: { repo: PR.repo, number: 3 },
+      })
+    );
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('not https://ghe.example.com/example/repo/issues/4');
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
+  }, 60_000);
+
+  test('a blocked item closes nothing', () => {
+    const at = install();
+    const applied = outcome(
+      at,
+      { runId: 'run-1' },
+      facts(at, { runId: 'run-1' }).output,
+      {
+        ...READY_VERDICT,
+        INPUTS_CONTRACT: '"BLOCKED"',
+        INPUTS_ROUTE: '"no_action"',
+        INPUTS_LABELS: '["archon-blocked","archon-size-s","archon-type-feature"]',
+        INPUTS_CLOSURE: 'null',
+      }
+    );
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
+    expect(stored(at).value).toMatchObject({ stage: 'blocked', claim: null });
   }, 60_000);
 
   test('a closed issue is recorded and its labels are left alone', () => {
@@ -1138,6 +1227,20 @@ describe('eval mode', () => {
           proposed_edits: { title: '', body: '' },
           report: { path: 'triage.md' },
         },
+      },
+    });
+  }, 60_000);
+
+  test('a duplicate verdict closes nothing in eval, and reports what it would close as', () => {
+    const at = install();
+    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }), 'facts');
+    const outcome = evalOutcome(at, decided, DUPLICATE_VERDICT);
+    const result = succeeded(outcome, 'outcome');
+    expect([...outcome.gh, ...outcome.forge]).toEqual([]);
+    expect(result).toMatchObject({
+      stage: 'close',
+      evaluation: {
+        triage: { contract: 'NO_ACTION', closure: { kind: 'duplicate', url: ORIGINAL_URL } },
       },
     });
   }, 60_000);

@@ -13,6 +13,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { Closure } from './close.ts';
 import { archonCommand, record, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 import { note } from './io.ts';
@@ -158,6 +159,8 @@ export interface IntakeDecision {
 
 /** Triage's verdict as the outcome node receives it. */
 export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
+  /** What made a NO_ACTION item closable; null on every other verdict. Not stored. */
+  readonly closure: Closure | null;
   readonly labels: readonly string[];
   readonly summary: string;
   readonly report: { readonly run_id: string; readonly path: string };

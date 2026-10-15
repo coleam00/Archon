@@ -6,7 +6,7 @@
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
  * a delivery creates a draft pull request and upserts the same review comment
  * across rounds, and none of
- * those steps calls `gh`.
+ * those steps calls `gh`; intake's close links a resolved issue both ways.
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -22,6 +22,7 @@ import {
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
+import { closeResolved } from '../../workflows/sdlc/.shared/close';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -261,4 +262,49 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
     ].sort()
   );
   expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
+}, 120_000);
+
+it('closes a resolved item through the plugin, linking it to what resolved it and back', () => {
+  const host = forgeHost();
+  const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  const issue = (number: number): FakeGitHubState['issues'][number] => ({
+    ...seeded.issues[0],
+    number,
+    html_url: `https://${FAKE_HOST}/example/repo/issues/${String(number)}`,
+    labels: [],
+  });
+  seeded.issues.push(issue(3), issue(8));
+  writeFileSync(host.statePath, JSON.stringify(seeded));
+  const original = { repo: PR.repo, number: 3 };
+  const originalUrl = `https://${FAKE_HOST}/example/repo/issues/3`;
+  const change = `https://${FAKE_HOST}/example/repo/pull/5`;
+
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    ARCHON_SDLC_FORGE: 'forge',
+    ARCHON_CLI_COMMAND: JSON.stringify(host.argv),
+  });
+  try {
+    closeResolved(
+      { repo: PR.repo, number: 7 },
+      { kind: 'duplicate', url: originalUrl, original }
+    );
+    closeResolved({ repo: PR.repo, number: 8 }, { kind: 'delivered', url: change });
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+
+  const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  const closed = (number: number) => state.issues.find(row => row.number === number);
+  expect(closed(7)).toMatchObject({ state: 'closed', state_reason: 'duplicate' });
+  expect(closed(3)).toMatchObject({ state: 'open' });
+  expect(closed(8)).toMatchObject({ state: 'closed', state_reason: 'completed' });
+  const on = (number: number) =>
+    state.comments.filter(row => row.issue === number).map(row => row.body);
+  expect(on(7)).toEqual([expect.stringContaining(originalUrl)]);
+  expect(on(3)).toEqual([
+    expect.stringContaining(`https://${FAKE_HOST}/example/repo/issues/7`),
+  ]);
+  expect(on(8)).toEqual([expect.stringContaining(change)]);
 }, 120_000);

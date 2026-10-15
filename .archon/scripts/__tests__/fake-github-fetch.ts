@@ -36,11 +36,13 @@ export interface FakeGitHubState {
     title: string;
     body: string;
     state: string;
+    state_reason?: string | null;
     labels: { name: string }[];
   }[];
   labels: { name: string; color: string; description: string }[];
   pulls: FakePull[];
-  comments: { id: number; body: string }[];
+  /** Comments on pull request 42, or on `issue` when one is named. */
+  comments: { id: number; body: string; issue?: number }[];
   nextComment: number;
   checkRuns: { id: number; name: string; status: string; conclusion: string | null }[];
   workflowRuns: { id: number; head_sha: string; check_suite_id: number; run_attempt: number; status: string; conclusion: string | null }[];
@@ -76,12 +78,13 @@ export function initialState(headSha: string): FakeGitHubState {
   };
 }
 
-function comment(row: { id: number; body: string }): Record<string, unknown> {
+function comment(row: FakeGitHubState['comments'][number]): Record<string, unknown> {
+  const on = row.issue === undefined ? 'pull/42' : `issues/${String(row.issue)}`;
   return {
     id: row.id,
     body: row.body,
-    html_url: `https://${FAKE_HOST}/example/repo/pull/42#issuecomment-${String(row.id)}`,
-    issue_url: `${ROOT}/issues/42`,
+    html_url: `https://${FAKE_HOST}/example/repo/${on}#issuecomment-${String(row.id)}`,
+    issue_url: `${ROOT}/issues/${String(row.issue ?? 42)}`,
   };
 }
 
@@ -134,6 +137,10 @@ function route(
   if (issue) {
     if (method === 'PUT' && Array.isArray(body?.labels))
       issue.labels = body.labels.map(name => ({ name: String(name) }));
+    if (method === 'PATCH' && typeof body?.state === 'string') {
+      issue.state = body.state;
+      issue.state_reason = typeof body.state_reason === 'string' ? body.state_reason : null;
+    }
     return Response.json(issue);
   }
   if (path === GRAPHQL && method === 'POST' && pull) {
@@ -170,13 +177,16 @@ function route(
     if (method === 'PATCH' && typeof body?.body === 'string') pull.body = body.body;
     return Response.json(pull);
   }
-  if (path === `${ROOT}/issues/42/comments`) {
+  const commentsOn = /\/issues\/(\d+)\/comments$/.exec(path)?.[1];
+  if (commentsOn !== undefined) {
+    const on = Number(commentsOn) === 42 ? undefined : Number(commentsOn);
     if (method === 'POST' && typeof body?.body === 'string') {
-      const row = { id: state.nextComment++, body: body.body };
+      const row = { id: state.nextComment++, body: body.body, ...(on === undefined ? {} : { issue: on }) };
       state.comments.push(row);
       return Response.json(comment(row), { status: 201 });
     }
-    return Response.json(page === 1 ? state.comments.map(comment) : []);
+    const rows = state.comments.filter(row => row.issue === on);
+    return Response.json(page === 1 ? rows.map(comment) : []);
   }
   const commentId = /\/issues\/comments\/(\d+)$/.exec(path)?.[1];
   if (commentId !== undefined) {

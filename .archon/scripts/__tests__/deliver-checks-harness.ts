@@ -23,6 +23,8 @@ export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 export interface GhCommentRow {
   readonly id: number;
   readonly body: string;
+  /** The issue it is on; omitted for the pull request. */
+  readonly issue?: number;
 }
 
 /** The pull request `gh pr view --json` reports, before any write in the run. */
@@ -51,7 +53,10 @@ export interface GhFake {
   readonly writeFail?: string;
   /** Drop the write instead of applying it, so the read-back disagrees. */
   readonly writeLost?: boolean;
-  /** Existing tracker issues; `issue create` appends to them. */
+  /**
+   * Existing tracker issues; `issue create` appends to them. `gh api` reads them
+   * too, beside the one issue `issue` describes.
+   */
   readonly issues?: readonly GhIssue[];
   /** The issue `gh api repos/<path>/issues/<n>` reads; number 7 by default. Labels come from `issueLabels`. */
   readonly issue?: GhApiIssue;
@@ -65,6 +70,8 @@ export interface GhApiIssue {
   /** The author's login; null for a deleted account. */
   readonly author?: string | null;
   readonly state?: 'open' | 'closed';
+  /** Why a closed issue was closed. */
+  readonly state_reason?: string;
   /**
    * The edit history `gh api graphql` reports; never edited when omitted. A null
    * `createdBody` is a creation revision that cannot be recovered (deleted).
@@ -117,6 +124,10 @@ export interface ScriptRun {
   readonly forgeRequests: readonly string[];
   /** Every issue the fake gh created, in order. */
   readonly createdIssues: readonly GhIssue[];
+  /** Every comment the fake gh wrote, with the issue or pull request it is on. */
+  readonly comments: readonly { readonly issue: number; readonly body: string }[];
+  /** Every issue state change the fake gh received. */
+  readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
@@ -135,6 +146,7 @@ const pr = {
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
+const subject = { number: 7, title: 'An issue', body: 'An issue body', author: 'someone', state: 'open', ...(fake.issue ?? {}) };
 const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
@@ -246,29 +258,52 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     // gh api names its host with --hostname and its repository in the endpoint.
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
-    const url = (id) => 'https://' + apiHost + '/' + apiPath + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
-    const issue = { number: 7, title: 'An issue', body: 'An issue body', author: 'someone', state: 'open', ...(fake.issue ?? {}) };
-    if (endpoint.endsWith('/issues/' + String(issue.number))) return result(0, JSON.stringify({
-      number: issue.number, title: issue.title, body: issue.body, state: issue.state,
-      user: issue.author === null ? null : { login: issue.author },
-      html_url: 'https://' + apiHost + '/' + apiPath + '/issues/' + String(issue.number),
-      labels: [...new Set(issueLabels)].map(name => ({ name })),
-    }));
+    // A comment row without an issue number is on the pull request.
+    const commentUrl = (row) => 'https://' + apiHost + '/' + apiPath + (row.issue === undefined ? '/pull/' + String(pr.number) : '/issues/' + String(row.issue)) + '#issuecomment-' + String(row.id);
+    const issueUrl = (n) => 'https://' + apiHost + '/' + apiPath + '/issues/' + String(n);
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
+    const input = () => JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8'));
+    if (endpoint.endsWith('/issues/' + String(subject.number))) {
+      if (method === 'PATCH') {
+        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+        const change = input();
+        appendFileSync(${JSON.stringify(ghLog)} + '.closes', JSON.stringify({ number: subject.number, ...change }) + '\\n');
+        if (!fake.writeLost) { subject.state = change.state; subject.state_reason = change.state_reason; }
+      }
+      return result(0, JSON.stringify({
+        number: subject.number, title: subject.title, body: subject.body, state: subject.state,
+        state_reason: subject.state_reason ?? null,
+        user: subject.author === null ? null : { login: subject.author },
+        html_url: issueUrl(subject.number),
+        labels: [...new Set(issueLabels)].map(name => ({ name })),
+      }));
+    }
+    const other = issues.find(row => endpoint.endsWith('/issues/' + String(row.number)));
+    if (other !== undefined) return result(0, JSON.stringify({
+      number: other.number, title: other.title, body: other.body, state: other.state.toLowerCase(),
+      user: { login: 'someone' },
+      html_url: other.pull ? issueUrl(other.number).replace('/issues/', '/pull/') : issueUrl(other.number),
+      labels: [],
+      ...(other.pull ? { pull_request: {} } : {}),
+    }));
+    const parts = endpoint.split('?')[0].split('/');
+    const commentsOn = parts.at(-1) === 'comments' && parts.at(-3) === 'issues' ? Number(parts.at(-2)) : pr.number;
+    const onIssue = commentsOn === pr.number ? undefined : commentsOn;
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
-      const rows = page === 1 ? comments.map(row => ({ ...row, html_url: url(row.id) })) : [];
+      const rows = page === 1 ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row) })) : [];
       return result(0, JSON.stringify(rows));
     }
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    const body = JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8')).body;
+    const body = input().body;
     const id = method === 'PATCH' ? Number(endpoint.split('/').pop()) : nextId++;
+    let row = comments.find(entry => entry.id === id);
     if (!fake.writeLost) {
-      const existing = comments.find(row => row.id === id);
-      if (existing) existing.body = body;
-      else comments.push({ id, body });
+      if (row) row.body = body;
+      else { row = { id, body, ...(onIssue === undefined ? {} : { issue: onIssue }) }; comments.push(row); }
     }
-    return result(0, JSON.stringify({ id, body, html_url: url(id) }));
+    appendFileSync(${JSON.stringify(ghLog)} + '.comments', JSON.stringify({ issue: row?.issue ?? onIssue ?? pr.number, body }) + '\\n');
+    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }));
   }
   return result(95, '', 'unexpected gh call');
 } });
@@ -405,6 +440,8 @@ else {
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
     createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
+    comments: lines(`${ghLog}.comments`).map(line => JSON.parse(line) as ScriptRun['comments'][number]),
+    closes: lines(`${ghLog}.closes`).map(line => JSON.parse(line) as ScriptRun['closes'][number]),
     artifacts,
   };
 }

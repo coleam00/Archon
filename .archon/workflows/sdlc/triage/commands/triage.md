@@ -37,14 +37,14 @@ A run cannot recover from a premise that was never stated, so before choosing a 
 
 Then check the delivery preconditions the outcome actually depends on: an existing primitive or owner, a data shape or typed seam, a persistence model, the observability needed to verify the result. A refactor of code the work must already touch is issue-owned enabling work, not a blocker. A missing foundation with its own outcome, broader owners, or a separate product decision is a prerequisite that must land first — report it with the same weight whether or not anyone has logged it. Treat alignment with current direction as part of readiness.
 
-The verdict says whether a run should start from this item, not only whether the item is well written. A well-formed contract whose outcome already holds on the current base is `NO_ACTION`, not `READY`.
+The verdict says whether a run should start from this item, not only whether the item is well written. A well-formed contract whose outcome already holds on the current base is never `READY`: it is `NO_ACTION`, or `BLOCKED` when the policy leaves its close to a maintainer.
 
 Declare exactly one contract verdict:
 
 - `READY` — the six elements are present and agree with each other and with current direction, the outcome is not already true on the current base, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
 - `NEEDS_CONTRACT_WORK` — one of the six elements is materially missing, ambiguous, or contradictory. Propose the contract that would make the item ready (below) and stop.
 - `BLOCKED` — the contract is clear, but something must happen first: a prerequisite that has its own owner, an owner-level product decision, source material that cannot be reached, direction that looks stale and needs a maintainer's judgment, or a close the triage policy leaves to a maintainer. Name what it waits on in `blocked_reason`, and list the fully qualified URLs of the items it waits on in `blocked_by` when they exist; an external decision may have none. Never invent a reference.
-- `NO_ACTION` — the item should be closed, and the triage policy allows that close without a person. Whether a reason (already delivered, owned by another item, obsolete, superseded, rejected by direction) allows a close is the policy's call, not this command's. An item that looks closable for a reason the policy leaves to a maintainer is `BLOCKED` instead, with `blocked_reason` naming the maintainer's decision and why the item looks closable. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
+- `NO_ACTION` — the item should be closed, and the triage policy allows that close without a person. Two reasons can close an item this way, and each only when the policy allows it: the item duplicates another item, or a merged change already delivered its outcome. Whether the policy allows it is the policy's call, not this command's. Name that item or change in `closure` by the URL you opened to confirm it; never invent one. An item that looks closable for any other reason, or for one the policy leaves to a maintainer, is `BLOCKED` instead, with `blocked_reason` naming the maintainer's decision and why the item looks closable.
 
 Only a `READY` item carries an engineering route, and a `READY` item always carries one. Every other verdict carries no route: the verdict is the reason, and the route you would have chosen belongs in the assessment for the human, not in the declared fields.
 
@@ -100,7 +100,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
   - `READY` with `route` `continue` and `pull_request` — the number of the open pull request to finish, in the item's repository;
   - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;
-  - `NO_ACTION` alone.
+  - `NO_ACTION` with `closure` — `{ "kind": "duplicate", "url", "original" }`, where `url` is the duplicated item's fully qualified URL and `original` is the same item as `{ "repo": { "host", "path" }, "number" }`; or `{ "kind": "delivered", "url" }`, where `url` is the merged change's fully qualified URL.
 - `type`, `size`, `complexity`, `importance`, `urgency` — each `{ "value", "reason" }`, the value from its list above and the reason one non-empty line.
 - `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.

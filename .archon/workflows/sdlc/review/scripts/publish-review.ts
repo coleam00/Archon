@@ -32,8 +32,7 @@
  *   as the next round's lens set.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
@@ -122,15 +121,13 @@ try {
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
-    const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
-    try {
-      const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`);
-      const comment = upsertComment(pr, MARKER, marked, source);
-      note(`publish-review: canonical review comment at ${comment.url}`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    const comment = upsertComment(
+      { kind: 'pr', ref: pr },
+      MARKER,
+      `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`,
+      source
+    );
+    note(`publish-review: canonical review comment at ${comment.url}`);
   }
   // review-round reads these as the next round's cursor and lens set.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
