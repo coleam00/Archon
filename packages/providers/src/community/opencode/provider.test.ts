@@ -247,6 +247,21 @@ describe('OpencodeProvider', () => {
       },
       expected: 'request',
     },
+    {
+      options: {
+        nodeConfig: { systemPrompt: ['node', 'lines'] as string[] },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'node\nlines',
+    },
+    {
+      options: {
+        systemPrompt: ['request', 'lines'] as string[],
+        nodeConfig: { systemPrompt: ['node', 'lines'] as string[] },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'request\nlines',
+    },
   ])('sends the selected system prompt to the SDK: $expected', async ({ options, expected }) => {
     const runtime = makeRuntime();
     runtimeQueue.push(runtime);

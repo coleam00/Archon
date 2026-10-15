@@ -1,3 +1,4 @@
+import type { SessionPromptAsyncData } from '@opencode-ai/sdk/v2';
 import { createLogger } from '@archon/paths';
 
 import {
@@ -156,15 +157,16 @@ export function createSessionPromptBody(
   model: { providerID: string; modelID: string },
   requestOptions: SendQueryOptions | undefined,
   agentOverride?: NamedAgentConfig
-): Record<string, unknown> {
+): NonNullable<SessionPromptAsyncData['body']> {
   const singleAgent = agentOverride ?? selectSingleAgent(requestOptions?.nodeConfig?.agents);
   const adaptedAgentConfig = singleAgent ? adaptNamedAgentForOpencode(singleAgent) : undefined;
   const effectivePrompt = resolvePromptForAgent(singleAgent, prompt);
-  const system =
+  const selectedSystem =
     requestOptions?.systemPrompt ??
     requestOptions?.nodeConfig?.systemPrompt ??
     requestOptions?.appendSystemPrompt;
-  const promptBody: Record<string, unknown> = {
+  const system = Array.isArray(selectedSystem) ? selectedSystem.join('\n') : selectedSystem;
+  const promptBody: NonNullable<SessionPromptAsyncData['body']> = {
     parts: [{ type: 'text', text: effectivePrompt }],
     model: adaptedAgentConfig?.model ?? model,
     ...(adaptedAgentConfig?.agent ? { agent: adaptedAgentConfig.agent } : {}),
@@ -186,7 +188,7 @@ export async function promptSession(
   client: OpencodeClientLike,
   cwd: string,
   sessionId: string,
-  promptBody: Record<string, unknown>
+  promptBody: NonNullable<SessionPromptAsyncData['body']>
 ): Promise<void> {
   await client.session.promptAsync({
     path: { id: sessionId },
