@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /**
  * Why a failed run ended. Recorded by the caller that knows (in the terminal
@@ -13,6 +13,8 @@ export const runExitReasonSchema = z.enum([
   'unhandled_error',
   // All nodes succeeded but `evidence_policy.required` found no evidence marker (#2230).
   'evidence_missing',
+  // The run budget refused new work, or its spend could not be measured (#2814).
+  'budget_refused',
   // The run's recorded executable source could not be reached.
   'source_unavailable',
   // The executor exited while the run was still running (finally-block backstop).

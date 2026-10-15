@@ -1,7 +1,7 @@
 /**
  * Zod schemas for workflow event row types.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
 // WorkflowEventRow
