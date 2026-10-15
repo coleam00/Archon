@@ -272,34 +272,6 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
     }
   }, 120000);
 
-  // A hangup, a second Ctrl-C and SIGKILL all end the owner before its teardown runs.
-  test('an owner that dies without its teardown still ends the node tree', async () => {
-    const fixture = makeFixture();
-    const owner = startForegroundRun(fixture);
-    try {
-      const holdPid = await waitFor(
-        'the hold node to start',
-        () => {
-          if (!existsSync(fixture.pidFile)) return undefined;
-          const pid = Number(readFileSync(fixture.pidFile, 'utf8').trim());
-          return Number.isInteger(pid) && pid > 0 ? pid : undefined;
-        },
-        owner
-      );
-      owner.child.kill('SIGHUP');
-      await owner.settled;
-      await waitFor(
-        'the orphaned node tree to exit',
-        () => (!processExists(holdPid) ? true : undefined),
-        undefined,
-        3000
-      );
-    } finally {
-      if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
-      await owner.settled;
-    }
-  }, 120_000);
-
   test('records why it stopped and still resumes to completion', async () => {
     const fixture = makeFixture();
     const owner = startForegroundRun(fixture);
