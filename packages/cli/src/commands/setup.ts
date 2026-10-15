@@ -46,7 +46,7 @@ import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
-import { checkProviderDiagnostics, type CheckResult } from './doctor';
+import { FORGE_GITHUB_PLUGIN, checkProviderDiagnostics, type CheckResult } from './doctor';
 import {
   CODEX_SETUP_ENV,
   migrateCodexSetupEnv,
@@ -1287,7 +1287,7 @@ async function collectForgeToken(): Promise<string | undefined> {
   note(
     'The SDLC workflows (archon-ship, archon-deliver, archon-upkeep, archon-pr)\n' +
       'reach GitHub through the GitHub forge plugin. They need two things:\n\n' +
-      '1. The plugin: archon plugin add coleam00/Archon/plugins/forge-github\n' +
+      `1. The plugin: archon plugin add ${FORGE_GITHUB_PLUGIN}\n` +
       '2. A token: GH_TOKEN in this env file, or GitHub App mode\n\n' +
       'Create a classic token at github.com/settings/tokens with the repo scope\n' +
       '(and workflow, only if runs may change .github/workflows/ files).\n' +

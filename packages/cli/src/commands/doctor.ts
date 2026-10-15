@@ -241,7 +241,8 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
-const FORGE_PLUGIN_INSTALL = 'archon plugin add coleam00/Archon/plugins/forge-github';
+export const FORGE_GITHUB_PLUGIN = 'coleam00/Archon/plugins/forge-github';
+const FORGE_PLUGIN_INSTALL = `archon plugin add ${FORGE_GITHUB_PLUGIN}`;
 
 // The SDLC pack's `forgeSource()` owns these values; doctor.test.ts holds this to it.
 function selectedSdlcForge(env: NodeJS.ProcessEnv): string {
@@ -312,7 +313,7 @@ export async function checkGithubForge(
     return {
       label,
       status: 'warn',
-      message: `${message}: the installed plugin predates the SDLC workflows. Run \`archon plugin update coleam00/Archon/plugins/forge-github\`.`,
+      message: `${message}: the installed plugin predates the SDLC workflows. Run \`archon plugin update ${FORGE_GITHUB_PLUGIN}\`.`,
     };
   }
   if (kind === 'no_credential') {
