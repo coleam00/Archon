@@ -1500,7 +1500,7 @@ describe('GitHub setup wizard', () => {
     expect(readFileSync(join(dirname(target), backups[0]), 'utf8')).toBe(original);
   });
 
-  it.each(GITHUB_APP_CREDENTIAL_KEYS)(
+  it.each([...GITHUB_APP_CREDENTIAL_KEYS])(
     'rejects PAT beside partial %s in Add and workflow loading',
     async key => {
       setupMode = 'add';
