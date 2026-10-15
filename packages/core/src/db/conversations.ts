@@ -7,6 +7,7 @@ import type { UpdateConversationInput } from '../schemas/conversation';
 import { lockConversationOwnership } from './conversation-ownership';
 import { listConversationDetachBlockers } from './workflows';
 import { pool, getDialect, getDatabase, getDatabaseType } from './connection';
+import { visibilityWhere, type ConversationVisibility } from './conversation-visibility';
 import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
@@ -185,19 +186,18 @@ export async function updateConversation(
 }
 
 /**
- * List all conversations ordered by recent activity
+ * List the conversations `visibility` lets the caller reach, ordered by recent activity.
  */
 export async function listConversations(
-  limit = 50,
-  platformType?: string,
-  codebaseId?: string,
-  excludeEmpty = false,
-  /**
-   * Non-enforcing "mine" filter: when set, restrict to conversations attributed
-   * to this user (`user_id = $N`). Absent → all (default visibility stays open).
-   */
-  userId?: string
+  visibility: ConversationVisibility,
+  filter: {
+    limit?: number;
+    platformType?: string;
+    codebaseId?: string;
+    excludeEmpty?: boolean;
+  } = {}
 ): Promise<readonly Conversation[]> {
+  const { limit = 50, platformType, codebaseId, excludeEmpty = false } = filter;
   const params: unknown[] = [];
   let sql =
     'SELECT * FROM remote_agent_conversations WHERE deleted_at IS NULL AND (hidden IS NULL OR hidden = false)';
@@ -217,10 +217,7 @@ export async function listConversations(
     sql += ` AND codebase_id = $${String(params.length)}`;
   }
 
-  if (userId) {
-    params.push(userId);
-    sql += ` AND user_id = $${String(params.length)}`;
-  }
+  sql += visibilityWhere(visibility, params);
 
   sql += ' ORDER BY last_activity_at DESC NULLS LAST';
   params.push(limit);

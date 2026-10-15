@@ -13,10 +13,10 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     also carries dispatch fields (ignored here). `conversationId` is the
  *     platform id used by every other conversation route.
  *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
- *     (JSON array). `mine=true` is non-enforcing: it narrows to the signed-in
- *     user's conversations when an identity resolves (Better Auth cookie or
- *     X-Archon-User), so each user gets their own per-project chat on
- *     multi-user installs; with no identity (solo installs) nothing narrows.
+ *     (JSON array). Where conversations are private (web auth, or a proxy
+ *     setting ARCHON_WEB_AUTH_HEADER) the server already scopes the list to the
+ *     signed-in user. Elsewhere `mine=true` narrows to the caller when an
+ *     identity resolves; with no identity (solo installs) nothing narrows.
  *   - sendMessage:        POST /api/conversations/:id/message. JSON, or
  *     multipart when files are attached (mirrors startRun's multipart path).
  */

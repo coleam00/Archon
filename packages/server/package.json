@@ -127,6 +127,9 @@
       "src/routes/api.auth.test.ts"
     ],
     [
+      "src/routes/api.conversation-ownership.test.ts"
+    ],
+    [
       "src/routes/api.provider-keys.test.ts"
     ],
     [

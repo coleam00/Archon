@@ -76,6 +76,8 @@ mock.module('../auth', () => ({
       : null,
   isWebAuthEnabled: () => requireRunIdentity || sessionUserId !== undefined,
   isApiGateEnabled: () => false,
+  // Conversation ownership has its own suite (api.conversation-ownership.test.ts).
+  isConversationOwnershipEnforced: () => false,
   getSignupMode: () => 'disabled',
 }));
 function makeUser(id: string): User {
