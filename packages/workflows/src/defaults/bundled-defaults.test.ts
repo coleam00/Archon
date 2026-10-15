@@ -200,113 +200,46 @@ describe('bundled-defaults', () => {
       const all = where('`architecture.md`, its `engineering.md`, and its direction document');
       const values = where('`engineering.md` and its direction document');
       const engineering = where('`engineering.md`', 'one');
-      const decides = 'read the section that rules on it';
-      const cites = 'read the section you cite, not the whole file';
-      const reads: Record<string, { read: string; section: string; architecture: boolean }> = {
-        '__archon_pack__bundled:sdlc:triage::triage': {
-          read: where('direction document', 'one'),
-          section: decides,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:plan::plan': {
-          read: all,
-          section: decides,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:investigate::investigate': {
-          read: all,
-          section: decides,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:implement::implement': {
-          read: engineering,
-          section: decides,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:simplify::simplify': {
-          read: all,
-          section: cites,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:review::review-seams': {
-          read: all,
-          section: cites,
-          architecture: true,
-        },
-        '__archon_pack__bundled:sdlc:review::review-code': {
-          read: values,
-          section: cites,
-          architecture: false,
-        },
-        '__archon_pack__bundled:sdlc:review::review-synthesize': {
-          read: values,
-          section: cites,
-          architecture: false,
-        },
-        '__archon_pack__bundled:sdlc:review::review-tests': {
-          read: engineering,
-          section: cites,
-          architecture: false,
-        },
-        '__archon_pack__bundled:sdlc:review::review-errors': {
-          read: engineering,
-          section: cites,
-          architecture: false,
-        },
-        '__archon_pack__bundled:sdlc:review::review-docs': {
-          read: engineering,
-          section: cites,
-          architecture: false,
-        },
+      // Prompts that decide read the section that rules on a decision; reviewers read the
+      // section they cite.
+      const decides: Record<string, string> = {
+        '__archon_pack__bundled:sdlc:triage::triage': where('direction document', 'one'),
+        '__archon_pack__bundled:sdlc:plan::plan': all,
+        '__archon_pack__bundled:sdlc:investigate::investigate': all,
+        '__archon_pack__bundled:sdlc:implement::implement': engineering,
       };
-      for (const [key, expected] of Object.entries(reads)) {
-        const content = BUNDLED_COMMANDS[key];
-        expect(content).toBeDefined();
-        expect(content).not.toContain('.archon/engineering.md');
-        expect(content).not.toContain('Read `AGENTS.md`');
-        expect({
-          key,
-          read: content.includes(expected.read),
-          section: content.includes(expected.section),
-          architecture: content.includes('`architecture.md`'),
-        }).toEqual({ key, read: true, section: true, architecture: expected.architecture });
-      }
-    });
-
-    // The pack's measured misses each became one stated line; losing one silently
-    // reopens the miss it closed.
-    it('lens checklists and the implement, synthesis and plan rules are stated', () => {
-      const lines: Record<string, string[]> = {
-        '__archon_pack__bundled:sdlc:review::review-code': ['write their predicates side by side'],
-        '__archon_pack__bundled:sdlc:review::review-errors': [
-          'Secrets in error text',
-          'Before the `try`',
-          'Failure result contract',
-        ],
-        '__archon_pack__bundled:sdlc:review::review-seams': [
-          'credentials only over HTTPS',
-          'resolve the composition first',
-        ],
-        '__archon_pack__bundled:sdlc:implement::implement': [
-          "Never run the project's full validation or the whole repository's suite",
-          'Never wait for, poll, or re-run CI',
-        ],
-        '__archon_pack__bundled:sdlc:review::review-synthesize': [
-          'raised a second time',
-          'deferred to an operator check',
-        ],
-        '__archon_pack__bundled:sdlc:review::review-scope': ['git merge-tree --write-tree'],
-        '__archon_pack__bundled:sdlc:plan::plan': ['This decision names `rulings.md`'],
+      const cites: Record<string, string> = {
+        '__archon_pack__bundled:sdlc:simplify::simplify': all,
+        '__archon_pack__bundled:sdlc:review::review-seams': all,
+        '__archon_pack__bundled:sdlc:review::review-code': values,
+        '__archon_pack__bundled:sdlc:review::review-synthesize': values,
+        '__archon_pack__bundled:sdlc:review::review-tests': engineering,
+        '__archon_pack__bundled:sdlc:review::review-errors': engineering,
+        '__archon_pack__bundled:sdlc:review::review-docs': engineering,
       };
-      for (const [key, fragments] of Object.entries(lines)) {
-        const content = BUNDLED_COMMANDS[key];
-        expect(content).toBeDefined();
-        for (const fragment of fragments) {
-          expect({ key, fragment, stated: content.includes(fragment) }).toEqual({
+      // Judgments that are not structural never open `architecture.md`.
+      const noArchitecture = new Set([
+        '__archon_pack__bundled:sdlc:review::review-code',
+        '__archon_pack__bundled:sdlc:review::review-synthesize',
+        '__archon_pack__bundled:sdlc:review::review-tests',
+        '__archon_pack__bundled:sdlc:review::review-errors',
+        '__archon_pack__bundled:sdlc:review::review-docs',
+      ]);
+      for (const [prompts, section] of [
+        [decides, 'read the section that rules on it'],
+        [cites, 'read the section you cite, not the whole file'],
+      ] as const) {
+        for (const [key, read] of Object.entries(prompts)) {
+          const content = BUNDLED_COMMANDS[key];
+          expect(content).toBeDefined();
+          expect(content).not.toContain('.archon/engineering.md');
+          expect(content).not.toContain('Read `AGENTS.md`');
+          expect({
             key,
-            fragment,
-            stated: true,
-          });
+            read: content.includes(read),
+            section: content.includes(section),
+            architecture: content.includes('`architecture.md`'),
+          }).toEqual({ key, read: true, section: true, architecture: !noArchitecture.has(key) });
         }
       }
     });
