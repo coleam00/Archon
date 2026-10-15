@@ -6,6 +6,7 @@
  *   bench.ts run --set <set.json> --batch <case> --version <v.yaml>... --judge <spec> --out <dir>
  *                [--samples N] [--variant <id>...]
  *   bench.ts judge --out <dir> --judge <spec> [--batch <case>]
+ *   bench.ts render --out <dir> --judge <spec> [--batch <case>]
  *
  * Every sample reviews a sealed, history-less clone: a parentless snapshot of the
  * case base as `origin/<base_branch>`, and one commit on top holding the variant. No
@@ -22,10 +23,11 @@
  * Each sample that passes its hard checks is judged as soon as it finishes, by a
  * separate run of the judge workflow, so a revised rubric re-judges with `judge`
  * instead of re-running reviews. `run` and `judge` then write the batch's page and
- * `marks.yaml`, where the operator calibrates and overrides the judge.
+ * `marks.yaml`, where the operator calibrates and overrides the judge. `render`
+ * rebuilds those outputs from saved judgements without calling a provider.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -1102,7 +1104,13 @@ export function writeBatch(outDir: string, caseId: string, judge: Judge): void {
   const marks = join(dir, 'marks.yaml');
   const merged = mergeMarks(marks, markEntries(samples, judge));
   writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
-  writeFileSync(marks, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
+  const staging = `${marks}.${process.pid}.tmp`;
+  try {
+    writeFileSync(staging, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
+    renameSync(staging, marks);
+  } finally {
+    rmSync(staging, { force: true });
+  }
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
 }
 
@@ -1137,14 +1145,16 @@ async function main(argv: readonly string[]): Promise<void> {
   const outDir = resolve(values.out);
   if (values.judge === '') throw new Error('--judge needs a model spec');
 
-  if (command === 'judge') {
-    if (values.judge === undefined) throw new Error('judge needs --judge <spec>');
+  if (command === 'judge' || command === 'render') {
+    if (values.judge === undefined) throw new Error(`${command} needs --judge <spec>`);
     const judge = resolveJudge(values.judge);
-    const samples = readSamples(outDir, values.batch).filter(line => line.passed);
-    const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
-    if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
-    await Promise.all(judged.map(line => judgeSample(line, { outDir, repoRoot, judge })));
-    for (const caseId of new Set(judged.map(line => line.case))) {
+    const samples = readSamples(outDir, values.batch).filter(line => command === 'render' || line.passed);
+    if (command === 'judge') {
+      const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
+      if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
+      await Promise.all(judged.map(line => judgeSample(line, { outDir, repoRoot, judge })));
+    }
+    for (const caseId of new Set(samples.map(line => line.case))) {
       try {
         writeBatch(outDir, caseId, judge);
       } catch (error) {
@@ -1166,7 +1176,7 @@ async function main(argv: readonly string[]): Promise<void> {
     }
     return;
   }
-  if (command !== 'run') throw new Error('usage: bench.ts prepare|run|judge --out <dir> ...');
+  if (command !== 'run') throw new Error('usage: bench.ts prepare|run|judge|render --out <dir> ...');
 
   if (values.batch === undefined) throw new Error('run needs --batch <case>');
   const versionFiles = values.version ?? [];

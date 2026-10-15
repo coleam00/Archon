@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
@@ -661,6 +661,18 @@ describe('the batch page and marks', () => {
     expect(readFileSync(join(batch, 'marks.yaml'), 'utf8')).toBe('not_a_list: true');
   });
 
+  it('replaces marks without truncating the previous file', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-atomic-marks-')));
+    const batch = join(out, 'batches', 'counting');
+    const marks = join(batch, 'marks.yaml');
+    const original = '- run_id: prior\n  mark: right\n  note: Operator evidence.\n';
+    write(batch, 'marks.yaml', original);
+    linkSync(marks, join(batch, 'previous.yaml'));
+    writeBatch(out, 'counting', testJudge);
+    expect(readFileSync(join(batch, 'previous.yaml'), 'utf8')).toBe(original);
+    expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual(Bun.YAML.parse(original));
+  });
+
   it('keeps a marked or annotated entry a re-judge no longer calls for, and drops an unmarked one', () => {
     const file = join(track(mkdtempSync(join(tmpdir(), 'archon-bench-marks-'))), 'marks.yaml');
     const at = { run_id: 'run-1', version: 'v', variant: 'clean', sample: 1, judged_by: testJudge };
@@ -777,6 +789,7 @@ describe('bench run', () => {
       exec(env, 'run', '--set', set, '--batch', 'counting', '--version', join(out, 'v.yaml'), '--judge', 'opus', '--out', out, ...args);
     const run = (...args: string[]) => runIn({}, ...args);
     const judge = (...args: string[]) => exec({}, 'judge', '--out', out, '--judge', 'opus', ...args);
+    const render = (...args: string[]) => exec({}, 'render', '--out', out, '--judge', 'opus', ...args);
     const argv = (n: number): unknown => JSON.parse(readFileSync(join(cli, `argv-${n}.json`), 'utf8'));
     /** The judge run `runId` returns `value` as its judgement. */
     const judgeReturns = (runId: string, value: unknown) =>
@@ -784,7 +797,7 @@ describe('bench run', () => {
         join(cli, `detail-${runId}.json`),
         JSON.stringify({ id: runId, status: 'completed', terminal_record: { returns: { availability: 'available', node_id: 'judge', value } } })
       );
-    return { repo, out, cli, run, runIn, judge, judgeReturns, argv, packSha };
+    return { repo, out, cli, run, runIn, judge, render, judgeReturns, argv, packSha };
   }
 
   const tierOpus = { provider: 'claude', model: 'opus' };
@@ -1019,6 +1032,24 @@ describe('bench run', () => {
     expect(judged.sort()).toEqual(['run-1 by run-2', 'run-1 by run-5', 'run-3 by run-4', 'run-3 by run-6']);
     expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([marked, finding]);
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
+  });
+
+  it('renders saved judgements after marks repair without launching a judge', () => {
+    const { out, cli, run, render, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Not stated.' }], shape_unmatched: 0 });
+    expect(run('--variant', 'v1').status).toBe(0);
+    const batch = join(out, 'batches', 'counting');
+    const judgements = readFileSync(join(out, 'judgements.jsonl'), 'utf8');
+    write(batch, 'marks.yaml', 'not_a_list: true');
+    write(batch, 'page.md', 'Previous page.');
+    expect(render('--batch', 'counting').status).toBe(1);
+    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toBe('Previous page.');
+    write(batch, 'marks.yaml', '[]');
+    expect(render('--batch', 'counting').status).toBe(0);
+    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
+    expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toHaveLength(1);
+    expect(readFileSync(join(out, 'judgements.jsonl'), 'utf8')).toBe(judgements);
+    expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
   });
 
   it('rejects a malformed selected saved sample before a paid review launch', () => {
