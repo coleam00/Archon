@@ -1026,9 +1026,14 @@ branch refs/heads/feature/auth
 
     test('creates branch when exact ref is absent despite pathspec wording', async () => {
       execSpy.mockRejectedValueOnce(
-        Object.assign(new Error('pathspec did not match'), {
-          stderr: "error: pathspec 'new-branch' did not match any file(s) known to git",
-        })
+        new git.GitFailure(
+          'unclassified',
+          'pathspec did not match',
+          Object.assign(new Error('checkout'), {
+            code: 1,
+            stderr: "error: pathspec 'new-branch' did not match any file(s) known to git",
+          })
+        )
       );
       execSpy.mockRejectedValueOnce(
         new git.GitFailure(
@@ -1039,11 +1044,15 @@ branch refs/heads/feature/auth
       );
       execSpy.mockResolvedValueOnce({ stdout: 'origin\n', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
+      execSpy.mockResolvedValueOnce({
+        stdout: '+refs/heads/*:refs/remotes/origin/*\n',
+        stderr: '',
+      });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(5);
+      expect(execSpy).toHaveBeenCalledTimes(6);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -1055,9 +1064,14 @@ branch refs/heads/feature/auth
 
     test('creates branch when exact ref is absent despite missing-branch wording', async () => {
       execSpy.mockRejectedValueOnce(
-        Object.assign(new Error("branch doesn't exist"), {
-          stderr: "error: branch 'new-branch' doesn't exist",
-        })
+        new git.GitFailure(
+          'unclassified',
+          "branch doesn't exist",
+          Object.assign(new Error('checkout'), {
+            code: 1,
+            stderr: "error: branch 'new-branch' doesn't exist",
+          })
+        )
       );
       execSpy.mockRejectedValueOnce(
         new git.GitFailure(
@@ -1068,11 +1082,15 @@ branch refs/heads/feature/auth
       );
       execSpy.mockResolvedValueOnce({ stdout: 'origin\n', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
+      execSpy.mockResolvedValueOnce({
+        stdout: '+refs/heads/*:refs/remotes/origin/*\n',
+        stderr: '',
+      });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(5);
+      expect(execSpy).toHaveBeenCalledTimes(6);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -1082,8 +1100,25 @@ branch refs/heads/feature/auth
       );
     });
 
+    test('preserves a typed checkout timeout without attempting branch creation', async () => {
+      const failure = new git.GitFailure('timeout', 'checkout timed out');
+      execSpy.mockRejectedValueOnce(failure);
+      execSpy.mockRejectedValueOnce(Object.assign(new Error('absent ref'), { code: 1 }));
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const error = await git
+        .checkout(repo('/workspace/repo'), branch('feature'))
+        .catch((error: unknown) => error);
+      expect(error).toHaveProperty('cause', failure);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    });
+
     test('preserves the checkout failure when remote inspection fails', async () => {
-      const failure = new git.GitFailure('unclassified', 'original checkout failure');
+      const failure = new git.GitFailure(
+        'unclassified',
+        'original checkout failure',
+        Object.assign(new Error('checkout'), { code: 1 })
+      );
       execSpy.mockRejectedValueOnce(failure);
       execSpy.mockRejectedValueOnce(Object.assign(new Error('absent ref'), { code: 1 }));
       execSpy.mockRejectedValueOnce(new Error('remote inspection failed'));
@@ -1154,6 +1189,27 @@ branch refs/heads/feature/auth
       expect(await readFile(join(root, 'conflict.txt'), 'utf8')).toBe('local untracked content');
     });
 
+    test.each([
+      ['+refs/heads/*:refs/vendor/*', 'refs/vendor/feature'],
+      ['+refs/heads/feature:refs/vendor/feature', 'refs/vendor/feature'],
+      ['+refs/heads/*:refs/remotes/alias/*', 'refs/remotes/alias/feature'],
+      ['+refs/heads/feature:refs/remotes/alias/feature', 'refs/remotes/alias/feature'],
+    ])('preserves a checkout conflict with fetch mapping %s', async (mapping, destination) => {
+      await run('config', '--replace-all', 'remote.origin.fetch', mapping);
+      await run('update-ref', destination, remoteCommit);
+      await run('update-ref', '-d', 'refs/remotes/origin/feature');
+      await writeFile(join(root, 'conflict.txt'), 'local untracked content');
+      const error = await git.checkout(root, branch('feature')).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected checkout failure');
+      expect(error.cause).toBeInstanceOf(git.GitFailure);
+      expect(error.cause).toHaveProperty('code', 1);
+      expect(error.cause).toHaveProperty('stderr', expect.stringContaining('conflict.txt'));
+      expect(await run('rev-parse', 'HEAD')).toBe(base);
+      expect(await git.localBranchExists(root, branch('feature'))).toBe(false);
+      expect(await readFile(join(root, 'conflict.txt'), 'utf8')).toBe('local untracked content');
+    });
+
     test('preserves ambiguous remote checkout failure without creating a branch', async () => {
       await run('remote', 'add', 'other', root);
       await run('config', 'checkout.defaultRemote', 'nonexistent');
@@ -1168,6 +1224,18 @@ branch refs/heads/feature/auth
       expect(await run('rev-parse', 'HEAD')).toBe(remoteCommit);
       expect(await run('symbolic-ref', '--short', 'HEAD')).toBe('feature');
     });
+
+    test.each(['+refs/heads/*:refs/vendor/*', '+refs/heads/feature:refs/vendor/feature'])(
+      'creates an absent branch with fetch mapping %s',
+      async mapping => {
+        await run('config', '--replace-all', 'remote.origin.fetch', mapping);
+        await run('update-ref', 'refs/vendor/feature', remoteCommit);
+        await run('update-ref', '-d', 'refs/remotes/origin/feature');
+        await git.checkout(root, branch('new-branch'));
+        expect(await run('rev-parse', 'HEAD')).toBe(base);
+        expect(await run('symbolic-ref', '--short', 'HEAD')).toBe('new-branch');
+      }
+    );
 
     test('creates a genuinely new branch at HEAD', async () => {
       await git.checkout(root, branch('new-branch'));

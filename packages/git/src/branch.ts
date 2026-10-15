@@ -82,34 +82,22 @@ export async function getUniqueCommitCount(
  */
 export async function checkout(repoPath: RepoPath, branchName: BranchName): Promise<void> {
   try {
-    // Try to checkout existing branch first
     await execFileAsync('git', ['-C', repoPath, 'checkout', branchName], {
       timeout: 30000,
     });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const exists = await (async () => {
-      if (await localBranchExists(repoPath, branchName)) return true;
-      const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
-        timeout: 10000,
-      });
-      const { stdout: refs } = await execFileAsync(
-        'git',
-        ['-C', repoPath, 'for-each-ref', '--format=%(refname)', 'refs/remotes'],
-        { timeout: 10000 }
-      );
-      const remoteRefs = new Set(refs.trim().split('\n'));
-      return remotes
-        .trim()
-        .split('\n')
-        .some(remote => remoteRefs.has(`refs/remotes/${remote}/${branchName}`));
-    })().catch((inspectionError: unknown) => {
-      getLog().debug(
-        { err: inspectionError, repoPath, branchName },
-        'checkout_ref_inspection_failed'
-      );
-      return true;
-    });
+    const mayCreate =
+      error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1;
+    const exists =
+      !mayCreate ||
+      (await checkoutBranchExists(repoPath, branchName).catch((inspectionError: unknown) => {
+        getLog().debug(
+          { err: inspectionError, repoPath, branchName },
+          'checkout_ref_inspection_failed'
+        );
+        return true;
+      }));
     if (!exists) {
       await execFileAsync('git', ['-C', repoPath, 'checkout', '-b', branchName], {
         timeout: 30000,
@@ -117,10 +105,60 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
       return;
     }
 
-    // Unexpected error - surface it
     getLog().error({ repoPath, branchName, err, stderr: err.stderr }, 'checkout_failed');
     throw new Error(`Failed to checkout branch ${branchName}: ${err.message}`, { cause: error });
   }
+}
+
+async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
+  if (await localBranchExists(repoPath, branchName)) return true;
+  const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
+    timeout: 10000,
+  });
+  const { stdout: refs } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'for-each-ref', '--format=%(refname)'],
+    { timeout: 10000 }
+  );
+  const existingRefs = new Set(refs.trim().split('\n'));
+  const sourceRef = `refs/heads/${branchName}`;
+  for (const remote of remotes.trim().split('\n').filter(Boolean)) {
+    let fetchSpecs: string;
+    try {
+      const result = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'config', '--get-all', `remote.${remote}.fetch`],
+        { timeout: 10000 }
+      );
+      fetchSpecs = result.stdout;
+    } catch (error) {
+      // A remote without a fetch mapping cannot supply a checkout candidate.
+      if (error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1)
+        continue;
+      throw error;
+    }
+    for (const spec of fetchSpecs.trim().split('\n')) {
+      if (spec.startsWith('^')) continue;
+      const [source, destination] = spec.replace(/^\+/, '').split(':');
+      if (!source || !destination) continue;
+      const star = source.indexOf('*');
+      if (star === -1) {
+        if (source === sourceRef && existingRefs.has(destination)) return true;
+      } else {
+        const prefix = source.slice(0, star);
+        const suffix = source.slice(star + 1);
+        if (
+          sourceRef.length < prefix.length + suffix.length ||
+          !sourceRef.startsWith(prefix) ||
+          !sourceRef.endsWith(suffix)
+        )
+          continue;
+        const matched = sourceRef.slice(prefix.length, sourceRef.length - suffix.length);
+        if (existingRefs.has(destination.replace('*', matched))) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
