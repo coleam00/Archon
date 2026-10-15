@@ -2572,10 +2572,11 @@ export async function listConversationDetachBlockers(
 
 export async function listNotifiedTerminalRuns(): Promise<WorkflowRun[]> {
   const field = (alias: string, key: string): string => getDialect().jsonText(`${alias}.data`, key);
+  const baseline = field('e', 'baseline');
   const nonBaseline =
     getDatabaseType() === 'postgresql'
-      ? "COALESCE(e.data->>'baseline', 'false') <> 'true'"
-      : "COALESCE(json_extract(e.data, '$.baseline'), 0) = 0";
+      ? `COALESCE(${baseline}, 'false') <> 'true'`
+      : `COALESCE(${baseline}, 0) = 0`;
   const result = await pool.query<WorkflowRunRow>(
     `
     SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
