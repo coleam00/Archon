@@ -610,9 +610,10 @@ async function relocateSafeDirectory(path: RepoPath): Promise<void> {
   const lockPath = `${config}.lock`;
   // Use Git's writer lock and publish only the finished edit. Readers retain
   // their accepted trust even if a repair fails after removing the old entry.
-  const lock = await open(lockPath, 'wx', (await stat(config)).mode);
+  const lock = await open(lockPath, 'wx', 0o600);
   let published = false;
   try {
+    await lock.chmod((await stat(config)).mode);
     await lock.writeFile(await readFile(config));
     await lock.close();
     try {

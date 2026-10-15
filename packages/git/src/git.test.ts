@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm } from 'fs/promises';
+import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm, chmod, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
@@ -3269,6 +3269,8 @@ branch refs/heads/feature/auth
           await realExec('git', ['init', root]);
           await realExec('git', ['config', '--global', '--add', 'safe.directory', root]);
           await realExec('git', ['config', '--global', '--add', 'safe.directory', '']);
+          if (process.platform !== 'win32') await chmod(config, 0o660);
+          const configMode = (await stat(config)).mode;
           const checkTrust = async (): Promise<void> => {
             await realExec('git', ['-C', root, 'status', '--porcelain'], {
               env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
@@ -3325,6 +3327,7 @@ branch refs/heads/feature/auth
             (await realExec('git', ['config', '--global', 'test.concurrent'])).stdout.trim()
           ).toBe('retained');
           expect(await Bun.file(`${config}.lock`).exists()).toBe(false);
+          expect((await stat(config)).mode).toBe(configMode);
         } finally {
           execSpy.mockRestore();
           if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
