@@ -311,6 +311,37 @@ describe('review head boundary', () => {
     });
   }
 
+  it('refuses ambiguous PRs even when the second match is on a later GitHub page', () => {
+    const run = check({
+      gh: {
+        listedPrs: {
+          [`${PR.repo.host}/${PR.repo.path}`]: [
+            { number: 42, state: 'OPEN', headRefName: 'feature', headRefOid: HEAD },
+            ...Array.from({ length: 99 }, (_, index) => ({
+              number: index + 100,
+              state: 'OPEN' as const,
+              headRefName: 'feature',
+              headRepositoryOwner: { login: `fork${index}` },
+            })),
+            {
+              number: 43,
+              state: 'OPEN',
+              headRefName: 'feature',
+              headRefOid: HEAD,
+              baseRefName: 'release',
+            },
+          ],
+        },
+      },
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain(
+      'more than one open pull request matches; retry with --input scope=<full-PR-URL>'
+    );
+  });
+
   it('requires an explicit selector when empty-scope discovery finds several PRs', () => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/contributor/repo.git');
