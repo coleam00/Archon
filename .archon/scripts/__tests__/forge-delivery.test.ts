@@ -36,6 +36,7 @@ const MARKER = '<!-- archon-review-report -->';
 // it before it creates.
 const CHECKOUT = gitCheckout({}, trackTempRoot);
 const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const BASE_SHA = readFileSync(join(CHECKOUT, '.git/refs/heads/dev'), 'utf8').trim();
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
@@ -151,6 +152,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
       through('review/scripts/publish-review', {
         inputs: {
           INPUTS_PR: JSON.stringify(PR),
+          INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: BASE_SHA }),
           INPUTS_REPORT: '{ARTIFACTS}/report.md',
           INPUTS_HEAD: HEAD_SHA,
           ARCHON_NODE_EXECUTION: JSON.stringify({
