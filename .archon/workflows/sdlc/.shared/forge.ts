@@ -49,12 +49,15 @@ export function archonEnvFile(env: NodeJS.ProcessEnv = process.env): string {
   return join(home, '.env');
 }
 
+/** The GitHub forge plugin's install id; doctor.test.ts holds doctor's copy to it. */
+export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
+
 const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 // Per-user GitHub mode scrubs the shared token from a run started by a user who has
 // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
 const SETUP =
   'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
-  '`archon plugin add coleam00/Archon/plugins/forge-github`, and set `GH_TOKEN` in ' +
+  `\`archon plugin add ${GITHUB_FORGE_PLUGIN}\`, and set \`GH_TOKEN\` in ` +
   `Archon's env file \`${archonEnvFile()}\` or configure GitHub App mode. When per-user GitHub ` +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
   '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
@@ -68,7 +71,7 @@ export const REMEDY = {
   no_plugin_for_host: SETUP,
   no_credential: SETUP,
   unsupported_op:
-    'For github.com, `archon plugin update coleam00/Archon/plugins/forge-github` installs the ' +
+    `For github.com, \`archon plugin update ${GITHUB_FORGE_PLUGIN}\` installs the ` +
     'latest released plugin, which may not support this operation either. ' +
     USE_GH,
 } as const;

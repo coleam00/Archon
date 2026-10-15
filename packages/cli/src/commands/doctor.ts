@@ -241,6 +241,7 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
+// The SDLC pack owns the plugin id and the access read; doctor.test.ts holds these to it.
 export const FORGE_GITHUB_PLUGIN = 'coleam00/Archon/plugins/forge-github';
 const FORGE_PLUGIN_INSTALL = `archon plugin add ${FORGE_GITHUB_PLUGIN}`;
 

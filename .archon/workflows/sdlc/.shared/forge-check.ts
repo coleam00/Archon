@@ -7,9 +7,20 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, forgeSource, invokeForge, type ForgeSource } from './forge.ts';
+import { archonCommand, forgeSource, invokeForge, type ForgeSource, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
 import { remoteRepos } from './remote.ts';
+
+/**
+ * The read that proves a repository's forge access. `archon doctor` makes the same
+ * read; doctor.test.ts holds the two together.
+ */
+export function forgeAccessRead(repo: QualifiedPr['repo']) {
+  return {
+    op: 'pr.view',
+    data: { selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' } },
+  } as const;
+}
 
 export function checkForgeAccess(): { readonly source: ForgeSource } {
   const source = forgeSource();
@@ -93,9 +104,8 @@ function checkForge(): void {
   for (const repo of repos) {
     const name = `${repo.host}/${repo.path}`;
     try {
-      invokeForge('pr.view', {
-        selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
-      });
+      const read = forgeAccessRead(repo);
+      invokeForge(read.op, read.data);
       answered.push(name);
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);

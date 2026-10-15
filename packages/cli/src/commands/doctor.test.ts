@@ -15,7 +15,11 @@ import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
-import { forgeSource } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
+import {
+  GITHUB_FORGE_PLUGIN,
+  forgeSource,
+} from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
+import { forgeAccessRead } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -25,6 +29,7 @@ import {
   checkConnectedProviders,
   checkGhAuth,
   checkGithubForge,
+  FORGE_GITHUB_PLUGIN,
   checkAssistantLogin,
   type AssistantLoginDeps,
   checkWorkspaceWritable,
@@ -95,13 +100,15 @@ describe('checkGithubForge', () => {
     expect(runForge).not.toHaveBeenCalled();
   });
 
-  it('passes when the plugin answers an authenticated read', async () => {
+  it('passes when the plugin answers the SDLC preflight read', async () => {
     const runForge = mock(answering({ ok: true }));
     expect((await checkGithubForge({ GH_TOKEN: 'ghp_x' }, runForge)).status).toBe('pass');
-    const repo = { host: 'github.com', path: 'coleam00/Archon' };
-    expect(runForge).toHaveBeenCalledWith('pr.view', {
-      selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
-    });
+    const read = forgeAccessRead({ host: 'github.com', path: 'coleam00/Archon' });
+    expect(runForge).toHaveBeenCalledWith(read.op, read.data);
+  });
+
+  it('names the plugin the SDLC pack names', () => {
+    expect(FORGE_GITHUB_PLUGIN).toBe(GITHUB_FORGE_PLUGIN);
   });
 
   it('skips naming both steps when no plugin is installed', async () => {
@@ -161,9 +168,9 @@ describe('checkGithubForge', () => {
   it('fails with the forge message when the token is rejected', async () => {
     const result = await checkGithubForge(
       { GH_TOKEN: 'ghp_x' },
-      refusing('forge_error', 'GitHub rejected the token (401)')
+      refusing('authorization', 'Bad credentials')
     );
-    expect(result).toMatchObject({ status: 'fail', message: 'GitHub rejected the token (401)' });
+    expect(result).toMatchObject({ status: 'fail', message: 'Bad credentials' });
   });
 });
 
