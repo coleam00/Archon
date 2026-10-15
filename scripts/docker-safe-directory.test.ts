@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -17,7 +17,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
       id: 'echo 1001',
       mkdir: 'exit 0',
       find: 'for arg do if [ "$arg" = -print0 ]; then printf "%s/.git\\0" "$ARCHON_TEST_REPO"; exit; fi; done; printf "%s/.git\\n" "$ARCHON_TEST_REPO"',
-      bun: 'exit 0',
+      bun: 'if [ "$1" = -e ]; then exec "$ARCHON_TEST_BUN" "$@"; fi',
     };
     for (const [name, body] of Object.entries(scripts)) {
       await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -36,6 +36,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
       GIT_CONFIG_COUNT: '0',
       PATH: `${bin}${delimiter}${process.env.PATH}`,
       ARCHON_TEST_REPO: repo,
+      ARCHON_TEST_BUN: process.execPath,
       ARCHON_HOME: '',
       ARCHON_DATA: '',
       GH_TOKEN: '',
@@ -69,7 +70,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
     const realGit = Bun.which('git');
     if (!realGit) throw new Error('Git is required');
     const wrapper = `#!/bin/sh
-if [ "$1" = config ] && [ "$2" = --global ] && [ "$3" = --null ] && [ "$4" = --get-all ]; then
+if [ "$1" = config ] && [ "$2" = --includes ]; then
   "$ARCHON_TEST_GIT" "$@" || exit $?
   "$ARCHON_TEST_GIT" config --global --fixed-value --unset-all safe.directory "$ARCHON_TEST_REPO"
   "$ARCHON_TEST_GIT" config --global --fixed-value --replace-all safe.directory "$ARCHON_TEST_REPO" "$ARCHON_TEST_REPO"
@@ -99,7 +100,7 @@ fi
         },
       });
       await unlink(join(bin, 'git'));
-      expect(repair.exitCode).toBe(fail ? 9 : 0);
+      expect(repair.exitCode).toBe(fail ? 1 : 0);
       if (fail) expect(repair.stderr.toString()).toContain('injected-replacement-failure');
       expect(await Bun.file(marker).exists()).toBe(true);
       await unlink(marker);
@@ -137,5 +138,57 @@ fi
     expect(() =>
       execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
     ).toThrow();
+  }
+);
+
+test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])(
+  'Docker repairs trust across %s',
+  async layout => {
+    const home = trackTempRoot(await mkdtemp(join(tmpdir(), 'docker-safe-sources-')));
+    const repo = join(home, 'repo');
+    const bin = join(home, 'bin');
+    await mkdir(bin);
+    await mkdir(join(home, 'xdg/git'), { recursive: true });
+    for (const [name, body] of Object.entries({
+      id: 'echo 1001',
+      mkdir: 'exit 0',
+      find: 'printf "%s/.git\\0" "$ARCHON_TEST_REPO"',
+      bun: 'if [ "$1" = -e ]; then exec "$ARCHON_TEST_BUN" "$@"; fi',
+    }))
+      await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const env = {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, 'xdg'),
+      GIT_CONFIG_GLOBAL: undefined,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_COUNT: '0',
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
+      ARCHON_TEST_REPO: repo,
+      ARCHON_TEST_BUN: process.execPath,
+      ARCHON_HOME: '',
+      ARCHON_DATA: '',
+      GH_TOKEN: '',
+      CLAUDE_BIN_PATH: process.execPath,
+    };
+    const git = (...args: string[]) => execFileSync('git', args, { env, encoding: 'utf8' });
+    git('init', '--quiet', repo);
+    git('config', '--file', join(home, '.gitconfig'), 'safe.directory', repo);
+    git('config', '--file', join(home, 'xdg/git/config'), 'safe.directory', repo);
+    if (layout === 'include-reset') {
+      await appendFile(join(home, '.gitconfig'), '[include]\n path = reset\n');
+      git('config', '--file', join(home, 'reset'), 'safe.directory', repo);
+      await appendFile(join(home, 'reset'), '[safe]\n directory = \n');
+    }
+    for (let boot = 0; boot < 2; boot++) {
+      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
+      const entries = git('config', '--includes', '--null', '--get-all', 'safe.directory').split(
+        '\0'
+      );
+      expect(entries.filter(value => value === repo)).toHaveLength(1);
+      execFileSync('git', ['-C', repo, 'status', '--porcelain'], {
+        env: { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+      });
+    }
   }
 );

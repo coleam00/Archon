@@ -237,18 +237,12 @@ describe('WorktreeProvider against real git', () => {
   });
 
   test('new and reused checkouts work when Git requires explicit ownership trust', async () => {
-    await execFileAsync('git', [
-      'config',
-      '--global',
-      '--fixed-value',
-      '--replace-all',
-      'safe.directory',
-      repoPath,
-      repoPath,
-    ]);
-    await git(root, 'config', '--global', '--add', 'safe.directory', worktreePath);
-    await git(root, 'config', '--global', '--add', 'safe.directory', '');
-    await git(root, 'config', '--global', '--add', 'safe.directory', repoPath);
+    const config = process.env.GIT_CONFIG_GLOBAL;
+    if (!config) throw new Error('Scratch global config missing');
+    await writeFile(
+      config,
+      `[safe]\n directory = ${JSON.stringify(repoPath)}\n directory = ${JSON.stringify(worktreePath)}\n directory = \n directory = ${JSON.stringify(repoPath)}\n`
+    );
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),
       '#!/bin/sh\ngit status --porcelain >/dev/null\n',
@@ -938,7 +932,9 @@ describe('WorktreeProvider against real git', () => {
   });
 
   test('marker write failure rolls back the locked setup and retains trust', async () => {
-    await git(root, 'config', '--global', '--add', 'safe.directory', '/workspace/other');
+    const config = process.env.GIT_CONFIG_GLOBAL;
+    if (!config) throw new Error('Scratch global config missing');
+    await writeFile(config, '[safe]\n directory = /workspace/other\n');
     await git(repoPath, 'remote', 'add', 'origin', repoPath);
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),

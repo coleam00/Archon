@@ -74,50 +74,7 @@ fi
 # worktrees are nested at arbitrary depths unknown at build time.
 find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
   repo_dir="${git_dir%/.git}"
-  {
-    $RUNNER git config --global --null --get-all safe.directory || {
-      status=$?
-      if [ "$status" -ne 1 ]; then exit "$status"; fi
-    }
-  } | {
-    count=0
-    effective=0
-    while IFS= read -r -d '' entry; do
-      if [ -z "$entry" ]; then effective=0; fi
-      if [ "$entry" = "$repo_dir" ]; then
-        count=$((count + 1))
-        effective=$((effective + 1))
-      fi
-    done
-    if [ "$count" -ne 1 ] || [ "$effective" -ne 1 ]; then
-      if [ "$count" -ne "$effective" ]; then
-        $RUNNER bash -e -c '
-          config=${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}
-          if [ -z "${GIT_CONFIG_GLOBAL+x}" ] && [ ! -e "$config" ]; then
-            config=${XDG_CONFIG_HOME:-$HOME/.config}/git/config
-          fi
-          # A sentinel keeps command substitution from stripping pathname newlines.
-          config=$(readlink -fn -- "$config" && printf ".")
-          config=${config%.}
-          lock=$config.lock
-          # Share the Git writer lock; never publish the intermediate unset.
-          (set -o noclobber; : > "$lock")
-          cleanup() { rm -f -- "$lock"; }
-          trap cleanup EXIT
-          cp -p -- "$config" "$lock"
-          git config --file "$lock" --fixed-value --unset-all safe.directory "$1" || {
-            status=$?
-            if [ "$status" -ne 5 ]; then exit "$status"; fi
-          }
-          git config --file "$lock" --fixed-value --replace-all safe.directory "$1" "$1"
-          mv -f -- "$lock" "$config"
-          trap - EXIT
-        ' bash "$repo_dir"
-      else
-        $RUNNER git config --global --fixed-value --replace-all safe.directory "$repo_dir" "$repo_dir"
-      fi
-    fi
-  }
+  $RUNNER bun -e 'import { addSafeDirectory, toRepoPath } from "@archon/git"; await addSafeDirectory(toRepoPath(process.argv[1]));' "$repo_dir"
 done
 
 # The token stays in the environment, not in the persisted ~/.gitconfig.

@@ -1,7 +1,7 @@
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
-import { readdir, open, readFile, realpath, rename, stat, unlink } from 'fs/promises';
+import { readdir, open, readFile, realpath, rename, stat, unlink, appendFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
@@ -620,13 +620,12 @@ export async function syncRepository(
   return { ok: true, value: undefined };
 }
 
-async function relocateSafeDirectory(path: RepoPath): Promise<void> {
-  const home = process.env.HOME || homedir();
-  const homeConfig = join(home, '.gitconfig');
-  const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
-  const config = await realpath(
-    process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
-  );
+async function editSafeDirectory(
+  configPath: string,
+  path: RepoPath,
+  grant: boolean
+): Promise<void> {
+  const config = await realpath(configPath);
   const lockPath = `${config}.lock`;
   // Use Git's writer lock and publish only the finished edit. Readers retain
   // their accepted trust even if a repair fails after removing the old entry.
@@ -647,20 +646,24 @@ async function relocateSafeDirectory(path: RepoPath): Promise<void> {
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
     }
-    await execFileAsync(
-      'git',
-      [
-        'config',
-        '--file',
-        lockPath,
-        '--fixed-value',
-        '--replace-all',
-        'safe.directory',
-        path,
-        path,
-      ],
-      { timeout: 10000 }
-    );
+    if (grant) {
+      // Git writes into the last matching section, after any included resets.
+      await appendFile(lockPath, '\n[safe]\n');
+      await execFileAsync(
+        'git',
+        [
+          'config',
+          '--file',
+          lockPath,
+          '--fixed-value',
+          '--replace-all',
+          'safe.directory',
+          path,
+          path,
+        ],
+        { timeout: 10000 }
+      );
+    }
     await rename(lockPath, config);
     published = true;
   } finally {
@@ -689,29 +692,54 @@ async function relocateSafeDirectory(path: RepoPath): Promise<void> {
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
   try {
-    let values: string[];
+    let fields: string[];
     try {
       const { stdout } = await execFileAsync(
         'git',
-        ['config', '--global', '--null', '--get-all', 'safe.directory'],
+        [
+          'config',
+          '--includes',
+          '--show-scope',
+          '--show-origin',
+          '--null',
+          '--get-all',
+          'safe.directory',
+        ],
         { timeout: 10000 }
       );
-      values = stdout.split('\0').slice(0, -1);
+      fields = stdout.split('\0').slice(0, -1);
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
-      values = [];
+      fields = [];
     }
-    const firstGrant = values.indexOf(path);
-    // Git's empty value resets prior grants; replace-all retains their position.
-    if (firstGrant !== -1 && firstGrant < values.lastIndexOf('')) {
-      await relocateSafeDirectory(path);
+    const entries: { source: string; value: string }[] = [];
+    for (let i = 0; i < fields.length; i += 3) {
+      if (fields[i] === 'global') {
+        entries.push({ source: fields[i + 1].slice('file:'.length), value: fields[i + 2] });
+      }
+    }
+    const values = entries.map(entry => entry.value);
+    const grants = entries.filter(entry => entry.value === path);
+    if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
+    if (grants.length === 0 && !values.includes('')) {
+      await execFileAsync(
+        'git',
+        ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
+        { timeout: 10000 }
+      );
       return;
     }
-    await execFileAsync(
-      'git',
-      ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
-      { timeout: 10000 }
+    const home = process.env.HOME || homedir();
+    const homeConfig = join(home, '.gitconfig');
+    const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
+    const target = await realpath(
+      process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
     );
+    // Publish effective trust before removing duplicate grants in earlier sources.
+    await editSafeDirectory(target, path, true);
+    for (const source of new Set(grants.map(entry => entry.source))) {
+      if ((await realpath(source)) !== target) await editSafeDirectory(source, path, false);
+    }
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');

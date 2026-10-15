@@ -706,13 +706,10 @@ describe('cloneRepository', () => {
           Object.assign(process.env, env);
           spyExecFileAsync.mockImplementation(realExecFileAsync);
           spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
-          await realExecFileAsync('git', [
-            'config',
-            '--global',
-            '--add',
-            'safe.directory',
-            '/workspace/other',
-          ]);
+          await fsPromises.writeFile(
+            env.GIT_CONFIG_GLOBAL,
+            '[safe]\n directory = /workspace/other\n'
+          );
           mockCreateCodebase.mockResolvedValue(makeCodebase());
 
           // The filesystem mock models a removed clone, so each invocation sets up the same path.

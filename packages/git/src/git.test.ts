@@ -3263,6 +3263,26 @@ branch refs/heads/feature/auth
         { timeout: 10000 }
       );
     });
+    test('times out a hung initial config read before any write', async () => {
+      execSpy.mockRestore();
+      const realExec = git.execFileAsync;
+      let killed = false;
+      execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_file, args, options) => {
+        expect(args).toContain('--get-all');
+        try {
+          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], options);
+        } catch (error) {
+          killed = error instanceof Error && 'killed' in error && error.killed === true;
+          throw error;
+        }
+      });
+      await expect(git.addSafeDirectory(repo('/workspace/repo'))).rejects.toThrow(
+        'Failed to add safe directory'
+      );
+      expect(killed).toBe(true);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    }, 15000);
+
     test.each([false, true])(
       'reset repair preserves accepted trust (write fails: %s)',
       async fail => {
@@ -3276,8 +3296,7 @@ branch refs/heads/feature/auth
         process.env.GIT_CONFIG_GLOBAL = config;
         try {
           await realExec('git', ['init', root]);
-          await realExec('git', ['config', '--global', '--add', 'safe.directory', root]);
-          await realExec('git', ['config', '--global', '--add', 'safe.directory', '']);
+          await writeFile(config, `[safe]\n directory = ${JSON.stringify(root)}\n directory = \n`);
           if (process.platform !== 'win32') await chmod(config, 0o660);
           const configMode = (await stat(config)).mode;
           const checkTrust = async (): Promise<void> => {
@@ -3381,6 +3400,53 @@ branch refs/heads/feature/auth
         else process.env.GIT_CONFIG_GLOBAL = previousConfig;
       }
     });
+
+    test.each(['include-reset', 'two-globals'])(
+      'repairs effective global trust across %s',
+      async layout => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(
+          (await realpath(await mkdtemp(join(tmpdir(), 'git-safe-sources-')))).replaceAll('\\', '/')
+        );
+        const saved = {
+          HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+          GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+        };
+        Object.assign(process.env, { HOME: root, XDG_CONFIG_HOME: join(root, 'xdg') });
+        delete process.env.GIT_CONFIG_GLOBAL;
+        try {
+          await realMkdir(join(root, 'xdg/git'), { recursive: true });
+          await git.execFileAsync('git', ['init', root]);
+          const grant = `[safe]\n directory = "${root}"\n`;
+          await writeFile(join(root, 'xdg/git/config'), grant);
+          await writeFile(
+            join(root, '.gitconfig'),
+            layout === 'two-globals' ? grant : `${grant}[include]\n path = reset\n`
+          );
+          await writeFile(join(root, 'reset'), `${grant}[safe]\n directory = \n`);
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await git.addSafeDirectory(repo(root));
+            const { stdout } = await git.execFileAsync('git', [
+              'config',
+              '--includes',
+              '--null',
+              '--get-all',
+              'safe.directory',
+            ]);
+            expect(stdout.split('\0').filter(value => value === root)).toHaveLength(1);
+            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
+          }
+        } finally {
+          for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        }
+      }
+    );
 
     test('repeated setup keeps one exact safe-directory entry and preserves other paths', async () => {
       execSpy.mockRestore();
