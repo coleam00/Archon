@@ -3,6 +3,7 @@
  * workflow loading and execution (non-schema hand-written discriminated unions).
  */
 import { z } from 'zod';
+import type { deadlineWaitCursor } from '../store';
 import {
   dagNodeSchema,
   effortLevelSchema,
@@ -400,7 +401,12 @@ export type LoadCommandResult =
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
   | { success: false; workflowRunId?: string; error: string }
-  | { success: true; paused: true; workflowRunId: string };
+  | {
+      success: true;
+      paused: true;
+      workflowRunId: string;
+      waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+    };
 
 // ---------------------------------------------------------------------------
 // WorkflowLoadError / WorkflowLoadResult — workflow discovery results

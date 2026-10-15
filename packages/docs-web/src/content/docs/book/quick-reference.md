@@ -34,11 +34,14 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 
 | Command | Description |
 |---------|-------------|
-| `archon isolation list` | List all active worktrees |
-| `archon isolation cleanup` | Remove stale worktrees (older than 7 days) |
-| `archon isolation cleanup <days>` | Remove stale worktrees older than N days |
+| `archon isolation list` | List active worktrees and containers |
+| `archon isolation cleanup` | Remove eligible worktrees, containers, and container volumes older than 7 days |
+| `archon isolation cleanup <days>` | Remove eligible worktrees, containers, and container volumes older than N days |
 | `archon isolation cleanup --merged` | Remove worktrees whose branches merged into the base branch |
 | `archon isolation cleanup --merged --include-closed` | Also remove worktrees with closed (abandoned) PRs |
+
+Age-based container cleanup runs even when no worktree qualifies. Live or resumable runs
+and platform retention policies protect their workspaces.
 
 Cleanup keeps and reports workspaces whose originating platform is no longer
 registered, including merged worktrees. Use `archon isolation list` to inspect them.

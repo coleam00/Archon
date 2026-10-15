@@ -9,6 +9,10 @@
  * case asserts on that recorded request (tools, injected skill bodies, guidance) and on
  * the hook log, so it reads what a model would actually see.
  *
+ * The stub provider requires OpenAI auth and the ChatGPT backend points at the same stub,
+ * so the recorded request also carries the credential each auth path logged Codex in with
+ * and nothing leaves localhost.
+ *
  * The temp home is the fixture under test; the provider never sets CODEX_HOME itself.
  * The binary is required: a missing one fails here rather than skipping.
  */
@@ -21,6 +25,7 @@ import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import type { MessageChunk, SendQueryOptions } from '../types';
 import { AppServerConnection } from './app-server';
 import { resolveBundledCodexBinary } from './binary-resolver';
+import { CODEX_CREDENTIAL_ENV } from './credential-env';
 import { CodexProvider } from './provider';
 
 /** A minimal MCP stdio server whose one tool is named `<argv[2]>_marker`. */
@@ -44,7 +49,13 @@ let home: string;
 let repo: string;
 let hookLog: string;
 let stub: ReturnType<typeof Bun.serve>;
-let modelRequests: string[] = [];
+/** A model request as the stub received it, with the credential headers it carried. */
+interface ModelRequest {
+  body: string;
+  authorization: string | null;
+  accountId: string | null;
+}
+let modelRequests: ModelRequest[] = [];
 /** The request an unscoped turn sends: the control a scoped request is compared against. */
 let unscopedRequest: string;
 
@@ -169,7 +180,13 @@ beforeAll(async () => {
     port: 0,
     hostname: '127.0.0.1',
     async fetch(request) {
-      if (request.method === 'POST') modelRequests.push(await request.text());
+      if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/responses')) {
+        modelRequests.push({
+          body: await request.text(),
+          authorization: request.headers.get('authorization'),
+          accountId: request.headers.get('chatgpt-account-id'),
+        });
+      }
       return Response.json(
         { error: { message: 'stub model', type: 'invalid_request_error' } },
         { status: 400 }
@@ -182,11 +199,13 @@ beforeAll(async () => {
     [
       'model = "stub-model"',
       'model_provider = "stub"',
+      `chatgpt_base_url = ${toml(`http://127.0.0.1:${String(stub.port)}/backend-api/`)}`,
       '',
       '[model_providers.stub]',
       'name = "stub"',
       `base_url = ${toml(`http://127.0.0.1:${String(stub.port)}/v1`)}`,
       'wire_api = "responses"',
+      'requires_openai_auth = true',
       'request_max_retries = 0',
       'stream_max_retries = 0',
       '',
@@ -205,7 +224,7 @@ beforeAll(async () => {
   // took 6 to 18 s, against 2 to 4 s for each later one. Taking it here, under the setup
   // budget, keeps it off whichever case would otherwise run first.
   await runRequest({});
-  unscopedRequest = modelRequests[0] ?? '';
+  unscopedRequest = modelRequests[0]?.body ?? '';
 }, testTimeout(60_000));
 
 afterAll(async () => {
@@ -249,10 +268,17 @@ async function runRequest(
   resumeSessionId?: string
 ): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
+  const { env, ...rest } = options;
   for await (const chunk of new CodexProvider().sendQuery(PROMPT, repo, resumeSessionId, {
-    // An empty CODEX_API_KEY keeps an operator's key from logging the stub provider in.
-    env: { CODEX_HOME: home, CODEX_API_KEY: '' },
-    ...options,
+    // Empty Archon-supplied credentials keep an operator's own from logging the stub in.
+    env: {
+      CODEX_HOME: home,
+      [CODEX_CREDENTIAL_ENV.apiKey]: '',
+      [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: '',
+      [CODEX_CREDENTIAL_ENV.chatgptAccountId]: '',
+      ...env,
+    },
+    ...rest,
   })) {
     chunks.push(chunk);
   }
@@ -283,7 +309,7 @@ interface Seen {
 /** What the model would have seen on the turn's first request, and which hooks ran. */
 async function seen(): Promise<Seen> {
   expect(modelRequests.length).toBeGreaterThan(0);
-  const request = modelRequests[0];
+  const request = modelRequests[0].body;
   const hooks = (await readFile(hookLog, 'utf8').catch(() => ''))
     .split(/\r?\n/)
     .filter(Boolean)
@@ -320,11 +346,11 @@ describe('Codex capability scope on the real binary', () => {
       const result = resultOf(await runRequest({ purpose: 'title-generation' }));
       expect(result.failure?.evidence).toContain('stub model');
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
-      expect(modelRequests[0]).not.toContain('AMBIENT-CATALOGUE-MARKER');
-      expect(modelRequests[0]).not.toContain('AMBIENT-BODY-MARKER');
-      expect(modelRequests[0]).not.toContain('## Skills');
-      expect(modelRequests[0]).not.toContain('# Apps');
-      expect(modelRequests[0]).not.toContain('# Plugins');
+      expect(modelRequests[0].body).not.toContain('AMBIENT-CATALOGUE-MARKER');
+      expect(modelRequests[0].body).not.toContain('AMBIENT-BODY-MARKER');
+      expect(modelRequests[0].body).not.toContain('## Skills');
+      expect(modelRequests[0].body).not.toContain('# Apps');
+      expect(modelRequests[0].body).not.toContain('# Plugins');
       if (!result.sessionId) throw new Error('title thread missing');
       const entries: unknown[] = (await readFile(await rolloutOf(result.sessionId), 'utf8'))
         .trim()
@@ -478,5 +504,99 @@ describe('Codex capability scope on the real binary', () => {
       expect(modelRequests).toEqual([]);
     },
     testTimeout(20_000)
+  );
+});
+
+/** An unsigned ChatGPT access token: Codex reads its claims and never verifies it. */
+function chatgptAccessToken(accountId: string): string {
+  const part = (value: object): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const claims = {
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    email: 'boundary@example.com',
+    'https://api.openai.com/auth': { chatgpt_account_id: accountId, chatgpt_plan_type: 'plus' },
+  };
+  return `${part({ alg: 'none' })}.${part(claims)}.sig`;
+}
+
+const MANAGED_TOKEN = chatgptAccessToken('acct-boundary');
+const MANAGED_ENV = {
+  [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: MANAGED_TOKEN,
+  [CODEX_CREDENTIAL_ENV.chatgptAccountId]: 'acct-boundary',
+};
+
+async function sha256(path: string): Promise<string> {
+  return new Bun.CryptoHasher('sha256').update(await readFile(path)).digest('hex');
+}
+
+/** The user's config and guidance files, hashed, so a run that rewrote one shows. */
+async function userFileHashes(): Promise<string[]> {
+  const files = [
+    join(home, 'config.toml'),
+    join(home, 'AGENTS.md'),
+    join(home, 'hooks.json'),
+    join(repo, 'AGENTS.md'),
+  ];
+  return await Promise.all(files.map(sha256));
+}
+
+async function runAuthedNode(
+  env: Record<string, string>,
+  nodeConfig: SendQueryOptions['nodeConfig'] = {}
+): Promise<MessageChunk[]> {
+  return await runRequest({ nodeConfig: { nodeId: 'scoped', ...nodeConfig }, env });
+}
+
+describe('Codex auth paths keep the user’s own home on the real binary', () => {
+  interface AuthPath {
+    name: string;
+    env: Record<string, string>;
+    authorization: string | null;
+    accountId: string | null;
+  }
+  test.each<AuthPath>([
+    { name: 'ambient login', env: {}, authorization: null, accountId: null },
+    {
+      name: 'Archon-supplied API key',
+      env: { [CODEX_CREDENTIAL_ENV.apiKey]: 'sk-boundary-key' },
+      authorization: 'Bearer sk-boundary-key',
+      accountId: null,
+    },
+    {
+      name: 'Archon-managed ChatGPT subscription',
+      env: MANAGED_ENV,
+      authorization: `Bearer ${MANAGED_TOKEN}`,
+      accountId: 'acct-boundary',
+    },
+  ])(
+    '$name authenticates with the user’s config and guidance and writes nothing to their home',
+    async ({ env, authorization, accountId }) => {
+      const before = await userFileHashes();
+      const result = resultOf(await runAuthedNode(env));
+      expect(result.failure?.evidence).toContain('stub model');
+      // The user's config.toml defined the provider that received this credential.
+      expect(modelRequests[0]).toMatchObject({ authorization, accountId });
+      expect((await seen()).guidance).toBe(true);
+      if (!result.sessionId) throw new Error('thread missing');
+      expect(await rolloutOf(result.sessionId)).toStartWith(home);
+      expect(await Bun.file(join(home, 'auth.json')).exists()).toBe(false);
+      expect(await userFileHashes()).toEqual(before);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a managed subscription leaves capability scope as it is',
+    async () => {
+      await runAuthedNode(MANAGED_ENV);
+      expect(modelRequests[0].authorization).toBe(`Bearer ${MANAGED_TOKEN}`);
+      expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
+
+      modelRequests = [];
+      await rm(hookLog, { force: true });
+      await runAuthedNode(MANAGED_ENV, { plugins: ['alpha@fixture'] });
+      expect(modelRequests[0].authorization).toBe(`Bearer ${MANAGED_TOKEN}`);
+      expect(await seen()).toEqual(ALPHA_ONLY);
+    },
+    testTimeout(40_000)
   );
 });

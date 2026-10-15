@@ -8,7 +8,8 @@ import {
   toRepoPath,
   toBranchName,
   execFileAsync,
-  hasUncommittedChanges,
+  hasUncommittedChangesStrict,
+  worktreeExists,
   toWorktreePath,
   getDefaultBranch,
   getUniqueCommitCount,
@@ -120,14 +121,15 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 
   console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
 
-  const staleEnvs = await isolationDb.findStaleEnvironments(daysStale);
+  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
+    env => env.provider === 'worktree'
+  );
 
   if (staleEnvs.length === 0) {
-    console.log('No stale environments found.');
-    return;
+    console.log('No stale worktree environments found.');
+  } else {
+    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
   }
-
-  console.log(`Found ${String(staleEnvs.length)} stale environment(s):`);
 
   const provider = getIsolationProvider();
   let cleaned = 0;
@@ -314,8 +316,11 @@ export async function isolationCompleteCommand(
 
       // Check 1: uncommitted changes in worktree
       try {
-        const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
-        if (hasChanges) {
+        const workingPath = toWorktreePath(env.working_path);
+        if (
+          (await worktreeExists(workingPath)) &&
+          (await hasUncommittedChangesStrict(workingPath))
+        ) {
           blockers.push('uncommitted changes in worktree');
         }
       } catch (error) {

@@ -3,7 +3,6 @@ export {
   parsePiConfig,
   resolvePiExtensionSettings,
   type PiProviderDefaults,
-  type ParsedPiConfig,
   type PiNodeOverride,
   type PiExtensionSettings,
 } from './config';

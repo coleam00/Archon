@@ -71,13 +71,11 @@ export {
   agentDefinitionSchema,
   executionContextSchema,
   systemPromptInputSchema,
-  systemPromptPresetSchema,
   type AgentDefinition,
   CONTAINER_ENV_DENYLIST,
   defineNativeToolInputSchema,
   type MessageChunk,
   type ResultChunk,
-  type SystemPromptPreset,
   type SystemPromptInput,
   type ExecutionContext,
   type AgentRequestOptions,
@@ -123,6 +121,12 @@ export {
   requireProvider,
   parseProviderRunModel,
 } from './registration';
+export {
+  declaredSkillRoots,
+  skillDiscoverySchema,
+  type SkillDiscovery,
+  type SkillRootScope,
+} from './skills';
 
 export { buildProviderSubprocessEnv } from './agent-provider';
 

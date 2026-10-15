@@ -182,7 +182,7 @@ The former plugin `install` verb remains a deprecated alias for `archon plugin a
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
-A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each installed chat receipt starts one supervised plugin process. Install, update, and removal take effect at the next restart. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
+A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each usable chat receipt starts one supervised plugin process; a receipt that is unreadable or does not own its executable is logged and skipped until `update <id>` or `remove <id>` repairs it. Install, update, and removal take effect at the next restart. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -1056,10 +1056,10 @@ Signal an exact event wait occurrence and attempt its execution immediately:
 
 ```bash
 archon workflow signal <full-run-id> --event checks.complete \
-  --resume-at '2026-10-04T12:00:00.000Z' --data '{"conclusion":"success"}' --json
+  --occurrence '<metadata.wait.pauseId>' --data '{"conclusion":"success"}' --json
 ```
 
-Use the event name and `metadata.wait.resumeAt` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Stale, duplicate, expired, mismatched, and non-event occurrences are rejected without resuming.
+Use the event name and `metadata.wait.pauseId` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Duplicate, expired, mismatched, and non-event signals are rejected without resuming. `--resume-at <ISO timestamp>` remains accepted for compatibility and is required when `--occurrence` is omitted. Without an occurrence, a stale signal cannot be distinguished from a later wait with the same event and deadline. When both selectors are supplied, both must match. Persisted waits without a `pauseId` can still be signaled with `--resume-at`.
 
 The result reports `signaled` separately from admission and settlement. If the signal succeeds but execution is refused or fails, it remains durable, the command returns 1, and a later `workflow wake` can retry after the problem is resolved. A concurrent resume winner after a successful signal is a normal outcome.
 
@@ -1380,11 +1380,21 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 To explicitly discard a resumable run and remove the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
-of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
-an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
-how to retry.
+of this section. Abandon removes a checkout only when the run holds its matching creation
+proof, even if the checkout has since been adopted. It deletes uncommitted work there and
+keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
-Remove stale environments. Age cleanup uses the originating platform's registered policy.
+Remove stale environments. Worktree cleanup only handles worktree records. Container
+cleanup removes eligible containers and their volumes through the container backend,
+including when no stale worktrees exist. A missing host folder does not make a container
+destroyed. To clean eligible containers without waiting for the default age threshold,
+run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
+
+Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active container
+environments remain. The error lists their environment IDs and the cleanup command.
+Clean them up explicitly, then retry deletion.
+
+Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
 the plugins. A receipt supersedes a bundled chat policy with the same platform id.
 
@@ -1396,8 +1406,10 @@ behavior.
 
 Ordinary removal requires a stored creation proof matching
 Archon's marker and Git registration in the expected repository. Replacement
-repositories, adopted checkouts, and older records without proof are retained for
-operator inspection. If Git removal leaves a directory behind, cleanup reports it
+repositories and checkouts without matching stored proof, including newly registered
+adoptions and older records, are retained for operator inspection. Reusing a registered
+checkout sets `adopted: true` while preserving its creation proof, so that checkout
+can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
 Cleanup deletes an environment's local branch only when Archon created that branch.

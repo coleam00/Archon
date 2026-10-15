@@ -1244,6 +1244,23 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 }
 
 /**
+ * Whether a run executes in this conversation as its own transcript: a hidden
+ * worker conversation, or a CLI run's conversation. A foreground run started from
+ * a chat executes in that chat (`conversation_id = parent_conversation_id`), and
+ * the chat stays its owner's, so it does not count.
+ */
+export async function isRunTranscriptConversation(conversationId: string): Promise<boolean> {
+  const result = await pool.query<{ found: number }>(
+    `SELECT 1 AS found FROM remote_agent_workflow_runs
+     WHERE conversation_id = $1
+       AND (parent_conversation_id IS NULL OR parent_conversation_id <> conversation_id)
+     LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows.length > 0;
+}
+
+/**
  * Find the most recent workflow run for a worker platform conversation ID.
  * Joins with conversations table to resolve platform_conversation_id → DB id.
  */
@@ -1768,14 +1785,22 @@ export async function clearWorkflowWaitContext(
     `wait.${waitContext.kind === 'attention' ? 'waitingSince' : 'resumeAt'}`
   );
   const cursor = waitContext.kind === 'attention' ? waitContext.waitingSince : waitContext.resumeAt;
+  const pauseIdExpr = dialect.jsonText('metadata', 'wait.pauseId');
+  const occurrenceMatches =
+    waitContext.pauseId === undefined ? `${pauseIdExpr} IS NULL` : `${pauseIdExpr} = $4`;
   const clearWait = dialect.jsonRemove('metadata', 'wait');
   try {
     return await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${clearWait}
-         WHERE id = $1 AND status = 'running' AND ${nodeExpr} = $2 AND ${cursorExpr} = $3`,
-        [id, waitContext.nodeId, cursor]
+         WHERE id = $1 AND status = 'running' AND ${nodeExpr} = $2 AND ${cursorExpr} = $3 AND ${occurrenceMatches}`,
+        [
+          id,
+          waitContext.nodeId,
+          cursor,
+          ...(waitContext.pauseId === undefined ? [] : [waitContext.pauseId]),
+        ]
       );
       if ((result.rowCount ?? 0) === 0) return { cleared: false };
       const rows = waitCompletionEvents(id, completion);
@@ -1947,7 +1972,8 @@ export async function deferWorkflowContinuation(
     await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4)
+       WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4
+           AND (${waitPauseId} = $7 OR (${waitPauseId} IS NULL AND $7 IS NULL)))
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
          OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
@@ -1959,6 +1985,7 @@ export async function deferWorkflowContinuation(
         cursor.kind === 'quota' ? null : cursor.nodeId,
         cursor.kind === 'quota' ? cursor.attempt : null,
         cursor.kind === 'answered' ? cursor.pauseId : null,
+        cursor.kind === 'wait' ? (cursor.pauseId ?? null) : null,
       ]
     );
   } catch (error) {
@@ -2068,6 +2095,12 @@ export async function signalWorkflowWait(
   const nodeExpr = dialect.jsonText('metadata', 'wait.nodeId');
   const signaledExpr = dialect.jsonText('metadata', 'wait.signaledAt');
   const resumeAtExpr = dialect.jsonText('metadata', 'wait.resumeAt');
+  const pauseIdExpr = dialect.jsonText('metadata', 'wait.pauseId');
+  const pauseIdParam = payload === undefined ? 6 : 7;
+  const occurrenceMatch =
+    parsedWaitContext.pauseId === undefined
+      ? `${pauseIdExpr} IS NULL`
+      : `${pauseIdExpr} = $${String(pauseIdParam)}`;
   const signaledAt = new Date().toISOString();
   const metadataWrite =
     payload === undefined
@@ -2084,6 +2117,7 @@ export async function signalWorkflowWait(
          SET metadata = ${metadataWrite}
          WHERE id = $1 AND status = 'paused' AND ${eventExpr} = $2
            AND ${nodeExpr} = $3 AND ${resumeAtExpr} = $4
+           AND ${occurrenceMatch}
            AND ${signaledExpr} IS NULL AND ${resumeAtExpr} > $5`,
         payload === undefined
           ? [
@@ -2092,6 +2126,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.nodeId,
               parsedWaitContext.resumeAt,
               signaledAt,
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
           : [
               id,
@@ -2100,6 +2135,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.resumeAt,
               signaledAt,
               JSON.stringify(payload),
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
       );
       const signaled = (result.rowCount ?? 0) > 0;

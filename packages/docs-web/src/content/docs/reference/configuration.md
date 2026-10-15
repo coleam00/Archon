@@ -302,10 +302,11 @@ absent from disk entirely, such as Claude's built-in skills and plugin-qualified
 `plugin:skill` entries, are left to the SDK to resolve. A plugin's skill loads only
 when the node also names that plugin under `plugins:`.
 
-Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
-resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo
-therefore narrows and reports itself, instead of falling back to the permissive
-`['project', 'user']` default.
+Archon refuses a config file with an unrecognized entry such as
+`settingSources: ['projct']`. Config that reaches the provider without that check
+has only the unrecognized entry dropped, and logs `provider.config_invalid_fields_dropped`.
+A typo therefore narrows the sources and reports itself, instead of falling back to
+the permissive `['project', 'user']` default.
 
 | Value | Description |
 |-------|-------------|
@@ -611,7 +612,7 @@ To connect once the vars are set: `archon auth github` (CLI), `/archon connect g
 
 Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
 
-A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved and visibility stays open. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it, while the local operator always remains allowed. See [Who can act on a run](/reference/security/#who-can-act-on-a-run). `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it, while the local operator always remains allowed. See [Who can act on a run](/reference/security/#who-can-act-on-a-run). Web and CLI conversations are private to their owner; see [Adapter authorization](/reference/security/#adapter-authorization). Run reads stay open: `GET /api/workflows/runs?mine=true` is a non-enforcing "my" filter, not a security boundary.
 
 | Variable | Description | Default |
 | --- | --- | --- |

@@ -76,6 +76,8 @@ mock.module('../auth', () => ({
       : null,
   isWebAuthEnabled: () => requireRunIdentity || sessionUserId !== undefined,
   isApiGateEnabled: () => false,
+  // Conversation ownership has its own suite (api.conversation-ownership.test.ts).
+  isConversationOwnershipEnforced: () => false,
   getSignupMode: () => 'disabled',
 }));
 function makeUser(id: string): User {
@@ -2415,6 +2417,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
           owner: 'node',
           nodeId: 'checks',
           kind: 'event',
+          pauseId: 'first',
           event: 'checks.complete',
           waitingSince: '2026-08-24T10:00:00.000Z',
           resumeAt: '2026-08-25T10:00:00.000Z',
@@ -2428,7 +2431,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event: 'checks.complete',
-        resumeAt: '2026-08-25T10:00:00.000Z',
+        occurrence: 'first',
         payload: { conclusion: 'success' },
       }),
     });
@@ -2440,6 +2443,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
         owner: 'node',
         nodeId: 'checks',
         kind: 'event',
+        pauseId: 'first',
         event: 'checks.complete',
         waitingSince: '2026-08-24T10:00:00.000Z',
         resumeAt: '2026-08-25T10:00:00.000Z',
@@ -2466,6 +2470,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
           owner: 'node',
           nodeId: 'checks',
           kind: 'event',
+          pauseId: 'web-occurrence',
           event: 'checks.complete',
           waitingSince: '2026-08-24T10:00:00.000Z',
           resumeAt: '2026-08-25T10:00:00.000Z',
@@ -2484,6 +2489,11 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
     });
 
     expect(response.status).toBe(200);
+    expect(mockSignalWorkflowWait).toHaveBeenCalledWith(
+      'run-wait-web',
+      expect.objectContaining({ pauseId: 'web-occurrence' }),
+      undefined
+    );
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockGetConversationById).not.toHaveBeenCalled();
@@ -2503,6 +2513,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
           sessionId: null,
           sessionProvider: null,
           kind: 'event',
+          pauseId: 'loop-occurrence',
           event: 'checks.complete',
           waitingSince: '2026-08-24T10:00:00.000Z',
           resumeAt: '2026-08-25T10:00:00.000Z',
@@ -2516,6 +2527,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event: 'checks.complete',
+        occurrence: 'loop-occurrence',
         resumeAt: '2026-08-25T10:00:00.000Z',
       }),
     });
@@ -2528,6 +2540,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
         nodeId: 'release',
         bodyWaitId: 'checks',
         iteration: 2,
+        pauseId: 'loop-occurrence',
         event: 'checks.complete',
         resumeAt: '2026-08-25T10:00:00.000Z',
       }),
@@ -2580,9 +2593,10 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
           sessionId: null,
           sessionProvider: null,
           kind: 'event',
+          pauseId: 'second',
           event: 'checks.complete',
           waitingSince: '2026-08-24T10:01:00.000Z',
-          resumeAt: '2026-08-25T10:01:00.000Z',
+          resumeAt: '2026-08-25T10:00:00.000Z',
         },
       },
     });
@@ -2594,11 +2608,28 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
       body: JSON.stringify({
         event: 'checks.complete',
         resumeAt: '2026-08-25T10:00:00.000Z',
+        occurrence: 'first',
         payload: { conclusion: 'stale' },
       }),
     });
 
     expect(response.status).toBe(400);
+    expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { event: 'checks.complete' },
+    { event: 'checks.complete', occurrence: '' },
+    { event: 'checks.complete', occurrence: 'first', resumeAt: 'today' },
+  ])('rejects invalid signal selectors before reading the run: %j', async body => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-wait-2/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(400);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
     expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
   });
 

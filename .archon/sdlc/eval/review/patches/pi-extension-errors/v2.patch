@@ -1,0 +1,25 @@
+diff --git a/packages/providers/src/community/pi/extension-error-broker.ts b/packages/providers/src/community/pi/extension-error-broker.ts
+index 21c941d40..d0e6e153e 100644
+--- a/packages/providers/src/community/pi/extension-error-broker.ts
++++ b/packages/providers/src/community/pi/extension-error-broker.ts
+@@ -1,5 +1,4 @@
+ import { createLogger } from '@archon/paths';
+-import type { ExtensionError } from '@earendil-works/pi-coding-agent';
+ 
+ import { Semaphore } from './semaphore';
+ 
+@@ -9,6 +8,14 @@ function getLog(): ReturnType<typeof createLogger> {
+   return cachedLog;
+ }
+ 
++/** Structured failure Pi hands to the `onError` callback of `bindExtensions()`. */
++export interface ExtensionError {
++  extensionPath: string;
++  event: string;
++  error: string;
++  stack?: string;
++}
++
+ export interface PiExtensionTurn {
+   onError(listener: (error: Error) => void): () => void;
+   report(error: Error, extensionPath: string, evidence?: string): void;

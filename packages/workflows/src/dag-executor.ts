@@ -46,8 +46,7 @@ import {
   recordNodeState,
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { readFile } from 'fs/promises';
-import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
+import { basename, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
@@ -221,12 +220,14 @@ import {
   type JsonValue,
   type TemplateToken,
 } from './output-ref';
+import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
 import { validateArtifactPointers } from './artifact-pointer';
 import {
   COMPILED_LOOP_COMMAND,
   readComposedBindings,
+  readHomeMcpDirectory,
   resolveIncludeOutputAliases,
   readComposedMeta,
   type LoopWithCompiledCommand,
@@ -661,35 +662,16 @@ function applyPresetOptions(
   return undefined;
 }
 
-/**
- * The server names an MCP config file declares. `missing` is set only for ENOENT. Any
- * other read, parse or shape failure leaves `servers` undefined and is debug-logged:
- * the provider owns full loading and reports a broken file itself.
- */
-async function readMcpServerNames(
-  fullPath: string
-): Promise<{ missing: boolean; servers?: string[] }> {
-  let raw: string;
+/** The provider diagnoses invalid selected JSON; inspection only supplies filtering names. */
+function parseMcpServerNames(raw: string, fullPath: string): string[] | undefined {
   try {
-    raw = await readFile(fullPath, 'utf-8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { missing: true };
-    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
-  }
-  const serverMap = mcpServerMap(parsed);
-  if (!serverMap.ok) {
+    const serverMap = mcpServerMap(JSON.parse(raw));
+    if (serverMap.ok) return Object.keys(serverMap.servers);
     getLog().debug({ error: serverMap.error, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
+  } catch (err) {
+    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
   }
-  return { missing: false, servers: Object.keys(serverMap.servers) };
+  return undefined;
 }
 
 /** What a node's `mcp:` declaration hands its provider for one attempt. */
@@ -697,8 +679,9 @@ export type NodeMcpResolution =
   | { kind: 'none' }
   /** The provider loads `path`; `servers` are the names the file declares, if readable. */
   | { kind: 'load'; path: string; servers: Set<string> }
+  | { kind: 'missing'; path: string; servers: Set<string>; diagnostic: string }
   /** An optional declaration the node runs without. */
-  | { kind: 'unavailable'; fullPath: string; record: McpUnavailable };
+  | { kind: 'unavailable'; fullPath: string; record: McpUnavailable; diagnostic?: string };
 
 /**
  * Decide whether a node's MCP servers reach its provider. A required declaration
@@ -709,13 +692,16 @@ export type NodeMcpResolution =
 export async function resolveNodeMcp(
   mcp: NodeMcp | undefined,
   capabilities: ProviderCapabilities,
-  cwd: string
+  cwd: string,
+  homeYamlDirectory?: string
 ): Promise<NodeMcpResolution> {
   const declaration = mcpDeclaration(mcp);
   if (declaration === undefined) return { kind: 'none' };
   const { path, optional } = declaration;
-  const fullPath = isAbsolute(path) ? path : resolvePath(cwd, path);
-  const { missing, servers } = await readMcpServerNames(fullPath);
+  const selected = await resolveMcpPath(path, cwd, homeYamlDirectory);
+  const fullPath = selected.kind === 'missing' ? selected.attemptedPaths[0] : selected.path;
+  const servers =
+    selected.kind === 'found' ? parseMcpServerNames(selected.content, fullPath) : undefined;
   if (optional && !capabilities.mcp) {
     return {
       kind: 'unavailable',
@@ -723,10 +709,19 @@ export async function resolveNodeMcp(
       record: { path, reason: 'provider_unsupported', ...(servers ? { servers } : {}) },
     };
   }
-  if (optional && missing) {
-    return { kind: 'unavailable', fullPath, record: { path, reason: 'config_missing' } };
+  if (selected.kind === 'missing') {
+    const diagnostic = missingMcpConfigMessage(path, selected.attemptedPaths);
+    if (optional) {
+      return {
+        kind: 'unavailable',
+        fullPath,
+        record: { path, reason: 'config_missing' },
+        diagnostic,
+      };
+    }
+    return { kind: 'missing', path: fullPath, servers: new Set(), diagnostic };
   }
-  return { kind: 'load', path, servers: new Set(servers) };
+  return { kind: 'load', path: fullPath, servers: new Set(servers) };
 }
 
 /** Workflow-level provider options. The provider options have node-level
@@ -2372,7 +2367,9 @@ async function executeNodeInternal(
     : undefined;
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
-  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd);
+  const homeMcpDirectory = readHomeMcpDirectory(node);
+  if (homeMcpDirectory !== undefined) await assertWorkflowSourceIntegrity(workflowSourceRoots);
+  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2405,7 +2402,7 @@ async function executeNodeInternal(
     const why =
       record.reason === 'provider_unsupported'
         ? `provider '${provider}' cannot load MCP servers`
-        : `config file not found at ${fullPath}`;
+        : (nodeMcp.diagnostic ?? `config file not found at ${fullPath}`);
     await safeSendMessage(
       platform,
       conversationId,
@@ -2557,7 +2554,7 @@ async function executeNodeInternal(
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
-    ...(nodeMcp.kind === 'load'
+    ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
     abortSignal: nodeAbortController.signal,
@@ -3105,7 +3102,11 @@ async function executeNodeInternal(
     const err = error as Error;
 
     const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
-    const failureMessage = cancelled ? 'Cancelled by user' : err.message;
+    const failureMessage = cancelled
+      ? 'Cancelled by user'
+      : nodeMcp.kind === 'missing'
+        ? `${err.message}\n${nodeMcp.diagnostic}`
+        : err.message;
     if (cancelled) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
     } else {
@@ -7104,6 +7105,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.durationMs).toISOString(),
     };
@@ -7128,6 +7130,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(resumeAtMs).toISOString(),
     };
@@ -7139,6 +7142,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'event',
+      pauseId: randomUUID(),
       event,
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.deadlineMs).toISOString(),

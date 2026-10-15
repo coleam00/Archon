@@ -19,6 +19,7 @@ export function registerBuiltinProviders(): void {
       displayName: claudeDescriptor.displayName,
       factory: createClaudeProvider,
       capabilities: claudeDescriptor.capabilities,
+      skillDiscovery: claudeDescriptor.skillDiscovery,
       builtIn: true,
       parseConfig: parseClaudeConfigStrict,
       credentials: singleVendorCatalog(claudeDescriptor.credentials.specs[0]),

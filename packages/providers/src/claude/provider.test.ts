@@ -2470,7 +2470,7 @@ describe('ClaudeProvider', () => {
       });
 
       for await (const _ of client.sendQuery('test', '/tmp', 'earlier-session', {
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Workflows now: a, b' },
+        appendSystemPrompt: 'Workflows now: a, b',
         nodeConfig: {},
       })) {
         // consume
@@ -2482,6 +2482,26 @@ describe('ClaudeProvider', () => {
         type: 'preset',
         preset: 'claude_code',
         append: 'Workflows now: a, b',
+        snapshot: false,
+      });
+    });
+
+    test('a request systemPrompt replaces the preset and its append', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        systemPrompt: 'You are a reviewer',
+        appendSystemPrompt: 'Workflows now: a, b',
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.systemPrompt).toEqual({
+        type: 'custom',
+        prompt: 'You are a reviewer',
         snapshot: false,
       });
     });
