@@ -40,7 +40,18 @@ export function processProviderRegistration(
       }
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
-  const runModel = schemas.run.pipe(z.object({ model: z.string() }));
+  const runSchema: z.core.JSONSchema.BaseSchema = config?.run ?? descriptor.configSchema;
+  const runModel = scopedConfigSchema(
+    {
+      type: 'object',
+      properties: { model: runSchema.properties?.model ?? true },
+      required: ['model'],
+      $defs: runSchema.$defs,
+      definitions: runSchema.definitions,
+    },
+    false,
+    false
+  ).pipe(z.object({ model: z.string() }));
   return {
     id: descriptor.id,
     displayName: descriptor.displayName,
@@ -50,9 +61,8 @@ export function processProviderRegistration(
     ...(descriptor.skillDiscovery ? { skillDiscovery: descriptor.skillDiscovery } : {}),
     credentials: {
       ...descriptor.credentials,
-      // The model is read the way the provider's own run schema normalizes it, and
-      // the text before its first `/` names the vendor. A model that schema
-      // rejects selects no vendor; the run would refuse it anyway.
+      // Vendor lookup receives only a model, so unrelated required run settings
+      // must not prevent validation and normalization of the model field.
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
         if (model === undefined) return undefined;

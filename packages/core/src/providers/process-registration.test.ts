@@ -65,37 +65,49 @@ test('credential vendor selection follows single-vendor and declared prefix rule
   expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
 });
 
-test('a plugin selects its credential vendor from the model its own run schema normalizes', () => {
-  const run = z.strictObject({
-    model: normalizedConfigString(
-      z.string().regex(/^\s*[a-z]+\s*\//),
-      'slash-separated'
-    ).optional(),
-  });
-  const registration = processProviderRegistration(
-    providerPluginDescriptorSchema.parse({
-      ...descriptor,
-      id: 'stub-plugin',
-      credentials: {
-        kind: 'static',
-        specs: [
-          { vendor: 'acme', displayName: 'Acme', kinds: ['subscription'] },
-          { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
-        ],
-      },
-      config: {
-        install: z.toJSONSchema(run, { io: 'input' }),
-        run: z.toJSONSchema(run, { io: 'input' }),
-        snapshot: z.toJSONSchema(run, { io: 'input' }),
-      },
-    }),
-    argv
-  );
-  expect(registration.credentials.vendorFor(' acme / m ')).toBe('acme');
-  expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
-  expect(registration.credentials.vendorFor('Acme/m')).toBeUndefined();
-  expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
-});
+test.each(['scoped', 'legacy'] as const)(
+  '%s plugin vendor lookup needs only the model field',
+  route => {
+    const run = z.strictObject({
+      region: z.string(),
+      model: normalizedConfigString(
+        z.string().regex(/^\s*[a-z]+\s*\//),
+        'slash-separated'
+      ).optional(),
+    });
+    const registration = processProviderRegistration(
+      providerPluginDescriptorSchema.parse({
+        ...descriptor,
+        id: 'stub-plugin',
+        credentials: {
+          kind: 'static',
+          specs: [
+            { vendor: 'acme', displayName: 'Acme', kinds: ['subscription'] },
+            { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+          ],
+        },
+        configSchema: z.toJSONSchema(run, { io: 'input' }),
+        config:
+          route === 'scoped'
+            ? {
+                install: z.toJSONSchema(run, { io: 'input' }),
+                run: z.toJSONSchema(run, { io: 'input' }),
+                snapshot: z.toJSONSchema(run, { io: 'input' }),
+              }
+            : undefined,
+      }),
+      argv
+    );
+    expect(registration.parseConfig({ model: 'openai/gpt', region: 'eu' }, 'run')).toEqual({
+      model: 'openai/gpt',
+      region: 'eu',
+    });
+    expect(registration.credentials.vendorFor(' acme / m ')).toBe('acme');
+    expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
+    expect(registration.credentials.vendorFor('Acme/m')).toBeUndefined();
+    expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
+  }
+);
 
 test('a declared skillDiscovery survives process registration', () => {
   const skillDiscovery = { project: ['.stub/skills'], user: ['skills'] };
