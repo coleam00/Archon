@@ -11,7 +11,7 @@ import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
-import { wakeDueWorkflowContinuations } from './continuation-host';
+import { wakeDueWorkflowContinuations } from './continuation-resume';
 import { createWorkflowStore } from './store-adapter';
 
 const originalHome = process.env.ARCHON_HOME;
