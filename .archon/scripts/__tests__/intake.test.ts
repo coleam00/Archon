@@ -1022,7 +1022,7 @@ function evalRun(
 ): ScriptRun {
   return runPackScript(`intake/scripts/${script}`, {
     cwd: at.checkout,
-    source: options.source,
+    source: options.source ?? 'gh',
     forge: { kind: 'fake', ...(options.response ? { response: options.response } : {}) },
     gh: { issue: { number: 7, ...ghIssue }, issueLabels: ['archon-ready'], repositoryLabels: [] },
     inputs: {
