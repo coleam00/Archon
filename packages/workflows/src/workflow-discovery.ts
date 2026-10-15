@@ -809,6 +809,7 @@ export async function discoverWorkflows(
         allErrors.push({
           filename,
           error: `Script discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+          workflowName: workflow.name,
           errorType: 'read_error',
           cause: error,
         });
@@ -841,6 +842,7 @@ export async function discoverWorkflows(
           allErrors.push({
             filename,
             error: `Script file read error at '${script.path}': ${err.message} (${err.code ?? 'unknown'})`,
+            workflowName: workflow.name,
             errorType: 'read_error',
             cause: error,
           });
@@ -954,6 +956,7 @@ export async function discoverWorkflows(
     allErrors.push(
       ...expansionErrors.map(e => ({
         ...e,
+        workflowName: e.filename,
         filename: filenameByName.get(e.filename) ?? e.filename,
       }))
     );

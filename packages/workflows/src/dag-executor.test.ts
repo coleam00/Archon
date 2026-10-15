@@ -21687,7 +21687,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           await mkdir(workflows, { recursive: true });
           await mkdir(commands, { recursive: true });
           await writeFile(
-            join(workflows, 'root.yaml'),
+            join(workflows, 'root-file.yaml'),
             'name: root\ndescription: root\nnodes:\n  - id: wrapped\n    include: block\n'
           );
           await writeFile(
@@ -21720,6 +21720,58 @@ describe('executeDagWorkflow -- script nodes', () => {
             await chmod(commandFile, 0o644);
           }
           expectReleased(mockDeps.store, 'fan');
+        });
+      }
+
+      for (const nested of [false, true]) {
+        it(`ignores an unrelated ${nested ? 'included' : 'direct'} command read failure`, async () => {
+          const mockDeps = createMockDeps();
+          const workflows = join(testDir, '.archon', 'workflows');
+          const commands = join(testDir, '.archon', 'commands');
+          await mkdir(workflows, { recursive: true });
+          await mkdir(commands, { recursive: true });
+          await writeFile(
+            join(workflows, 'healthy.yaml'),
+            'name: healthy\ndescription: healthy\nnodes:\n  - id: work\n    prompt: Healthy work.\n'
+          );
+          await writeFile(
+            join(workflows, 'broken.yaml'),
+            'name: broken\ndescription: broken\nnodes:\n  - id: work\n    command: locked\n'
+          );
+          if (nested)
+            await writeFile(
+              join(workflows, 'unrelated.yaml'),
+              'name: unrelated\ndescription: unrelated\nnodes:\n  - id: wrapped\n    include: broken\n'
+            );
+          const commandFile = join(commands, 'locked.md');
+          await writeFile(commandFile, 'Unreadable unrelated command.');
+          await chmod(commandFile, 0o000);
+          try {
+            await executeDagWorkflow(
+              dagOptions({
+                deps: mockDeps,
+                cwd: testDir,
+                workflowRun: makeWorkflowRun('healthy-compose'),
+                workflow: {
+                  name: 'healthy-compose',
+                  nodes: [
+                    {
+                      id: 'fan',
+                      kind: 'compose_fan_out',
+                      include: 'healthy',
+                      fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                    },
+                  ],
+                },
+              })
+            );
+          } finally {
+            await chmod(commandFile, 0o644);
+          }
+          expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
         });
       }
 

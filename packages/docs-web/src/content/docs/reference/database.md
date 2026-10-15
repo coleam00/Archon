@@ -80,7 +80,7 @@ is limited by the platform's `fsync` guarantees; macOS does not force drive cach
 Triggers work with file storage: `archon trigger whoami` records a local run-as identity,
 and timer fire, admission, queueing, inspection and drain use the file store. Admission
 commits the run, request and resource holder together. A terminal or missing run releases
-its slot, and so does a run paused at a host-continued wait or gate. A run released because
+its slot, and so does a run paused at a host-continued wait or gate. A run paused because
 its source is unreadable keeps its slot, including while waiting for a host that can read it.
 A wait or gate resume takes a slot again ahead of queued requests. When a resume of a run whose wait is due or
 signaled, or whose pause is answered, is refused, the run records `capacity_wait` and

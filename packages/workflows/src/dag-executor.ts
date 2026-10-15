@@ -8062,8 +8062,6 @@ export async function resolveFanOutChildDefinition(
       deps.providers,
       sourceRoots
     );
-    const readFailure = errors.find(error => isSourceReadFailure(error.cause));
-    if (readFailure !== undefined) throw readFailure.cause;
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
     // is reachable here only by the composition that names it.
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
@@ -8073,13 +8071,18 @@ export async function resolveFanOutChildDefinition(
     if (!definition) {
       const relevantError = errors.find(error => {
         const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
-        return filename === targetName || error.error.includes(`'${targetName}'`);
+        return error.workflowName !== undefined
+          ? error.workflowName === targetName
+          : filename === targetName;
       });
+      if (relevantError !== undefined && isSourceReadFailure(relevantError.cause)) {
+        throw relevantError.cause;
+      }
       return {
         unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
       };
     }
-    const commandContents = await resolveWorkflowCommandContents(sourceRoots, definitions);
+    const commandContents = await resolveWorkflowCommandContents(sourceRoots, [definition]);
     for (const content of commandContents.values()) {
       if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause)) {
         throw content.cause;

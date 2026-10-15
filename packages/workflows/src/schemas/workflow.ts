@@ -463,6 +463,7 @@ export interface WorkflowWithSource {
  */
 export interface WorkflowLoadError {
   readonly filename: string;
+  readonly workflowName?: string;
   readonly error: string;
   readonly errorType: 'read_error' | 'parse_error' | 'validation_error';
   readonly cause?: unknown;
