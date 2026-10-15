@@ -1,5 +1,7 @@
 import {
   chatRunActionSchema,
+  type ChatAttentionNotice,
+  type ChatRunAction,
   type ChatRunEvent,
   type ChatResultFooter,
 } from '@archon/chat-contract';
@@ -7,6 +9,7 @@ import type { types } from '@slack/bolt';
 
 type TerminalEvent = Extract<ChatRunEvent, { type: 'terminal' }>;
 type ApprovalEvent = Extract<ChatRunEvent, { type: 'approval_pending' }>;
+type Decision = ApprovalEvent['decisions'][number];
 export type RunTerminalStatus = TerminalEvent['status'];
 
 type KnownBlock = types.KnownBlock;
@@ -86,10 +89,7 @@ function formatTokenCount(n: number): string {
 }
 
 export type SlackApprovalAction = Pick<ApprovalEvent, 'runId' | 'nodeId' | 'pauseId'> &
-  Pick<
-    Extract<import('@archon/chat-contract').ChatRunAction, { action: 'respond' }>['response'],
-    'decision'
-  >;
+  Pick<Extract<ChatRunAction, { action: 'respond' }>['response'], 'decision'>;
 
 export function parseApprovalValue(value: string): SlackApprovalAction | undefined {
   let raw: unknown;
@@ -112,6 +112,21 @@ export function parseApprovalValue(value: string): SlackApprovalAction | undefin
     nodeId: parsed.data.response.nodeId,
     decision: parsed.data.response.decision,
     pauseId: parsed.data.response.pauseId,
+  };
+}
+
+function decisionButton(decision: Decision): Omit<types.Button, 'action_id' | 'value'> {
+  const label =
+    decision.label ??
+    (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+  return {
+    type: 'button',
+    ...(decision.id === 'approve'
+      ? { style: 'primary' as const }
+      : decision.id === 'reject'
+        ? { style: 'danger' as const }
+        : {}),
+    text: { type: 'plain_text', text: truncate(label, 75), emoji: true },
   };
 }
 
@@ -150,25 +165,7 @@ export function buildApprovalBlocks(input: {
       type: 'actions',
       block_id: `approval:${String(offset)}`,
       elements: decisions.slice(offset, offset + 25).map((decision, index) => ({
-        type: 'button',
-        ...(decision.id === 'approve'
-          ? { style: 'primary' as const }
-          : decision.id === 'reject'
-            ? { style: 'danger' as const }
-            : {}),
-        text: {
-          type: 'plain_text',
-          text: truncate(
-            decision.label ??
-              (decision.id === 'approve'
-                ? 'Approve'
-                : decision.id === 'reject'
-                  ? 'Reject'
-                  : decision.id),
-            75
-          ),
-          emoji: true,
-        },
+        ...decisionButton(decision),
         action_id: `respond:${String(offset + index)}`,
         value: values[offset + index],
       })),
@@ -339,6 +336,239 @@ export function buildStatusBlocks(
         ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
         : ''
     }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`,
+  };
+}
+
+type OpenNotice = Exclude<ChatAttentionNotice, { type: 'terminal' }>;
+type TerminalNotice = Extract<ChatAttentionNotice, { type: 'terminal' }>;
+type WithoutSender<T> = T extends unknown ? Omit<T, 'sender'> : never;
+/** The run action a notice control carries; the clicking member becomes its sender. */
+export type SlackNoticeAction = WithoutSender<ChatRunAction>;
+
+export const NOTICE_ACTION_PATTERN = /^attention:/;
+export const NOTICE_COMPOSE = 'attention:compose';
+export const NOTICE_PICK = 'attention:pick';
+export const NOTICE_SUBMIT = 'attention:submit';
+const NOTICE_CHOOSE = 'attention:choose';
+
+export function parseNoticeAction(
+  value: string | undefined,
+  platformUserId: string
+): ChatRunAction | undefined {
+  if (value === undefined) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const parsed = chatRunActionSchema.safeParse({ ...raw, sender: { platformUserId } });
+  return parsed.success ? parsed.data : undefined;
+}
+
+function plainButton(
+  text: string,
+  style?: 'primary' | 'danger'
+): Omit<types.Button, 'action_id' | 'value'> {
+  return { type: 'button', ...(style ? { style } : {}), text: { type: 'plain_text', text } };
+}
+
+function noticeButton(
+  base: Omit<types.Button, 'action_id' | 'value'>,
+  actionId: string,
+  action: SlackNoticeAction
+): types.Button | undefined {
+  const value = JSON.stringify(action);
+  return value.length <= 2000 ? { ...base, action_id: actionId, value } : undefined;
+}
+
+function actionBlocks(controls: (types.Button | undefined)[]): KnownBlock[] | undefined {
+  // Leave room for the notice text inside Slack's 50-block message limit.
+  if (controls.length > 45 * 25) return undefined;
+  const buttons = controls.filter(control => control !== undefined);
+  if (buttons.length !== controls.length) return undefined;
+  const blocks: KnownBlock[] = [];
+  for (let offset = 0; offset < buttons.length; offset += 25)
+    blocks.push({ type: 'actions', elements: buttons.slice(offset, offset + 25) });
+  return blocks;
+}
+
+/** The notice's answer controls, or undefined when they exceed Slack's limits. */
+function noticeControls(notice: OpenNotice): KnownBlock[] | undefined {
+  const { runId, nodeId, pauseId } = notice;
+  const choices = (options: Decision[], action: (id: string) => SlackNoticeAction) =>
+    options.map((option, index) =>
+      noticeButton(decisionButton(option), `${NOTICE_CHOOSE}:${String(index)}`, action(option.id))
+    );
+  if (notice.type === 'gate') {
+    const decisions = choices(notice.decisions, decision => ({
+      action: 'respond',
+      runId,
+      response: { nodeId, pauseId, decision },
+    }));
+    // A reply approves the loop gate with feedback, so the loop runs another iteration.
+    const reply =
+      notice.gateType === 'interactive_loop'
+        ? [
+            noticeButton(plainButton('Reply'), NOTICE_COMPOSE, {
+              action: 'respond',
+              runId,
+              response: { nodeId, pauseId, decision: 'approve' },
+            }),
+          ]
+        : [];
+    return actionBlocks([...decisions, ...reply]);
+  }
+  const cancel: types.Button = { ...plainButton('Cancel', 'danger'), action_id: `cancel:${runId}` };
+  if (!pauseId)
+    return actionBlocks([
+      noticeButton(plainButton('Resume', 'primary'), `${NOTICE_CHOOSE}:0`, {
+        action: 'resume',
+        runId,
+      }),
+      cancel,
+    ]);
+  const answer = (choose: string[]): SlackNoticeAction => ({
+    action: 'answer',
+    runId,
+    response: { nodeId, pauseId, choose },
+  });
+  switch (notice.form) {
+    case 'message':
+      return actionBlocks([
+        noticeButton(plainButton('Answer', 'primary'), NOTICE_COMPOSE, answer([])),
+        cancel,
+      ]);
+    case 'approval':
+    case 'select':
+      return actionBlocks([...choices(notice.options, id => answer([id])), cancel]);
+    case 'multi_select': {
+      const submit = noticeButton(plainButton('Submit', 'primary'), NOTICE_SUBMIT, answer([]));
+      // Slack allows 100 options per menu and 150 characters per option value.
+      if (!submit || notice.options.length > 100 || notice.options.some(o => o.id.length > 150))
+        return undefined;
+      return [
+        {
+          type: 'actions',
+          block_id: NOTICE_PICK,
+          elements: [
+            {
+              type: 'multi_static_select',
+              action_id: NOTICE_PICK,
+              placeholder: { type: 'plain_text', text: 'Choose options' },
+              options: notice.options.map(option => ({
+                text: { type: 'plain_text', text: truncate(option.label ?? option.id, 75) },
+                value: option.id,
+              })),
+            },
+            submit,
+            cancel,
+          ],
+        },
+      ];
+    }
+  }
+}
+
+function noticeIntro(notice: OpenNotice, header: string): KnownBlock {
+  // Slack rejects section text over 3000 characters.
+  return {
+    type: 'section',
+    text: { type: 'mrkdwn', text: truncate(`${header}\n\n${notice.message}`, 3000) },
+  };
+}
+
+function noticeHeader(notice: OpenNotice | TerminalNotice): string {
+  return `*${notice.workflowName}* · run \`${shortRunId(notice.runId)}\``;
+}
+
+export function buildAttentionNoticeBlocks(notice: OpenNotice): {
+  blocks: KnownBlock[];
+  fallbackText: string;
+} {
+  const controls = noticeControls(notice);
+  return {
+    blocks: [
+      noticeIntro(notice, `:bell: Needs attention — ${noticeHeader(notice)}`),
+      ...(controls ?? [
+        {
+          type: 'context',
+          elements: [
+            { type: 'mrkdwn', text: 'Too many choices to answer in Slack; answer in Archon.' },
+          ],
+        },
+      ]),
+    ],
+    fallbackText: truncate(
+      `${notice.workflowName} needs attention (run ${shortRunId(notice.runId)}): ${notice.message}`,
+      300
+    ),
+  };
+}
+
+/** A notice whose controls no longer apply: answered, or closed by the run finishing. */
+export function buildSettledNoticeBlocks(
+  notice: OpenNotice | undefined,
+  runId: string,
+  outcome: string
+): { blocks: KnownBlock[]; fallbackText: string } {
+  const header = notice ? noticeHeader(notice) : `run \`${shortRunId(runId)}\``;
+  return {
+    blocks: [
+      notice
+        ? noticeIntro(notice, `${outcome} — ${header}`)
+        : { type: 'section', text: { type: 'mrkdwn', text: `${outcome} — ${header}` } },
+    ],
+    fallbackText: `${outcome} — run ${shortRunId(runId)}`,
+  };
+}
+
+export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
+  blocks: KnownBlock[];
+  fallbackText: string;
+} {
+  const facts: string[] = [];
+  if (notice.authoredOutcome)
+    facts.push(
+      `authored outcome: ${notice.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : notice.authoredOutcome}`
+    );
+  if (notice.totalCostUsd !== undefined)
+    facts.push(`total cost: $${notice.totalCostUsd.toFixed(4)}`);
+  const blocks: KnownBlock[] = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `${TERMINAL_HEADER[notice.status]} — ${noticeHeader(notice)}` },
+    },
+  ];
+  if (facts.length > 0)
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: facts.map(fact => `_${fact}_`).join(' · ') }],
+    });
+  return {
+    blocks,
+    fallbackText: `${TERMINAL_HEADER[notice.status]} (${notice.workflowName})`,
+  };
+}
+
+/** The free-text answer form. `private_metadata` carries the clicked control back. */
+export function buildComposeView(metadata: string): types.ModalView {
+  return {
+    type: 'modal',
+    callback_id: NOTICE_COMPOSE,
+    private_metadata: metadata,
+    title: { type: 'plain_text', text: 'Answer' },
+    submit: { type: 'plain_text', text: 'Send' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: NOTICE_COMPOSE,
+        label: { type: 'plain_text', text: 'Your answer' },
+        element: { type: 'plain_text_input', action_id: NOTICE_COMPOSE, multiline: true },
+      },
+    ],
   };
 }
 

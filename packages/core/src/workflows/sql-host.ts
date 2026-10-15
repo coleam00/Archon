@@ -16,6 +16,8 @@ import {
   type WorkflowOperations,
 } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
+import { runOwnerLossWatch } from '../services/run-attention-watch';
+import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 export function createWorkflowHostStore(): IWorkflowHostStore {
@@ -60,29 +62,36 @@ export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost
     deps,
     records,
     doorbell: subscribeToSqlRunDoorbell,
-    engine: new InProcessWorkflowEngine(deps),
+    engine: new InProcessWorkflowEngine(deps, {
+      branchOf: attentionQueueSource(deps.store, records.isolation).branchOf,
+      ownerLoss: runOwnerLossWatch(deps.store),
+      doorbell: subscribeToSqlEventDoorbell,
+    }),
     operations: createSqlWorkflowOperations(deps.store, records),
   };
 }
 
-export async function subscribeToSqlRunDoorbell(
-  runId: string,
-  onDoorbell: () => void
+/** Rings for every committed workflow event: one notification listener, whatever the run. */
+export async function subscribeToSqlEventDoorbell(
+  onEvent: (runId: string) => void
 ): Promise<(() => void) | null> {
   const listener = connection.getDbNotificationListener();
   if (!listener) return null;
   try {
-    return await listener.listen(
-      WORKFLOW_EVENT_NOTIFY_CHANNEL,
-      payload => {
-        if (payload === runId) onDoorbell();
-      },
-      err => {
-        createLogger('run-attention').debug({ err, runId }, 'run_attention.doorbell_dropped');
-      }
-    );
+    return await listener.listen(WORKFLOW_EVENT_NOTIFY_CHANNEL, onEvent, err => {
+      createLogger('run-attention').debug({ err }, 'run_attention.doorbell_dropped');
+    });
   } catch (err) {
-    createLogger('run-attention').debug({ err, runId }, 'run_attention.doorbell_unavailable');
+    createLogger('run-attention').debug({ err }, 'run_attention.doorbell_unavailable');
     return null;
   }
+}
+
+export function subscribeToSqlRunDoorbell(
+  runId: string,
+  onDoorbell: () => void
+): Promise<(() => void) | null> {
+  return subscribeToSqlEventDoorbell(payload => {
+    if (payload === runId) onDoorbell();
+  });
 }

@@ -1,14 +1,17 @@
 /**
  * Apply the facts node's decision: write the work item first, then the labels that
- * mirror it, then release the claim. A closed issue gets the document write only.
- * In eval mode nothing is read or written: the decision is applied to a fresh item
- * in memory and reported, with the label delta live would write, as `evaluation`.
+ * mirror it, then close an item triage found resolved, then release the claim. A
+ * close is checked before the first write; one the forge refuses leaves the item
+ * BLOCKED for a maintainer instead. A closed issue gets the document write only. In eval mode nothing is read or
+ * written: the decision is applied to a fresh item in memory and reported, with the
+ * label delta live would write, as `evaluation`.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM, INPUTS_DECISION and INPUTS_SEEN from facts;
  * triage's verdict fields, each "null" when triage did not run; the workflow's
  * INPUTS_MODE and INPUTS_TRUST.
  */
 
+import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
@@ -18,6 +21,7 @@ import {
   isOwnedLabel,
   type OwnedLabel,
   type Route,
+  wantedLabels,
   writeLabels,
 } from '../../.shared/labels.ts';
 import {
@@ -34,11 +38,27 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
+/**
+ * A string field of triage's verdict, or null when triage did not run. The engine
+ * binds a string raw, not as JSON, and a skipped producer's `if_skipped: null` as
+ * the text `null`.
+ */
+function verdictText(value: string | undefined): string | null {
+  const raw = text(value);
+  return raw === 'null' ? null : raw;
+}
+
 /** Triage's verdict, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
-  const contract = nullableJson(process.env.INPUTS_CONTRACT) as Contract | null;
+  const contract = verdictText(process.env.INPUTS_CONTRACT) as Contract | null;
   if (contract === null) return null;
-  const route = nullableJson(process.env.INPUTS_ROUTE) as Route;
+  const route = verdictText(process.env.INPUTS_ROUTE) as Route;
+  const closure = nullableJson(process.env.INPUTS_CLOSURE) as Closure | null;
+  // A missing binding reads as null; a NO_ACTION verdict without its closure would
+  // label the item for a close that never happens.
+  if ((contract === 'NO_ACTION') !== (closure !== null)) {
+    throw new Error('a NO_ACTION verdict, and only that one, carries a closure');
+  }
   const verdict: LabelVerdict = contract === 'READY' ? { contract, route } : { contract };
   return {
     verdict,
@@ -48,9 +68,25 @@ function triageResult(): TriageResult | null {
     complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
     importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
     urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
+    closure,
     labels: nullableJson(process.env.INPUTS_LABELS) as string[],
-    summary: nullableJson(process.env.INPUTS_SUMMARY) as string,
+    summary: text(process.env.INPUTS_SUMMARY),
     report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
+  };
+}
+
+/** Triage's closable verdict as a BLOCKED one, when the close it declared was refused. */
+function leftToMaintainer(triage: TriageResult, refused: string): TriageResult {
+  const verdict: LabelVerdict = { contract: 'BLOCKED' };
+  return {
+    ...triage,
+    verdict,
+    closure: null,
+    labels: [
+      ...wantedLabels(verdict, triage.type.value, triage.size.value),
+      ...triage.labels.filter(name => !isOwnedLabel(name)),
+    ],
+    summary: `${triage.summary} The close was refused: ${refused}; a maintainer decides.`,
   };
 }
 
@@ -87,10 +123,10 @@ function evaluatedTriage(triage: TriageResult | null): Record<string, unknown> |
   const { verdict, ...fields } = triage;
   return {
     contract: verdict.contract,
-    route: nullableJson(process.env.INPUTS_ROUTE),
+    route: verdictText(process.env.INPUTS_ROUTE),
     ...fields,
     proposed_edits: nullableJson(process.env.INPUTS_PROPOSED_EDITS),
-    blocked_reason: nullableJson(process.env.INPUTS_BLOCKED_REASON),
+    blocked_reason: verdictText(process.env.INPUTS_BLOCKED_REASON),
     blocked_by: nullableJson(process.env.INPUTS_BLOCKED_BY),
   };
 }
@@ -152,12 +188,20 @@ function main(): void {
     decision.path === 'triage' &&
     decision.trust === 'outside' &&
     bodyDigest(viewIssue(item).body) !== decision.body_digest;
+  // A demoted item's verdict judged text no maintainer promoted, so it closes nothing.
+  let close: ClosePlan | null = null;
+  let judged = triage;
+  if (!bodyMoved && triage?.closure) {
+    close = planClose(item, triage.closure);
+    if (close.refused !== null) judged = leftToMaintainer(triage, close.refused);
+  }
   const next = updateClaimed(item, runId, doc =>
-    applyDecision(doc, decision, triage, bodyMoved, at, runId)
+    applyDecision(doc, decision, judged, bodyMoved, at, runId)
   );
 
-  const delta = labelDelta(next, decision, triage, bodyMoved);
+  const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
+  if (close !== null && close.refused === null) close.close();
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));

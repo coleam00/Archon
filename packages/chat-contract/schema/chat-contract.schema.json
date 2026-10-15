@@ -1197,6 +1197,10 @@
             },
             "resumed": {
               "type": "boolean"
+            },
+            "waitingForCapacity": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [
@@ -1226,6 +1230,10 @@
             },
             "resumed": {
               "type": "boolean"
+            },
+            "waitingForCapacity": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [
@@ -1246,6 +1254,10 @@
             },
             "resumed": {
               "type": "boolean"
+            },
+            "waitingForCapacity": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [
@@ -1262,6 +1274,10 @@
             },
             "resumed": {
               "type": "boolean"
+            },
+            "waitingForCapacity": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [

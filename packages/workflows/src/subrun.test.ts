@@ -300,6 +300,9 @@ class InMemoryStore implements IWorkflowStore {
   deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
     throw new Error('Unexpected deferWorkflowContinuation');
   };
+  releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
+    released: false,
+  });
   answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
     throw new Error('Unexpected answerAttentionWait');
   };
@@ -500,7 +503,7 @@ class InMemoryStore implements IWorkflowStore {
     id,
     approvalContext,
     extraMetadata,
-    suspension
+    event
   ) => {
     const r = this.runs.get(id);
     if (!r || r.status !== 'running') {
@@ -518,7 +521,7 @@ class InMemoryStore implements IWorkflowStore {
         approval: { ...approvalContext },
       };
     }
-    if (suspension) this.events.push(suspension);
+    if (event) this.events.push(event);
     return Promise.resolve();
   };
 
@@ -1641,6 +1644,12 @@ nodes:
     );
 
     const store = new InMemoryStore();
+    const pause = store.pauseWorkflowRun;
+    const childBlockEvents: unknown[] = [];
+    store.pauseWorkflowRun = (id, approval, extra, event) => {
+      if (approval.type === 'child_workflow') childBlockEvents.push(event);
+      return pause(id, approval, extra, event);
+    };
     const deps = makeDeps(store);
     const parent = await discover('parent-gated');
 
@@ -1662,6 +1671,18 @@ nodes:
     expect(store.events.some(e => e.event_type === 'node_completed' && e.step_name === 'sub')).toBe(
       false
     );
+    // The blocked-on-child pause commits its node_suspended with the pause, once.
+    expect(childBlockEvents).toEqual([
+      expect.objectContaining({ event_type: 'node_suspended', step_name: 'sub' }),
+    ]);
+    expect(
+      store.events.filter(
+        e =>
+          e.workflow_run_id === parentRun?.id &&
+          e.event_type === 'node_suspended' &&
+          e.step_name === 'sub'
+      )
+    ).toHaveLength(1);
 
     // Approve the CHILD by run id, then resume it — the child's completion fires the
     // parent auto-resume hook in-process.
@@ -2209,13 +2230,13 @@ nodes:
       const deps = makeDeps(store);
       if (failure === 'credential') {
         deps.isPerUserProviderKeysEnabled = () => true;
-        deps.getUserProviderCredentialStatus = async () => ({
+        deps.getUserProviderCredential = async () => ({
           kind: 'api_key',
-          status: {
+          getStatus: async () => ({
             state: 'unusable',
             source: 'archon',
             evidence: 'credential cannot be decrypted',
-          },
+          }),
         });
       }
       const resolve = mock(async () => ({ cwd: '/never', envId: 'never', branchName: 'never' }));
@@ -5017,9 +5038,9 @@ ${fanOut}
     const deps = makeDeps(store);
     const pause = store.pauseWorkflowRun;
     let fanOutPauses = 0;
-    store.pauseWorkflowRun = (id, approval, extra, suspension) => {
+    store.pauseWorkflowRun = (id, approval, extra, event) => {
       if (approval.type === 'fan_out') fanOutPauses += 1;
-      return pause(id, approval, extra, suspension);
+      return pause(id, approval, extra, event);
     };
 
     await executeWorkflow(

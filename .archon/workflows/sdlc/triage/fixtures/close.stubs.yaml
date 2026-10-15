@@ -1,7 +1,9 @@
-# Dry-run fixture: the outcome is already delivered, so no action; the verdict
+# Dry-run fixture: a merged change already delivered the outcome, so no action; the verdict
 # derives archon-close and the run completes with outcome false.
 triage:
-  decision: { contract: NO_ACTION }
+  decision:
+    contract: NO_ACTION
+    closure: { kind: delivered, url: "https://github.com/example/repo/pull/3" }
   type: { value: feature, reason: "stub: asks for new behavior" }
   size: { value: s, reason: "stub: size" }
   complexity: { value: low, reason: "stub: complexity" }

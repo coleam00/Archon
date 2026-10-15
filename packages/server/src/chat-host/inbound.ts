@@ -116,20 +116,23 @@ export function registerChatInbound(
     runId: string,
     actor: ChatActor,
     action: ChatRunAction['action']
-  ): Promise<boolean> => {
+  ): Promise<{ resumed: boolean; waitingForCapacity?: true }> => {
     try {
       const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) return false;
+      if (!run) return { resumed: false };
       const target = await workflowResumeTargetForRun(run, platforms);
-      return await resumeWorkflowRunFromServer(
+      const outcome = await resumeWorkflowRunFromServer(
         createSqlWorkflowHost(),
         run,
         actor.kind === 'user' ? actor.userId : undefined,
         target
       );
+      return outcome.kind === 'waiting_for_capacity'
+        ? { resumed: false, waitingForCapacity: true }
+        : { resumed: outcome.kind === 'resumed' };
     } catch (err) {
       getLog().warn({ err, runId, plugin: descriptor.id, action }, 'chat.run_resume_failed');
-      return false;
+      return { resumed: false };
     }
   };
   connection.onRunAction(async (action): Promise<ChatRunActionResponse> => {
@@ -142,7 +145,7 @@ export function registerChatInbound(
         await operations.resumeWorkflow(action.runId, actor);
         return {
           status: 'done',
-          result: { kind: 'resumed', resumed: await continueRun(action.runId, actor, 'resume') },
+          result: { kind: 'resumed', ...(await continueRun(action.runId, actor, 'resume')) },
         };
       }
       if (action.action === 'answer') {
@@ -162,7 +165,7 @@ export function registerChatInbound(
         await operations.answerWorkflow(action.runId, request, actor, origin);
         return {
           status: 'done',
-          result: { kind: 'answered', resumed: await continueRun(action.runId, actor, 'answer') },
+          result: { kind: 'answered', ...(await continueRun(action.runId, actor, 'answer')) },
         };
       }
       if (action.action === 'cancel') {
@@ -198,10 +201,10 @@ export function registerChatInbound(
             : {}),
         }
       );
-      const resumed =
+      const resume =
         !('cancelled' in result) || !result.cancelled
           ? await continueRun(action.runId, actor, action.action)
-          : false;
+          : { resumed: false };
       return {
         status: 'done',
         result:
@@ -212,9 +215,9 @@ export function registerChatInbound(
                 maxAttemptsReached: result.maxAttemptsReached,
                 writeBack: result.writeBack,
                 newMode: result.newMode,
-                resumed,
+                ...resume,
               }
-            : { kind: 'approved', type: result.type, resumed },
+            : { kind: 'approved', type: result.type, ...resume },
       };
     } catch (error) {
       if (error instanceof RunActionForbiddenError)

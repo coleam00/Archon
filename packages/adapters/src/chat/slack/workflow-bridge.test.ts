@@ -513,7 +513,7 @@ describe('SlackWorkflowBridge', () => {
     'custom button responds with exact ID %s and pause identity',
     async decision => {
       const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-      const resumeWorkflow = mock(async () => true);
+      const resumeWorkflow = mock(async () => 'resumed' as const);
       triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
       mockGetConversationId.mockReturnValue('C1:111.0');
       new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
@@ -587,7 +587,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('a failed response leaves the gate actionable and does not report success or resume', async () => {
     const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
     new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
@@ -617,7 +617,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('approve button responds and edits the message', async () => {
     const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
 
@@ -665,7 +665,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('interactive-loop approval describes the aggregate completion condition', async () => {
     const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
     mockApproveWorkflow.mockResolvedValue(approvalResult('interactive_loop'));
@@ -700,7 +700,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('reject button under retry threshold notes workflow will retry', async () => {
     const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
     mockRejectWorkflow.mockResolvedValue(rejectionResult());
@@ -744,7 +744,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('a persisted approval button remains truthful when resume is unavailable after restart', async () => {
     const { adapter, updated, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => false);
+    const resumeWorkflow = mock(async () => 'not_resumed' as const);
 
     new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
 
@@ -767,9 +767,25 @@ describe('SlackWorkflowBridge', () => {
     expect(text).not.toContain('workflow resumed');
   });
 
+  test('an answer refused for capacity says the run waits and Archon continues it', async () => {
+    const { adapter, updated, dispatchAction } = makeFakeAdapter();
+    new SlackWorkflowBridge(adapter as never, async () => 'waiting_for_capacity').attach();
+
+    await dispatchAction('approve:r1:review', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+
+    const resolution = updated.find(message => message.ts === '2.000');
+    const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
+    expect(text).toContain('waiting for capacity');
+    expect(text).not.toContain('resume was not accepted');
+  });
+
   test('a container write-back rejection says the resumed run will discard the changes', async () => {
     const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
     mockRejectWorkflow.mockResolvedValue(rejectionResult({ writeBack: true }));
@@ -802,7 +818,7 @@ describe('SlackWorkflowBridge', () => {
 
   test('does not dispatch resume twice for the same approval', async () => {
     const { adapter, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+    const resumeWorkflow = mock(async () => 'resumed' as const);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
 

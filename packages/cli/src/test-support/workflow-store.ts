@@ -1,12 +1,13 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
+import { resumeRefusal } from '@archon/workflows/resource-start-store';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isPathInside } from '@archon/paths';
 import {
   WorkflowEventCursorError,
-  WorkflowNotResumableError,
   WorkflowResourceBusyError,
+  pauseCursorMatches,
   type IWorkflowStore,
   type WorkflowEventCursor,
   type WorkflowNodeSession,
@@ -224,21 +225,30 @@ export function createInMemoryWorkflowStore(
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: (id, cursor) =>
+    resumeWorkflowRun: async (id, cursor) => {
+      // A paused run's first refusal commits its capacity wait, so it is thrown after the write.
+      const outcome = await write(async view => {
+        const run = view.resumableRun(id, cursor);
+        const blocker = await admission.resume(run);
+        if (!blocker) return view.resumeWorkflowRun(id, cursor);
+        const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
+        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        return busy;
+      });
+      if (outcome instanceof WorkflowResourceBusyError) throw outcome;
+      return outcome;
+    },
+    releasePausedRunSlot: (id, cursor) =>
       write(async view => {
         const run = await view.getWorkflowRun(id);
-        const request = await admission.getResourceStartRequest(id);
-        if (request?.status === 'admitted') {
-          if (run?.status !== 'failed' && run?.status !== 'paused')
-            throw new WorkflowNotResumableError(id, run?.status ?? 'missing');
-          const blocker = await admission.resumeBlocker(id, run.status);
-          if (blocker) throw new WorkflowResourceBusyError(id, blocker);
-        }
-        return view.resumeWorkflowRun(id, cursor);
+        if (!run || !pauseCursorMatches(run, cursor)) return { released: false };
+        const released = await admission.release(id);
+        if (released) view.clearCapacityWait(id);
+        return { released };
       }),
     recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),
-    pauseWorkflowRun: (id, approval, extra, suspension) =>
-      write(view => view.pauseWorkflowRun(id, approval, extra, suspension)),
+    pauseWorkflowRun: (id, approval, extra, event) =>
+      write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>

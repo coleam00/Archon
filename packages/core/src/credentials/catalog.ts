@@ -136,8 +136,6 @@ const EXTRA_INSTALL_ENV_VARS: Record<string, Record<string, string[]>> = {
   // own anthropic api_key delivery) — an install configured with only this
   // var is authenticated.
   claude: { anthropic: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'] },
-  // pi-ai's own env lookup reads a token the operator set; Archon never delivers it.
-  pi: { anthropic: ['ANTHROPIC_OAUTH_TOKEN'] },
 };
 
 function hasInstallEnv(agent: string, vendor: string): boolean {

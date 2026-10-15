@@ -139,6 +139,10 @@ export function createWorkflowStore(): IWorkflowStore {
       if (!Number.isSafeInteger(limit) || limit <= 0)
         throw new RangeError('limit must be a positive integer');
       const rows = await workflowEventDb.readWorkflowEventsAfter(order, limit);
+      // A returned row proves the cursor is behind the head; only an empty page can hide
+      // a cursor this install never issued (another database, a restored backup).
+      if (rows.length === 0 && BigInt(order) > BigInt(await workflowEventDb.getWorkflowEventHead()))
+        throw new WorkflowEventCursorError();
       const deliveries = rows.map(event => {
         if (event.event_order == null) throw new Error('Feed row has no event order');
         return { cursor: sqlCursor(event.event_order), event: hydrateWorkflowEventRow(event) };
@@ -177,6 +181,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listAttentionQueueRows: () => workflowDb.listAttentionQueueRows(),
     signalWorkflowWait: workflowDb.signalWorkflowWait,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
+    releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
@@ -290,10 +295,10 @@ export function createWorkflowDeps(
           // beside that bag only so the workflow subprocess boundary can scrub echoed
           // file-delivered credentials without knowing provider-specific file shapes.
           isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-          getUserProviderCredentialStatus: async (userId, vendor) => {
+          getUserProviderCredential: async (userId, vendor) => {
             const [row] = await requiredCredentialRows(userId, [vendor]);
             return row
-              ? { kind: row.kind, status: await getStoredCredentialStatus(userId, row.provider) }
+              ? { kind: row.kind, getStatus: () => getStoredCredentialStatus(userId, row.provider) }
               : undefined;
           },
           getUserProviderEnv: async (

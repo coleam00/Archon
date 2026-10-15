@@ -34,12 +34,18 @@ export const chatRunActionSchema = z.discriminatedUnion('action', [
 ]);
 export type ChatRunAction = z.infer<typeof chatRunActionSchema>;
 
+/**
+ * Present, with `resumed: false`, when the action is recorded but the run's resource is
+ * full: the run stays paused in its place and a continuation host continues it.
+ */
+const waitingForCapacity = z.literal(true).optional();
 // A presentation projection: database rows and execution paths never cross this wire.
 export const runActionResultSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('approved'),
     type: z.enum(['interactive_loop', 'approval_gate', 'attention']),
     resumed: z.boolean(),
+    waitingForCapacity,
   }),
   z.object({
     kind: z.literal('rejected'),
@@ -48,9 +54,10 @@ export const runActionResultSchema = z.discriminatedUnion('kind', [
     writeBack: z.boolean(),
     newMode: z.boolean(),
     resumed: z.boolean(),
+    waitingForCapacity,
   }),
-  z.object({ kind: z.literal('answered'), resumed: z.boolean() }),
-  z.object({ kind: z.literal('resumed'), resumed: z.boolean() }),
+  z.object({ kind: z.literal('answered'), resumed: z.boolean(), waitingForCapacity }),
+  z.object({ kind: z.literal('resumed'), resumed: z.boolean(), waitingForCapacity }),
   z.object({ kind: z.literal('cooperative'), cancelled: z.boolean() }),
   z.object({
     kind: z.literal('stopped'),

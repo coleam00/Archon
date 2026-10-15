@@ -83,11 +83,21 @@ interface RunState {
 const STATUS_UPDATE_DEBOUNCE_MS = 500;
 const RESUME_NOT_ACCEPTED_NOTE =
   'recorded — resume was not accepted; check the run status and resume it manually if still paused';
+const CAPACITY_WAIT_NOTE =
+  'recorded — waiting for capacity; the run stays paused in its place and Archon continues it when its resource frees';
+
+/** `waiting_for_capacity`: the run's resource is full, and a continuation host continues it. */
+export type SlackWorkflowResumeOutcome = 'resumed' | 'waiting_for_capacity' | 'not_resumed';
 
 export type SlackWorkflowResume = (
   runId: string,
   slackUserId: string | undefined
-) => Promise<boolean>;
+) => Promise<SlackWorkflowResumeOutcome>;
+
+/** The note for a recorded answer whose resume was not accepted. */
+function notResumedNote(outcome: Exclude<SlackWorkflowResumeOutcome, 'resumed'>): string {
+  return outcome === 'waiting_for_capacity' ? CAPACITY_WAIT_NOTE : RESUME_NOT_ACCEPTED_NOTE;
+}
 
 export class SlackWorkflowBridge {
   private adapter: SlackAdapter;
@@ -97,7 +107,7 @@ export class SlackWorkflowBridge {
 
   constructor(
     adapter: SlackAdapter,
-    private readonly resumeWorkflow: SlackWorkflowResume = async () => false,
+    private readonly resumeWorkflow: SlackWorkflowResume = async () => 'not_resumed',
     private readonly operations: Pick<
       WorkflowOperations,
       'respondToWorkflow' | 'cancelWorkflow'
@@ -585,23 +595,26 @@ export class SlackWorkflowBridge {
           // paused after a completion condition was met finalizes on resume (no re-run, #2074);
           // otherwise the loop runs another iteration. Hedge like manage_run does —
           // this bridge approves with no comment, so both outcomes are reachable.
-          outcomeNote = resumed
-            ? result.type === 'interactive_loop'
-              ? 'workflow resumed — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration'
-              : 'workflow resumed'
-            : RESUME_NOT_ACCEPTED_NOTE;
+          outcomeNote =
+            resumed !== 'resumed'
+              ? notResumedNote(resumed)
+              : result.type === 'interactive_loop'
+                ? 'workflow resumed — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration'
+                : 'workflow resumed';
+        } else if (result.cancelled) {
+          outcomeNote = result.maxAttemptsReached
+            ? 'cancelled — max reject attempts reached'
+            : 'cancelled';
         } else {
-          outcomeNote = result.cancelled
-            ? result.maxAttemptsReached
-              ? 'cancelled — max reject attempts reached'
-              : 'cancelled'
-            : (await this.tryResumeWorkflow(runId, actorId))
-              ? result.writeBack
+          const resumed = await this.tryResumeWorkflow(runId, actorId);
+          outcomeNote =
+            resumed !== 'resumed'
+              ? notResumedNote(resumed)
+              : result.writeBack
                 ? 'recorded — workflow resumed to discard the container changes'
                 : result.newMode
                   ? 'recorded — workflow resumed'
-                  : 'recorded — workflow resumed and will retry with feedback'
-              : RESUME_NOT_ACCEPTED_NOTE;
+                  : 'recorded — workflow resumed and will retry with feedback';
         }
       } catch (error) {
         if (error instanceof RunActionForbiddenError) {
@@ -647,12 +660,12 @@ export class SlackWorkflowBridge {
   private async tryResumeWorkflow(
     runId: string,
     slackUserId: string | undefined
-  ): Promise<boolean> {
+  ): Promise<SlackWorkflowResumeOutcome> {
     try {
       return await this.resumeWorkflow(runId, slackUserId);
     } catch (error) {
       getLog().warn({ err: error as Error, runId }, 'slack.bridge_resume_failed');
-      return false;
+      return 'not_resumed';
     }
   }
 
