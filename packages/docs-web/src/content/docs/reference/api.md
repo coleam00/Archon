@@ -103,10 +103,10 @@ Optionally specify a codebase:
 ```bash
 curl -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{"codebase_id": "your-codebase-id"}'
+  -d '{"codebaseId": "your-codebase-id"}'
 ```
 
-Returns the created conversation with its `platform_conversation_id`.
+Returns the created conversation with its `conversationId`.
 
 ### Send a Message
 
@@ -681,7 +681,7 @@ Events are JSON-encoded with a `type` field. See the [Web UI documentation](/ada
 # 1. Create a conversation
 CONV_ID=$(curl -s -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{}' | jq -r '.platform_conversation_id')
+  -d '{}' | jq -r '.conversationId')
 
 # 2. Send a message
 curl -X POST http://localhost:3090/api/conversations/$CONV_ID/message \
@@ -698,7 +698,7 @@ curl http://localhost:3090/api/conversations/$CONV_ID/messages
 # 1. Create a conversation scoped to a codebase
 CONV_ID=$(curl -s -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{"codebase_id": "your-codebase-id"}' | jq -r '.platform_conversation_id')
+  -d '{"codebaseId": "your-codebase-id"}' | jq -r '.conversationId')
 
 # 2. Start the workflow
 curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \

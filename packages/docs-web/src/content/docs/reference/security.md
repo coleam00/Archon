@@ -79,8 +79,8 @@ nodes:
 **How it works:**
 - `allowed_tools` is a whitelist -- only listed tools are available. An empty list (`[]`) disables all tools.
 - `denied_tools` is a blacklist -- listed tools are blocked, all others are available.
-- These are mutually exclusive per node. If both are set, `allowed_tools` takes precedence.
-- Tool restrictions are currently supported for the Claude provider only. Codex nodes with `denied_tools` will log a warning; `allowed_tools` is not supported by Codex.
+- If both are set, the provider's own precedence applies. Copilot gives `allowed_tools` precedence over `denied_tools` instead of removing the denied tools from the allowed set.
+- Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
 
 ## Data Privacy and Logging
 

@@ -57,7 +57,7 @@ Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non
 ## Quick Start
 
 ```bash
-# List available workflows (requires a git repo, a registered folder project, or --folder on first use)
+# List available workflows (requires a git repo or an already registered folder project)
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
@@ -1521,14 +1521,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks; ownership checks still apply |
 
 Without `--force`, completion refuses an environment a workflow run can still claim, the
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
@@ -1545,8 +1545,11 @@ git fetch --prune origin # replace origin with the configured remote when needed
 archon complete feature-auth
 ```
 
-Completion verifies its patches are already on the configured or detected remote default branch
-before removing it. Accepts multiple branch names in one call.
+Without `--force`, completion checks for unique and unpushed commits before deletion. If the
+branch's remote-tracking ref is missing, it verifies that any unique commits are patch-equivalent
+to the configured base branch or detected remote default branch. With `--force`, these checks
+are skipped, so deletion can discard the only reachable copy of commits. Accepts multiple
+branch names in one call.
 
 ### `serve`
 

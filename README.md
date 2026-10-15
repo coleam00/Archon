@@ -31,7 +31,7 @@ When you ask an AI agent to "fix this bug", what happens depends on the model's 
 Archon fixes this. Encode your development process as a workflow. The workflow defines the phases, validation gates, and artifacts. The AI fills in the intelligence at each step, but the structure is deterministic and owned by you.
 
 - **Repeatable** - Same workflow, same sequence, every time. Plan, implement, validate, review, PR.
-- **Isolated** - Every workflow run gets its own git worktree. Run 5 fixes in parallel with no conflicts.
+- **Worktree isolation** - Repository workflows can run in a separate git worktree or reuse an existing one. See [isolation and folder projects](https://archon.diy/getting-started/concepts/#isolation-worktrees).
 - **Fire and forget** - Kick off a workflow, go do other work. Come back to a finished PR with review comments.
 - **Composable** - Mix deterministic nodes (bash scripts, tests, git ops) with AI nodes (planning, code generation, review). The AI only runs where it adds value.
 - **Portable** - Define workflows once in `.archon/workflows/`, commit them to your repo. They work the same from CLI, Web UI, Slack, Telegram, or GitHub.

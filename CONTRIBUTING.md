@@ -180,7 +180,7 @@ for merged PRs they do not cover, and removes duplicates.
 - Follow [`AGENTS.md`](./AGENTS.md) and
   [`.archon/engineering.md`](./.archon/engineering.md).
 - TypeScript strict mode is enforced.
-- All functions require explicit return types.
+- Use inferred types where they are clear; annotate boundaries when needed to express a meaningful contract.
 - Do not use `any` without justification.
 - Follow existing patterns in the codebase.
 
