@@ -1166,7 +1166,7 @@ describe('manage_run — gate continuation', () => {
     expect(out).toContain('Approved');
     expect(out).toContain('decision is recorded');
     expect(out).toContain('database unavailable');
-    expect(out).toContain('/workflow status r1abcdef-1234');
+    expect(out).toContain('/workflow get r1abcdef-1234');
     expect(out).toContain('/workflow resume r1abcdef-1234');
   });
 

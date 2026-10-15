@@ -269,7 +269,7 @@ export function buildStatusBlocks(
   const blocks: KnownBlock[] = [headerSection];
   const approvalRecovery =
     snapshot.status === 'paused' && snapshot.approvalDeliveryFailed
-      ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`/archon-workflow status ${snapshot.runId}\` for the gate and respond with \`/archon-workflow respond\`.`
+      ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`/archon-workflow get ${snapshot.runId}\` for the gate and respond with \`/archon-workflow respond\`.`
       : undefined;
   if (approvalRecovery) {
     blocks.push({

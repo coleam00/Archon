@@ -792,6 +792,23 @@ describe('workflow status arguments', () => {
   });
 });
 
+describe('workflow get arguments', () => {
+  it('accepts a run id, the form recovery hints name', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-cli-get-'));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, 'cli.ts'), 'workflow', 'get', 'definitely-not-a-run'],
+        { encoding: 'utf8', env: { ...process.env, ARCHON_HOME: archonHome } }
+      );
+
+      expect(result.stderr).not.toContain('Usage: archon workflow get');
+    } finally {
+      await removeTempTree(archonHome);
+    }
+  });
+});
+
 describe('workflow status project scope', () => {
   it('uses the run-owned project after its conversation moves and returns every project with --all', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'archon-cli-status-scope-'));

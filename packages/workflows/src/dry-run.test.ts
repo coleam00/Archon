@@ -1808,6 +1808,27 @@ describe('dryRunWorkflow', () => {
     });
   });
 
+  test('gate messages, cancel reasons and wait messages keep $ARGUMENTS literal, as a real run renders them', async () => {
+    const preview = async (node: Record<string, unknown>): Promise<string | undefined> => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'literal-arguments',
+          nodes: [{ id: 'step', ...node } as never],
+        }),
+        userMessage: 'secret user text',
+        cwd: process.cwd(),
+        pauseAtGates: true,
+      });
+      return result.trace.find(entry => entry.nodeId === 'step')?.resolvedText;
+    };
+
+    expect(await preview({ approval: { message: 'Approve $ARGUMENTS?' } })).toBe(
+      'Approve $ARGUMENTS?'
+    );
+    expect(await preview({ cancel: 'Stopped for $ARGUMENTS' })).toBe('Stopped for $ARGUMENTS');
+    expect(await preview({ wait: { attention: 'Look at $ARGUMENTS' } })).toBe('Look at $ARGUMENTS');
+  });
+
   test('a stub answers an attention wait and routes on its decision', async () => {
     const workflow = makeTestWorkflow({
       name: 'attention-answer',
