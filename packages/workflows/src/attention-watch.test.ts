@@ -211,6 +211,59 @@ describe('watchAttentionQueue', () => {
     expect(other.lines.filter(ofRun(runId, 'resolved'))).toEqual([]);
   });
 
+  test('a project-scoped stream sends nothing for another project', async () => {
+    const store = await makeStore();
+    const before = await running(store, 'alpha');
+    const watched: string[] = [];
+    const stream = await watch(
+      store,
+      {
+        scope: { kind: 'project', project: { key: '_cwd/beta', codebaseId: null, name: 'beta' } },
+        labels: { ci: 'pr' },
+        bookmarkIntervalMs: 0,
+      },
+      {
+        ...host,
+        ownerLoss: runId => {
+          watched.push(runId);
+          return Promise.resolve({ observedStatus: 'running' });
+        },
+      }
+    );
+    // With a zero interval every read that reaches the head bookmarks it, so each alpha
+    // state below is read by the tail before the next replaces it.
+    const caughtUp = async (): Promise<void> => {
+      const head = await store.getWorkflowEventHead();
+      await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+    };
+    const runId = await running(store, 'alpha');
+    await store.createWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: 'workflow_started',
+      data: {},
+    });
+    await caughtUp();
+    const wait = ask({ ci: 'pr' });
+    await store.pauseWorkflowRunForWait(runId, wait, { kind: 'started', stepName: 'ask' });
+    await caughtUp();
+    await store.labelAttentionWait(runId, {
+      pauseId: wait.pauseId,
+      set: { ci: 'other' },
+      unset: [],
+      via: 'cli',
+    });
+    await caughtUp();
+    await store.resumeWorkflowRun(runId);
+    await store.completeWorkflowRun(runId, { duration_ms: 1 });
+    await store.completeWorkflowRun(before, { duration_ms: 1 });
+    await caughtUp();
+    await stream.close();
+    expect(stream.lines.filter(line => line.type !== 'ready' && line.type !== 'bookmark')).toEqual(
+      []
+    );
+    expect(watched).toEqual([]);
+  });
+
   test('restarting after a cursor misses nothing that happened while stopped', async () => {
     const store = await makeStore();
     const open = await pausedAtAsk(store);
@@ -218,6 +271,7 @@ describe('watchAttentionQueue', () => {
     const finishing = await running(store);
     const first = await watch(store);
     const ready = await first.next(line => line.type === 'ready');
+    if (ready.type !== 'ready') throw new Error('expected ready');
     await store.completeWorkflowRun(finishing, { duration_ms: 1 });
     const firstTerminal = await first.next(ofRun(finishing, 'terminal'));
     await first.close();
@@ -334,6 +388,106 @@ describe('watchAttentionQueue', () => {
     await portless.next(ofRun(healthy, 'terminal'));
     await portless.close();
     expect(portless.lines.filter(line => line.type === 'owner_lost')).toEqual([]);
+  });
+
+  test('a failed liveness read is retried rather than dropped', async () => {
+    const store = await makeStore();
+    const orphan = await running(store);
+    let calls = 0;
+    const stream = await watch(
+      store,
+      {},
+      {
+        ...host,
+        ownerLoss: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new Error('database unavailable'))
+            : Promise.resolve({ observedStatus: 'running' });
+        },
+      }
+    );
+    await stream.next(ofRun(orphan, 'owner_lost'));
+    await stream.close();
+    expect(calls).toBe(2);
+  });
+
+  test('a failed start after ready stops the liveness it armed', async () => {
+    const store = await makeStore();
+    const armed = await running(store);
+    const signals: AbortSignal[] = [];
+    const lines: AttentionStreamLine[] = [];
+    const failing: IWorkflowStore = Object.create(store);
+    failing.listWorkflowRuns = async (
+      query?: Parameters<IWorkflowStore['listWorkflowRuns']>[0]
+    ) => {
+      const page = await store.listWorkflowRuns(query);
+      // A second run whose project read fails, after the first was armed.
+      const broken = { ...page.runs[0], id: 'broken', codebase_id: 'missing' };
+      return { ...page, runs: [...page.runs, broken], total: page.total + 1 };
+    };
+    failing.getCodebase = () => Promise.reject(new Error('database unavailable'));
+    const rejected = await watchAttentionQueue(
+      failing,
+      {
+        ...host,
+        ownerLoss: (_runId, signal) => {
+          signals.push(signal);
+          return new Promise(resolve => signal.addEventListener('abort', () => resolve(null)));
+        },
+      },
+      line => void lines.push(line),
+      { scope: { kind: 'all' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+    ).catch((error: unknown) => error);
+    expect(rejected).toBeInstanceOf(Error);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].aborted).toBe(true);
+    await store.completeWorkflowRun(armed, { duration_ms: 1 });
+    await Bun.sleep(30);
+    expect(lines.map(line => line.type)).toEqual(['ready']);
+  });
+
+  test('a tail that cannot read its cursor stops with an error line', async () => {
+    const store = await makeStore();
+    let foreign = false;
+    const failing: IWorkflowStore = Object.create(store);
+    failing.readWorkflowEventsAfter = (cursor, options) =>
+      foreign
+        ? Promise.reject(new WorkflowEventCursorError())
+        : store.readWorkflowEventsAfter(cursor, options);
+    const stream = await watch(failing);
+    foreign = true;
+    expect(await stream.next(line => line.type === 'error')).toEqual({
+      type: 'error',
+      error: 'cursor_invalid',
+    });
+    foreign = false;
+    await pausedAtAsk(store);
+    await Bun.sleep(30);
+    await stream.close();
+    expect(stream.lines.at(-1)?.type).toBe('error');
+  });
+
+  test('a stream that cannot read the store sends no bookmark until a read succeeds', async () => {
+    const store = await makeStore();
+    let reads = 0;
+    let down = true;
+    const failing: IWorkflowStore = Object.create(store);
+    failing.readWorkflowEventsAfter = (cursor, options) => {
+      reads += 1;
+      return down
+        ? Promise.reject(new Error('database unavailable'))
+        : store.readWorkflowEventsAfter(cursor, options);
+    };
+    const stream = await watch(failing, { bookmarkIntervalMs: 0 });
+    while (reads < 5) await Bun.sleep(5);
+    expect(stream.lines.map(line => line.type)).toEqual(['ready']);
+    down = false;
+    expect(await stream.next(line => line.type === 'bookmark')).toEqual({
+      type: 'bookmark',
+      cursor: await store.getWorkflowEventHead(),
+    });
+    await stream.close();
   });
 
   test('an idle stream sends a bookmark at the feed position', async () => {

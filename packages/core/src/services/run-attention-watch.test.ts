@@ -932,4 +932,27 @@ describe('runOwnerLossWatch', () => {
     expect(await watchOwner('asking', signal)).toBeNull();
     expect(rows.get('orphan')?.status).toBe('running');
   });
+
+  test('keeps watching a running run through its tool-call attention, and reports its lost owner', async () => {
+    const stalled = {
+      streamId: 'stream',
+      nodeId: 'implement',
+      provider: 'codex',
+      toolCallId: 'tool',
+      name: 'bash',
+      startedAt: '2026-10-01T00:00:00.000Z',
+      lastProgressAt: '2026-10-01T00:00:00.000Z',
+      raisedAt: '2026-10-01T00:30:00.000Z',
+      thresholdMs: 1800000,
+    };
+    putRun('stalled', { metadata: { ...localOwner, tool_call_attention: [stalled] } });
+    putRun('malformed', { metadata: { ...localOwner, tool_call_attention: 'garbage' } });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('stalled', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('malformed', signal)).toEqual({ observedStatus: 'running' });
+    expect(rows.get('stalled')?.metadata).toMatchObject({ tool_call_attention: [stalled] });
+  });
 });

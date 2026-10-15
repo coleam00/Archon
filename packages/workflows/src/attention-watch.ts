@@ -106,7 +106,10 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
+  /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
+  /** The store cannot read the stream's cursor; the last line of the stream. */
+  z.object({ type: z.literal('error'), error: z.literal('cursor_invalid') }),
 ]);
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
@@ -234,7 +237,8 @@ function terminalOutcome(
 /**
  * Start a watch: snapshot the open items in scope, emit `ready`, then follow the feed.
  * Resolves once the snapshot and `ready` were delivered. Rejects with
- * `WorkflowEventCursorError` before any line when `after` cannot be read.
+ * `WorkflowEventCursorError` before any line when `after` cannot be read; a tail that
+ * later cannot read its cursor ends the stream with an `error` line.
  */
 export async function watchAttentionQueue(
   store: AttentionWatchStore,
@@ -247,6 +251,7 @@ export async function watchAttentionQueue(
   const filtersLabels = Object.keys(labels).length > 0;
   const source: AttentionQueueSource = { store, branchOf: host.branchOf };
   const bookmarkIntervalMs = options.bookmarkIntervalMs ?? DEFAULT_BOOKMARK_INTERVAL_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const start = options.after ?? (await store.getWorkflowEventHead());
   if (options.after !== undefined) await store.readWorkflowEventsAfter(options.after, { limit: 1 });
@@ -254,23 +259,15 @@ export async function watchAttentionQueue(
   const open = new Map<string, OpenItem>();
   let follower: WorkflowEventFeedFollower | undefined;
   let closed = false;
-  let ready = false;
   let chain: Promise<void> = Promise.resolve();
-  let bookmarkTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastLineAt = Date.now();
   const position = (): WorkflowEventCursor => follower?.cursor() ?? start;
-
-  const armBookmark = (): void => {
-    if (!ready || closed) return;
-    clearTimeout(bookmarkTimer);
-    bookmarkTimer = setTimeout(() => {
-      emit({ type: 'bookmark', cursor: position() });
-    }, bookmarkIntervalMs);
-  };
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
   // listener sees one line at a time, and the tail awaits it.
   function emit(line: AttentionStreamLine): void {
     if (closed) return;
+    lastLineAt = Date.now();
     chain = chain.then(async () => {
       try {
         await listener(line);
@@ -281,7 +278,6 @@ export async function watchAttentionQueue(
         );
       }
     });
-    armBookmark();
   }
 
   const inQuery = (item: AttentionQueueItem): boolean =>
@@ -295,36 +291,57 @@ export async function watchAttentionQueue(
     const watchOwner = host.ownerLoss;
     if (watchOwner === undefined || closed || waiters.has(runId) || lost.has(runId)) return;
     const controller = new AbortController();
+    const { signal } = controller;
     waiters.set(runId, controller);
-    const settle = (): boolean => {
-      if (waiters.get(runId) !== controller) return false;
-      waiters.delete(runId);
-      return !controller.signal.aborted;
-    };
-    watchOwner(runId, controller.signal).then(
-      result => {
-        if (!settle() || result === null) return;
-        lost.add(runId);
-        emit({
-          type: 'owner_lost',
-          cursor: position(),
-          project,
-          runId,
-          observedStatus: result.observedStatus,
-        });
-      },
-      (error: unknown) => {
-        if (settle())
+    void (async (): Promise<void> => {
+      let result: Awaited<ReturnType<RunOwnerLossWatch>>;
+      for (;;) {
+        try {
+          result = await watchOwner(runId, signal);
+          break;
+        } catch (error) {
+          if (signal.aborted) return;
+          // A failed read says nothing about the owner; an orphan may commit no event that
+          // would re-arm this watch, so it retries rather than goes quiet.
           getLog().warn(
             { err: error as Error, runId },
             'workflow.attention_watch_owner_watch_failed'
           );
+          await abortableDelay(pollIntervalMs, signal);
+          if (signal.aborted) return;
+        }
       }
-    );
+      if (waiters.get(runId) !== controller || signal.aborted) return;
+      waiters.delete(runId);
+      if (result === null) return;
+      lost.add(runId);
+      emit({
+        type: 'owner_lost',
+        cursor: position(),
+        project,
+        runId,
+        observedStatus: result.observedStatus,
+      });
+    })();
   };
   const disarm = (runId: string): void => {
     waiters.get(runId)?.abort();
     waiters.delete(runId);
+  };
+  const stopLiveness = (): void => {
+    for (const controller of waiters.values()) controller.abort();
+    waiters.clear();
+  };
+
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= (async (): Promise<void> => {
+      closed = true;
+      stopLiveness();
+      await follower?.close();
+      await chain;
+    })();
+    return closing;
   };
 
   // 1. The snapshot: the complete open set in scope, refilled on every connect.
@@ -342,12 +359,11 @@ export async function watchAttentionQueue(
     emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
   }
   emit({ type: 'ready', cursor: start });
-  ready = true;
-  armBookmark();
   await chain;
 
   // 2. Arm liveness for every run already running in scope.
-  if (host.ownerLoss !== undefined) {
+  const armRunning = async (): Promise<void> => {
+    if (host.ownerLoss === undefined) return;
     for (let offset = 0; ; offset += RUNNING_PAGE_LIMIT) {
       const page = await store.listWorkflowRuns({
         status: 'running',
@@ -360,7 +376,7 @@ export async function watchAttentionQueue(
       }
       if (page.runs.length < RUNNING_PAGE_LIMIT || offset + RUNNING_PAGE_LIMIT >= page.total) break;
     }
-  }
+  };
 
   // 3. The tail. Caches live for one page: a run is read once per page, after the page
   // was read, so the row reflects at least every event in it.
@@ -470,30 +486,44 @@ export async function watchAttentionQueue(
     await chain;
   };
 
-  follower = await followWorkflowEventFeed(store, start, handle, {
-    pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    ...(host.doorbell ? { doorbell: host.doorbell } : {}),
-    beginPage: page => {
-      views = new Map();
-      codebases = new Map();
-      reconciled.clear();
-      answers = indexAnswers(page);
-    },
-    logFields: { watch: 'attention' },
-  });
-
-  let closing: Promise<void> | undefined;
-  return {
-    close(): Promise<void> {
-      closing ??= (async (): Promise<void> => {
+  try {
+    await armRunning();
+    follower = await followWorkflowEventFeed(store, start, handle, {
+      pollIntervalMs,
+      ...(host.doorbell ? { doorbell: host.doorbell } : {}),
+      beginPage: page => {
+        views = new Map();
+        codebases = new Map();
+        reconciled.clear();
+        answers = indexAnswers(page);
+      },
+      onCaughtUp: () => {
+        if (Date.now() - lastLineAt >= bookmarkIntervalMs)
+          emit({ type: 'bookmark', cursor: position() });
+      },
+      onStopped: () => {
+        emit({ type: 'error', error: 'cursor_invalid' });
         closed = true;
-        clearTimeout(bookmarkTimer);
-        for (const controller of waiters.values()) controller.abort();
-        waiters.clear();
-        await follower.close();
-        await chain;
-      })();
-      return closing;
-    },
-  };
+        stopLiveness();
+      },
+      logFields: { watch: 'attention' },
+    });
+  } catch (error) {
+    // Already past `ready`: nothing else will close what was armed.
+    await close();
+    throw error;
+  }
+  return { close };
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }

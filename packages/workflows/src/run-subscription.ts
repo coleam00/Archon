@@ -51,6 +51,10 @@ export interface WorkflowEventFeedFollowOptions {
   doorbell?: WorkflowEventDoorbell;
   /** Called with each page before its deliveries are handled. */
   beginPage?: (page: WorkflowEventPage) => void;
+  /** Called after each tick that read and handled every delivery up to the head. */
+  onCaughtUp?: () => void;
+  /** Called when a `WorkflowEventCursorError` stops the tail. */
+  onStopped?: () => void;
   /** Fields every failure log carries, naming the follower. */
   logFields: Record<string, unknown>;
 }
@@ -92,12 +96,14 @@ export async function followWorkflowEventFeed(
     try {
       await drainToHead();
       consecutiveFailures = 0;
+      options.onCaughtUp?.();
     } catch (error) {
       consecutiveFailures += 1;
       const fields = { ...options.logFields, err: error as Error, consecutiveFailures };
       if (error instanceof WorkflowEventCursorError) {
         // Never becomes readable, so the tail stops; a draining close() reports it.
         getLog().error(fields, 'workflow.subscription_read_failed');
+        options.onStopped?.();
         return;
       }
       if (consecutiveFailures >= FAILURE_ESCALATION_THRESHOLD) {

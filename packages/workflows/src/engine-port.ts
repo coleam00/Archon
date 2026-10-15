@@ -123,7 +123,8 @@ export interface IWorkflowEngine {
    * the open items as a snapshot, then `ready`, then a line for every change the feed
    * commits. Delivery is at least once and one line at a time; the listener's promise is
    * awaited before the next line. Observes only: no run state is written. Rejects with
-   * `WorkflowEventCursorError`, before any line, when `after` cannot be read.
+   * `WorkflowEventCursorError`, before any line, when `after` cannot be read; a tail that
+   * later cannot read its own cursor sends an `error` line and stops.
    */
   watchAttention(
     listener: (line: AttentionStreamLine) => void | Promise<void>,
