@@ -3621,9 +3621,9 @@ describe('workflow dispatch routing', () => {
     const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original,
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async () => ({
+      getUserProviderCredential: async () => ({
         kind: 'api_key',
-        status: { state: 'unusable', source: 'archon', evidence: 'cannot read' },
+        getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'cannot read' }),
       }),
     }));
     const platform = makeForegroundPlatform();

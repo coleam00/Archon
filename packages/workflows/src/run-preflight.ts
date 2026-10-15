@@ -380,12 +380,13 @@ export async function assertRunCredentials(
     | 'providers'
     | 'getAgentProvider'
     | 'isPerUserProviderKeysEnabled'
-    | 'getUserProviderCredentialStatus'
+    | 'getUserProviderCredential'
     | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration
 ): Promise<void> {
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
+  const storedStatuses = new Map<string, CredentialStatus>();
   for (const requirement of prepared.requirements) {
     const { provider, model, vendor } = requirement;
     // A stored credential this provider cannot consume is never delivered to it, so the
@@ -394,7 +395,7 @@ export async function assertRunCredentials(
     if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
       if (deps.credentialStore === 'files')
         throw new FileStoreUnsupportedError('stored per-user provider credentials');
-      if (!deps.getUserProviderCredentialStatus)
+      if (!deps.getUserProviderCredential)
         throw new WorkflowCredentialPreflightError(
           requirement,
           'credential adapter has no stored status port'
@@ -403,7 +404,7 @@ export async function assertRunCredentials(
         try {
           storedCredentials.set(
             vendor,
-            await deps.getUserProviderCredentialStatus(prepared.executionUserId, vendor)
+            await deps.getUserProviderCredential(prepared.executionUserId, vendor)
           );
         } catch {
           throw new WorkflowCredentialPreflightError(
@@ -423,10 +424,18 @@ export async function assertRunCredentials(
       ) {
         unconsumedKind = stored.kind;
       } else {
-        const status: CredentialStatus = stored?.status ?? {
-          state: 'not_connected',
-          source: 'archon',
-        };
+        let status = storedStatuses.get(vendor);
+        if (!status) {
+          try {
+            status = (await stored?.getStatus()) ?? { state: 'not_connected', source: 'archon' };
+          } catch {
+            throw new WorkflowCredentialPreflightError(
+              requirement,
+              'could not verify the stored credential'
+            );
+          }
+          storedStatuses.set(vendor, status);
+        }
         if (status.state === 'not_connected' && prepared.connectedVendors.has(vendor)) {
           assertCredentialStatus(requirement, status);
         }

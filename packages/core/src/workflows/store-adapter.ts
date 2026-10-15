@@ -290,10 +290,10 @@ export function createWorkflowDeps(
           // beside that bag only so the workflow subprocess boundary can scrub echoed
           // file-delivered credentials without knowing provider-specific file shapes.
           isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-          getUserProviderCredentialStatus: async (userId, vendor) => {
+          getUserProviderCredential: async (userId, vendor) => {
             const [row] = await requiredCredentialRows(userId, [vendor]);
             return row
-              ? { kind: row.kind, status: await getStoredCredentialStatus(userId, row.provider) }
+              ? { kind: row.kind, getStatus: () => getStoredCredentialStatus(userId, row.provider) }
               : undefined;
           },
           getUserProviderEnv: async (

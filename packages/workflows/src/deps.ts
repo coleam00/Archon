@@ -211,10 +211,10 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // WorkflowDeps — the single injection point
 // ---------------------------------------------------------------------------
 
-/** A stored credential: how it was connected, and whether it can be used now. */
+/** Stored metadata is safe to inspect before resolving health, which may decrypt or refresh. */
 export interface StoredProviderCredential {
   kind: StoredCredentialKind;
-  status: CredentialStatus;
+  getStatus: () => Promise<CredentialStatus>;
 }
 
 export interface WorkflowDeps {
@@ -275,7 +275,7 @@ export interface WorkflowDeps {
   /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
   credentialStore?: WorkflowStoreKind;
   /** The user's stored credential for `vendor`, or `undefined` when none is stored. */
-  getUserProviderCredentialStatus?: (
+  getUserProviderCredential?: (
     userId: string,
     vendor: string
   ) => Promise<StoredProviderCredential | undefined>;

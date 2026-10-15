@@ -392,9 +392,9 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({
+    getUserProviderCredential: mock(async () => ({
       kind: 'api_key' as const,
-      status: { state: 'usable' as const, source: 'archon' as const },
+      getStatus: async () => ({ state: 'usable' as const, source: 'archon' as const }),
     })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
@@ -6145,14 +6145,14 @@ describe('credential preflight lifecycle', () => {
       const getStatus = mock(
         async (): Promise<import('./deps').StoredProviderCredential> => ({
           kind: 'api_key',
-          status: {
+          getStatus: async () => ({
             state: 'unusable',
             source: 'archon',
             evidence: 'stored credential unreadable',
-          },
+          }),
         })
       );
-      deps.getUserProviderCredentialStatus = getStatus;
+      deps.getUserProviderCredential = getStatus;
       mockExecuteDagWorkflow.mockClear();
       const result = await executeWorkflow(
         deps,
@@ -6185,11 +6185,14 @@ describe('credential preflight lifecycle', () => {
   it('a Pi-only run with its own login neither refreshes nor delivers a stored Claude subscription', async () => {
     const deps = makeDeps(makeStore());
     deps.isPerUserProviderKeysEnabled = () => true;
-    deps.getUserProviderCredentialStatus = mock(
+    const storedStatus = mock(async (): Promise<never> => {
+      throw new Error('unused credential must not be refreshed');
+    });
+    deps.getUserProviderCredential = mock(
       async () =>
         ({
           kind: 'oauth',
-          status: { state: 'unusable', source: 'archon', evidence: 'refresh token revoked' },
+          getStatus: storedStatus,
         }) as const
     );
     deps.getAgentProvider = mock(() => ({
@@ -6212,6 +6215,7 @@ describe('credential preflight lifecycle', () => {
       {}
     );
     expect(result.success).toBe(true);
+    expect(storedStatus).not.toHaveBeenCalled();
     expect(getUserProviderEnv).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
@@ -6221,11 +6225,11 @@ describe('credential preflight lifecycle', () => {
     const deps = makeDeps(store);
     deps.isPerUserProviderKeysEnabled = () => true;
     const { StoredCredentialDeliveryError } = await import('./run-preflight');
-    deps.getUserProviderCredentialStatus = mock(
+    deps.getUserProviderCredential = mock(
       async () =>
         ({
           kind: 'api_key',
-          status: { state: 'usable', source: 'archon' },
+          getStatus: async () => ({ state: 'usable', source: 'archon' }),
         }) as const
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
