@@ -2,11 +2,7 @@
 # and asks nothing, even for an ask decision, so the run never pauses.
 facts:
   path: decide
-  mode: eval
   base: { branch: dev, sha: "stub-sha" }
-  runs: ["run-a"]
-  refs: 1
-  decisions: 0
   policy_defaults: "/stub/policy"
 decide:
   decisions:
@@ -25,8 +21,6 @@ outcome:
   asked: []
   question: ""
   evaluation:
-    base: { branch: dev, sha: "stub-sha" }
-    runs: ["run-a"]
     decisions:
       - outcome: ask
         key: stub-open-question

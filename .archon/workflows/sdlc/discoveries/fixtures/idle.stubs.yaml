@@ -1,11 +1,7 @@
 # Dry-run fixture: no finished run has undecided discoveries, so no agent runs.
 facts:
   path: idle
-  mode: live
   base: { branch: dev, sha: "stub-sha" }
-  runs: []
-  refs: 0
-  decisions: 0
   policy_defaults: "/stub/policy"
 outcome:
   mode: live

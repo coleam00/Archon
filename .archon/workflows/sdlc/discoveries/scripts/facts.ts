@@ -1,13 +1,14 @@
 /**
- * Build this pass's queue: the finished runs whose discoveries no pass has decided,
+ * Build this pass's queue: the finished runs with records no decision settled yet,
  * every decision made so far, and the base commit claims are checked against.
  *
  * A run's records become final when the run reaches a terminal status, so only
- * terminal runs are queued, oldest first. In live mode each queued run is claimed with
- * a conditional write on its `discoveries/runs/<id>` document, so two passes never
- * decide the same run. A claim is released only when the claiming run is terminal.
- * Eval mode writes nothing and reads no run document: it decides the window's runs as
- * if no pass had seen them, against whatever decisions are already stored.
+ * terminal runs are queued, oldest first. A record is settled once a decision record
+ * that is not `asked` lists it. In live mode each queued run is claimed with a
+ * conditional write on its `discoveries/runs/<id>` document, so two passes never
+ * decide the same run; a claim is released only when the claiming run is terminal.
+ * Eval mode writes nothing and claims nothing: it decides every record in the window,
+ * settled or not, against whatever decisions are already stored.
  *
  * Writes `$ARTIFACTS_DIR/drain/queue.json` (the queued records, for the agent and the
  * outcome) and `$ARTIFACTS_DIR/drain/discovery-decisions.md` (every stored decision).
@@ -18,9 +19,10 @@ import { join } from 'node:path';
 import {
   DECISIONS_PREFIX,
   type DecisionRecord,
-  parseDrainMode,
+  decidedRefs,
   parseDecisionRecord,
-  parseRunDoc,
+  parseDrainMode,
+  parseRunClaim,
   type QueuedRun,
   renderDecisions,
   runName,
@@ -57,24 +59,19 @@ function readDecisions(): DecisionRecord[] {
   });
 }
 
-/**
- * Claim the run for this pass, or say why not. The claim keeps the refs earlier
- * passes already decided, so a run that came back only for its asked records is
- * decided only for those.
- */
-function claimRun(runId: string, self: string, at: string): readonly string[] | null {
+/** Claim the run for this pass: false when another pass holds it or won the write. */
+function claimRun(runId: string, self: string, at: string): boolean {
   const name = runName(runId);
   const stored = stateGet(name);
-  const doc = parseRunDoc(name, stored.value);
-  if (doc?.claim !== undefined && doc.claim !== null && doc.claim.run_id !== self) {
-    const status = runStatus(doc.claim.run_id);
+  const held = parseRunClaim(name, stored.value)?.claim ?? null;
+  if (held !== null && held.run_id !== self) {
+    const status = runStatus(held.run_id);
     if (claimDisposition(status) === 'hold') {
-      if (status === null) note(`${name} stays claimed: the engine reports no status for run ${doc.claim.run_id}`);
-      return null;
+      if (status === null) note(`${name} stays claimed: the engine reports no status for run ${held.run_id}`);
+      return false;
     }
   }
-  const next = { version: 1, claim: { run_id: self, at }, decided: doc?.decided ?? {} };
-  return statePut(name, next, stored.revision) === 'ok' ? Object.keys(next.decided) : null;
+  return statePut(name, { version: 1, claim: { run_id: self, at } }, stored.revision) === 'ok';
 }
 
 function main(): void {
@@ -95,6 +92,7 @@ function main(): void {
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
   const decisions = readDecisions();
+  const settled = mode === 'live' ? decidedRefs(decisions) : new Set<string>();
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
@@ -104,9 +102,15 @@ function main(): void {
   const candidates = listed
     .filter(run => typeof run.id === 'string' && run.id !== self)
     .filter(run => typeof run.status === 'string' && TERMINAL.includes(run.status))
-    .map(run => ({ run, completed: typeof run.completed_at === 'string' ? Date.parse(run.completed_at) : Number.NaN }))
+    .map(run => ({
+      run,
+      completed: typeof run.completed_at === 'string' ? Date.parse(run.completed_at) : Number.NaN,
+    }))
     .filter(({ completed }) => !Number.isNaN(completed))
-    .filter(({ completed }) => (since === undefined || completed >= since) && (until === undefined || completed <= until))
+    .filter(
+      ({ completed }) =>
+        (since === undefined || completed >= since) && (until === undefined || completed <= until)
+    )
     .sort((left, right) => left.completed - right.completed);
 
   const queue: QueuedRun[] = [];
@@ -126,20 +130,11 @@ function main(): void {
       note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
       continue;
     }
-    if (relayed.records.length === 0) continue;
-    let decided: readonly string[] = [];
-    if (mode === 'live') {
-      // Skip before claiming a run every record of which is already decided.
-      const doc = parseRunDoc(runName(id), stateGet(runName(id)).value);
-      if (doc !== null && relayed.records.every(record => record.ref in doc.decided)) continue;
-      const claimed = claimRun(id, self, at);
-      if (claimed === null) continue;
-      decided = claimed;
-    }
     const records = relayed.records
-      .filter(record => !decided.includes(record.ref))
-      .map(record => ({ ...record, ref: `${id}:${record.ref}` }));
+      .map(record => ({ ...record, ref: `${id}:${record.ref}` }))
+      .filter(record => !settled.has(record.ref));
     if (records.length === 0) continue;
+    if (mode === 'live' && !claimRun(id, self, at)) continue;
     queue.push({
       id,
       workflow: typeof run.workflow_name === 'string' ? run.workflow_name : '',
@@ -158,11 +153,7 @@ function main(): void {
   writeFileSync(join(drain, 'discovery-decisions.md'), renderDecisions(decisions));
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
-    mode,
     base: { branch: base.branch, sha },
-    runs: queue.map(run => run.id),
-    refs: queue.reduce((count, run) => count + run.records.length, 0),
-    decisions: decisions.length,
     policy_defaults: POLICY_DEFAULTS,
   });
 }

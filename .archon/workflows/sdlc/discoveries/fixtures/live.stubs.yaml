@@ -3,11 +3,7 @@
 # scripts are stubbed; .archon/scripts/__tests__/discoveries.test.ts runs them.
 facts:
   path: decide
-  mode: live
   base: { branch: dev, sha: "stub-sha" }
-  runs: ["run-a"]
-  refs: 3
-  decisions: 0
   policy_defaults: "/stub/policy"
 decide:
   decisions:

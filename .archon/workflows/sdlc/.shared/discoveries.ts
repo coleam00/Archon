@@ -1,16 +1,17 @@
 /**
  * The discoveries workflow's state: one decision record per decided discovery, and
- * one document per drained run.
+ * one claim document per drained run.
  *
  * `discoveries/decisions/<key>` holds what was decided about one discovery, under a
- * short key the deciding agent chose, with every run that found it. It is the
- * workflow's memory: the agent reads all of them before deciding, so a discovery
- * already handled is not handled again, and a maintainer's answer applies to later
- * items. One small document per key keeps every write well under the store's
- * document cap.
+ * short key the deciding agent chose, with every run record (`<run-id>:<ref>`) that
+ * found it. It is the workflow's memory and its commit point: a record is decided
+ * once a decision record that is not `asked` lists it. The agent reads every record
+ * before deciding, so a discovery already handled is not handled again, and a
+ * maintainer's answer applies to later items. One small document per key keeps every
+ * write well under the store's document cap.
  *
- * `discoveries/runs/<run-id>` is a drained run's work item: the claim of the pass
- * working it and which key each of its records was decided under.
+ * `discoveries/runs/<run-id>` is a drained run's work item: only the claim of the
+ * pass working it.
  */
 
 import type { QualifiedPr } from './forge.ts';
@@ -24,17 +25,13 @@ const KEY = /^[a-z0-9][a-z0-9-]{2,80}$/;
 export type IssueRef = QualifiedPr;
 
 /**
- * What became of a discovery. A `filed` decision carries its draft until the issue
- * exists, so a pass that stopped between the two finishes the same issue by its
- * marker rather than filing a second one.
+ * What became of a discovery. A `filed` decision keeps the issue's title and body;
+ * its issue is null until the create reads back, so a pass that stopped between the
+ * two finishes the same issue by its marker rather than filing a second one.
  */
 export type Decision =
-  | {
-      readonly kind: 'filed';
-      readonly issue: IssueRef | null;
-      readonly draft: { readonly title: string; readonly body: string } | null;
-    }
-  | { readonly kind: 'tracked'; readonly issue: IssueRef; readonly comment_url: string | null }
+  | { readonly kind: 'filed'; readonly issue: IssueRef | null; readonly title: string; readonly body: string }
+  | { readonly kind: 'tracked'; readonly issue: IssueRef }
   | { readonly kind: 'dropped' }
   | { readonly kind: 'asked' };
 
@@ -53,17 +50,15 @@ export interface DecisionRecord {
   /** The base commit the claim was checked against. */
   readonly verified_at: string;
   readonly at: string;
-  /** Every run that found this discovery, oldest first. */
-  readonly runs: readonly string[];
+  /** Every run record that found this discovery, as `<run-id>:<ref>`. */
+  readonly refs: readonly string[];
   /** The last question asked about it, with its answer once there is one. */
   readonly question: Question | null;
 }
 
-export interface RunDoc {
+export interface RunClaim {
   readonly version: 1;
   readonly claim: { readonly run_id: string; readonly at: string } | null;
-  /** Each decided record's ref, mapped to the key it was decided under. */
-  readonly decided: Readonly<Record<string, string>>;
 }
 
 export function isKey(value: unknown): value is string {
@@ -79,6 +74,18 @@ export function runName(runId: string): string {
   return `${RUNS_PREFIX}${runId}`;
 }
 
+/** The run a qualified ref belongs to. */
+export function refRun(ref: string): string {
+  const colon = ref.indexOf(':');
+  if (colon <= 0) throw new Error(`"${ref}" is not a qualified discovery ref`);
+  return ref.slice(0, colon);
+}
+
+/** The refs some decision already settled: every ref a record that is not `asked` lists. */
+export function decidedRefs(records: readonly DecisionRecord[]): Set<string> {
+  return new Set(records.filter(record => record.decision.kind !== 'asked').flatMap(record => record.refs));
+}
+
 function text(value: unknown): value is string {
   return typeof value === 'string';
 }
@@ -86,8 +93,13 @@ function text(value: unknown): value is string {
 function issueRef(value: unknown): IssueRef | undefined {
   if (!isObject(value) || !isObject(value.repo)) return undefined;
   const { host, path } = value.repo;
-  return text(host) && host !== '' && text(path) && path !== '' &&
-    typeof value.number === 'number' && Number.isInteger(value.number) && value.number > 0
+  return text(host) &&
+    host !== '' &&
+    text(path) &&
+    path !== '' &&
+    typeof value.number === 'number' &&
+    Number.isInteger(value.number) &&
+    value.number > 0
     ? { repo: { host, path }, number: value.number }
     : undefined;
 }
@@ -97,24 +109,12 @@ function decision(value: unknown): Decision | undefined {
   switch (value.kind) {
     case 'filed': {
       const issue = value.issue === null ? null : issueRef(value.issue);
-      const draft =
-        value.draft === null
-          ? null
-          : isObject(value.draft) && text(value.draft.title) && text(value.draft.body)
-            ? { title: value.draft.title, body: value.draft.body }
-            : undefined;
-      // Exactly one of the two: the draft is the issue until the issue exists.
-      if (issue === undefined || draft === undefined || (issue === null) === (draft === null)) {
-        return undefined;
-      }
-      return { kind: 'filed', issue, draft };
+      if (issue === undefined || !text(value.title) || !text(value.body)) return undefined;
+      return { kind: 'filed', issue, title: value.title, body: value.body };
     }
     case 'tracked': {
       const issue = issueRef(value.issue);
-      if (issue === undefined || !(value.comment_url === null || text(value.comment_url))) {
-        return undefined;
-      }
-      return { kind: 'tracked', issue, comment_url: value.comment_url };
+      return issue === undefined ? undefined : { kind: 'tracked', issue };
     }
     case 'dropped':
     case 'asked':
@@ -158,10 +158,10 @@ export function parseDecisionRecord(name: string, value: unknown): DecisionRecor
     !text(value.reason) ||
     !text(value.verified_at) ||
     !text(value.at) ||
-    !Array.isArray(value.runs) ||
-    !value.runs.every(text)
+    !Array.isArray(value.refs) ||
+    !value.refs.every(text)
   ) {
-    return fail('a title, reason, verified_at, at or runs field is missing');
+    return fail('a title, reason, verified_at, at or refs field is missing');
   }
   return {
     version: 1,
@@ -171,29 +171,25 @@ export function parseDecisionRecord(name: string, value: unknown): DecisionRecor
     reason: value.reason,
     verified_at: value.verified_at,
     at: value.at,
-    runs: value.runs,
+    refs: value.refs,
     question: asked,
   };
 }
 
-/** A drained run's document; null when there is none yet. */
-export function parseRunDoc(name: string, value: unknown): RunDoc | null {
+/** A drained run's claim document; null when there is none yet. */
+export function parseRunClaim(name: string, value: unknown): RunClaim | null {
   if (value === null) return null;
   const claim = isObject(value) ? value.claim : undefined;
-  const decided = isObject(value) ? value.decided : undefined;
   if (
     !isObject(value) ||
     value.version !== 1 ||
-    !(claim === null || (isObject(claim) && text(claim.run_id) && text(claim.at))) ||
-    !isObject(decided) ||
-    !Object.values(decided).every(isKey)
+    !(claim === null || (isObject(claim) && text(claim.run_id) && text(claim.at)))
   ) {
-    throw new Error(`${name} is not a drained-run document`);
+    throw new Error(`${name} is not a drained-run claim`);
   }
   return {
     version: 1,
     claim: claim === null ? null : { run_id: claim.run_id as string, at: claim.at as string },
-    decided: decided as Record<string, string>,
   };
 }
 
@@ -201,13 +197,12 @@ function issueText(issue: IssueRef): string {
   return `https://${issue.repo.host}/${issue.repo.path}/issues/${String(issue.number)}`;
 }
 
-function outcomeText(record: DecisionRecord): string {
-  const decided = record.decision;
+function outcomeText(decided: Decision): string {
   switch (decided.kind) {
     case 'filed':
       return decided.issue === null ? 'filed, issue not yet created' : `filed ${issueText(decided.issue)}`;
     case 'tracked':
-      return `tracked by ${issueText(decided.issue)}${decided.comment_url === null ? '' : ` (evidence ${decided.comment_url})`}`;
+      return `tracked by ${issueText(decided.issue)}`;
     case 'dropped':
       return 'dropped';
     case 'asked':
@@ -224,13 +219,14 @@ export function renderDecisions(records: readonly DecisionRecord[]): string {
   const sections = [...records]
     .sort((left, right) => left.key.localeCompare(right.key))
     .map(record => {
+      const runs = [...new Set(record.refs.map(refRun))];
       const lines = [
         `## ${record.key}`,
         '',
         `- ${record.title}`,
-        `- Decision: ${outcomeText(record)}`,
+        `- Decision: ${outcomeText(record.decision)}`,
         `- Reason: ${record.reason}`,
-        `- Verified at ${record.verified_at}, decided ${record.at}, found by ${String(record.runs.length)} run(s): ${record.runs.join(', ')}`,
+        `- Verified at ${record.verified_at}, decided ${record.at}, found by ${String(runs.length)} run(s): ${runs.join(', ')}`,
       ];
       if (record.question !== null) {
         lines.push(`- Question: ${record.question.text}`);
@@ -271,15 +267,15 @@ export interface Queue {
   readonly runs: readonly QueuedRun[];
 }
 
-/** The run a qualified ref belongs to. */
-export function refRun(ref: string): string {
-  const colon = ref.indexOf(':');
-  if (colon <= 0) throw new Error(`"${ref}" is not a qualified discovery ref`);
-  return ref.slice(0, colon);
-}
+/** The deciding agent's outcomes; the decide node's output schema must admit exactly these. */
+export const AGENT_OUTCOMES = ['file', 'track', 'drop', 'ask'] as const;
 
 /** What the deciding agent declared for one discovery, as its output schema admits it. */
-export type AgentDecision = { readonly key: string; readonly refs: readonly string[]; readonly title: string } & (
+export type AgentDecision = {
+  readonly key: string;
+  readonly refs: readonly string[];
+  readonly title: string;
+} & (
   | { readonly outcome: 'file'; readonly body: string; readonly reason: string }
   | {
       readonly outcome: 'track';
@@ -294,8 +290,9 @@ export type AgentDecision = { readonly key: string; readonly refs: readonly stri
 
 /**
  * The exact checks before any write: every queued ref is decided exactly once, by a
- * decision whose key is valid and used once, and a key that already has an issue is
- * never filed again. Returns every violation; an empty list passes.
+ * decision whose key is valid and used once; a key that already has an issue is never
+ * filed again; and a key whose filing is still unfinished is only filed, so its draft
+ * is never overwritten. Returns every violation; an empty list passes.
  */
 export function checkDecisions(
   queued: readonly string[],
@@ -316,13 +313,13 @@ export function checkDecisions(
       seen.set(ref, decision.key);
       if (!queued.includes(ref)) problems.push(`${ref} (key ${decision.key}) is not a queued ref`);
     }
-    const record = stored.get(decision.key);
-    const issued =
-      record !== undefined &&
-      ((record.decision.kind === 'filed' && record.decision.issue !== null) ||
-        record.decision.kind === 'tracked');
+    const prior = stored.get(decision.key)?.decision;
+    const issued = (prior?.kind === 'filed' && prior.issue !== null) || prior?.kind === 'tracked';
     if (decision.outcome === 'file' && issued) {
       problems.push(`key ${decision.key} already has an issue; it is never filed again`);
+    }
+    if (decision.outcome !== 'file' && prior?.kind === 'filed' && prior.issue === null) {
+      problems.push(`key ${decision.key} has an unfinished filing; it can only be filed`);
     }
   }
   for (const ref of queued) if (!seen.has(ref)) problems.push(`${ref} has no decision`);

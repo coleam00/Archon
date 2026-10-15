@@ -2,11 +2,7 @@
 # attention item, and the stubbed answer is stored on the asked record.
 facts:
   path: decide
-  mode: live
   base: { branch: dev, sha: "stub-sha" }
-  runs: ["run-a"]
-  refs: 1
-  decisions: 0
   policy_defaults: "/stub/policy"
 decide:
   decisions:

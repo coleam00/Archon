@@ -420,11 +420,11 @@ terminal report lists.
 
 - **Queue.** A pass lists this project's runs that ended (completed, failed or
   cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
-  them that still have undecided records. A run's work item is the state document
-  `discoveries/runs/<run-id>`: the claim of the pass working it, and which key each of
-  its records was decided under. A claim is released only when the claiming run is
-  completed, failed or cancelled, never on age. A run whose records cannot be read is
-  left queued and named on the pass's stderr.
+  them that still have undecided records. A record is decided once a decision record
+  that is not `asked` lists it. A run's work item is the state document
+  `discoveries/runs/<run-id>`, which holds the claim of the pass working it. A claim is
+  released only when the claiming run is completed, failed or cancelled, never on age.
+  A run whose records cannot be read is left queued and named on the pass's stderr.
 - **Decisions.** One agent decides every queued record, under the project's direction
   document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
   verifies each claim against the default branch's head with `git show` and
@@ -434,16 +434,17 @@ terminal report lists.
   evidence comment per key, only when it adds something), `drop` it with a reason, or
   `ask` a maintainer.
 - **Memory.** Every decision is the state document `discoveries/decisions/<key>`: the
-  outcome, the reason, the commit it was verified at, the runs that found it, and the
-  last question with its answer. Each pass writes them all as one readable
+  outcome, the reason, the commit it was verified at, every run record that found it
+  (`<run-id>:<ref>`), and the last question with its answer. Each pass writes them all as one readable
   `drain/discovery-decisions.md` in its artifacts, which is what the agent reads. List
   them with `archon state list --prefix discoveries/decisions/`.
 - **Writes.** The `outcome` script checks before any write that every queued record is
   decided exactly once and that a key which already has an issue is not filed again,
-  and that a tracking issue is open. It writes each decision record before its public
-  write. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
-  create looks for that marker across every issue first, so a pass that stopped after
-  creating an issue recovers it instead of filing a second one. Filed issues carry no
+  and that a tracking issue is open. It writes every decision record before any public
+  write; a filed record keeps the issue's title and body until the issue reads back.
+  A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the create
+  looks for that marker across every issue first, so the next pass finishes a filing
+  an earlier one stopped in the middle of without filing a second issue. Filed issues carry no
   labels: intake triages them like any other issue, which it does only when the
   install's forge identity is on `maintainers.json`.
 - **Questions.** Every `ask` in a pass becomes one attention item labelled

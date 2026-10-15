@@ -50,18 +50,14 @@ nodes:
       type: object
       properties:
         path: { type: string, enum: [idle, decide] }
-        mode: { type: string, enum: [live, eval] }
         base:
           type: object
           properties:
             branch: { type: string }
             sha: { type: string }
           required: [branch, sha]
-        runs: { type: array, items: { type: string } }
-        refs: { type: integer }
-        decisions: { type: integer }
         policy_defaults: { type: string }
-      required: [path, mode, base, runs, refs, decisions, policy_defaults]
+      required: [path, base, policy_defaults]
 
   # Reads code at the base commit with git show and git grep; the checkout stays as
   # it was. The engine fails this node if the agent modifies it.
@@ -152,8 +148,8 @@ nodes:
       properties:
         mode: { type: string, enum: [live, eval] }
         summary: { type: string }
-        # Issues filed or recovered, and issues a discovery is tracked by, with the
-        # evidence comment when one was posted.
+        # Issues filed or recovered, and issues a discovery is tracked by (the
+        # evidence comment's URL when one was posted).
         written:
           type: array
           items:
@@ -161,7 +157,7 @@ nodes:
             properties:
               key: { type: string }
               outcome: { type: string, enum: [file, track] }
-              url: { type: [string, 'null'] }
+              url: { type: string }
             required: [key, outcome, url]
         dropped:
           type: array
@@ -174,16 +170,14 @@ nodes:
         asked: { type: array, items: { type: string } }
         # The asked items, numbered with their recommendations; empty when none.
         question: { type: string }
-        # Null in live. In eval: the base, the runs decided, every decision, and every
-        # check that would have refused the pass before a write.
+        # Null in live. In eval: every decision, and every check that would have
+        # refused the pass before a write. The queued runs are in drain/queue.json.
         evaluation:
           type: [object, 'null']
           properties:
-            base: { type: object }
-            runs: { type: array, items: { type: string } }
             decisions: { type: array, items: { type: object } }
             problems: { type: array, items: { type: string } }
-          required: [base, runs, decisions, problems]
+          required: [decisions, problems]
       required: [mode, summary, written, dropped, asked, question, evaluation]
 
   # One attention item per pass, whatever the number of questions. A paused run
