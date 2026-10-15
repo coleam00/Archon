@@ -193,6 +193,26 @@ describe('git utilities', () => {
     });
   });
 
+  describe('readWorktreeRegistration', () => {
+    for (const code of ['EACCES', 'EIO', 'ELOOP']) {
+      test(`propagates ancestor resolution errors: ${code}`, async () => {
+        const error = Object.assign(new Error('cannot resolve path'), { code });
+        const fsPromises = await import('fs/promises');
+        const realpathSpy = spyOn(fsPromises, 'realpath').mockRejectedValueOnce(error);
+        const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+        try {
+          await expect(
+            git.readWorktreeRegistration(testDir, join(testDir, 'checkout'))
+          ).rejects.toBe(error);
+          expect(realpathSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          realpathSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+    }
+  });
+
   describe('getCanonicalRepoPath', () => {
     test('returns same path for non-worktree', async () => {
       const result = await git.getCanonicalRepoPath(testDir);

@@ -16,6 +16,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { WorktreeRegistrationChangedError } from './codebase-delete-error';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 // Adopted worktrees have no creation proof, so identical upserts need a fresh store-owned identity.
@@ -231,7 +232,7 @@ export async function markWorktreeDestroyed(
     [env.id, env.metadata[WORKTREE_REGISTRATION_ID] ?? '']
   );
   if (result.rowCount !== 1) {
-    throw new Error(`Worktree ${env.id} changed during cleanup; inspect it and retry deletion`);
+    throw new WorktreeRegistrationChangedError(env.id);
   }
 }
 
