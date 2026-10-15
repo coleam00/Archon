@@ -225,7 +225,7 @@ import {
   type JsonValue,
   type TemplateToken,
 } from './output-ref';
-import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
+import { resolveMcpPath, missingMcpConfigMessage, type McpPathResolution } from './mcp-path';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
 import { validateArtifactPointers } from './artifact-pointer';
@@ -682,6 +682,7 @@ function parseMcpServerNames(raw: string, fullPath: string): string[] | undefine
 
 /** What a node's `mcp:` declaration hands its provider for one attempt. */
 export type NodeMcpResolution =
+  | Extract<McpPathResolution, { kind: 'read_error' }>
   | { kind: 'none' }
   /** The provider loads `path`; `servers` are the names the file declares, if readable. */
   | { kind: 'load'; path: string; servers: Set<string> }
@@ -690,10 +691,10 @@ export type NodeMcpResolution =
   | { kind: 'unavailable'; fullPath: string; record: McpUnavailable; diagnostic?: string };
 
 /**
- * Decide whether a node's MCP servers reach its provider. A required declaration
- * always does: a missing file or an incapable provider fails the node exactly as it
- * did before optional declarations existed. An optional one is withheld when the
- * provider cannot load MCP servers, or when its config file does not exist.
+ * Decide whether a node's MCP servers reach its provider. Missing required files and
+ * readable invalid JSON still reach the provider for diagnosis; I/O errors retain their
+ * cause for the executor. An optional declaration is withheld when the provider cannot
+ * load MCP servers, or when its config file does not exist.
  */
 export async function resolveNodeMcp(
   mcp: NodeMcp | undefined,
@@ -715,6 +716,7 @@ export async function resolveNodeMcp(
       record: { path, reason: 'provider_unsupported', ...(servers ? { servers } : {}) },
     };
   }
+  if (selected.kind === 'read_error') return selected;
   if (selected.kind === 'missing') {
     const diagnostic = missingMcpConfigMessage(path, selected.attemptedPaths);
     if (optional) {
@@ -2377,10 +2379,24 @@ async function executeNodeInternal(
     commandName === undefined ? undefined : await loadNodeCommandPrompt(ctx, commandName, stepName);
   const homeMcpDirectory = readHomeMcpDirectory(node);
   if (homeMcpDirectory !== undefined) await assertNodeSourceReadable(workflowSourceRoots, stepName);
-  await reserveBudget();
   const capabilities = requireProvider(deps.providers, provider).capabilities;
-  const aiClient = deps.getAgentProvider(provider);
   const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
+  if (nodeMcp.kind === 'read_error') {
+    const sourceRoot =
+      workflowSourceRoots.kind === 'captured'
+        ? workflowSourceRoots.anchor.root
+        : workflowSourceRoots.globalWorkflows;
+    if (
+      homeMcpDirectory !== undefined &&
+      isInsideAny(nodeMcp.path, [sourceRoot]) &&
+      isSourceReadFailure(nodeMcp.error)
+    ) {
+      throw new RunSourceUnreadableError(stepName, nodeMcp.error);
+    }
+    throw nodeMcp.error;
+  }
+  await reserveBudget();
+  const aiClient = deps.getAgentProvider(provider);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,

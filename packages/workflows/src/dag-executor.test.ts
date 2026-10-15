@@ -21,6 +21,7 @@ import {
   type Mock,
 } from 'bun:test';
 import * as sourceFiles from 'fs/promises';
+import * as sourceIntegrity from './workflow-source';
 import * as commandPaths from '@archon/paths';
 import { chmod, mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
@@ -23302,6 +23303,116 @@ nodes:
       expect(loaded).toEqual([[checkoutWins ? 'checkout' : 'captured']]);
       expect(store.completeWorkflowRun).toHaveBeenCalled();
     }
+  });
+
+  for (const optional of [false, true]) {
+    it(`releases ${optional ? 'an optional' : 'a required'} captured MCP config that fails its actual read`, async () => {
+      await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+      await discoverHome('claude');
+      const capture = await captureWorkflowSource({
+        sourceRoot: testDir,
+        captureRoot: join(testDir, 'capture'),
+      });
+      const roots = capturedSourceRoots(capture.anchor);
+      const workflow = await discoverHome('claude', roots);
+      const homeNode = workflow.nodes[0];
+      if (homeNode.kind !== 'agent') throw new Error('Expected home agent');
+      const node = { ...homeNode, mcp: { path: 'servers.json', optional } };
+      const capturedConfig = join(roots.globalWorkflows, 'nested', 'servers.json');
+      expect(readHomeMcpDirectory(node)).toBe(join(roots.globalWorkflows, 'nested'));
+      const store = createMockStore();
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'done' };
+        yield { type: 'result', sessionId: 'mcp-actual-read', cost: 0.1 };
+      });
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('mcp-actual-read'),
+        workflowSourceRoots: roots,
+        workflow: { ...workflow, nodes: [node], budget: { max_work_units: 1, max_spend_usd: 5 } },
+      });
+      const cause = Object.assign(new Error('captured MCP read unavailable'), {
+        code: 'EACCES',
+        syscall: 'open',
+        path: capturedConfig,
+      });
+      const verifyActual = sourceIntegrity.assertWorkflowSourceIntegrity;
+      let readPaths: unknown[] = [];
+      let restoreRead: () => void = () => undefined;
+      const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
+        async source => {
+          await verifyActual(source);
+          const reader = spyOn(sourceFiles, 'readFile')
+            .mockRejectedValueOnce(
+              Object.assign(new Error('missing checkout config'), {
+                code: 'ENOENT',
+                syscall: 'open',
+                path: join(testDir, 'servers.json'),
+              })
+            )
+            .mockRejectedValue(cause);
+          restoreRead = () => {
+            readPaths = reader.mock.calls.map(([path]) => path);
+            reader.mockRestore();
+          };
+        }
+      );
+      try {
+        await executeDagWorkflow(options);
+      } finally {
+        restoreRead();
+        verifier.mockRestore();
+      }
+      expect(readPaths).toEqual([join(testDir, 'servers.json'), capturedConfig]);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+      expect(store.releaseRunForUnreadableSource.mock.calls[0]?.[1]).toMatchObject({
+        nodeId: 'check',
+        path: capturedConfig,
+      });
+      expect((await store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits).toBe(0);
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+      await executeDagWorkflow(options);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it('fails an invalid checkout MCP config instead of releasing the captured source', async () => {
+    await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+    await discoverHome('claude');
+    const capture = await captureWorkflowSource({
+      sourceRoot: testDir,
+      captureRoot: join(testDir, 'capture'),
+    });
+    const roots = capturedSourceRoots(capture.anchor);
+    const workflow = await discoverHome('claude', roots);
+    await mkdir(join(testDir, 'servers.json'));
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('mcp-checkout-read'),
+        workflowSourceRoots: roots,
+        workflow: { ...workflow, budget: { max_work_units: 1 } },
+      })
+    );
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+    expect((await store.getDagResumeSnapshot('mcp-checkout-read')).budget.workUnits).toBe(0);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
   it('refuses home config capture tampering before a later node reads it', async () => {
