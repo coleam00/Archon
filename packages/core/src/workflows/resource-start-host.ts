@@ -295,6 +295,26 @@ export interface ResourceStartHost extends WorkflowHost {
   startAdmitted: (requestId: string) => Promise<void>;
 }
 
+/** One failed start from a drain. `receiptId` is unset for queued work of unknown origin. */
+export interface ResourceStartDrainFailure {
+  receiptId?: string;
+  error: unknown;
+}
+
+/**
+ * A drain's failures, each tagged with the receipt it belongs to, so a caller that fired
+ * one receipt reports its own failures apart from other pending work on the host.
+ */
+export class ResourceStartDrainError extends AggregateError {
+  constructor(readonly failures: readonly ResourceStartDrainFailure[]) {
+    super(
+      failures.map(failure => failure.error),
+      `${String(failures.length)} resource start(s) failed; inspect their receipt records.`
+    );
+    this.name = 'ResourceStartDrainError';
+  }
+}
+
 /**
  * One host pass: prepare this host's pending receipt bindings, then admit its queued
  * requests while their slots have capacity. Every admitted request is handed to the
@@ -302,12 +322,12 @@ export interface ResourceStartHost extends WorkflowHost {
  * admission are claimed atomically by the store.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
-  const failures: unknown[] = [];
-  const start = async (requestId: string): Promise<void> => {
+  const failures: ResourceStartDrainFailure[] = [];
+  const start = async (requestId: string, receiptId?: string): Promise<void> => {
     try {
       await host.startAdmitted(requestId);
     } catch (error) {
-      failures.push(error);
+      failures.push({ receiptId, error });
     }
   };
 
@@ -323,10 +343,10 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     try {
       disposition = await prepareClaimedBinding(host, binding.intent, identity);
     } catch (error) {
-      failures.push(error);
+      failures.push({ receiptId: binding.receiptId, error });
       continue;
     }
-    if (disposition.status === 'admitted') await start(disposition.requestId);
+    if (disposition.status === 'admitted') await start(disposition.requestId, binding.receiptId);
   }
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
@@ -340,10 +360,7 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 
   if (failures.length > 0) {
-    throw new AggregateError(
-      failures,
-      `${String(failures.length)} resource start(s) failed; inspect their receipt records.`
-    );
+    throw new ResourceStartDrainError(failures);
   }
 }
 
