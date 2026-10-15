@@ -6,15 +6,27 @@ const guide = readFileSync(
   join(import.meta.dir, '../packages/docs-web/src/content/docs/guides/attention-queue.md'),
   'utf8'
 );
-const handler = guide.split('  - id: answer\n')[1]?.split('    bash: |\n')[1]?.split('\n```')[0];
-if (!handler?.includes('answers=$decide.output.answers')) {
-  throw new Error('Cannot locate the published attention-queue answer handler');
+function extractHandler(guide: string): string {
+  const handler = guide
+    .replaceAll('\r\n', '\n')
+    .split('  - id: answer\n')[1]
+    ?.split('    bash: |\n')[1]
+    ?.split('\n```')[0];
+  if (!handler?.includes('answers=$decide.output.answers')) {
+    throw new Error('Cannot locate the published attention-queue answer handler');
+  }
+  return handler
+    .split('\n')
+    .map(line => line.slice(6))
+    .join('\n')
+    .replace('$decide.output.answers', '"$TEST_ANSWERS"');
 }
-const script = handler
-  .split('\n')
-  .map(line => line.slice(6))
-  .join('\n')
-  .replace('$decide.output.answers', '"$TEST_ANSWERS"');
+const script = extractHandler(guide);
+
+test('published handler extraction accepts LF and CRLF checkouts', () => {
+  const lfGuide = guide.replaceAll('\r\n', '\n');
+  expect(extractHandler(lfGuide.replaceAll('\n', '\r\n'))).toBe(extractHandler(lfGuide));
+});
 
 const answers = JSON.stringify([
   { runId: 'first', occurrence: 'first-pause', option: 'retry' },
