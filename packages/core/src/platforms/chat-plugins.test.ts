@@ -119,7 +119,7 @@ test('receipt policies replace defaults and follow the remaining defaults in ord
   expect(defaults[1]).toEqual({ id: 'matrix-chat', workspaceRetention: 'age-based' });
 });
 
-test('chat runtime loading uses the receipt executable and rejects missing ownership or duplicate platform ids', async () => {
+test('chat runtime skips unowned executables while duplicate platform ids remain errors', async () => {
   const dir = trackRoot(await mkdtemp(join(tmpdir(), 'chat-runtime-')));
   expect(await loadChatPlugins(dir)).toEqual([]);
   const file = receiptPath(dir, receipt.id);
@@ -134,10 +134,29 @@ test('chat runtime loading uses the receipt executable and rejects missing owner
     file,
     JSON.stringify({ ...installed, files: [{ path: 'other', sha256: 'b'.repeat(64) }] })
   );
-  await expect(loadChatPlugins(dir)).rejects.toThrow('does not own its executable');
+  const peer = receiptPath(dir, 'other/healthy');
+  await mkdir(dirname(peer), { recursive: true });
+  const healthy = {
+    ...installed,
+    id: 'other/healthy',
+    descriptor: { ...installed.descriptor, id: receipt.descriptor.id },
+  };
+  await writeFile(peer, JSON.stringify(healthy));
+  const logger = paths.createLogger('test');
+  const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
+  const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
+  try {
+    expect(await loadChatPlugins(dir)).toEqual([
+      { descriptor: healthy.descriptor, argv: [join(dir, executable)] },
+    ]);
+    const warnings = JSON.stringify(warning.mock.calls);
+    expect(warnings).toContain(file);
+    expect(warnings).toContain('archon plugin update owner/chat-fixture');
+    expect(warnings).toContain('archon plugin remove owner/chat-fixture');
+  } finally {
+    loggerFactory.mockRestore();
+    warning.mockRestore();
+  }
   await writeFile(file, JSON.stringify(installed));
-  const duplicate = receiptPath(dir, 'other/fixture');
-  await mkdir(dirname(duplicate), { recursive: true });
-  await writeFile(duplicate, JSON.stringify({ ...installed, id: 'other/fixture' }));
   await expect(loadChatPlugins(dir)).rejects.toThrow('Duplicate installed chat platform');
 });

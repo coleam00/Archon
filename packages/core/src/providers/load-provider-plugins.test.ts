@@ -48,28 +48,53 @@ test('receipt loading builds registrations without spawning and leaves an empty 
   expect(() => registration.parseConfig({ model: 42 }, 'run')).toThrow();
 });
 
-test('invalid executable identities and delivery rules name the receipt and repair commands', async () => {
+test('unusable receipts warn without blocking a healthy provider', async () => {
   const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-receipts-invalid-')));
-  const file = receiptPath(dir, id);
+  const file = receiptPath(dir, 'owner/broken');
+  const healthy = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
-  for (const value of [
-    { ...receipt, descriptor: { ...descriptor, id: 'other' } },
-    { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
-    {
-      ...receipt,
-      descriptor: {
-        ...descriptor,
-        credentials: {
-          kind: 'static',
-          specs: [{ vendor: 'unknown', displayName: 'Unknown', kinds: ['api_key'] }],
+  await mkdir(dirname(healthy), { recursive: true });
+  await writeFile(healthy, JSON.stringify(receipt));
+  const logger = paths.createLogger('test');
+  const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
+  const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
+  try {
+    for (const value of [
+      { ...receipt, descriptor: { ...descriptor, id: 'other' } },
+      { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
+      { ...receipt, descriptor: { ...descriptor, id: 'claude' } },
+      {
+        ...receipt,
+        descriptor: {
+          ...descriptor,
+          credentials: {
+            kind: 'static',
+            specs: [{ vendor: 'unknown', displayName: 'Unknown', kinds: ['api_key'] }],
+          },
         },
       },
-    },
-  ]) {
-    await writeFile(file, JSON.stringify(value));
-    await expect(loadProviderPlugins(dir)).rejects.toThrow(file);
-    await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin update');
-    await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin remove');
+    ]) {
+      const contents = JSON.stringify({
+        ...value,
+        id: 'owner/broken',
+        tag: 'SECRET_TOKEN_AND_MESSAGE',
+      });
+      await writeFile(file, contents);
+      warning.mockClear();
+      expect(await readReceipts(dir)).toHaveLength(2);
+      expect((await loadProviderPlugins(dir)).map(provider => provider.id)).toEqual([
+        descriptor.id,
+      ]);
+      const warnings = JSON.stringify(warning.mock.calls);
+      expect(warnings).toContain(file);
+      expect(warnings).toContain('archon plugin update owner/broken');
+      expect(warnings).toContain('archon plugin remove owner/broken');
+      expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
+      expect(await readFile(file, 'utf8')).toBe(contents);
+    }
+  } finally {
+    loggerFactory.mockRestore();
+    warning.mockRestore();
   }
 });
 

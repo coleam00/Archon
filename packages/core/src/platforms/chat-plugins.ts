@@ -1,4 +1,6 @@
 import { join } from 'node:path';
+import { createLogger } from '@archon/paths';
+import { receiptPath } from '@archon/plugin-manifest/store';
 import type { ChatPluginDescriptor } from '@archon/chat-contract';
 import { isChatReceipt } from '@archon/plugin-manifest';
 import { loadRuntimeReceipts } from '../utils/plugin-receipts';
@@ -29,14 +31,24 @@ export async function loadChatPlugins(pluginsDir: string): Promise<
 > {
   const receipts = (await loadRuntimeReceipts(pluginsDir)).filter(isChatReceipt);
   const ids = new Set<string>();
-  return receipts.map(receipt => {
+  const plugins: Awaited<ReturnType<typeof loadChatPlugins>> = [];
+  for (const receipt of receipts) {
     const { descriptor, manifest } = receipt;
+    const executable = manifest.executable + (process.platform === 'win32' ? '.exe' : '');
+    if (!receipt.files.some(file => file.path === executable)) {
+      createLogger('core.chat-plugins').warn(
+        {
+          receipt: receiptPath(pluginsDir, receipt.id),
+          reason: 'receipt does not own its executable',
+        },
+        `Plugin unavailable. Run archon plugin update ${receipt.id} or archon plugin remove ${receipt.id}`
+      );
+      continue;
+    }
     if (ids.has(descriptor.id))
       throw new Error(`Duplicate installed chat platform ${descriptor.id}`);
     ids.add(descriptor.id);
-    const executable = manifest.executable + (process.platform === 'win32' ? '.exe' : '');
-    if (!receipt.files.some(file => file.path === executable))
-      throw new Error(`Chat receipt ${receipt.id} does not own its executable`);
-    return { descriptor, argv: [join(pluginsDir, executable)] };
-  });
+    plugins.push({ descriptor, argv: [join(pluginsDir, executable)] });
+  }
+  return plugins;
 }

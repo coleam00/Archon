@@ -72,18 +72,21 @@ await serveProvider({ descriptor, create: () => new ExampleProvider() });
 `capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
 `configSchema` is the fallback for all configuration scopes within protocol 2. Protocol-1
 plugins and hosts must update to protocol 2 before they can initialize together.
-Runtime discovery reports and skips incompatible installed receipts, leaving other
-plugins available. Use `archon plugin update <id>` or `archon plugin remove <id>` to
+Runtime discovery reports and skips incompatible or unusable installed receipts,
+including providers with mismatched executable identities or missing executable ownership,
+leaving other plugins available. Use `archon plugin update <id>` or `archon plugin remove <id>` to
 repair the install. A provider can
 add `config: { install, run, snapshot, stripUnknownKeys? }` to use separate JSON
 Schemas for install defaults, per-run settings, and persisted snapshots. Newer hosts
 prefer `config`. Generate these schemas from the same schemas used by the in-process
 parser, using `z.toJSONSchema(schema, { io: 'input' })` for Zod schemas. Set
-`stripUnknownKeys: true` to strip undeclared fields recursively at object schemas that
-omit `additionalProperties`. Explicit `additionalProperties: false` still rejects
+`stripUnknownKeys: true` to strip undeclared fields recursively where object member
+rules omit `additionalProperties`. Unconstrained schemas such as `{}` preserve object
+contents. Explicit `additionalProperties: false` still rejects
 unknown fields; `true` or a schema preserves allowed fields, including record keys.
 Snapshot projection retains fields declared by the snapshot schema, including
-referenced and composed schemas and matching `patternProperties`.
+referenced schemas, all `allOf` conjuncts, the selected `anyOf` or `oneOf` alternative,
+and matching `patternProperties`.
 An explicit `additionalProperties: false` also rejects unknown snapshot fields.
 For snapshots that validate install settings before excluding them, use
 `snapshotConfigSchema(portableFields, localFields)` from `@archon/provider-contract`.
