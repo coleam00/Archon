@@ -15,6 +15,28 @@ export const streamingModeSchema = z.enum(['stream', 'batch']);
 export const platformStreamingSchema = z.record(identityPlatformSchema, streamingModeSchema);
 export type PlatformStreaming = z.infer<typeof platformStreamingSchema>;
 
+/** An install-level chat route for attention notices. `destination` is opaque to Archon. */
+export const attentionNoticeRouteSchema = z.object({
+  platform: identityPlatformSchema,
+  destination: z.string().min(1),
+});
+export type AttentionNoticeRoute = z.infer<typeof attentionNoticeRouteSchema>;
+/** The id a route's ledger rows and health entry carry; a platform cannot contain ':'. */
+export function attentionNoticeRouteId(route: AttentionNoticeRoute): string {
+  return `${route.platform}:${route.destination}`;
+}
+export const attentionNoticeRoutesSchema = z
+  .array(attentionNoticeRouteSchema)
+  .superRefine((routes, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, route] of routes.entries()) {
+      const id = attentionNoticeRouteId(route);
+      if (seen.has(id))
+        ctx.addIssue({ code: 'custom', path: [index], message: `duplicate route '${id}'` });
+      seen.add(id);
+    }
+  });
+
 /**
  * Global configuration (non-secret user preferences)
  * Located at ~/.archon/config.yaml
@@ -154,6 +176,12 @@ export interface GlobalConfig {
    * Platform streaming preferences
    */
   streaming?: PlatformStreaming;
+
+  /**
+   * Chat routes that receive a notice when a run needs attention, and a follow-up
+   * when it ends. Global only: repository config never carries routes.
+   */
+  attentionNotices?: AttentionNoticeRoute[];
 
   /**
    * Concurrency limits
@@ -305,6 +333,7 @@ export interface MergedConfig {
    */
   tiers?: RawTiersConfig;
   streaming: PlatformStreaming;
+  attentionNotices: AttentionNoticeRoute[];
   concurrency: {
     maxConversations: number;
   };

@@ -73,6 +73,7 @@ test.each([false, true])(
         resultFooter: async () => {},
         onInbound() {},
         onRunAction() {},
+        attentionNotice: async () => ({}),
         runEvent: async event => {
           events.push(event);
         },

@@ -2,6 +2,7 @@ import type {
   ChatActor,
   ChatPluginDescriptor,
   ConnectedChat,
+  ChatRunAction,
   ChatRunActionResponse,
 } from '@archon/chat-contract';
 import {
@@ -14,7 +15,16 @@ import {
 import * as userDb from '@archon/core/db/users';
 import * as workflowDb from '@archon/core/db/workflows';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
-import { CancelRefusedError } from '@archon/core/operations/workflow-operations';
+import {
+  CancelRefusedError,
+  ResumeRefusedError,
+  StaleGateAnswerError,
+  assertAnswerAdmissible,
+  assertAnswerable,
+  attentionAnswerFor,
+  workflowOperationErrorMessage,
+  type GateAnswerOrigin,
+} from '@archon/core/operations/workflow-operations';
 import {
   createSqlWorkflowHost,
   createSqlWorkflowOperations,
@@ -101,12 +111,60 @@ export function registerChatInbound(
       .catch(createMessageErrorHandler(descriptor.id, platform, message.conversationId));
     return { status: 'accepted' };
   });
+  // Runs after the action is recorded or admitted; a failed resume must not report it refused.
+  const continueRun = async (
+    runId: string,
+    actor: ChatActor,
+    action: ChatRunAction['action']
+  ): Promise<boolean> => {
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return false;
+      const target = await workflowResumeTargetForRun(run, platforms);
+      return await resumeWorkflowRunFromServer(
+        createSqlWorkflowHost(),
+        run,
+        actor.kind === 'user' ? actor.userId : undefined,
+        target
+      );
+    } catch (err) {
+      getLog().warn({ err, runId, plugin: descriptor.id, action }, 'chat.run_resume_failed');
+      return false;
+    }
+  };
   connection.onRunAction(async (action): Promise<ChatRunActionResponse> => {
     if (!isAllowed(action.sender.platformUserId))
       return { status: 'rejected', reason: 'not_allowed' };
     const actor = await actorFor(action.sender);
     try {
       const operations = createSqlWorkflowOperations();
+      if (action.action === 'resume') {
+        await operations.resumeWorkflow(action.runId, actor);
+        return {
+          status: 'done',
+          result: { kind: 'resumed', resumed: await continueRun(action.runId, actor, 'resume') },
+        };
+      }
+      if (action.action === 'answer') {
+        const run = await workflowDb.getWorkflowRun(action.runId);
+        if (!run) return { status: 'refused', message: 'Workflow run not found' };
+        // Authorize first, so a member who may not answer never learns the open occurrence.
+        await operations.assertRunActionAllowed(run, actor, 'respond');
+        const { nodeId, pauseId, choose, text } = action.response;
+        const origin: GateAnswerOrigin = { via: descriptor.id, expectedGate: { nodeId, pauseId } };
+        const request = text === undefined ? { choose } : { choose, text };
+        try {
+          assertAnswerAdmissible(run, origin);
+          attentionAnswerFor(run, assertAnswerable(run), request);
+        } catch (refusal) {
+          return { status: 'refused', message: workflowOperationErrorMessage(refusal, platform) };
+        }
+        await operations.answerWorkflow(action.runId, request, actor, origin);
+        return {
+          status: 'done',
+          result: { kind: 'answered', resumed: await continueRun(action.runId, actor, 'answer') },
+        };
+      }
       if (action.action === 'cancel') {
         const result = await operations.cancelWorkflow(action.runId, actor);
         return {
@@ -140,24 +198,10 @@ export function registerChatInbound(
             : {}),
         }
       );
-      let resumed = false;
-      if (!('cancelled' in result) || !result.cancelled) {
-        // The gate response is already recorded; a failed resume must not report it refused.
-        try {
-          const run = await workflowDb.getWorkflowRun(action.runId);
-          if (run) {
-            const target = await workflowResumeTargetForRun(run, platforms);
-            resumed = await resumeWorkflowRunFromServer(
-              createSqlWorkflowHost(),
-              run,
-              actor.kind === 'user' ? actor.userId : undefined,
-              target
-            );
-          }
-        } catch {
-          getLog().warn({ plugin: descriptor.id, action: action.action }, 'chat.run_resume_failed');
-        }
-      }
+      const resumed =
+        !('cancelled' in result) || !result.cancelled
+          ? await continueRun(action.runId, actor, action.action)
+          : false;
       return {
         status: 'done',
         result:
@@ -175,6 +219,8 @@ export function registerChatInbound(
     } catch (error) {
       if (error instanceof RunActionForbiddenError)
         return { status: 'forbidden', message: error.message };
+      if (error instanceof StaleGateAnswerError || error instanceof ResumeRefusedError)
+        return { status: 'refused', message: error.message };
       if (error instanceof CancelRefusedError)
         return {
           status: 'refused',

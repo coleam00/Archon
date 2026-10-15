@@ -13,6 +13,7 @@ import {
 import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import { RunActionForbiddenError } from './run-authorization';
 import {
+  ResumeRefusedError,
   StaleGateAnswerError,
   createWorkflowOperations,
   expectedGateForOccurrence,
@@ -208,9 +209,9 @@ describe('answering an attention wait', () => {
       'Continue it with resume'
     );
     expect((await operations.resumeWorkflow(legacy, operator)).id).toBe(legacy);
-    await expect(operations.resumeWorkflow(await paused('select'), operator)).rejects.toThrow(
-      "waiting for an answer to its 'select' attention wait"
-    );
+    const refusal = operations.resumeWorkflow(await paused('select'), operator);
+    await expect(refusal).rejects.toBeInstanceOf(ResumeRefusedError);
+    await expect(refusal).rejects.toThrow("waiting for an answer to its 'select' attention wait");
   });
 });
 

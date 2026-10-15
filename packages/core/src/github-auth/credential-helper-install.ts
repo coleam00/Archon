@@ -10,7 +10,7 @@
  *      `credential.https://github.com.useHttpPath = true`
  *   3. Strip credentials from the worktree's github.com remote URLs.
  *
- * The caller (the GitHub adapter in App mode) decides whether to
+ * The caller (the GitHub adapter or URL registration in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
@@ -50,11 +50,29 @@ export function installCredentialHelperScript(): string {
   return helperPath;
 }
 
-/** Never throws. The caller serializes setup per repository. */
-export async function installCredentialHelper(
+/**
+ * Git takes `.git/config.lock` for each write and fails instead of waiting, so
+ * overlapping setup on one repository (the adapter and URL registration both
+ * call this) is chained per resolved path.
+ */
+const pendingInstalls = new Map<string, Promise<CredentialHelperInstallResult>>();
+
+/** Never throws. */
+export function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const repoPath = resolve(worktreePath);
+  const previous = pendingInstalls.get(repoPath) ?? Promise.resolve();
+  const pending = previous
+    .then(() => install(repoPath))
+    .finally(() => {
+      if (pendingInstalls.get(repoPath) === pending) pendingInstalls.delete(repoPath);
+    });
+  pendingInstalls.set(repoPath, pending);
+  return pending;
+}
+
+async function install(repoPath: string): Promise<CredentialHelperInstallResult> {
   try {
     const helperPath = installCredentialHelperScript();
     const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;

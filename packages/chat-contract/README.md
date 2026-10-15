@@ -22,6 +22,7 @@ shutdown of their platform connection after `serveChat` returns.
 | Host to plugin | `chat/send` | `{}` |
 | Host to plugin | `chat/result_footer` | `{}`; requires `resultFooter` capability |
 | Host to plugin | `chat/run_event` notification | Requires `runEvents` capability |
+| Host to plugin | `chat/attention_notice` | `{conversationId?}`; requires `attentionNotices` capability |
 
 All payloads have exported Zod schemas and inferred TypeScript types. Malformed
 request arguments get JSON-RPC `-32602`. Malformed reply payloads reject the
@@ -45,16 +46,30 @@ pending (including authored decisions, pause identity and the persisted authored
 outcome), and terminal status with authored outcome and cost. Engine events and database rows stay on the host.
 The host routes events only to the plugin owning the run's conversation.
 
-Run actions are approve, reject, respond and cancel. An optional response carries
-node/pause identity and feedback; respond requires an explicit decision.
-`RunActionResult` carries the approval/rejection presentation facts and whether
-resume succeeded, cooperative cancellation (including already-finished), or
-a stopped live owner with cleanup warnings, cascade failures and a blocked parent.
+`ChatAttentionNotice` goes to an install-level route the operator configured, not to
+a run's own conversation. `destination` is the route's opaque value. A `gate` notice
+carries the gate type, message and decisions; an `attention` notice carries the
+attention wait's form (`message`, `approval`, `select` or `multi_select`) and its
+options; a `terminal` notice closes a run the route was told about, with the
+`conversationId` the plugin returned for that run's earlier notice. A plugin that can
+thread a follow-up returns `conversationId`; otherwise it returns `{}`.
+
+Run actions are approve, reject, respond, answer, resume and cancel. An optional
+response carries node/pause identity and feedback; respond requires an explicit
+decision. Answer carries a typed answer to an attention wait: the required
+`nodeId` and `pauseId` of the occurrence it answers, the chosen option ids and
+optional text. The host refuses an answer to an occurrence that is no longer open.
+Resume continues a paused or failed run, such as an attention wait without a
+`pauseId`. `RunActionResult` carries the approval/rejection presentation facts and
+whether resume succeeded, an answer or resume and whether it resumed, cooperative
+cancellation (including already-finished), or a stopped live owner with cleanup
+warnings, cascade failures and a blocked parent.
 Unexpected host operation failures should become RPC errors, not a successful
 action result.
 
 The descriptor declares retention, streaming defaults and their environment key,
-an optional allowlist environment key, optional footer and run-event support, and
+an optional allowlist environment key, optional footer, run-event and attention-notice
+support, and
 `workflowCommand.prefix`. Hosts format workflow commands as `prefix + command`;
 the prefix's trailing space is significant.
 
@@ -70,14 +85,11 @@ The runner installs fixture host handlers for sender ids `allowed` and `denied`.
 `PluginRemoteError` is exported from the conformance subpath for process-fixture
 drivers that carry a remote error through a separate control channel.
 It checks start success or typed failure, long sends, both sender outcomes,
-invalid-params without delivery, render-error containment, optional footer and
-stdin closure. Each check has a bounded grace period (5 seconds by default).
+invalid-params without delivery, render-error containment, optional footer, an
+optional attention notice and its terminal follow-up, and stdin closure. Each check has a bounded grace period (5 seconds by default).
 
 Generate the language-independent schema with
 `bun run generate:chat-contract-schema` from the root; verify it with
 `bun run check:chat-contract-schema`. The published document's `$defs` includes
 each wire payload and the JSON-RPC envelope. Package tests run with
 `bun run --cwd packages/chat-contract test`.
-
-This package delivers slice 1 of #3646. Installation, process supervision,
-host authorization pipelines, event mapping and Slack migration are later slices.

@@ -14,6 +14,7 @@ test('descriptor owns capabilities and optional operations; config owns streamin
     onInbound() {},
     onRunAction() {},
     runEvent: async () => {},
+    attentionNotice: async () => ({}),
     send: async params => {
       sends.push(params);
     },

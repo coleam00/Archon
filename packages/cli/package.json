@@ -159,6 +159,9 @@
       "src/commands/workflow-continuations.test.ts"
     ],
     [
+      "src/commands/workflow-continuation-source.test.ts"
+    ],
+    [
       "src/commands/workflow-wake.integration.spec.ts"
     ],
     [
