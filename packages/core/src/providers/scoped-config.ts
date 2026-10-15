@@ -28,6 +28,26 @@ function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSch
   return resolved === node ? node : resolveConfigSchema(resolved, schema);
 }
 
+interface Applicators {
+  /** The referenced schema and every allOf member: all must hold. */
+  conjuncts: JsonSchema[];
+  /** One branch set per anyOf and oneOf keyword: each set must be satisfied. */
+  alternatives: JsonSchema[][];
+}
+
+// The only reader of composition keywords. JSON Schema applies every present keyword,
+// so a node with both anyOf and oneOf has two alternative sets, never one or the other.
+function applicators(node: JsonSchema, schema: z.core.JSONSchema.BaseSchema): Applicators {
+  if (typeof node !== 'object') return { conjuncts: [], alternatives: [] };
+  return {
+    conjuncts: [
+      ...(node.$ref ? [resolveConfigReference(node, schema)] : []),
+      ...(node.allOf ?? []),
+    ],
+    alternatives: [node.anyOf, node.oneOf].filter(set => set !== undefined),
+  };
+}
+
 // Credential selection has only a model; root constraints and unrelated run fields
 // belong to full configuration validation, not to this field projection.
 export function modelConfigSchema(
@@ -44,11 +64,10 @@ export function modelConfigSchema(
     const rules: z.core.JSONSchema.BaseSchema[] = fields.map(field =>
       typeof field === 'object' ? field : field ? {} : { not: {} }
     );
-    if (node.$ref) rules.push(modelRule(resolveConfigReference(node, schema)));
-    if (node.anyOf) rules.push({ anyOf: node.anyOf.map(modelRule) });
-    // Distinct run branches can share a model rule once unrelated fields are removed.
-    if (node.oneOf) rules.push({ anyOf: node.oneOf.map(modelRule) });
-    if (node.allOf) rules.push(...node.allOf.map(modelRule));
+    const { conjuncts, alternatives } = applicators(node, schema);
+    rules.push(...conjuncts.map(modelRule));
+    // Distinct oneOf run branches can share a model rule once unrelated fields are removed.
+    rules.push(...alternatives.map(set => ({ anyOf: set.map(modelRule) })));
     const constraints = rules.filter(rule => Object.keys(rule).length > 0);
     return constraints.length === 0
       ? {}
@@ -74,20 +93,19 @@ export function modelConfigSchema(
     const mode = node[CONFIG_STRING_NORMALIZATION_KEY];
     if (mode !== undefined)
       value = normalizeConfigString(value, configStringNormalizationSchema.parse(mode));
-    if (node.$ref) value = normalize(raw, resolveConfigReference(node, schema), value);
-    const branches = node.anyOf ?? node.oneOf;
-    if (branches) {
+    const { conjuncts, alternatives } = applicators(node, schema);
+    for (const conjunct of conjuncts) value = normalize(raw, conjunct, value);
+    for (const set of alternatives) {
       // Unrelated run fields can select a different branch. A model alone is
       // sufficient only when every applicable branch gives the same result.
       const results = new Set(
-        branches
+        set
           .filter(candidate => validator(candidate).safeParse(raw).success)
           .map(branch => normalize(raw, branch, value))
       );
       if (results.size !== 1) return undefined;
       value = results.values().next().value;
     }
-    for (const branch of node.allOf ?? []) value = normalize(raw, branch, value);
     return value;
   };
   return z.object({
@@ -128,15 +146,11 @@ export function scopedConfigSchema(
     root: boolean
   ): z.core.JSONSchema.BaseSchema[] => {
     if (typeof node !== 'object') return [];
-    const rules = [node];
-    if (node.$ref) rules.push(...objectRules(value, resolveConfigReference(node, schema), root));
-    for (const branch of node.allOf ?? []) rules.push(...objectRules(value, branch, root));
-    const alternatives = node.anyOf ?? node.oneOf;
-    if (alternatives) {
-      const branch = selectedBranch(value, alternatives, root);
-      if (branch !== undefined) rules.push(...objectRules(value, branch, root));
-    }
-    return rules;
+    const { conjuncts, alternatives } = applicators(node, schema);
+    const selected = alternatives
+      .map(set => selectedBranch(value, set, root))
+      .filter(branch => branch !== undefined);
+    return [node, ...[...conjuncts, ...selected].flatMap(rule => objectRules(value, rule, root))];
   };
   const declaresKey = (rules: z.core.JSONSchema.BaseSchema[], key: string): boolean =>
     rules.some(
@@ -156,21 +170,19 @@ export function scopedConfigSchema(
     const node = unresolved;
     if (typeof node !== 'object') return value;
     const original = value;
-    if (node.$ref)
-      value = project(value, resolveConfigReference(node, schema), root, output, owners);
-    const branches = node.anyOf ?? node.oneOf;
-    if (branches) {
-      const branch = selectedBranch(original, branches, root);
+    const { conjuncts, alternatives } = applicators(node, schema);
+    for (const set of alternatives) {
+      const branch = selectedBranch(original, set, root);
       if (branch !== undefined) value = project(value, branch, root, output, owners);
     }
-    if (node.allOf?.length) {
+    if (conjuncts.length > 0) {
       if (output) {
-        for (const branch of node.allOf) value = project(value, branch, root, true, owners);
+        for (const conjunct of conjuncts) value = project(value, conjunct, root, true, owners);
       } else {
-        const members: z.ZodType[] = node.allOf.map(branch =>
+        const members: z.ZodType[] = conjuncts.map(conjunct =>
           z.preprocess(
-            input => project(input, branch, root, false, owners),
-            z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
+            input => project(input, conjunct, root, false, owners),
+            branchValidator(conjunct)
           )
         );
         const parsed = members

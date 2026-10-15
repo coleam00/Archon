@@ -109,35 +109,59 @@ test.each(['scoped', 'legacy'] as const)(
   }
 );
 
-test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 'oneOf'] as const)(
-  '%s plugin model rules normalize credential preflight without unrelated run fields',
-  async composition => {
-    const modelRule = normalizedConfigString(
-      z.string().regex(/^\s*openai\s*\//),
-      'slash-separated'
-    );
-    const fields = z.toJSONSchema(z.strictObject({ model: modelRule, region: z.literal('eu') }), {
-      io: 'input',
-    });
-    const alternative = z.toJSONSchema(
-      z.strictObject({ model: modelRule, region: z.literal('us') }),
+test.each([
+  'direct',
+  'field-ref',
+  '$ref',
+  'intermediate-ref',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'object anyOf+oneOf',
+  'field anyOf+oneOf',
+] as const)(
+  '%s plugin model rules normalize config and credential preflight without unrelated run fields',
+  async shape => {
+    const modelRule = z.toJSONSchema(
+      normalizedConfigString(z.string().regex(/^\s*openai\s*\//), 'slash-separated'),
       { io: 'input' }
     );
-    const run =
-      composition === 'direct'
-        ? fields
-        : composition === 'field-ref'
-          ? {
-              ...fields,
-              $defs: { model: fields.properties?.model ?? true },
-              properties: { ...fields.properties, model: { $ref: '#/$defs/model' } },
-            }
-          : composition === '$ref' || composition === 'intermediate-ref'
-            ? {
-                $defs: { fields, intermediate: { $ref: '#/$defs/fields' } },
-                $ref: composition === '$ref' ? '#/$defs/fields' : '#/$defs/intermediate',
-              }
-            : { [composition]: composition === 'allOf' ? [fields] : [fields, alternative] };
+    const fields = (region: string): z.core.JSONSchema.BaseSchema => ({
+      type: 'object',
+      properties: { model: modelRule, region: { const: region } },
+      required: ['model', 'region'],
+      additionalProperties: false,
+    });
+    const runs: Record<typeof shape, z.core.JSONSchema.BaseSchema> = {
+      direct: fields('eu'),
+      'field-ref': {
+        ...fields('eu'),
+        $defs: { model: modelRule },
+        properties: { model: { $ref: '#/$defs/model' }, region: { const: 'eu' } },
+      },
+      $ref: { $defs: { fields: fields('eu') }, $ref: '#/$defs/fields' },
+      'intermediate-ref': {
+        $defs: { fields: fields('eu'), intermediate: { $ref: '#/$defs/fields' } },
+        $ref: '#/$defs/intermediate',
+      },
+      allOf: { allOf: [fields('eu')] },
+      anyOf: { anyOf: [fields('eu'), fields('us')] },
+      oneOf: { oneOf: [fields('eu'), fields('us')] },
+      // Both keywords apply: the model rule lives only in oneOf, the region only in anyOf.
+      'object anyOf+oneOf': {
+        type: 'object',
+        anyOf: [{ type: 'object', properties: { region: { const: 'eu' } }, required: ['region'] }],
+        oneOf: [{ type: 'object', properties: { model: modelRule }, required: ['model'] }],
+      },
+      'field anyOf+oneOf': {
+        ...fields('eu'),
+        properties: {
+          model: { type: 'string', anyOf: [{ type: 'string' }], oneOf: [modelRule] },
+          region: { const: 'eu' },
+        },
+      },
+    };
+    const run = runs[shape];
     const registration = processProviderRegistration(
       providerPluginDescriptorSchema.parse({
         ...descriptor,
@@ -153,10 +177,11 @@ test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 
       argv
     );
     const model = ' openai / gpt ';
-    expect(registration.parseConfig({ model, region: 'eu' }, 'run')).toEqual({
-      model: 'openai/gpt',
-      region: 'eu',
-    });
+    for (const scope of ['install', 'run', 'snapshot'] as const)
+      expect(registration.parseConfig({ model, region: 'eu' }, scope)).toEqual({
+        model: 'openai/gpt',
+        region: 'eu',
+      });
     expect(() => registration.parseConfig({ model: 'anthropic/gpt', region: 'eu' }, 'run')).toThrow(
       InvalidProviderRunConfigError
     );
@@ -169,9 +194,9 @@ test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 
     }));
     const native = registration.factory();
     native.checkCredential = checkCredential;
-    const getUserProviderCredentialStatus = mock(async (_user: string, _vendor: string) => ({
+    const getUserProviderCredential = mock(async (_user: string, _vendor: string) => ({
       kind: 'api_key' as const,
-      status: { state: 'usable' as const, source: 'archon' as const },
+      getStatus: async () => ({ state: 'usable' as const, source: 'archon' as const }),
     }));
     const deps = {
       providers: { get: () => registration, list: () => [registration] },
@@ -183,7 +208,7 @@ test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 
       store: { getCodebaseEnvVars: async () => ({}) },
       getAgentProvider: () => native,
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus,
+      getUserProviderCredential,
     };
     const prepared = await prepareRunAiConfiguration(
       deps,
@@ -200,7 +225,7 @@ test.each(['direct', 'field-ref', '$ref', 'intermediate-ref', 'allOf', 'anyOf', 
         { provider: registration.id, model, vendor: registration.credentials.vendorFor(model) },
       ],
     });
-    expect(getUserProviderCredentialStatus).toHaveBeenCalledWith('user', 'openai');
+    expect(getUserProviderCredential).toHaveBeenCalledWith('user', 'openai');
     expect(checkCredential).not.toHaveBeenCalled();
   }
 );
