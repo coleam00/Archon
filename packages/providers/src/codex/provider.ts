@@ -577,6 +577,7 @@ function codexHomeOf(initializeResponse: unknown): string {
 }
 
 interface TurnRequest {
+  abortSignal: AbortSignal | undefined;
   tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;
   login: CodexLogin | undefined;
@@ -667,7 +668,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   let parentCompleted = false;
   connection.handleToolCalls(async params => {
     const turnId = await activeTurn.promise;
-    return !parentCompleted
+    return !parentCompleted && !request.abortSignal?.aborted
       ? tools.call(params, threadId, turnId)
       : toolResponse('The Archon turn has ended.', false);
   });
@@ -1193,6 +1194,7 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
       const stream = streamTurn({
+        abortSignal,
         connection,
         tools,
         login,

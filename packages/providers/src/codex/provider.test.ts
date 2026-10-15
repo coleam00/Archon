@@ -197,6 +197,43 @@ describe('CodexProvider', () => {
     });
   });
 
+  test('a tool received after cancellation must not begin a new side effect', async () => {
+    const controller = new AbortController();
+    const handler = mock(async () => 'registered');
+    const { provider, server } = providerWith({
+      notifications: [itemStarted(command('ready', 'true'))],
+      completion: null,
+      ignoreInterrupt: true,
+    });
+    const consume = async () => {
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        abortSignal: controller.signal,
+        nativeTools: [
+          {
+            name: 'register_project',
+            description: 'Register',
+            inputSchema: { properties: {}, required: [] },
+            handler,
+          },
+        ],
+      })) {
+        if (chunk.type === 'tool_call') {
+          controller.abort();
+          server.processes[0].callTool({
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'after-cancel',
+            namespace: null,
+            tool: 'register_project',
+            arguments: {},
+          });
+        }
+      }
+    };
+    await expect(consume()).rejects.toThrow('Query aborted');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   describe('native tools', () => {
     const input = { prompt: 'Fix the "login" bug in C:\\Users\\me' };
     const call = {
@@ -363,7 +400,7 @@ describe('CodexProvider', () => {
 
     test('writes the persisted session format and resumes a fixed saved identifier', async () => {
       const savedId =
-        'thread-1:archon-codex-tools:031e8dcbfe5ce9aaef61a80ebcf2a12939ba1ff54a02c68117bb2bb130eeabb8';
+        'thread-1:archon-codex-tools:52e650d28c71262d384b8b25df7f242c4b99389e782c24f6db7711a2d4375b77';
       const options = { nativeTools: [tool(async () => 'Queued')] };
       expect(resultOf(await run(providerWith().provider, options)).sessionId).toBe(savedId);
 

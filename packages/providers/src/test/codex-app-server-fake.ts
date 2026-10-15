@@ -102,6 +102,7 @@ export interface FakeProcess {
   signals: string[];
   stdinEnded: boolean;
   send: (notification: ServerNotification) => void;
+  callTool: (params: DynamicToolCallParams) => void;
   exit: (code: number) => void;
   /** Request methods in the order the client sent them. */
   readonly methods: string[];
@@ -144,6 +145,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       signals: [],
       stdinEnded: false,
       send: notification => send(notification),
+      callTool: params => send({ id: params.callId, method: 'item/tool/call', params }),
       exit: code => close(code, null),
       get methods() {
         return this.requests.map(request => request.method);

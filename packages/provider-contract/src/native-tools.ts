@@ -1,9 +1,11 @@
-import { z, type ZodTypeAny } from 'zod';
-import type { NativeToolInputSchema, NativeToolProperty } from '../types';
+import { z } from 'zod';
+import {
+  nativeToolInputSchema,
+  type NativeToolInputSchema,
+  type NativeToolProperty,
+} from './agent-provider';
 
-type ZodRawShape = Record<string, ZodTypeAny>;
-
-function zodFieldForProperty(prop: NativeToolProperty): ZodTypeAny {
+function zodFieldForProperty(prop: NativeToolProperty): z.ZodType<string | boolean | undefined> {
   switch (prop.kind) {
     case 'string':
       return z.string();
@@ -18,16 +20,13 @@ function zodFieldForProperty(prop: NativeToolProperty): ZodTypeAny {
   }
 }
 
-/**
- * Shared input validation for Claude's SDK tools and Codex's dynamic tools. Deliberately flat: a property is a string, a string enum,
- * or a boolean, and `required` decides whether it is optional.
- */
-export function nativeToolInputToZodShape(input: NativeToolInputSchema): ZodRawShape {
-  const shape: ZodRawShape = {};
+export function nativeToolInputParser(input: NativeToolInputSchema) {
+  nativeToolInputSchema.parse(input);
+  const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
   for (const [key, prop] of Object.entries(input.properties)) {
     let field = zodFieldForProperty(prop);
     if (prop.description !== undefined) field = field.describe(prop.description);
     shape[key] = input.required.includes(key) ? field : field.optional();
   }
-  return shape;
+  return z.strictObject(shape);
 }

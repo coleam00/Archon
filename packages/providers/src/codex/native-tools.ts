@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { NativeTool } from '../types';
-import { nativeToolInputToZodShape } from '../shared/native-tools';
+import { nativeToolInputParser } from '@archon/provider-contract';
 import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec';
 import type { DynamicToolCallParams } from './protocol/v2/DynamicToolCallParams';
 import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallResponse';
@@ -28,7 +28,7 @@ export function buildCodexNativeTools(tools: readonly NativeTool[]): {
 } {
   const catalog = tools.map(tool => ({
     tool,
-    schema: z.object(nativeToolInputToZodShape(tool.inputSchema)),
+    schema: nativeToolInputParser(tool.inputSchema),
   }));
   return {
     specs: catalog.map(({ tool, schema }) => ({

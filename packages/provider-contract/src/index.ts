@@ -146,3 +146,5 @@ export {
   normalizedConfigString,
   snapshotConfigSchema,
 } from './config-schema';
+
+export { nativeToolInputParser } from './native-tools';
