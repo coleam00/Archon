@@ -1,5 +1,6 @@
 import * as pluginProcess from '@archon/paths/plugin-process';
 import { expect, test, spyOn } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,8 +91,7 @@ posixOnly('a node whose root exited stays endable while its job holds the output
 });
 
 for (const runtime of ['bash', 'bun'] as const) {
-  const runtimeTest = runtime === 'bash' ? posixOnly : test;
-  runtimeTest(
+  posixOnly(
     `owner interruption reports unproved cleanup after a ${runtime} root exits`,
     async () => {
       const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-owner-held-')));
@@ -127,10 +127,7 @@ for (const runtime of ['bash', 'bun'] as const) {
           'root exit',
           () => existsSync(rootFile) && !processExists(Number(readFileSync(rootFile, 'utf8')))
         );
-        const cleanupMessage =
-          process.platform === 'win32'
-            ? 'exited before tree termination could be proved'
-            : 'still running';
+        const cleanupMessage = 'still running';
         await expect(trees.end()).rejects.toThrow(cleanupMessage);
         const error = await node;
         expect(error).toMatchObject({
@@ -150,6 +147,44 @@ for (const runtime of ['bash', 'bun'] as const) {
     }
   );
 }
+
+test('Windows owner interruption reports unproved cleanup between root exit and close', async () => {
+  const platform = process.platform;
+  const child = new childProcess.ChildProcess();
+  Object.defineProperties(child, {
+    pid: { value: 123456 },
+    stdin: { value: null },
+    stdout: { value: null },
+    stderr: { value: null },
+    unref: { value: () => child },
+  });
+  const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+  const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockRejectedValue(
+    new Error('must not target an exited root')
+  );
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const trees = recordNodeProcessTrees();
+  const node = runNode('unused', 30000).catch((error: unknown) => error as RawSubprocessRejection);
+  try {
+    // Windows need not inherit the wrapper's pipes. Drive exit before close explicitly.
+    child.emit('exit', 0, null);
+    const cleanupMessage = 'exited before tree termination could be proved';
+    await expect(trees.end()).rejects.toThrow(cleanupMessage);
+    expect(await node).toMatchObject({
+      timedOut: false,
+      observedExit: { code: 0, signal: null },
+      cleanupError: { message: expect.stringContaining(cleanupMessage) },
+    });
+    expect(taskkill).not.toHaveBeenCalled();
+  } finally {
+    child.emit('close', 0, null);
+    await node;
+    trees.release();
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    spawn.mockRestore();
+    taskkill.mockRestore();
+  }
+});
 
 function lifelineWatches(pgid: number): boolean {
   const ps = Bun.spawnSync(['/bin/ps', '-A', '-o', 'args=']);
