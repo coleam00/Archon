@@ -18,8 +18,12 @@ import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import {
   type NodeBinding,
+  type ResolvedVersion,
   type RunDetail,
   type RunNode,
+  SAMPLES_FILE,
+  TIERS,
+  type Tier,
   agentBinding,
   appendLine,
   archonJson,
@@ -28,7 +32,7 @@ import {
   getRun,
   isId,
   launch,
-  readLines,
+  relabelRefusal,
   returnedValue,
   snapshotSource,
   waitRun,
@@ -44,10 +48,6 @@ import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts
 type Repo = QualifiedPr['repo'];
 type IntakePath = (typeof INTAKE_PATHS)[number];
 
-export const TIERS = ['small', 'medium', 'large'] as const;
-export type Tier = (typeof TIERS)[number];
-
-export const SAMPLES_FILE = 'samples.jsonl';
 export const CHECKS_FILE = 'checks.jsonl';
 
 /** What one version pins. Versions differ only in `provider` and `model`. */
@@ -62,14 +62,6 @@ export interface Version {
   /** The tier archon-triage declares, which the version's config layer pins. */
   readonly tier: Tier;
   readonly effort?: string;
-}
-
-export interface ResolvedVersion {
-  readonly version: Version;
-  /** The extracted `.archon` snapshot a run reads its workflow from (`--workflow-source`). */
-  readonly source: string;
-  /** The run config layer pinning the version's tier (`--config`). */
-  readonly config: string;
 }
 
 interface Binding {
@@ -165,7 +157,7 @@ function packFile(repoRoot: string, sha: string, suffix: string): string {
  * record for the life of an output directory, so a label already recorded with
  * another version is refused.
  */
-export async function resolveVersion(file: string, repoRoot: string, checkout: string, outDir: string): Promise<ResolvedVersion> {
+export async function resolveVersion(file: string, repoRoot: string, checkout: string, outDir: string): Promise<ResolvedVersion<Version>> {
   const refuse = (reason: string): never => {
     throw new Error(`version ${file}: ${reason}`);
   };
@@ -216,11 +208,8 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
     ...wanted,
     tier: tier as Tier,
   };
-  for (const line of readLines(join(outDir, SAMPLES_FILE))) {
-    if (isObject(line.version) && line.version.label === label && canonical(line.version) !== canonical(version)) {
-      return refuse(`label ${label} already names another version in ${join(outDir, SAMPLES_FILE)}; choose a new label`);
-    }
-  }
+  const relabel = relabelRefusal(outDir, version);
+  if (relabel !== undefined) return refuse(relabel);
   return { version, source, config };
 }
 
@@ -479,16 +468,16 @@ const ran = (node: RunNode): boolean => node.state !== 'skipped' && node.state !
 export function agentNodesRan(nodes: readonly RunNode[]): string[] {
   return nodes
     .filter(ran)
-    .filter(node => node.execution?.node?.kind === undefined || node.execution.node.kind === 'agent')
+    .filter(node => node.kind === undefined || node.kind === 'agent')
     .map(node => node.nodeId);
 }
 
-/** Total cost over agent nodes that ran; null when any of them reported none. */
+/** Total cost of the latest attempt of each agent node that ran; null when any of them reported none. */
 export function runCost(nodes: readonly RunNode[]): number | null {
   let total = 0;
   for (const node of nodes) {
-    if (node.execution?.node?.kind !== 'agent' || node.state === 'skipped') continue;
-    const cost = node.execution.spend?.costUsd;
+    if (node.kind !== 'agent' || node.state === 'skipped') continue;
+    const cost = node.attempts.at(-1)?.costUsd;
     if (cost?.source !== 'provider') return null;
     total += cost.value;
   }
@@ -580,7 +569,7 @@ function workflowOf(run: RowRun): BenchWorkflow {
 
 export interface RowRun {
   readonly row: Row;
-  readonly resolved: ResolvedVersion;
+  readonly resolved: ResolvedVersion<Version>;
   /** Where the run executes: the eval checkout, or the version's scratch checkout. */
   readonly cwd: string;
   /** The scratch repository and the row's copy number there; absent in eval. */
@@ -804,7 +793,7 @@ export interface BatchOptions {
   readonly base: string;
   readonly outDir: string;
   readonly repoRoot: string;
-  readonly versions: readonly { readonly resolved: ResolvedVersion; readonly cwd: string }[];
+  readonly versions: readonly { readonly resolved: ResolvedVersion<Version>; readonly cwd: string }[];
   /** Present for a live batch: each label's scratch repository and its copies of the rows. */
   readonly live?: ReadonlyMap<string, { readonly scratch: Scratch; readonly copies: Readonly<Record<string, number>> }>;
   readonly concurrency?: number;

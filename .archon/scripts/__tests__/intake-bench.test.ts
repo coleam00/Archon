@@ -15,9 +15,8 @@ import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { expandWorkflowIncludes } from '../../../packages/workflows/src/include-expander';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
-import { TIER_NAMES } from '../../../packages/workflows/src/schemas/model-binding';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
-import { appendLine, readLines } from '../../workflows/sdlc/.shared/bench';
+import { SAMPLES_FILE, appendLine, readLines } from '../../workflows/sdlc/.shared/bench';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
@@ -29,10 +28,8 @@ import {
   issueTokens,
   type Line,
   postedComments,
-  SAMPLES_FILE,
   type Snapshot,
   snapshotChanges,
-  TIERS,
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
@@ -228,8 +225,9 @@ describe('bench run', () => {
       null,
       ['https://github.com/o/r/issues/1'],
     ]);
+    expect([triaged?.agent_nodes, triaged?.cost_usd]).toEqual([['triage'], 0.5]);
     // The skipped judge's empty binding proves nothing and fails nothing.
-    expect(lines.find(line => line.row === '12-outside')).toMatchObject({ agent_nodes: [], binding: null, verdict: null });
+    expect(lines.find(line => line.row === '12-outside')).toMatchObject({ agent_nodes: [], binding: null, verdict: null, cost_usd: 0 });
     expect(checks).toHaveLength(1);
     expect(checks[0].passed).toBe(true);
   });
@@ -478,10 +476,6 @@ describe('hard checks', () => {
 });
 
 describe('engine names the bench copies', () => {
-  it('tiers are the engine tiers', () => {
-    expect([...TIERS]).toEqual([...TIER_NAMES]);
-  });
-
   it('the judge node id is the agent node of archon-triage, alone and as intake includes it', () => {
     registerBuiltinProviders();
     const pack = join(import.meta.dir, '../../workflows/sdlc');

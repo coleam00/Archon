@@ -93,20 +93,31 @@ function binding(args: readonly string[], config: FakeConfig): FakeConfig['basel
   return parsed.tiers.medium;
 }
 
-function agent(nodeId: string, state: string, bound: FakeConfig['baseline']) {
-  return {
-    nodeId,
-    state,
-    execution: {
-      node: { kind: 'agent' },
-      // The engine records a skipped agent node with an empty binding.
-      binding:
-        state === 'skipped'
-          ? {}
-          : { provider: bound?.provider, tier: 'medium', model: { requested: bound?.model, resolved: { source: 'unavailable', reason: 'not_reported' } } },
-      spend: { costUsd: { source: 'provider', value: 0.5 } },
-    },
-  };
+interface FakeNode {
+  readonly id: string;
+  readonly state: string;
+  /** Absent for a node that recorded no execution row. */
+  readonly kind?: string;
+  readonly binding?: unknown;
+}
+
+function agent(id: string, state: string, bound: FakeConfig['baseline']): FakeNode {
+  // The engine records a skipped agent node with an empty binding.
+  const binding =
+    state === 'skipped'
+      ? {}
+      : { provider: bound?.provider, tier: 'medium', model: { requested: bound?.model, resolved: { source: 'unavailable', reason: 'not_reported' } } };
+  return { id, state, kind: 'agent', binding };
+}
+
+/** Each node's execution row, as `workflow get --events` lists them. */
+function events(nodes: readonly FakeNode[]) {
+  return nodes.flatMap(({ id, state, kind, binding }) => {
+    if (kind === undefined) return [];
+    const spend = kind === 'agent' && state !== 'skipped' ? { spend: { costUsd: { source: 'provider', value: 0.5 } } } : {};
+    const data = { node: { id, kind }, binding: binding ?? {}, ...spend };
+    return [{ step_name: id, event_type: state === 'skipped' ? 'node_skipped' : 'node_completed', data }];
+  });
 }
 
 function answer(dir: string, args: readonly string[]): string {
@@ -166,6 +177,13 @@ function answer(dir: string, args: readonly string[]): string {
       transcriptPath = join(dir, `transcript-run-${n}.jsonl`);
       writeFileSync(transcriptPath, '');
     }
+    const nodes: FakeNode[] = intake
+      ? [
+          { id: 'facts', state: 'completed', kind: 'exec' },
+          agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
+          { id: 'outcome', state: 'completed', kind: 'exec' },
+        ]
+      : [config.unboundTriage === true ? { id: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)];
     const detail = {
       id: `run-${n}`,
       status: 'completed',
@@ -173,7 +191,9 @@ function answer(dir: string, args: readonly string[]): string {
       started_at: '2026-10-15T10:00:00Z',
       completed_at: '2026-10-15T10:01:00Z',
       transcript_path: transcriptPath,
+      metadata: { dispatch: { base_branch: 'main' }, model_bindings: { effective: { aliases: {} } } },
       terminal_record: {
+        nodes: nodes.map(node => ({ node_id: node.id, state: node.state })),
         returns: {
           availability: 'available',
           node_id: intake ? 'outcome' : 'verdict',
@@ -182,13 +202,7 @@ function answer(dir: string, args: readonly string[]): string {
             : verdict,
         },
       },
-      nodes: intake
-        ? [
-            { nodeId: 'facts', state: 'completed', execution: { node: { kind: 'exec' } } },
-            agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
-            { nodeId: 'outcome', state: 'completed', execution: { node: { kind: 'exec' } } },
-          ]
-        : [config.unboundTriage === true ? { nodeId: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)],
+      events: events(nodes),
     };
     writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(detail));
     return JSON.stringify({ runId: `run-${n}` });

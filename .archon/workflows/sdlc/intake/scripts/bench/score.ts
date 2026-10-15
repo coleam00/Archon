@@ -12,10 +12,10 @@
  */
 
 import { join } from 'node:path';
-import { appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
+import { SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
 import type { WorkType } from '../../../.shared/labels.ts';
 import { isObject } from '../../../.shared/typed.ts';
-import { CHECKS_FILE, type BatchChecks, type Line, SAMPLES_FILE } from './runner.ts';
+import { CHECKS_FILE, type BatchChecks, type Line } from './runner.ts';
 import type { BenchSet, Group, Row } from './set.ts';
 
 export const MARKS = ['right', 'wrong', 'partly'] as const;
