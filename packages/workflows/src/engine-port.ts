@@ -3,6 +3,9 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type { AttentionLabels } from './schemas/dag-node';
+import type { AttentionQueueScope } from './attention-queue';
+import type { AttentionStreamLine } from './attention-watch';
 
 // These lists own both the public input exclusions and their runtime validation.
 export const FRESH_RUN_FORBIDDEN_OPTIONS = [
@@ -79,6 +82,26 @@ export interface WorkflowRunSubscription {
   close(): Promise<void>;
 }
 
+/**
+ * A host's early wake for new events in the feed, whatever run they belong to. Resolves
+ * to an unsubscribe, or null when the host has no notifications; polling still runs.
+ */
+export type WorkflowEventDoorbell = (onEvent: () => void) => Promise<(() => void) | null>;
+
+export interface AttentionWatchOptions {
+  /** Replay from this cursor, after the snapshot, instead of starting at the head. */
+  after?: WorkflowEventCursor;
+  scope: AttentionQueueScope;
+  /** Exact label matches for `attention` and `resolved` lines; every one must hold. */
+  labels?: Readonly<AttentionLabels>;
+  pollIntervalMs?: number;
+}
+
+export interface AttentionWatch {
+  /** Stops the watch and waits for lines in flight. Idempotent. */
+  close(): Promise<void>;
+}
+
 /** Hosts supply execution context; the implementation owns its dependencies. */
 export interface IWorkflowEngine {
   submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult>;
@@ -95,4 +118,16 @@ export interface IWorkflowEngine {
     listener: (delivery: WorkflowRunDelivery) => void,
     options?: WorkflowRunSubscriptionOptions
   ): Promise<WorkflowRunSubscription>;
+  /**
+   * Stream the attention queue across every run in scope, including runs started later:
+   * the open items as a snapshot, then `ready`, then a line for every change the feed
+   * commits. Delivery is at least once and one line at a time; the listener's promise is
+   * awaited before the next line. Observes only: no run state is written. Rejects with
+   * `WorkflowEventCursorError`, before any line, when `after` cannot be read; a tail that
+   * later cannot read its own cursor sends an `error` line and stops.
+   */
+  watchAttention(
+    listener: (line: AttentionStreamLine) => void | Promise<void>,
+    options: AttentionWatchOptions
+  ): Promise<AttentionWatch>;
 }

@@ -247,8 +247,8 @@ export function createInMemoryWorkflowStore(
         return { released };
       }),
     recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),
-    pauseWorkflowRun: (id, approval, extra, suspension) =>
-      write(view => view.pauseWorkflowRun(id, approval, extra, suspension)),
+    pauseWorkflowRun: (id, approval, extra, event) =>
+      write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>

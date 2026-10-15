@@ -1294,10 +1294,9 @@ export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pause
  * The single derivation of "what does this run need from outside, if anything".
  *
  * No database or I/O. The clock computes display durations only. The run row is
- * the authority: attention is
- * never derived from the event log, because terminal transitions exist that write no
- * terminal event (`resolveAndCancelApprovalGate` cancels a run while inserting only
- * `approval_received`), and two gate pauses write an unreliable event or none at all.
+ * the authority: attention is never derived from the event log. Every write that
+ * changes it commits an event, which the attention watch uses only as a wake, because
+ * a delivered event can later be retracted by recovery.
  *
  * Consumed by `assertApprovable`/`assertRejectable`, the server approve/reject/respond
  * routes, the orchestrator's paused-gate prompt section, `waitForRunAttention`, and the

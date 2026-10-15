@@ -8,8 +8,8 @@ direction and engineering values.
   requested approach fits the codebase against
   [`.archon/engineering.md`](../../engineering.md).
 - **Closing without a person.** Only two kinds of item may be closed without a
-  maintainer: a duplicate of an item that is still open, and an item whose outcome a
-  merged change already delivered. Name that open item or that merged change, and the
+  maintainer: a duplicate of an issue that is still open, and an item whose outcome a
+  merged change already delivered. Name that open issue or that merged change, and the
   close leaves a comment on the closed item linking to it, so a reader can follow the
   work from there.
 - **Everything else goes to a maintainer, with a recommendation.** An item that looks

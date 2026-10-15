@@ -23,9 +23,11 @@ import {
 import { SIZE_LABEL, TYPE_LABEL } from '../../workflows/sdlc/.shared/labels';
 import type { PrRef } from '../../../packages/forge/src/identity';
 import {
+  closeReasonSchema,
   forgePrRecordSchema,
   type ForgePrRecord,
 } from '../../../packages/forge/src/lifecycle';
+import { CLOSE_REASONS } from '../../workflows/sdlc/.shared/issue';
 
 // The pack is standalone and cannot import runtime packages. These assignments
 // check that its consumed projection stays compatible with the owning wire type.
@@ -69,6 +71,10 @@ test("every refusal remedy is keyed by a kind the forge contract's errors carry"
 // hands to parseQualifiedPr. A value the schema admits but the parser refuses
 // passes the provider's structured output and fails publication after the whole
 // review ran, so the two must accept the same values.
+test('every reason the pack closes an issue with is a forge close reason', () => {
+  for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
+});
+
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
   const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
   const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
