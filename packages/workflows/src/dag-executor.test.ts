@@ -34113,6 +34113,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     runMetadata?: Record<string, unknown>;
     status?: 'running' | 'paused';
     claimed?: boolean;
+    platform?: ReturnType<typeof createMockPlatform>;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
     store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
@@ -34124,6 +34125,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await executeDagWorkflow(
       dagOptions({
         deps,
+        ...(opts.platform ? { platform: opts.platform } : {}),
         conversationId: 'conv-wb',
         cwd: wbTestDir,
         workflow: {
@@ -34228,6 +34230,35 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(writes.filter(([event]) => event.event_type === 'writeback_requested')).toHaveLength(1);
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('records an undelivered pause notice when the write-back gate message cannot be sent', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+    });
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (): Promise<void> => {
+      throw new Error('401 unauthorized');
+    });
+    const store = await runGate({ backend, platform });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'wb-run',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'container',
+      data: { nodeId: '__writeback__', occurrence: expect.any(String), platform: 'test' },
+    });
   });
 
   it('a lost pause CAS during write-back stays fail-closed: throws, never suspends (#2489)', async () => {

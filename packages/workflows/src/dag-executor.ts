@@ -11436,7 +11436,7 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  await pauseGateRespectingExternalTransition(
+  const paused = await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
@@ -11459,7 +11459,17 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  // `paused` is undefined only when an external stop ended the run first; the notice still goes out.
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    WRITEBACK_GATE_NODE_ID,
+    paused ? gateOccurrence(paused) : '',
+    'container',
+    message
+  );
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */

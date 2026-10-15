@@ -135,8 +135,8 @@ export function createTransactionView(
     // `expected` gate needs a gate to compare against.
     if (run.status !== 'paused') return false;
     const gate: unknown = run.metadata.approval;
-    const record =
-      typeof gate === 'object' && gate !== null ? (gate as Record<string, unknown>) : {};
+    const record: Record<string, unknown> =
+      typeof gate === 'object' && gate !== null ? Object.fromEntries(Object.entries(gate)) : {};
     if (record.resolved != null) return false;
     if (expected === undefined) return true;
     return (
