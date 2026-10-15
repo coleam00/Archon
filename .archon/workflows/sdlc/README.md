@@ -395,9 +395,11 @@ are the operator's and stay outside the pack and the repository.
   at creation, no comments, open. A batch issue's comments, events and timeline
   answer as empty; anything else answers as live. A request that names a batch
   issue by its REST path or a GraphQL `number` but that the server answered live is a
-  leak. Each line also records the merged pull requests on the base that reference
-  the row's issue; a row whose issue or those pull requests cannot be read does not
-  run, and its line says why.
+  leak. Each eval line also records the merged pull requests on the base that reference
+  the row's issue. An eval row whose creation metadata cannot be read completely
+  does not run, and its line says why. This includes label histories exceeding the
+  first 20 events or reference histories exceeding the first 100 events. Live
+  scratch runs do not read this eval metadata.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no

@@ -396,7 +396,7 @@ const BATCH_ISSUE_QUERY = [
   'query($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) { issue(number: $number) {',
   'id url createdAt author { login }',
-  'labelEvents: timelineItems(first: 20, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) { nodes {',
+  'labelEvents: timelineItems(first: 20, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) { pageInfo { hasNextPage } nodes {',
   '__typename',
   '... on LabeledEvent { createdAt actor { login } label { name } }',
   '... on UnlabeledEvent { createdAt actor { login } label { name } } } }',
@@ -445,6 +445,9 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
   const { id, url, createdAt, author, labelEvents, refs } = issue;
   if (typeof id !== 'string' || typeof url !== 'string' || typeof createdAt !== 'string') {
     throw new Error(`${where} answered without its id, url and creation time`);
+  }
+  if (isObject(labelEvents) && isObject(labelEvents.pageInfo) && labelEvents.pageInfo.hasNextPage === true) {
+    throw new Error(`${where} has more than 20 label events; the bench reads only the first page`);
   }
   if (isObject(refs) && isObject(refs.pageInfo) && refs.pageInfo.hasNextPage === true) {
     throw new Error(`${where} has more than 100 cross-references; the bench reads only the first page`);
@@ -585,14 +588,13 @@ export function issueTokens(repo: Repo, number: number): RegExp[] {
   ];
 }
 
-const HEREDOC = /(?<!<)<<(?!<)-?[ \t]*['"\\]*([A-Za-z_]\w*)['"\\]*/;
+const HEREDOC = /(?<!<)<<(?!<)-?[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A-Za-z_]\w*))/;
 /** `cat > file`, `cat <<EOF > file` or `tee file`, once the here-document operator is cut out. */
 const WRITES_FILE = /^(?:cat\s*>>?\s*[^\s;&|<>]+|tee(?:\s+-a)?\s+[^\s;&|<>]+(?:\s*>\s*\/dev\/null)?)$/;
 
 /**
- * A shell command without the bodies of here-documents it writes to a file: text a
- * command writes, not runs. A body fed to any other command, such as `python3 -` or
- * `bash`, may run a lookup and is kept.
+ * Only quoted heredocs written by cat/tee are inert. Unquoted heredocs expand
+ * command substitutions even when their destination is a report file.
  */
 function withoutWrittenHeredocs(command: string): string {
   const kept: string[] = [];
@@ -606,7 +608,7 @@ function withoutWrittenHeredocs(command: string): string {
     if (opened !== null) {
       const segment = line.slice(0, opened.index).split(/&&|\|\||[;|(]/).pop() ?? '';
       const writer = `${segment} ${line.slice(opened.index + opened[0].length)}`.trim().replace(/\s+/g, ' ');
-      if (WRITES_FILE.test(writer)) terminator = opened[1];
+      if (WRITES_FILE.test(writer)) terminator = opened[1] ?? opened[2] ?? opened[3];
     }
     kept.push(line);
   }
@@ -618,7 +620,7 @@ function withoutWrittenHeredocs(command: string): string {
  * the query it searched. A tool call carries these as its input; Codex records a
  * shell command it runs through unified exec as a `command_execution` subtask, whose
  * start and end both name it. A file write is no lookup, though the report it writes
- * may cite the issue, and neither is a here-document a shell command writes it to.
+ * may cite the issue, and neither is a quoted here-document written to a file.
  */
 function lookupOf(event: Record<string, unknown>): { id: string; text: string } | undefined {
   if (event.type === 'tool_call' && isObject(event.rawInput)) {
@@ -650,13 +652,15 @@ export function findLookups(transcript: string, tokens: readonly RegExp[]): stri
   return [...lookups.values()];
 }
 
-const GH_LOOKUP = /\bgh\s+(?:issue\s+view|api)\b/;
+// Compound shell commands may contain reads outside gh, which the socket cannot cover.
+const GH_LOOKUP = /^[^:\n]+: (?:\S*sh\s+-[a-z]*c\s+['"])?gh\s+(?:issue\s+view|api)\s+[^;&|\n`$]*$/;
 
 /**
  * Split a run's lookups of the judged issue into those the creation-time answer
  * covered and the leaks. A `gh issue view` or `gh api` lookup is covered when the
  * run's lookup server answered the row's issue at creation at least once; a URL
- * fetch, curl or search never is. The server cannot tell which of the run's gh calls
+ * fetch, curl or search never is. Compound commands remain flagged because the
+ * socket cannot account for their other reads. The server cannot tell which gh call
  * a request came from, so it reports each request that named the issue and went out
  * live itself, and each is a leak whatever the transcript shows.
  */
@@ -991,7 +995,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
   const issues = new Map<number, BatchIssue>();
   const unread = new Map<number, string>();
-  for (const row of rows) {
+  for (const row of live === undefined ? rows : []) {
     if (issues.has(row.number) || unread.has(row.number)) continue;
     try {
       issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));

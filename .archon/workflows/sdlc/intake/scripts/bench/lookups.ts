@@ -12,13 +12,11 @@
  * issue's comments, events and timeline as empty without forwarding. Anything else
  * answers as live.
  *
- * A batch issue is recognised by machine identifiers only: its GraphQL node id or web
- * URL anywhere in an answer, and, for a GraphQL request whose variables name the set's
- * repository, its number. A request that names a batch issue by its REST path or a
- * GraphQL `number`, but whose answer the server could not rewrite, is answered live and
- * recorded, so the run's line reports it as a leak. A request that names the issue in
- * no such way, such as a text search, passes live unrecorded; so does a lookup outside
- * `gh`, which the transcript scan reports.
+ * Batch issues are recognised by node id or web URL. Issue selections in GraphQL
+ * requests receive a private id selection, removed from the response, so literal
+ * queries and aliases work without guessing which response object a number names.
+ * Requests outside the set's forge pass through unchanged. Non-gh reads remain
+ * observable through the transcript scan.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -115,58 +113,77 @@ function creationObject(original: Readonly<Record<string, unknown>>, view: Creat
 
 const sameText = (a: unknown, b: string): boolean => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 
-/** How a GraphQL request named its subject: in the set's repository, and which issue number it asked for. */
-export interface LookupScope {
-  readonly repoScoped: boolean;
-  readonly forcedNumber?: number;
-}
+const ISSUE_ID = '_archonBenchIssueId';
 
-/** `value` with every batch issue in it replaced by its creation view, and the numbers that were. */
-export function atCreation(
-  value: unknown,
-  views: ReadonlyMap<number, CreationView>,
-  scope: LookupScope
-): { value: unknown; answered: Set<number> } {
-  const answered = new Set<number>();
-  const byIdentity = (object: Readonly<Record<string, unknown>>): CreationView | undefined => {
-    for (const view of views.values()) {
-      if (object.id === view.id || object.node_id === view.id || sameText(object.url, view.url) || sameText(object.html_url, view.url)) return view;
-    }
-    return undefined;
-  };
-  const visit = (node: unknown, forced: CreationView | undefined): unknown => {
-    if (Array.isArray(node)) return node.map(entry => visit(entry, undefined));
-    if (!isObject(node)) return node;
-    const view = byIdentity(node) ?? forced ?? (scope.repoScoped && typeof node.number === 'number' ? views.get(node.number) : undefined);
-    if (view !== undefined) {
-      answered.add(view.number);
-      return creationObject(node, view);
-    }
-    return Object.fromEntries(Object.entries(node).map(([key, inner]) => [key, visit(inner, undefined)]));
-  };
-  if (!scope.repoScoped || !isObject(value)) return { value: visit(value, undefined), answered };
-  // Under a repository query for a batch issue's number, each object directly beneath
-  // `data.repository` is that issue, whatever alias names it.
-  const forced = scope.forcedNumber === undefined ? undefined : views.get(scope.forcedNumber);
-  const data = value.data;
-  if (forced === undefined || !isObject(data) || !isObject(data.repository)) return { value: visit(value, undefined), answered };
-  const repository = Object.fromEntries(Object.entries(data.repository).map(([key, inner]) => [key, visit(inner, isObject(inner) ? forced : undefined)]));
-  const rest = Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'repository').map(([key, inner]) => [key, visit(inner, undefined)]));
-  return { value: { ...value, data: { ...rest, repository } }, answered };
-}
-
-/** The scope a GraphQL request body names through its variables. */
-function scopeOf(body: string | undefined, repo: Repo): LookupScope {
+/**
+ * Ask GitHub to identify issue selections even when the caller requested only state
+ * or body. Tokenising GraphQL keeps strings and comments opaque; balanced arguments
+ * locate the selection set without assuming variable names, aliases or repositories.
+ */
+function identifyIssues(body: string | undefined): string | undefined {
+  if (body === undefined) return body;
   let request: unknown;
   try {
-    request = body === undefined ? undefined : JSON.parse(body);
+    request = JSON.parse(body);
   } catch {
-    return { repoScoped: false };
+    return body;
   }
-  const variables = isObject(request) && isObject(request.variables) ? request.variables : {};
-  const [owner, name] = repo.path.split('/');
-  const repoScoped = sameText(variables.owner, owner) && (sameText(variables.repo, name) || sameText(variables.name, name));
-  return repoScoped && typeof variables.number === 'number' ? { repoScoped, forcedNumber: variables.number } : { repoScoped };
+  if (!isObject(request) || typeof request.query !== 'string') return body;
+  const query = request.query;
+  const tokens = [...query.matchAll(/"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\])*"|#[^\r\n]*|[A-Za-z_]\w*|[^\s,]/g)]
+    .filter(token => !token[0].startsWith('#'));
+  const insertions: number[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const fragment = tokens[i][0] === 'Issue' && tokens[i - 1]?.[0] === 'on';
+    const field = ['issue', 'issueOrPullRequest'].includes(tokens[i][0]) && tokens[i + 1]?.[0] === '(';
+    if (!fragment && !field) continue;
+    let j = i;
+    let depth = 0;
+    if (field) {
+      for (j = i + 1; j < tokens.length; j++) {
+        if (tokens[j][0] === '(') depth++;
+        if (tokens[j][0] === ')' && --depth === 0) break;
+      }
+    }
+    // A field may have directives (with their own arguments) before its selection.
+    while (tokens[++j]?.[0] === '@') {
+      j++;
+      if (tokens[j + 1]?.[0] !== '(') continue;
+      j += 2;
+      depth = 1;
+      for (; j < tokens.length; j++) {
+        if (tokens[j][0] === '(') depth++;
+        if (tokens[j][0] === ')' && --depth === 0) break;
+      }
+    }
+    if (tokens[j]?.[0] === '{') insertions.push(tokens[j].index + 1);
+  }
+  let identified = query;
+  for (const at of insertions.reverse()) identified = `${identified.slice(0, at)} ... on Issue { ${ISSUE_ID}: id } ${identified.slice(at)}`;
+  return JSON.stringify({ ...request, query: identified });
+}
+
+/** Replace identified batch issues, preserving every unrelated object and field. */
+export function atCreation(
+  value: unknown,
+  views: ReadonlyMap<number, CreationView>
+): { value: unknown; answered: Set<number> } {
+  const answered = new Set<number>();
+  const visit = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(visit);
+    if (!isObject(node)) return node;
+    const original = Object.fromEntries(Object.entries(node).filter(([key]) => key !== ISSUE_ID));
+    const view = [...views.values()].find(view =>
+      node[ISSUE_ID] === view.id || node.id === view.id || node.node_id === view.id ||
+      sameText(node.url, view.url) || sameText(node.html_url, view.url)
+    );
+    if (view !== undefined) {
+      answered.add(view.number);
+      return creationObject(original, view);
+    }
+    return Object.fromEntries(Object.entries(original).map(([key, inner]) => [key, visit(inner)]));
+  };
+  return { value: visit(value), answered };
 }
 
 /**
@@ -212,24 +229,26 @@ export async function answerLookup(
 ): Promise<Answer> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/v3(?=\/)/, '');
+  const host = request.headers.get('host') ?? url.host;
+  const sameHost = sameText(host, repo.host === 'github.com' ? 'api.github.com' : repo.host);
   const history = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/(comments|events|timeline|labels)$/.exec(path);
-  const local = history !== null && sameText(history[1], repo.path) ? views.get(Number(history[2])) : undefined;
+  const local = sameHost && history !== null && sameText(history[1], repo.path) ? views.get(Number(history[2])) : undefined;
   if (request.method === 'GET' && local !== undefined && history !== null) {
     const answer = history[3] === 'labels' ? local.labels.map(name => ({ name })) : [];
     return { response: Response.json(answer), answered: [local.number], live: [] };
   }
 
-  const host = request.headers.get('host') ?? url.host;
   const headers = new Headers(request.headers);
   for (const name of DROPPED_REQUEST_HEADERS) headers.delete(name);
-  const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
+  const originalBody = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
+  const body = sameHost && path.endsWith('/graphql') ? identifyIssues(originalBody) : originalBody;
   const forwarded = await upstream(`https://${host}${url.pathname}${url.search}`, { method: request.method, headers, body });
   const responseHeaders = new Headers(forwarded.headers);
   for (const name of DROPPED_RESPONSE_HEADERS) responseHeaders.delete(name);
   const bytes = await forwarded.arrayBuffer();
   const init = { status: forwarded.status, statusText: forwarded.statusText, headers: responseHeaders };
   // A refused request, such as a GraphQL query missing a token scope, carries no issue.
-  const named = forwarded.ok ? namedIssues(path, body, repo, views) : [];
+  const named = sameHost && forwarded.ok ? namedIssues(path, body, repo, views) : [];
   const unchanged = { response: new Response(bytes, init), answered: [], live: named };
   if (!(forwarded.headers.get('content-type') ?? '').includes('json')) return unchanged;
   let parsed: unknown;
@@ -239,10 +258,14 @@ export async function answerLookup(
     return unchanged;
   }
   const refused = isObject(parsed) && parsed.data == null && 'errors' in parsed;
-  const rewritten = atCreation(parsed, views, path.endsWith('/graphql') ? scopeOf(body, repo) : { repoScoped: false });
-  if (rewritten.answered.size === 0) return refused ? { ...unchanged, live: [] } : unchanged;
+  if (!sameHost) return unchanged;
+  const rewritten = atCreation(parsed, views);
+  if (rewritten.answered.size === 0 && body === originalBody) return refused ? { ...unchanged, live: [] } : unchanged;
   const answered = [...rewritten.answered];
-  return { response: new Response(JSON.stringify(rewritten.value), init), answered, live: named.filter(number => !answered.includes(number)) };
+  // Enriched selections carry their own identity. An unmatched number can name a
+  // sibling PR or an issue in another repository, not a live read of this batch.
+  const live = body !== originalBody || refused ? [] : named.filter(number => !answered.includes(number));
+  return { response: new Response(JSON.stringify(rewritten.value), init), answered, live };
 }
 
 /** The operator's gh configuration directory, in gh's own order of precedence. */

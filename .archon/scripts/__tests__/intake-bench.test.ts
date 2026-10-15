@@ -38,7 +38,7 @@ import {
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
-import { answerLookup, atCreation, type CreationView, creationLabels } from '../../workflows/sdlc/intake/scripts/bench/lookups';
+import { answerLookup, atCreation, type CreationView, creationLabels, serveLookups } from '../../workflows/sdlc/intake/scripts/bench/lookups';
 import { MARKS_FILE, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
@@ -356,6 +356,13 @@ describe('bench run', () => {
     expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
   });
 
+  it('does not read eval metadata for live scratch runs', () => {
+    const refs = Array.from({ length: 101 }, (_, i) => ({ url: `https://github.com/o/r/pull/${String(i)}`, merged: false, oid: null }));
+    const { status, lines } = benchLive({ issues: [{ number: 11, labels: [], comments: 0, refs }, { number: 12, labels: [], comments: 0 }] });
+    expect(status).toBe(0);
+    expect(lines.every(line => line.status === 'completed')).toBe(true);
+  });
+
   it('does not pass a trust: auto row on which intake took a path without triage', () => {
     const { lines } = benchLive({ autoPath: 'quiet' });
     expect(lines.find(line => line.row === '11')).toMatchObject({
@@ -540,14 +547,14 @@ describe('bench run', () => {
     expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
   });
 
-  it('flags a lookup of the judged issue that the server answered live, beside one it answered at creation', () => {
+  it('answers literal GraphQL lookups of the judged issue at creation too', () => {
     const { run, cli } = bench({ lookupIssue: 11, lookupLiteral: true });
     const { lines } = run('base');
     const triaged = lines.find(line => line.row === '11');
     const n = Number(triaged?.run_id?.slice('run-'.length));
-    expect(JSON.parse(readFileSync(join(cli, `lookup-literal-run-${String(n)}.json`), 'utf8'))).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
+    expect(JSON.parse(readFileSync(join(cli, `lookup-literal-run-${String(n)}.json`), 'utf8'))).toEqual({ data: { repository: { issue: { state: 'OPEN' } } } });
     expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
-    expect(triaged?.leak).toEqual(['lookup server: POST /graphql was answered live']);
+    expect(triaged?.leak).toEqual([]);
   });
 
   it('records the merged pull requests on the base that reference the row issue', () => {
@@ -558,12 +565,27 @@ describe('bench run', () => {
       { url: 'https://github.com/o/r/pull/30', merged: true, oid: ok(repo, 'rev-parse', 'HEAD~1') },
       { url: 'https://github.com/o/r/pull/31', merged: true, oid: ok(repo, 'rev-parse', 'HEAD') },
       { url: 'https://github.com/o/r/pull/32', merged: false, oid: null },
+      { connected: true, url: 'https://github.com/o/r/pull/33', merged: true, oid: ok(repo, 'rev-parse', 'HEAD~1') },
     ];
     writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
-    const { status, lines } = runWith(['--base', 'HEAD~1'], 'base');
+    const { status, lines, checks } = runWith(['--base', 'HEAD~1'], 'base');
     expect(status).toBe(0);
-    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30']);
+    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30', 'https://github.com/o/r/pull/33']);
     expect(lines.find(line => line.row === '12-outside')?.merged_on_base).toEqual([]);
+    const line = lines.find(line => line.row === '11');
+    if (line === undefined) throw new Error('missing connected row');
+    const set: BenchSet = { bench: 'intake', repo: REPO, selected_at: '', rows: [row(11, { group: 'typed' })] };
+    const out = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
+    appendLine(join(out, CHECKS_FILE), checks[0]);
+    appendLine(join(out, SAMPLES_FILE), { ...line, group: 'typed', verdict: { ...line.verdict, contract: 'NO_ACTION', route: null } });
+    expect(renderScore(score(set, out))).toContain('1 excused by a merged base PR');
+  });
+
+  it('refuses an incomplete page of label history before launching the row', () => {
+    const labelEvents = Array.from({ length: 21 }, (_, i) => ({ createdAt: '2026-01-01T00:00:01Z', actor: 'someone', label: String(i) }));
+    const { run } = bench({ issues: [{ number: 11, labels: [], comments: 0, labelEvents }, { number: 12, labels: [], comments: 0 }] });
+    const { lines } = run('base');
+    expect(lines.find(line => line.row === '11')).toMatchObject({ status: 'not_started', problems: [expect.stringContaining('label events')] });
   });
 
   it('counts a merged PR whose merge commit this clone lacks, such as another repository\'s, as not on the base', () => {
@@ -749,6 +771,21 @@ describe('leaks', () => {
     ].join('\n');
     expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(["triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md <<'EOF'\ncat /runs/1/triage.md"]);
   });
+  it('flags expanding cat and tee heredocs through tool calls and command subtasks', () => {
+    for (const writer of ['cat > report', 'tee report']) {
+      for (const delimiter of ['EOF', "'EOF'", '"EOF"', '\\EOF']) {
+        const command = `${writer} <<${delimiter}\n$(curl https://github.com/o/r/issues/4)\nEOF`;
+        for (const event of [
+          { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
+          { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
+        ]) {
+          const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
+          expect(found).toHaveLength(delimiter === 'EOF' ? 1 : 0);
+        }
+      }
+    }
+  });
+
   it('flag a here-document that a command runs, and a lookup after a here-string', () => {
     const event = (id: string, command: string) => JSON.stringify({ type: 'provider_event', step: 'triage', event: { type: 'tool_call', toolCallId: id, name: 'Bash', rawInput: { command } } });
     const python = "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['gh', 'api', 'repos/o/r/issues/4'])\nEOF";
@@ -772,12 +809,11 @@ describe('lookups', () => {
   const views = new Map([[4, view(4)]]);
   const closedConnection = { nodes: [{ body: 'Fixed.' }], totalCount: 1 };
 
-  it('rewrite each batch issue in an answer to its creation view, by node id, URL or repository-scoped number', () => {
+  it('rewrite each batch issue in an answer to its creation view, by node id or URL', () => {
     // gh issue view: IssueByNumber, the issue under an alias of data.repository.
     const byNumber = atCreation(
-      { data: { repository: { hasIssuesEnabled: true, issue: { __typename: 'Issue', number: 4, title: 'Now', body: 'Now.', state: 'CLOSED', stateReason: 'COMPLETED', closedAt: 'x', closed: true, updatedAt: 'later', labels: { nodes: [{ name: 'bug' }, { name: 'archon-ready' }], totalCount: 2 }, comments: closedConnection, milestone: { title: 'v1' } } } } },
-      views,
-      { repoScoped: true, forcedNumber: 4 }
+      { data: { repository: { hasIssuesEnabled: true, issue: { _archonBenchIssueId: 'I_4', __typename: 'Issue', number: 4, title: 'Now', body: 'Now.', state: 'CLOSED', stateReason: 'COMPLETED', closedAt: 'x', closed: true, updatedAt: 'later', labels: { nodes: [{ name: 'bug' }, { name: 'archon-ready' }], totalCount: 2 }, comments: closedConnection, milestone: { title: 'v1' } } } } },
+      views
     );
     expect(byNumber.value).toEqual({
       data: {
@@ -806,18 +842,85 @@ describe('lookups', () => {
         { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'closed', state_reason: 'completed', comments: 3, labels: [{ name: 'x' }], assignees: [{ login: 'm' }] },
         { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
       ],
-      views,
-      { repoScoped: false }
+      views
     );
     expect(rest.value).toEqual([
       { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'open', state_reason: null, comments: 0, labels: [{ name: 'bug' }] },
       { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
     ]);
-    // gh issue list --search --json number,state,title: a node with neither id nor url.
-    const search = atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } }, views, { repoScoped: true });
-    expect(search.value).toEqual({ data: { search: { nodes: [{ number: 4, state: 'OPEN', title: 'Issue 4 as opened' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } });
+    // Numbers without identity cannot establish which repository owns a search result.
+    const search = atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } }, views);
+    expect(search.value).toEqual({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } });
     // Outside the set's repository, a number alone names nothing.
-    expect(atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED' }] } } }, views, { repoScoped: false }).answered.size).toBe(0);
+    expect(atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED' }] } } }, views).answered.size).toBe(0);
+  });
+
+  it('identifies literal, aliased and variable selections without changing sibling issues, PRs or repositories', async () => {
+    const query = `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        judged: issue(number: $number) { body state }
+        sibling: issue(number: 5) { body state }
+        pr: pullRequest(number: $number) { body state }
+      }
+      elsewhere: repository(owner: "other", name: "repo") {
+        issue(number: 4) { body state }
+      }
+    }`;
+    const response = { data: {
+      repository: {
+        judged: { _archonBenchIssueId: 'I_4', body: 'Fixed', state: 'CLOSED' },
+        sibling: { _archonBenchIssueId: 'I_5', body: 'Other issue', state: 'CLOSED' },
+        pr: { body: 'Merged PR', state: 'MERGED' },
+      },
+      elsewhere: { issue: { _archonBenchIssueId: 'I_elsewhere_4', body: 'Another repo', state: 'CLOSED' } },
+    } };
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query, variables: { owner: 'o', name: 'r', number: 4 } }),
+    }), REPO, views, async (_url, init) => {
+      const forwarded = JSON.parse(String(init.body)) as { query: string };
+      expect(forwarded.query.match(/_archonBenchIssueId: id/g)).toHaveLength(3);
+      expect(forwarded.query).toContain('pr: pullRequest(number: $number) { body state }');
+      return Response.json(response);
+    });
+    expect(await answer.response.json()).toEqual({ data: {
+      repository: {
+        judged: { body: 'As opened.', state: 'OPEN' },
+        sibling: { body: 'Other issue', state: 'CLOSED' },
+        pr: { body: 'Merged PR', state: 'MERGED' },
+      },
+      elsewhere: { issue: { body: 'Another repo', state: 'CLOSED' } },
+    } });
+    expect(answer.answered).toEqual([4]);
+
+    // A request to another repository alone must also strip the private identity.
+    const other = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: '{ repository(owner: "other", name: "repo") { issue(number: 4) { state } } }' }),
+    }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_other', state: 'CLOSED' } } } }));
+    expect(await other.response.json()).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
+    expect([other.answered, other.live]).toEqual([[], []]);
+  });
+
+  it('identifies issues in named and inline fragments used by search queries', async () => {
+    for (const query of [
+      'fragment issue on Issue { number state title } query { search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ...issue } } }',
+      '{ search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ... on Issue @include(if: true) { number state title } } } }',
+    ]) {
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query }),
+      }), REPO, views, async (_url, init) => {
+        const forwarded = JSON.parse(String(init.body)) as { query: string };
+        expect(forwarded.query).toContain('_archonBenchIssueId: id');
+        return Response.json({ data: { search: { nodes: [
+          { _archonBenchIssueId: 'I_4', number: 4, state: 'CLOSED', title: 'Now' },
+          { _archonBenchIssueId: 'I_other', number: 4, state: 'CLOSED', title: 'Other repository' },
+        ] } } });
+      });
+      expect(await answer.response.json()).toEqual({ data: { search: { nodes: [
+        { number: 4, state: 'OPEN', title: 'Issue 4 as opened' },
+        { number: 4, state: 'CLOSED', title: 'Other repository' },
+      ] } } });
+      expect(answer.answered).toEqual([4]);
+    }
   });
 
   it('answer a batch issue history locally and forward anything else unchanged', async () => {
@@ -849,22 +952,61 @@ describe('lookups', () => {
 
   it('count a gh lookup as answered only when the run reached the server, and a fetch never', () => {
     const lookups = ['triage: gh issue view 4 --repo o/r', 'triage: gh api repos/o/r/issues/4/events', 'triage: https://github.com/o/r/issues/4'];
+    const wrapped = "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'";
+    expect(splitLookups([wrapped], true, [])).toEqual({ answered: [wrapped], leak: [] });
     expect(splitLookups(lookups, true, [])).toEqual({ answered: lookups.slice(0, 2), leak: lookups.slice(2) });
     expect(splitLookups(lookups, false, [])).toEqual({ answered: [], leak: lookups });
     expect(splitLookups(lookups.slice(0, 1), true, ['POST /graphql'])).toEqual({ answered: lookups.slice(0, 1), leak: ['lookup server: POST /graphql was answered live'] });
   });
 
+  it('keeps mixed commands flagged even when gh reached the snapshot server', () => {
+    for (const separator of ['; ', ' && ', '\n', ' | ']) {
+      const command = `triage: gh issue view 4${separator}curl https://github.com/o/r/issues/4`;
+      expect(splitLookups([command], true, []).leak).toEqual([command]);
+    }
+  });
+
+  it('preserves stored gh credentials in the socket configuration', () => {
+    const operator = track(mkdtempSync(join(tmpdir(), 'bench-gh-auth-')));
+    writeFileSync(join(operator, 'hosts.yml'), 'github.com:\n    oauth_token: bench-stored-token\n    user: bench-test\n    git_protocol: https\n');
+    const previous = process.env.GH_CONFIG_DIR;
+    process.env.GH_CONFIG_DIR = operator;
+    const server = serveLookups(REPO, views);
+    try {
+      const result = spawnSync('gh', ['auth', 'token', '--hostname', 'github.com'], {
+        encoding: 'utf8',
+        env: { ...process.env, ...server.env, GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '' },
+      });
+      expect([result.status, result.stdout.trim()]).toEqual([0, 'bench-stored-token']);
+    } finally {
+      server.stop();
+      if (previous === undefined) delete process.env.GH_CONFIG_DIR;
+      else process.env.GH_CONFIG_DIR = previous;
+    }
+  });
+
+  it('does not rewrite another forge host, even with the same repository, number and id', async () => {
+    for (const path of ['/repos/o/r/issues/4/comments', '/graphql']) {
+      const upstream = async () => Response.json({ id: 'I_4', number: 4, state: 'CLOSED' });
+      const result = await answerLookup(new Request(`http://enterprise.example${path}`, {
+        method: path === '/graphql' ? 'POST' : 'GET',
+        ...(path === '/graphql' ? { body: JSON.stringify({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { state } } }' }) } : {}),
+      }), REPO, views, upstream);
+      expect([await result.response.json(), result.answered, result.live]).toEqual([{ id: 'I_4', number: 4, state: 'CLOSED' }, [], []]);
+    }
+  });
+
   it('report a request that names a batch issue but is answered live', async () => {
     const upstream = async (_url: string, init: RequestInit): Promise<Response> => {
-      const asked = JSON.parse(String(init.body)) as { variables?: unknown };
-      const issue = asked.variables === undefined ? { state: 'CLOSED' } : { id: 'I_4', number: 4, state: 'CLOSED' };
+      const asked = JSON.parse(String(init.body)) as { query: string };
+      const issue = { ...(asked.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: 'I_4' } : {}), state: 'CLOSED' };
       return Response.json({ data: { repository: { issue } } });
     };
     const graphql = (body: unknown) => new Request('http://api.github.com/graphql', { method: 'POST', headers: { host: 'api.github.com' }, body: JSON.stringify(body) });
-    const scoped = await answerLookup(graphql({ query: 'query($owner: String!, $repo: String!, $number: Int!) { x }', variables: { owner: 'o', repo: 'r', number: 4 } }), REPO, views, upstream);
+    const scoped = await answerLookup(graphql({ query: 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue(number: $number) { state } } }', variables: { owner: 'o', repo: 'r', number: 4 } }), REPO, views, upstream);
     expect([scoped.answered, scoped.live]).toEqual([[4], []]);
     const literal = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { state } } }' }), REPO, views, upstream);
-    expect([await literal.response.json(), literal.answered, literal.live]).toEqual([{ data: { repository: { issue: { state: 'CLOSED' } } } }, [], [4]]);
+    expect([await literal.response.json(), literal.answered, literal.live]).toEqual([{ data: { repository: { issue: { state: 'OPEN' } } } }, [4], []]);
     const rest = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/reactions'), REPO, views, async () => Response.json([{ content: '+1' }]));
     expect([rest.answered, rest.live]).toEqual([[], [4]]);
     const refused = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { projectItems { id } } } }' }), REPO, views, async () =>

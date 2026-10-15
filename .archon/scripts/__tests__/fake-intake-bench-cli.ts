@@ -32,7 +32,7 @@ export interface FakeIssue {
   /** Label history, oldest first, as the per-row read reports it. */
   readonly labelEvents?: readonly { createdAt: string; actor: string; label: string; removed?: true }[];
   /** Pull requests that reference the issue. */
-  readonly refs?: readonly { url: string; merged: boolean; oid: string | null }[];
+  readonly refs?: readonly { connected?: boolean; url: string; merged: boolean; oid: string | null }[];
 }
 
 export interface FakeConfig {
@@ -189,8 +189,8 @@ function upstream(dir: string, url: string, body: string | undefined): Response 
   if (pathname === '/graphql') {
     const request = JSON.parse(body ?? '{}') as { query: string; variables?: { number?: number } };
     // A query with literals gets only the field it asks for, as the tracker answers it.
-    const literal = /number: (\d+)\) \{ state \}/.exec(request.query);
-    if (literal !== null) return Response.json({ data: { repository: { issue: { state: now(Number(literal[1]))?.state ?? null } } } });
+    const literal = /number: (\d+)\)/.exec(request.query);
+    if (literal !== null) return Response.json({ data: { repository: { issue: { ...(request.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: `I_${literal[1]}` } : {}), state: now(Number(literal[1]))?.state ?? null } } } });
     return Response.json({ data: { repository: { issue: now(Number(request.variables?.number)) ?? null } } });
   }
   const rest = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(pathname);
@@ -312,10 +312,10 @@ function ghAnswer(dir: string, args: readonly string[]): string {
             url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
             createdAt: issue.createdAt ?? '2026-01-01T00:00:00Z',
             author: { login: issue.author ?? 'someone' },
-            labelEvents: { nodes: (issue.labelEvents ?? []).map(event) },
+            labelEvents: { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 }, nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
             refs: {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
-              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ source: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
+              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
             },
           },
         },
