@@ -38,7 +38,9 @@ inputs:
     description: >-
       Path to the previous review round's report. When set, this round verifies
       prior findings first and reviews only the delta since the commit that round
-      reviewed, which its publish recorded beside the report.
+      reviewed, which its publish recorded beside the report. Requires the
+      certified target file reviewed-target.json beside the report. For an older
+      report without that file, start a full review without prior_report or light.
   work_order:
     default: ""
     description: >-
@@ -372,4 +374,3 @@ nodes:
     trigger_rule: all_done
     with:
       lens: ""
-
