@@ -352,10 +352,8 @@ describe('package layering', () => {
     const doc = readFileSync(new URL('../.archon/architecture.md', import.meta.url), 'utf8');
     const table = doc.split('### Packages')[1]?.split('\n### ')[0] ?? '';
     const rows = table
-      .trim()
-      .split('\n\n')[0]
       .split('\n')
-      .slice(2)
+      .filter(line => line.trim().startsWith('|'))
       .map(line => {
         const cells = line
           .split('|')
@@ -365,6 +363,7 @@ describe('package layering', () => {
         const [name, , runtime, testOnly] = cells;
         return [name, runtime, testOnly];
       })
+      .filter(([name]) => name !== 'Package' && !/^:?-+:?$/.test(name))
       .sort(([a], [b]) => a.localeCompare(b));
     const imports = (names: readonly string[]): string =>
       [...names]
