@@ -191,6 +191,7 @@ test('schedule validates intervals and removes the exact installed identity', as
   expect(config).toMatchObject({
     id: expect.stringContaining('workflow-wake-'),
     schedule: { intervalSeconds: 10, runAtLoad: true },
+    programArguments: expect.arrayContaining(['workflow', 'wake', '--watch', '--json']),
   });
 });
 

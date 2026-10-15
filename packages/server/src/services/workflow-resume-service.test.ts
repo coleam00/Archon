@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { captureLogLines } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -6,6 +7,14 @@ import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
+import {
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
+} from '@archon/workflows/executor';
+import {
+  resumeWorkflowContinuation,
+  wakeDueWorkflowContinuations,
+} from '@archon/core/workflows/continuation-host';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
@@ -84,6 +93,7 @@ mock.module('@archon/paths', () => ({
   getArchonWorkspacesPath: () => '/tmp/workspaces',
 }));
 mock.module('@archon/workflows/executor', () => ({
+  WorkflowSourceUnavailableError,
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
   resolveContinuationWorkflow: mock(async () => undefined),
@@ -534,6 +544,106 @@ describe('workflow continuation scanner', () => {
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('preserves typed source failures through admission without claiming or failing the run', async () => {
+    const paused = run('typed-source-missing', 'paused', {
+      wait: {
+        owner: 'node',
+        kind: 'time',
+        nodeId: 'delay',
+        waitingSince: '2026-08-24T10:00:00Z',
+        resumeAt: '2026-08-24T11:00:00Z',
+      },
+    });
+    const sourceError = new WorkflowSourceUnavailableError(
+      '/foreign/source/manifest.json',
+      new Error('ENOENT')
+    );
+    mockResumeWorkflow.mockResolvedValue(paused);
+    mockResolveRunWorkflow.mockResolvedValue({
+      ok: false,
+      message: sourceError.message,
+      sourceError,
+    });
+    mockListDueWorkflowContinuations.mockResolvedValue([paused]);
+    const store = {
+      listDueWorkflowContinuations: mockListDueWorkflowContinuations,
+      deferWorkflowContinuation: mockDeferWorkflowContinuation,
+    };
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await wakeDueWorkflowContinuations(
+        store,
+        new Date('2026-08-24T12:00:00Z'),
+        (candidate, cursor) =>
+          resumeWorkflowContinuation(
+            host,
+            candidate.id,
+            async () => ({
+              kind: 'ready',
+              platform: new HeadlessPlatform(),
+              conversationId: 'conv-1',
+            }),
+            cursor
+          )
+      );
+    }
+    expect(mockResolveRunWorkflow).toHaveBeenCalledTimes(3);
+    expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('manual resume reports the frozen-source path and recovery actions without a due cursor', async () => {
+    const paused = run('manual-source-missing', 'paused', {});
+    const sourceError = new WorkflowSourceUnavailableError(
+      '/foreign/source/manifest.json',
+      Object.assign(new Error('missing'), { code: 'ENOENT' })
+    );
+    mockResumeWorkflow.mockResolvedValue(paused);
+    mockResolveRunWorkflow.mockResolvedValue({
+      ok: false,
+      message: sourceError.message,
+      sourceError,
+    });
+    const logs = captureLogLines();
+    try {
+      expect(await resumeWorkflowRunFromServer(host, paused)).toEqual({ kind: 'not_resumed' });
+      expect(logs.lines).toHaveLength(1);
+      expect(logs.lines[0]).toMatchObject({ level: 40, runId: paused.id, path: sourceError.path });
+      expect(logs.lines[0]?.msg).toContain(`archon workflow resume ${paused.id}`);
+      expect(logs.lines[0]?.msg).toContain(`archon workflow abandon ${paused.id}`);
+    } finally {
+      logs.restore();
+    }
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('manual resume warns for unverifiable source metadata without a path or due cursor', async () => {
+    const paused = run('manual-source-invalid', 'paused', {});
+    const sourceError = new WorkflowSourceIntegrityError('invalid recorded source metadata');
+    mockResumeWorkflow.mockResolvedValue(paused);
+    mockResolveRunWorkflow.mockResolvedValue({
+      ok: false,
+      message: sourceError.message,
+      sourceError,
+    });
+    const logs = captureLogLines();
+    try {
+      expect(await resumeWorkflowRunFromServer(host, paused)).toEqual({ kind: 'not_resumed' });
+      expect(logs.lines).toHaveLength(1);
+      expect(logs.lines[0]).toMatchObject({ level: 40, runId: paused.id });
+      expect(logs.lines[0]?.msg).toContain('path unavailable');
+      expect(logs.lines[0]?.msg).toContain(`archon workflow resume ${paused.id}`);
+      expect(logs.lines[0]?.msg).toContain(`archon workflow abandon ${paused.id}`);
+    } finally {
+      logs.restore();
+    }
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('returns after admission while execution stays detached under the live owner', async () => {

@@ -178,7 +178,7 @@ describe('workflow wake native schedule', () => {
     const generated = workflowWakeScheduleConfig(5);
     const originalId = generated.id;
     expect(workflowWakeScheduleConfig(10).id).toBe(originalId);
-    expect(generated.programArguments.slice(-3)).toEqual(['workflow', 'wake', '--json']);
+    expect(generated.programArguments.slice(-4)).toEqual(['workflow', 'wake', '--watch', '--json']);
     expect(generated.programArguments[0]).toBe(process.execPath);
     expect(generated.programArguments[1]).toBe(resolve(process.argv[1]));
     expect(generated.workingDirectory).toBe(generated.archonHome);
