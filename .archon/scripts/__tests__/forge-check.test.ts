@@ -95,9 +95,10 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(refused.forge).toEqual([]);
   });
 
-  it('refuses gh for a run whose GH_TOKEN was scrubbed, rather than using the host login', () => {
+  it('refuses gh when GH_TOKEN is empty, rather than using the host login', () => {
     const run = check({ source: 'gh', inputs: { GH_TOKEN: '' } });
     expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('`GH_TOKEN=` line');
     expect(run.stderr).toContain('archon auth github');
     expect(run.gh).toEqual([]);
     expect(run.forge).toEqual([]);
