@@ -1,5 +1,7 @@
+import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { getGitCheckoutIdentity } from '@archon/git';
 import {
-  canonicalizeProjectPath,
   isPathInside,
   getProjectStoragePaths,
   resolveProjectStorageKey,
@@ -14,18 +16,34 @@ export function storageRoot(project: ProjectIdentity): string {
   return getProjectStoragePaths(resolveProjectStorageKey(project, project.default_cwd)).root;
 }
 
+async function existingPhysicalPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export async function isCheckoutRegistered(
   path: string,
-  registered: readonly Pick<ProjectIdentity, 'default_cwd'>[]
+  registered: readonly Pick<ProjectIdentity, 'kind' | 'default_cwd'>[]
 ): Promise<boolean> {
-  const checkout = await canonicalizeProjectPath(path);
+  const checkout = (await existingPhysicalPath(path)) ?? resolve(path);
   for (const project of registered) {
-    const cwd = await canonicalizeProjectPath(project.default_cwd);
+    const physicalCwd = await existingPhysicalPath(project.default_cwd);
+    const cwd = physicalCwd ?? resolve(project.default_cwd);
     if (
       isPathInside(checkout, cwd, { includeRoot: true }) ||
       isPathInside(cwd, checkout, { includeRoot: true })
     )
       return true;
+    if (project.kind !== 'folder' && physicalCwd) {
+      const identity = await getGitCheckoutIdentity(physicalCwd);
+      for (const metadata of [identity.gitDir, identity.commonGitDir]) {
+        if (isPathInside(checkout, await realpath(metadata), { includeRoot: true })) return true;
+      }
+    }
   }
   return false;
 }

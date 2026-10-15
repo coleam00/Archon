@@ -11,6 +11,8 @@
 import { describe, test, expect, mock, afterEach, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { access, mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
+import { createFileWorkflowHost } from '../workflows/file-host';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -389,6 +391,89 @@ describe('project storage collisions', () => {
         clone.mockRestore();
         safeDirectory.mockRestore();
       }
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    '%s rejected clone preserves a registered linked worktree and its Git backing store',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const url = 'https://github.com/acme/api.git';
+      const worktree = join(root, 'linked');
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+        await gitCheckout(path, url);
+        execFileSync('git', [
+          '-C',
+          path,
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.test',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'Initial',
+        ]);
+        return { ok: true, value: undefined };
+      });
+      const racingStore = {
+        ...store,
+        createCodebase: async (input: Parameters<typeof createCodebase>[0]) => {
+          execFileSync('git', [
+            '-C',
+            input.default_cwd,
+            'worktree',
+            'add',
+            '-qb',
+            'linked',
+            worktree,
+          ]);
+          await store.createCodebase({ ...input, default_cwd: worktree });
+          await writeFile(join(worktree, 'operator-work.txt'), 'keep my work');
+          return store.createCodebase(input);
+        },
+      };
+      try {
+        await expect(cloneRepository(racingStore, url)).rejects.toThrow('worktrees');
+        expect(await readFile(join(worktree, 'operator-work.txt'), 'utf8')).toBe('keep my work');
+        expect(
+          execFileSync('git', ['-C', worktree, 'status', '--porcelain'], { encoding: 'utf8' })
+        ).toContain('operator-work.txt');
+        expect(await store.listCodebases()).toMatchObject([{ default_cwd: worktree }]);
+        expect(await store.listCodebases()).toHaveLength(1);
+      } finally {
+        clone.mockRestore();
+      }
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    '%s cleanup refuses deletion when a registered alias cannot be resolved',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const checkout = join(root, 'checkout');
+      const alias = join(root, 'alias');
+      await mkdir(checkout);
+      await fsPromises.symlink(checkout, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      await store.createCodebase({ name: 'owner', kind: 'folder', default_cwd: alias });
+      await fsPromises.unlink(alias);
+      await fsPromises.symlink(alias, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const remove = mock(async () => {
+        await fsPromises.rm(checkout, { recursive: true });
+      });
+      await expect(store.removeUnregisteredCheckout(checkout, remove)).rejects.toMatchObject({
+        code: 'ELOOP',
+      });
+      expect(remove).not.toHaveBeenCalled();
+      await access(checkout);
     }
   );
 

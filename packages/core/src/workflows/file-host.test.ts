@@ -290,7 +290,11 @@ test('file checkout cleanup preserves registered paths and aliases, and removes 
   await writeFile(join(checkout, 'operator-work.txt'), 'keep my work');
   const alias = join(home, 'alias');
   await symlink(checkout, alias, process.platform === 'win32' ? 'junction' : 'dir');
-  await first.records.codebases.createCodebase({ name: 'owner', default_cwd: alias });
+  await first.records.codebases.createCodebase({
+    name: 'owner',
+    kind: 'folder',
+    default_cwd: alias,
+  });
 
   for (const path of [checkout, alias, home, join(checkout, 'subdirectory')]) {
     await second.records.codebases.removeUnregisteredCheckout(path, () =>
@@ -302,4 +306,50 @@ test('file checkout cleanup preserves registered paths and aliases, and removes 
     rm(unowned, { recursive: true })
   );
   await expect(access(unowned)).rejects.toThrow();
+});
+
+test('file checkout removal holds the registration lock until removal finishes', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-lock-')));
+  process.env.ARCHON_HOME = home;
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const checkout = join(home, 'checkout');
+  await mkdir(checkout);
+  const entered = Promise.withResolvers<boolean>();
+  const release = Promise.withResolvers<void>();
+  const cleanup = first.records.codebases.removeUnregisteredCheckout(checkout, async () => {
+    entered.resolve(
+      await access(join(root, 'lock')).then(
+        () => true,
+        () => false
+      )
+    );
+    await release.promise;
+    await rm(checkout, { recursive: true });
+  });
+  const lockHeldDuringRemoval = await entered.promise;
+  let registered = false;
+  const registration = second.records.codebases
+    .createCodebase({
+      name: 'owner',
+      kind: 'folder',
+      default_cwd: checkout,
+    })
+    .then(row => {
+      registered = true;
+      return row;
+    });
+  try {
+    expect(lockHeldDuringRemoval).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(registered).toBe(false);
+  } finally {
+    release.resolve();
+    await cleanup;
+    await registration;
+  }
+  expect(registered).toBe(true);
+  await expect(access(checkout)).rejects.toThrow();
+  expect(await first.records.codebases.listCodebases()).toHaveLength(1);
 });
