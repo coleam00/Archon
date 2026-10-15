@@ -64,7 +64,6 @@ export async function findRegisteredRemote(
   const identity = remoteIdentity(remoteUrl);
   const matches: Codebase[] = [];
   const failures: ProjectRegistrationError[] = [];
-  let persistedMatch = false;
   for (const project of registered) {
     if (project.kind === 'folder') continue;
     let registeredUrl = project.repository_url;
@@ -86,7 +85,6 @@ export async function findRegisteredRemote(
     }
     if (registeredUrl && remoteIdentity(registeredUrl) === identity) {
       matches.push(project);
-      if (project.repository_url) persistedMatch = true;
     }
   }
   if (matches.length > 1) {
@@ -94,9 +92,9 @@ export async function findRegisteredRemote(
       `Multiple projects own this remote: ${matches.map(project => `"${project.name}" at ${project.default_cwd}`).join(', ')}. Repair the registrations with /update-project before continuing.`
     );
   }
-  // Routing a persisted owner does not claim new storage. Readable legacy
+  // Routing a readable owner does not claim new storage. Readable legacy
   // duplicates still make routing ambiguous; unreadable unrelated rows do not.
-  if (failures.length && (purpose === 'registration' || !persistedMatch)) throw failures[0];
+  if (failures.length && (purpose === 'registration' || matches.length === 0)) throw failures[0];
   for (const error of failures) {
     createLogger('registration.remote').warn(
       { err: error },

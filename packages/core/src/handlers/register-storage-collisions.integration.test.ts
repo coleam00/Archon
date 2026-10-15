@@ -14,6 +14,7 @@ import { mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { setLogSink, setLogLevel, getLogLevel } from '@archon/paths';
 
 const { SqliteAdapter, sqliteDialect } = await import('../db/adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
@@ -34,7 +35,10 @@ const { getWorktreeBase, toRepoPath } = await import('@archon/git');
 
 const trackTempRoot = trackTempRoots();
 const initialArchonHome = process.env.ARCHON_HOME;
+const initialLogLevel = getLogLevel();
 afterEach(async () => {
+  setLogSink(undefined);
+  setLogLevel(initialLogLevel);
   if (initialArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = initialArchonHome;
   await db.query('DELETE FROM remote_agent_codebases');
@@ -232,32 +236,51 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each(['missing', 'corrupt'])(
-    'known remote lookup survives an unrelated %s legacy checkout',
-    async state => {
-      const root = await makeHome();
-      const legacyPath = join(root, 'legacy');
-      if (state === 'corrupt') {
-        await gitCheckout(legacyPath);
-        await mkdir(join(legacyPath, '.archon'));
-        await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
-      }
-      await createCodebase({ name: 'Legacy', default_cwd: legacyPath });
-      const known = await createCodebase({
-        name: 'acme/api',
-        default_cwd: join(root, 'known'),
-        repository_url: 'https://github.com/acme/api',
-      });
-      expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
-      await expect(
-        createManagedCodebase({
-          name: 'acme/new',
-          default_cwd: join(root, 'new'),
-          repository_url: 'https://github.com/acme/new',
-        })
-      ).rejects.toThrow(legacyPath);
+  test.each([
+    ['missing', 'persisted'],
+    ['corrupt', 'persisted'],
+    ['missing', 'legacy'],
+    ['corrupt', 'legacy'],
+  ])('remote lookup survives an unrelated %s checkout with a %s owner', async (state, owner) => {
+    const root = await makeHome();
+    const legacyPath = join(root, 'legacy');
+    if (state === 'corrupt') {
+      await gitCheckout(legacyPath);
+      await mkdir(join(legacyPath, '.archon'));
+      await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
     }
-  );
+    await createCodebase({ name: 'Legacy', default_cwd: legacyPath });
+    const known = await createCodebase({
+      name: 'acme/api',
+      default_cwd: await gitCheckout(join(root, 'known'), 'https://github.com/acme/api.git'),
+      repository_url: owner === 'persisted' ? 'https://github.com/acme/api' : undefined,
+    });
+    const warnings: unknown[] = [];
+    setLogLevel('warn');
+    setLogSink(line => warnings.push(JSON.parse(line)));
+    expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        level: 40,
+        module: 'registration.remote',
+        msg: 'registration.lookup_legacy_unavailable',
+        err: expect.objectContaining({
+          type: 'ProjectRegistrationError',
+          message: expect.stringContaining(legacyPath),
+        }),
+      }),
+    ]);
+    expect(warnings[0]).toMatchObject({
+      err: { message: expect.stringContaining('Remote error:') },
+    });
+    await expect(
+      createManagedCodebase({
+        name: 'acme/new',
+        default_cwd: join(root, 'new'),
+        repository_url: 'https://github.com/acme/new',
+      })
+    ).rejects.toThrow(legacyPath);
+  });
 
   test('concurrent folder claims cannot insert two owners of one storage root', async () => {
     const root = await makeHome();
