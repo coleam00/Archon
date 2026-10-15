@@ -3,6 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import * as conversationDb from '@archon/core/db/conversations';
 import {
   resumeWorkflowContinuation,
+  unverifiableSourceGuidance,
   wakeDueWorkflowContinuations,
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-host';
@@ -109,7 +110,7 @@ export async function resumeWorkflowRunFromServer(
     if (admission.kind === 'unavailable' && admission.sourceError) {
       log.warn(
         { err: admission.sourceError, runId: run.id, path: admission.sourceError.path },
-        `Cannot resume run ${run.id}: frozen workflow source cannot be verified (${admission.sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+        `Cannot resume run ${run.id}: ${unverifiableSourceGuidance(run.id, admission.sourceError)}`
       );
     }
     return admission.kind === 'accepted';

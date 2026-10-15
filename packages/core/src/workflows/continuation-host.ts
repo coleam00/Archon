@@ -21,6 +21,14 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 
 const log = createLogger('workflow-continuation-host');
+
+/** Operator guidance for a run whose frozen source cannot be verified, shared by every host. */
+export function unverifiableSourceGuidance(
+  runId: string,
+  error: WorkflowSourceIntegrityError
+): string {
+  return `frozen workflow source cannot be verified (${error.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${runId}, or abandon with archon workflow abandon ${runId}.`;
+}
 type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
@@ -200,7 +208,7 @@ export async function wakeDueWorkflowContinuations(
             warnedRuns.add(run.id);
             log.warn(
               { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
-              `This host stopped automatically resuming run ${run.id}: frozen workflow source cannot be verified (${sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+              `This host stopped automatically resuming run ${run.id}: ${unverifiableSourceGuidance(run.id, sourceError)}`
             );
           }
           return outcome;
