@@ -224,7 +224,7 @@ Returns the isolation environments (worktrees) associated with a codebase.
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name a conversation you own |
+| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
 

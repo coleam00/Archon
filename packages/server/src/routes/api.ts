@@ -4654,15 +4654,15 @@ export function registerApiRoutes(
       );
     }
     try {
-      // A scope key is a conversation's internal id. Under enforcement the caller
-      // must own it, and the all-scopes reset, which reaches every user's
+      // A scope key is a conversation's internal id. Under enforcement it is
+      // authorized like any other conversation route, and the all-scopes reset, which reaches every user's
       // conversations at once, is not offered.
       if (isConversationOwnershipEnforced()) {
         if (scope === undefined) {
           return apiError(
             c,
             403,
-            'Resetting sessions across all scopes is not available while conversations are private. Pass ?scope=<conversation id> for a conversation you own.'
+            'Resetting sessions across all scopes is not available while conversations are private. Pass ?scope=<conversation id> to reset one conversation.'
           );
         }
         const access = await authorizeConversation(c, { id: scope }, 'write');
