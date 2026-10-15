@@ -353,12 +353,15 @@ describe('package layering', () => {
     const table = doc.split('### Packages')[1]?.split('\n### ')[0] ?? '';
     const rows = table
       .split('\n')
-      .filter(line => line.trim().startsWith('|'))
+      .filter(line => line.includes('|'))
       .map(line => {
         const cells = line
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
           .split('|')
-          .slice(1, -1)
           .map(cell => cell.trim());
+        if (cells.length === 3) cells.push('');
         expect(cells).toHaveLength(4);
         const [name, , runtime, testOnly] = cells;
         return [name, runtime, testOnly];
