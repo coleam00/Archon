@@ -24,7 +24,7 @@ Ground the plan in the code as it is, not as the request describes it. Read the 
 
 When a prior report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
 
-Design calls are judged against the project's own guidance. Read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on a call you are about to make, such as design rules for a language, API, or configuration surface. A call those documents already rule on is settled by them, not by your preference.
+Design calls are judged against the project's own guidance. For each design call, open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on the call, such as design rules for a language, API, or configuration surface, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, not by your preference.
 
 When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
 
@@ -34,14 +34,24 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. A call is a person's only when one of these holds, and you name which:
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+
+A call is a person's only when one of these holds, and you name which:
 
 - No project document covers it, and the code, a spike, and usage data do not settle it.
 - Two project documents disagree on it.
-- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write, a shipped lifecycle, or what an existing persisted or shipped value means, even when no schema changes — and no project document already rules on that change. If the plan must rewrite the comment or reference text that defines a persisted or shipped value, it changes that value's meaning.
+- It changes a shipped contract — what an existing persisted or shipped value means, or how an existing use of a public API, a configuration or language surface users write, or a shipped lifecycle behaves, even when no schema changes; a removal of something shipped; or a persisted shape — and no project document already rules on that change. If the plan must rewrite the comment or reference text that defines a persisted or shipped value so that the value reads differently, it changes that value's meaning.
 - The plan you can responsibly execute delivers less than the request's stated outcome: it drops a path, an acceptance item, or an invariant.
 
-Each such call is an open question, and it always blocks the plan. Once a question meets one of these conditions, stop designing: write `plan.md` with what you verified and the question, declare `ready: false` with it in `open_questions`, and do not design the full solution first. Never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking, however cheap or reversible a choice looks. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
+An addition to a public API, or to a configuration, language or lifecycle surface, is not a shipped-contract change when every existing value keeps meaning what it meant before: everything that worked before behaves as it did, and only the new part, or a value that failed before, behaves differently. Judge that yourself; it is not a person's call. Name the addition under **Contract additions** in the plan, with why each existing value keeps its meaning, so the pull request body flags it for the reviewer. Reference text that gains a statement of the addition does not change a meaning. When you cannot show that an existing value keeps its meaning, the change is not only an addition. A persisted shape is not covered: changing one stops even when it only adds.
+
+A choice that is cheap to reverse and changes no shipped contract, such as wording, presentation, naming or an internal shape, is provisional, never a person's call: make it, say so in the plan, and declare it as a non-blocking question when the owner should see it.
+
+An item whose proof needs credentials, a live third-party resource, or writes outside this run's branch and its pull request is not a person's call either. Plan it as an operator check that the pull request body names, and plan the rest.
+
+Settle the stated outcome. A wider path you find on the way is a discovery, never a blocker and never a reason to narrow the delivery.
+
+Each such call is an open question, and it always blocks the plan. Once a question meets one of these conditions, stop designing: write `plan.md` with what you verified and the question, declare `ready: false` with it in `open_questions`, and do not design the full solution first. Never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
 
 ## The plan
 
@@ -52,6 +62,7 @@ Write `$ARTIFACTS_DIR/plan.md`:
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused, behavior-proving, no padding.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
+- **Contract additions** — each addition to a shipped surface the plan makes without a person: what it adds and why every existing value keeps its meaning. The pull request body flags each one as a contract addition.
 - **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
 - **Open questions** — only when a call belongs to a person: each question, as declared below.
 
