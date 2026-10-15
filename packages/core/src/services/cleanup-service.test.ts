@@ -2139,6 +2139,32 @@ describe('cleanupMergedWorktrees', () => {
     mockWorktreeExists.mockResolvedValue(false);
   });
 
+  test('continues merged cleanup when the settled owner query fails for one environment', async () => {
+    const envs = ['before', 'broken', 'after'].map(name =>
+      makeEnvironment({
+        id: `env-${name}`,
+        branch_name: name,
+        working_path: `/workspace/repo/worktrees/${name}`,
+        status: 'active',
+      })
+    );
+    mockListByCodebase.mockResolvedValueOnce(envs);
+    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetLiveRunOwningEnv
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'failed-run', status: 'failed' })
+      .mockRejectedValueOnce(new Error('settled owner query failed'));
+    mockGetById.mockResolvedValueOnce(envs[0]).mockResolvedValueOnce(envs[2]);
+
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    expect(result.removed).toEqual(['before', 'after']);
+    expect(result.skipped).toEqual([
+      { branchName: 'broken', reason: 'settled owner query failed' },
+    ]);
+    expect(result.releasedFailedRuns).toEqual([]);
+  });
+
   test('removes merged branches without uncommitted changes', async () => {
     mockListByCodebase.mockResolvedValueOnce([
       makeEnvironment({

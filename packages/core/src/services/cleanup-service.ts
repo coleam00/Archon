@@ -1198,15 +1198,12 @@ export async function cleanupMergedWorktrees(
       continue;
     }
 
-    // Check for uncommitted changes or a live owning run
-    const check = await checkRemoval(env, repoPath, { kind: verdict });
-    if (check.blocker) {
-      result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
-      continue;
-    }
-
-    // Safe to remove (also delete remote branch since it's merged)
     try {
+      const check = await checkRemoval(env, repoPath, { kind: verdict });
+      if (check.blocker) {
+        result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
+        continue;
+      }
       const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
