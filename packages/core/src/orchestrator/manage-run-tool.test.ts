@@ -673,12 +673,12 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no', operator, { via: 'manage_run' });
   });
 
-  test('reject with no message defaults the rejection text to "Rejected"', async () => {
+  test('reject with no message leaves the default reason to rejectWorkflow', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockReject.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
-    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected', operator, {
+    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', '', operator, {
       via: 'manage_run',
     });
   });
@@ -758,7 +758,7 @@ describe('manage_run — destructive confirmation gate', () => {
       confirm: true,
       occurrence: 'pause-one',
     });
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', undefined, operator, {
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', '', operator, {
       via: 'manage_run',
       expectedGate: { nodeId: 'review', pauseId: 'pause-one' },
     });
@@ -781,7 +781,7 @@ describe('manage_run — destructive confirmation gate', () => {
       occurrence: '  ',
     });
     // An expected gate no pause can match, so the operation refuses it as stale, as the CLI does.
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', undefined, operator, {
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', '', operator, {
       via: 'manage_run',
       expectedGate: { nodeId: 'review', pauseId: '' },
     });
