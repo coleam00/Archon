@@ -293,6 +293,21 @@ test('a failed terminal post still closes the run notices, and the failure surfa
   ]);
 });
 
+test('a finished run closes only its own notices, and another run keeps live controls', async () => {
+  await notify(wait('select', [{ id: 'eu' }]));
+  await notify({ ...wait('select', [{ id: 'us' }]), runId: 'run-2' });
+  const otherRun = button('us');
+  await plugin.attentionNotice({
+    destination: 'C9',
+    notice: { type: 'terminal', runId: 'run-1', workflowName: 'deploy', status: 'completed' },
+  });
+  expect(slack.updates).toEqual([
+    expect.objectContaining({ ts: 'msg-1', text: expect.stringContaining('Closed') }),
+  ]);
+  await click(otherRun);
+  expect(sent()).toMatchObject({ action: 'answer', runId: 'run-2' });
+});
+
 test('options beyond Slack limits render the notice without controls', async () => {
   await notify(
     wait(
