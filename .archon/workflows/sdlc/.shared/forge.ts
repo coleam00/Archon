@@ -29,7 +29,7 @@ export function forgeSource(): ForgeSource {
   throw new Error(`ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"`);
 }
 
-const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
+export const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 // Per-user GitHub mode scrubs the shared token from a run started by a user who has
 // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
 const SETUP =

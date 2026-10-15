@@ -7,7 +7,7 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, forgeSource, readRepositoryLabels, type ForgeSource } from './forge.ts';
+import { archonCommand, forgeSource, readRepositoryLabels, USE_GH, type ForgeSource } from './forge.ts';
 import { note } from './io.ts';
 import { remoteRepos } from './remote.ts';
 
@@ -32,21 +32,30 @@ function checkGh(): void {
         '`/archon connect github` in Slack, or the Web UI Settings page'
     );
   }
-  let result: ReturnType<typeof Bun.spawnSync>;
-  try {
-    result = Bun.spawnSync(['gh', 'auth', 'status'], { stdout: 'pipe', stderr: 'pipe' });
-  } catch (error) {
-    throw new Error(
-      `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
-        'install gh, or unset ARCHON_SDLC_FORGE to use the forge plugin'
-    );
+  // A bare `gh auth status` fails when any account on any host is stale, so each host a
+  // remote names is checked on its own and one working host is enough, as on the forge path.
+  const hosts = [...new Set(remoteRepos().map(repo => repo.host))];
+  if (hosts.length === 0) {
+    throw new Error('this checkout has no git remote that names a forge repository');
   }
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated: ${result.stderr?.toString().trim()}; ` +
-        'run `gh auth login`, or unset ARCHON_SDLC_FORGE to use the forge plugin'
-    );
+  const failures: string[] = [];
+  for (const host of hosts) {
+    let result: ReturnType<typeof Bun.spawnSync>;
+    try {
+      result = Bun.spawnSync(['gh', 'auth', 'status', '--hostname', host], { stdout: 'pipe', stderr: 'pipe' });
+    } catch (error) {
+      throw new Error(
+        `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
+          'install gh, or unset ARCHON_SDLC_FORGE to use the forge plugin'
+      );
+    }
+    if (result.exitCode === 0) return;
+    failures.push(`${host}: ${result.stderr?.toString().trim()}`);
   }
+  throw new Error(
+    `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated for any host a remote names:\n${failures.join('\n')}\n` +
+      'run `gh auth login --hostname <host>`, or unset ARCHON_SDLC_FORGE to use the forge plugin'
+  );
 }
 
 /**
@@ -56,8 +65,13 @@ function checkGh(): void {
  * a host no plugin claims must not refuse a run its canonical remote can serve.
  */
 function checkForge(): void {
-  // A host that published no command refuses once here, not once per repository.
-  archonCommand();
+  // A host that published no command (a container execution) refuses once here, not
+  // once per repository.
+  try {
+    archonCommand();
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}. ${USE_GH}`);
+  }
   const repos = remoteRepos();
   if (repos.length === 0) {
     throw new Error('this checkout has no git remote that names a forge repository');

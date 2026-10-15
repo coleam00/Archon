@@ -1285,8 +1285,8 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
  */
 async function collectForgeToken(): Promise<string | undefined> {
   note(
-    'The SDLC workflows (archon-ship, archon-deliver, archon-upkeep) reach GitHub\n' +
-      'through the GitHub forge plugin. They need two things:\n\n' +
+    'The SDLC workflows (archon-ship, archon-deliver, archon-upkeep, archon-pr)\n' +
+      'reach GitHub through the GitHub forge plugin. They need two things:\n\n' +
       '1. The plugin: archon plugin add coleam00/Archon/plugins/forge-github\n' +
       '2. A token: GH_TOKEN in this env file, or GitHub App mode\n\n' +
       'Create a classic token at github.com/settings/tokens with the repo scope\n' +

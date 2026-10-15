@@ -63,6 +63,13 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     for (const step of SETUP) expect(run.stderr).toContain(step);
   });
 
+  it('names the gh switch when the host published no CLI command', () => {
+    const run = check({ forge: { kind: 'no-host' } });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
+    expect(run.stderr).toContain('ARCHON_SDLC_FORGE=gh');
+  });
+
   it('names the update when the installed plugin lacks the read', () => {
     const run = check({
       forge: { kind: 'fake', response: refusal('unsupported_op', 'plugin github does not support repo.labels.list') },
@@ -86,13 +93,19 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     const passed = check({ source: 'gh' });
     expect({ code: passed.code, stderr: passed.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(passed.stdout)).toEqual({ source: 'gh' });
-    expect(passed.gh).toEqual(['auth status']);
+    expect(passed.gh).toEqual(['auth status --hostname ghe.example.com']);
     expect(passed.forge).toEqual([]);
 
     const refused = check({ source: 'gh', gh: { authFail: 'You are not logged into any GitHub hosts.' } });
     expect(refused.code).not.toBe(0);
     expect(refused.stderr).toContain('You are not logged into any GitHub hosts.');
     expect(refused.forge).toEqual([]);
+  });
+
+  it('passes gh when one remote host is authenticated and another is not', () => {
+    const run = check({ source: 'gh', mirror: true, gh: { authFail: { 'ghe.example.com': 'token expired' } } });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(run.gh).toEqual(['auth status --hostname ghe.example.com', 'auth status --hostname mirror.example.com']);
   });
 
   it('refuses gh when GH_TOKEN is empty, rather than using the host login', () => {
