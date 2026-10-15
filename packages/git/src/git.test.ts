@@ -4020,6 +4020,35 @@ branch refs/heads/feature/auth
       }
     });
 
+    test.each(['getRemoteUrl', 'detectForge'] as const)(
+      '%s preserves the original remote failure when local config confirms the remote exists',
+      async consumer => {
+        const original = new git.GitFailure(
+          'unclassified',
+          'remote lookup failed',
+          Object.assign(new Error('lookup failed'), { code: 2, stderr: 'original Git evidence' })
+        );
+        execSpy.mockRejectedValueOnce(original);
+        execSpy.mockResolvedValueOnce({
+          stdout: 'https://github.com/owner/repo.git\n',
+          stderr: '',
+        });
+
+        const failure = await git[consumer](repo('/workspace/repo')).catch(
+          (error: unknown) => error
+        );
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toHaveProperty('cause', original);
+        expect(execSpy).toHaveBeenCalledTimes(2);
+        expect(execSpy).toHaveBeenNthCalledWith(
+          2,
+          'git',
+          ['-C', '/workspace/repo', 'config', '--local', '--get', 'remote.origin.url'],
+          expect.any(Object)
+        );
+      }
+    );
+
     test('throws for unexpected errors', async () => {
       execSpy.mockRejectedValue(new Error('fatal: permission denied'));
 
