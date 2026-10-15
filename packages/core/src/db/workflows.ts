@@ -1990,6 +1990,7 @@ export async function deferWorkflowContinuation(
   const waitPauseId = metadataText('wait.pauseId');
   const releaseNodeId = metadataText('source_release.nodeId');
   const releasedAt = metadataText('source_release.releasedAt');
+  const releaseId = metadataText('source_release.releaseId');
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs
@@ -2000,7 +2001,8 @@ export async function deferWorkflowContinuation(
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
          OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
          OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4)
-         OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $8))`,
+         OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $8
+           AND (${releaseId} = $9 OR (${releaseId} IS NULL AND $9 IS NULL))))`,
       [
         id,
         JSON.stringify({ continuation_retry_at: retryAt }),
@@ -2010,6 +2012,7 @@ export async function deferWorkflowContinuation(
         cursor.kind === 'answered' ? cursor.pauseId : null,
         cursor.kind === 'wait' ? (cursor.pauseId ?? null) : null,
         cursor.kind === 'source' ? cursor.releasedAt : null,
+        cursor.kind === 'source' ? (cursor.releaseId ?? null) : null,
       ]
     );
   } catch (error) {

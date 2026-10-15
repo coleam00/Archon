@@ -302,7 +302,7 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
   try {
     raw = JSON.parse(await readFile(file, 'utf-8'));
   } catch (error) {
-    throw new Error(`Cannot read ${file}: ${(error as Error).message}`);
+    throw new Error(`Cannot read ${file}: ${(error as Error).message}`, { cause: error });
   }
   const parsed = workflowPackManifestSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
@@ -313,20 +313,27 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
  * Every installed workflow pack under `roots`. A pack that cannot be read is reported,
  * not thrown: one broken install must not take the rest of the catalog down with it.
  */
-export async function listInstalledPacks(
-  root: InstalledPacksRoot
-): Promise<{ packs: InstalledPack[]; errors: { path: string; message: string }[] }> {
+export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
+  packs: InstalledPack[];
+  errors: { path: string; message: string; cause?: unknown }[];
+}> {
   const packs: InstalledPack[] = [];
-  const errors: { path: string; message: string }[] = [];
+  const errors: { path: string; message: string; cause?: unknown }[] = [];
   if (root.kind === 'receipts') {
     let scan: Awaited<ReturnType<typeof scanReceipts>>;
     try {
       scan = await scanReceipts(root.pluginsDir);
     } catch (error) {
-      errors.push({ path: root.pluginsDir, message: (error as Error).message });
+      errors.push({ path: root.pluginsDir, message: (error as Error).message, cause: error });
       return { packs, errors };
     }
-    errors.push(...scan.broken.map(entry => ({ path: entry.file, message: entry.message })));
+    errors.push(
+      ...scan.broken.map(entry => ({
+        path: entry.file,
+        message: entry.message,
+        cause: entry.cause,
+      }))
+    );
     for (const receipt of scan.receipts) {
       if (receipt.manifest.kind !== 'workflow-pack') continue;
       const owner = receipt.id.split('/')[0];
@@ -348,7 +355,7 @@ export async function listInstalledPacks(
           },
         });
       } catch (error) {
-        errors.push({ path: dir, message: (error as Error).message });
+        errors.push({ path: dir, message: (error as Error).message, cause: error });
       }
     }
     return { packs, errors };
@@ -372,7 +379,7 @@ export async function listInstalledPacks(
       }
       packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
     } catch (error) {
-      errors.push({ path: dir, message: (error as Error).message });
+      errors.push({ path: dir, message: (error as Error).message, cause: error });
     }
   }
   return { packs, errors };

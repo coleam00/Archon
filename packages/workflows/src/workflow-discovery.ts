@@ -1006,8 +1006,8 @@ export async function discoverWorkflows(
     const workflows: WorkflowWithSource[] = [];
     const support: WorkflowWithSource[] = [];
     const listed = await listInstalledPacks(roots.installed);
-    for (const { path, message } of listed.errors) {
-      allErrors.push({ filename: path, error: message, errorType: 'read_error' });
+    for (const { path, message, cause } of listed.errors) {
+      allErrors.push({ filename: path, error: message, errorType: 'read_error', cause });
     }
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;

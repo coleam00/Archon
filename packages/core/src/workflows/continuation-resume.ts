@@ -165,7 +165,7 @@ export async function resumeRunContinuation(
 
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
   const release = run.status === 'paused' ? readSourceRelease(run.metadata) : undefined;
-  if (release) return { kind: 'source', nodeId: release.nodeId, releasedAt: release.releasedAt };
+  if (release) return { kind: 'source', ...release };
   const wait = pendingWorkflowWaitDeadline(run);
   if (wait) return deadlineWaitCursor(wait);
   const answered = answeredPauseContinuation(run);

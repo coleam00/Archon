@@ -21278,6 +21278,245 @@ describe('executeDagWorkflow -- script nodes', () => {
         expect(failed).toHaveLength(1);
       }
 
+      for (const scope of [
+        'project',
+        'global',
+        'project-pack',
+        'global-pack',
+        'installed-pack',
+      ] as const) {
+        for (const captured of [false, true]) {
+          for (const runtime of ['bun', 'uv'] as const) {
+            it(`releases a selected unreadable script before spending (${scope}, captured=${captured}, ${runtime})`, async () => {
+              const deps = createMockDeps();
+              const packaged = scope.endsWith('-pack');
+              const global = scope.startsWith('global');
+              const installed = scope === 'installed-pack';
+              const relative = installed
+                ? join('plugins/packs/acme/kit', 'a'.repeat(40), 'block/scripts')
+                : packaged
+                  ? '.archon/workflows/team/block/scripts'
+                  : '.archon/scripts';
+              const folder = join(testDir, relative);
+              await mkdir(folder, { recursive: true });
+              const filename = runtime === 'bun' ? 'check.ts' : 'check.py';
+              await writeFile(
+                join(folder, filename),
+                runtime === 'bun' ? 'console.log("done")' : 'print("done")'
+              );
+              const pluginsDir = join(testDir, 'plugins');
+              const installedRoot = { kind: 'receipts' as const, pluginsDir };
+              if (installed) {
+                const manifest = {
+                  schemaVersion: 1,
+                  kind: 'workflow-pack',
+                  name: 'kit',
+                  description: 'test',
+                  entrypoints: { block: 'block/workflow.yaml' },
+                };
+                await mkdir(join(pluginsDir, 'installed/acme/kit'), { recursive: true });
+                await writeFile(
+                  join(pluginsDir, 'installed/acme/kit/receipt.json'),
+                  JSON.stringify({
+                    schemaVersion: 1,
+                    id: 'acme/kit',
+                    manifest,
+                    commit: 'a'.repeat(40),
+                    installedAt: new Date().toISOString(),
+                  })
+                );
+                const tree = join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40));
+                await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+              }
+              const capture = captured
+                ? await captureWorkflowSource({
+                    sourceRoot: testDir,
+                    captureRoot: join(testDir, 'capture'),
+                    ...(installed ? { installedFrom: installedRoot } : {}),
+                  })
+                : undefined;
+              const roots = capture
+                ? capturedSourceRoots(capture.anchor)
+                : sourceIntegrity.liveSourceRoots(testDir);
+              const project = capture ? join(capture.anchor.root, 'project') : testDir;
+              const selected = installed
+                ? join(
+                    capture
+                      ? join(capture.anchor.root, 'installed/acme.kit')
+                      : join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40)),
+                    'block/scripts',
+                    filename
+                  )
+                : join(project, relative, filename);
+              const workflowSourceRoots = global
+                ? {
+                    ...roots,
+                    project: null,
+                    globalScripts: join(project, '.archon/scripts'),
+                    globalWorkflows: join(project, '.archon/workflows'),
+                  }
+                : installed && !capture
+                  ? { ...roots, installed: installedRoot }
+                  : roots;
+              const script = packaged
+                ? formatPackagedResourceReference(
+                    {
+                      source: installed ? 'installed' : global ? 'global' : 'project',
+                      pack: installed ? 'acme.kit' : 'team',
+                      workflow: 'block',
+                    },
+                    'check'
+                  )
+                : 'check';
+              const options = dagOptions({
+                deps,
+                cwd: testDir,
+                workflowSourceRoots,
+                workflowRun: makeWorkflowRun('selected-script-read'),
+                workflow: {
+                  name: 'selected-script-read',
+                  budget: { max_work_units: 1 },
+                  nodes: [{ ...checkNode, runtime, script }],
+                },
+              });
+              deps.store.getDagResumeSnapshot.mockImplementation(async id =>
+                foldDagResumeSnapshot(persistedEvents(deps.store), id)
+              );
+              const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+              const verifier = spyOn(
+                sourceIntegrity,
+                'assertWorkflowSourceIntegrity'
+              ).mockImplementation(async roots => {
+                const result = await verify(roots);
+                await chmod(selected, 0o000);
+                return result;
+              });
+              try {
+                await executeDagWorkflow(options);
+              } finally {
+                verifier.mockRestore();
+                await chmod(selected, 0o644);
+              }
+              expectReleased(deps.store, 'run-check');
+              expect(
+                (await deps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+              ).toBe(0);
+              if (runtime === 'uv') return;
+              deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+              await executeDagWorkflow(options);
+              expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+              expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+            });
+          }
+        }
+      }
+
+      for (const failure of [
+        'receipt-directory',
+        'receipt-file',
+        'live-manifest',
+        'captured-manifest',
+        'invalid-manifest',
+        'invalid-receipt',
+      ] as const) {
+        it(`classifies composed installed-pack ${failure} failures`, async () => {
+          const deps = createMockDeps();
+          const plugins = join(testDir, 'plugins');
+          const receipt = join(plugins, 'installed/acme/kit/receipt.json');
+          const tree = join(plugins, 'packs/acme/kit', 'a'.repeat(40));
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'workflow-pack',
+            name: 'kit',
+            description: 'test',
+            entrypoints: { block: 'block/workflow.yaml' },
+          };
+          await mkdir(join(tree, 'block'), { recursive: true });
+          await mkdir(join(plugins, 'installed/acme/kit'), { recursive: true });
+          await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+          await writeFile(
+            join(tree, 'block/workflow.yaml'),
+            'name: block\ndescription: block\nnodes:\n  - id: work\n    prompt: Done.\n'
+          );
+          await writeFile(
+            receipt,
+            JSON.stringify({
+              schemaVersion: 1,
+              id: 'acme/kit',
+              manifest,
+              commit: 'a'.repeat(40),
+              installedAt: new Date().toISOString(),
+            })
+          );
+          const installed = { kind: 'receipts' as const, pluginsDir: plugins };
+          const capture =
+            failure === 'captured-manifest'
+              ? await captureWorkflowSource({
+                  sourceRoot: testDir,
+                  captureRoot: join(testDir, 'capture'),
+                  installedFrom: installed,
+                })
+              : undefined;
+          const roots = capture
+            ? capturedSourceRoots(capture.anchor)
+            : { ...sourceIntegrity.liveSourceRoots(testDir), installed };
+          const locked =
+            failure === 'receipt-directory'
+              ? join(plugins, 'installed')
+              : failure === 'receipt-file'
+                ? receipt
+                : capture
+                  ? join(capture.anchor.root, 'installed/acme.kit/archon-plugin.json')
+                  : join(tree, 'archon-plugin.json');
+          const invalid = failure === 'invalid-manifest' || failure === 'invalid-receipt';
+          if (invalid)
+            await writeFile(failure === 'invalid-receipt' ? receipt : locked, '{bad json');
+          const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+          const verifier = spyOn(
+            sourceIntegrity,
+            'assertWorkflowSourceIntegrity'
+          ).mockImplementation(async roots => {
+            await chmod(locked, failure === 'receipt-directory' ? 0o755 : 0o644);
+            const result = await verify(roots);
+            if (!invalid) await chmod(locked, 0o000);
+            return result;
+          });
+          const options = dagOptions({
+            deps,
+            cwd: testDir,
+            workflowSourceRoots: roots,
+            workflowRun: makeWorkflowRun('installed-read'),
+            workflow: {
+              name: 'installed-read',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'acme/kit:block',
+                  fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ],
+            },
+          });
+          try {
+            await executeDagWorkflow(options);
+          } finally {
+            verifier.mockRestore();
+            await chmod(locked, failure === 'receipt-directory' ? 0o755 : 0o644);
+          }
+          if (invalid) {
+            expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+            expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+            return;
+          }
+          expectReleased(deps.store, 'fan');
+          deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          await executeDagWorkflow(options);
+          expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+        });
+      }
+
       it('an unreadable captured scripts directory after admission leaves the run resumable, not failed', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');

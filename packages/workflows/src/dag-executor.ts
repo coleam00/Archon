@@ -47,6 +47,7 @@ import {
   recordNodeState,
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readFile } from 'node:fs/promises';
 import { basename, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
@@ -3893,10 +3894,16 @@ async function executeScriptNode(
   if (!isInlineScript(finalScript)) await assertNodeSourceReadable(workflowSourceRoots, stepName);
   const namedScripts = isInlineScript(finalScript)
     ? undefined
-    : await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript])).catch(error => {
-        if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
-        return error instanceof Error ? error : new Error(String(error));
-      });
+    : await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]))
+        .then(async scripts => {
+          const selected = scripts.get(finalScript);
+          if (selected) await readFile(selected.path);
+          return scripts;
+        })
+        .catch(error => {
+          if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+          return error instanceof Error ? error : new Error(String(error));
+        });
   await reserveBudget();
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),

@@ -123,7 +123,7 @@ export type WorkflowResumeCursor =
   /** An answered gate or attention wait (`answeredPauseContinuation`). */
   | { kind: 'answered'; nodeId: string; pauseId: string }
   /** A run released after a host-local source read failure (`readSourceRelease`). */
-  | { kind: 'source'; nodeId: string; releasedAt: string };
+  | ({ kind: 'source' } & Omit<SourceRelease, 'path'>);
 
 /** How long an unaccepted continuation, or a run released for unreadable source, waits before the next claim. */
 export const CONTINUATION_RETRY_MS = 60_000;
@@ -165,7 +165,8 @@ export function resumeCursorMatches(
       return (
         run.status === 'paused' &&
         release?.nodeId === cursor.nodeId &&
-        release.releasedAt === cursor.releasedAt
+        release.releasedAt === cursor.releasedAt &&
+        release.releaseId === cursor.releaseId
       );
     }
   }
@@ -460,6 +461,7 @@ export function sourceReleaseMetadata(
 ): Record<string, unknown> {
   const record: SourceRelease = {
     nodeId: release.nodeId,
+    releaseId: crypto.randomUUID(),
     releasedAt,
     ...(release.path !== undefined ? { path: release.path } : {}),
   };
@@ -939,7 +941,7 @@ export interface IWorkflowStore
   /**
    * Release a running run this host could not read the frozen source for (#4209): a
    * compare-and-swap from `running` to `paused` that writes `source_release` with a
-   * store-minted `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
+   * store-minted `releaseId` and `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
    * `source_released` in the same transaction. Writes nothing, and returns
    * `released: false`, when the row is no longer `running`: another transition owns it.
    */

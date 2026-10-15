@@ -184,7 +184,7 @@ export function workflowWaitStepName(wait: WorkflowWaitContext): string {
 export function pausedAttentionWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowAttentionWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
 }
@@ -193,7 +193,7 @@ export function pausedAttentionWait(
 export function pausedUsageLimitWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowUsageLimitWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   return isWorkflowWaitContext(wait) && wait.kind === 'quota' ? wait : undefined;
 }
@@ -495,7 +495,7 @@ export type WorkflowDeadlineWaitContext = Extract<WorkflowWaitContext, { resumeA
 export function pendingWorkflowWaitDeadline(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowDeadlineWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
   return wait;
@@ -535,7 +535,8 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || isContainerRun(run)) return undefined;
+  if (run.status !== 'paused' || isContainerRun(run) || readSourceRelease(run.metadata))
+    return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {
     if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)
@@ -797,7 +798,7 @@ export function readCapacityWait(
 
 /**
  * Key under which a run released after this host could not read its frozen source
- * (#4209) records where it stopped: `{ nodeId, releasedAt, path? }`. Written by
+ * (#4209) records where it stopped: `{ nodeId, releaseId, releasedAt, path? }`. Written by
  * `releaseRunForUnreadableSource`, cleared by `resumeWorkflowRun`. It makes the paused
  * run a due `source` continuation, so any host that can read the source continues it.
  */
@@ -805,6 +806,7 @@ export const SOURCE_RELEASE_METADATA_KEY = 'source_release';
 
 const sourceReleaseSchema = z.object({
   nodeId: z.string().min(1),
+  releaseId: z.string().uuid().optional(),
   releasedAt: z.string().datetime({ offset: true }),
   path: z.string().optional(),
 });

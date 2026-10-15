@@ -908,6 +908,7 @@ describe('workflows database', () => {
         null,
         'wait-occurrence',
         null,
+        null,
       ]);
     });
 
@@ -922,7 +923,15 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null, null, null]);
+      expect(params.slice(2)).toEqual([
+        '2026-08-25T10:00:00.000Z',
+        null,
+        2,
+        null,
+        null,
+        null,
+        null,
+      ]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {

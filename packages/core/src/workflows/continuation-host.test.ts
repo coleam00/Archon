@@ -124,7 +124,11 @@ describe('continuation host scanner', () => {
     ]);
   });
   test('resumes a run released for an unreadable source with its exact release cursor', async () => {
-    const release = { nodeId: 'check', releasedAt: '2026-08-24T11:00:00.000Z' };
+    const release = {
+      nodeId: 'check',
+      releaseId: crypto.randomUUID(),
+      releasedAt: '2026-08-24T11:00:00.000Z',
+    };
     mockListDueWorkflowContinuations.mockResolvedValue([
       run('released-1', 'paused', { source_release: release }),
     ]);
