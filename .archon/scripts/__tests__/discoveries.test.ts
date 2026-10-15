@@ -496,7 +496,8 @@ describe('the discoveries scripts', () => {
 
   test('an input outside its vocabulary refuses before anything is read', () => {
     const at = install();
-    for (const inputs of [{ INPUTS_MODE: 'dry' }, { INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }]) {
+    const refused: Record<string, string>[] = [{ INPUTS_MODE: 'dry' }, { INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
+    for (const inputs of refused) {
       const result = script(at, 'facts', { runId: 'pass-1', runs: [] }, inputs);
       expect(result.code).toBe(1);
       expect(result.gh).toEqual([]);
