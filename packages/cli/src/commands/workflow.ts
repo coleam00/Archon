@@ -3713,14 +3713,16 @@ async function runWorkflowWithOwnedSource(
     if (result.success && 'paused' in result && result.paused) {
       // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
       // `attention` pause has no deadline and stays with whoever resolves it.
-      const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
-      if (pausedRun !== null && wait !== undefined) {
+      if (result.waitCursor !== undefined) {
+        const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+        if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
+        const wait = pendingDurableWait(pausedRun);
+        if (wait === undefined) return;
         console.log(
           `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
             'this process resumes the run at its deadline.'
         );
-        return { run: pausedRun, wait, destination };
+        return { run: pausedRun, wait: { ...wait, cursor: result.waitCursor }, destination };
       }
       if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
         console.log('\nWorkflow paused — waiting for approval.');
