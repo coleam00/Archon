@@ -1,6 +1,41 @@
 import { describe, test, expect } from 'bun:test';
-import { dockerPreflight, extractDockerError, type DockerRunner } from './docker-exec';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { dockerCli, dockerPreflight, extractDockerError, type DockerRunner } from './docker-exec';
 import { IsolationFailure, classifyIsolationError, isKnownIsolationError } from '../errors';
+
+const trackTempRoot = trackTempRoots();
+
+// Windows execFile requires a native executable; it cannot launch this shell fixture.
+test.skipIf(process.platform === 'win32')(
+  'dockerCli wraps a real process failure with its operation and original evidence',
+  async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'docker-cli-')));
+    const stderr = 'permission denied: No such image: fix/timeout-retry\noriginal stderr\n';
+    await writeFile(
+      join(root, 'docker'),
+      `#!/bin/sh\nprintf '%s\\n' 'permission denied: No such image: fix/timeout-retry' 'original stderr' >&2\nexit 23\n`,
+      { mode: 0o755 }
+    );
+
+    const error = await dockerCli(['image', 'inspect', 'fix/timeout-retry'], {
+      env: { ...process.env, PATH: root },
+    }).catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(IsolationFailure);
+    if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+    expect(error.kind).toBe('unclassified');
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(error.cause).toMatchObject({ code: 23, stderr });
+    expect(error.message).toContain('docker image inspect failed');
+    expect(error.message).toContain(stderr);
+    expect(error.message).toContain('exit code 23');
+    expect(isKnownIsolationError(error)).toBe(true);
+    expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
+  }
+);
 
 describe('dockerPreflight', () => {
   test('resolves when daemon reachable and image present', async () => {
