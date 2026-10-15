@@ -496,6 +496,32 @@ export async function countCommitsAhead(
 }
 
 /**
+ * Count commits reachable from `revs` (a worktree's `HEAD`, a branch ref) that no
+ * remote-tracking ref reaches: the commits that exist only in this clone. Throws
+ * when git cannot answer, so a caller deciding whether deletion loses work never
+ * reads an error as zero.
+ */
+export async function countCommitsMissingFromRemotes(
+  workingPath: RepoPath | WorktreePath,
+  revs: readonly string[]
+): Promise<number> {
+  if (revs.length === 0) return 0;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workingPath, 'rev-list', '--count', ...revs, '--not', '--remotes'],
+      { timeout: 10000 }
+    );
+    return parseInt(stdout.trim(), 10);
+  } catch (error) {
+    throw new Error(
+      `Failed to count unpushed commits on ${revs.join(', ')} at ${workingPath}: ${(error as Error).message}`,
+      { cause: error }
+    );
+  }
+}
+
+/**
  * Get the last commit date for a repository or worktree.
  *
  * Returns null for expected errors (no commits, path not found).

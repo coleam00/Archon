@@ -143,6 +143,50 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: runId, status: 'failed' });
   });
+
+  test('a failed run stops pinning once settled, or once inactive past the stale window', async () => {
+    const env = await createEnv('pg-failed-release');
+    const conversationId = '99999999-9999-4999-8999-999999999999';
+    const runId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    await seedConversation(conversationId, env.id);
+    await seedRun(runId, conversationId, 'failed');
+    const stale = { kind: 'stale', staleDays: 7 } as const;
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toBeNull();
+    await failedDaysAgo(runId, 1);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toEqual({
+      id: runId,
+      status: 'failed',
+    });
+    await failedDaysAgo(runId, 10);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toBeNull();
+  });
+
+  test('an old paused run pins the env through every release', async () => {
+    const env = await createEnv('pg-paused-release');
+    const conversationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const runId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    await seedConversation(conversationId, env.id);
+    await seedRun(runId, conversationId, 'paused');
+    await db.query(
+      `UPDATE remote_agent_workflow_runs SET started_at = NOW() - INTERVAL '30 days' WHERE id = $1`,
+      [runId]
+    );
+    const paused = { id: runId, status: 'paused' };
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(
+      paused
+    );
+  });
+
+  async function failedDaysAgo(id: string, days: number): Promise<void> {
+    await db.query(
+      `UPDATE remote_agent_workflow_runs SET completed_at = NOW() - ($1 || ' days')::INTERVAL WHERE id = $2`,
+      [days, id]
+    );
+  }
+
   test.each(['pending', 'running', 'paused', 'failed'])(
     'same-path %s run pins environment without a conversation link',
     async status => {
