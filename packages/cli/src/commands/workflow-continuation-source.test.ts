@@ -26,6 +26,7 @@ const trackTempRoot = trackTempRoots();
 
 for (const source of [
   'missing',
+  'missing-unrecorded-path',
   'valid',
   'scheduled',
   'missing-origin',
@@ -72,7 +73,7 @@ for (const source of [
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
-      working_path: join(root, 'missing-worktree'),
+      working_path: source === 'missing-unrecorded-path' ? null : join(root, 'missing-worktree'),
       user_id: null,
       parent_run_id: null,
       adopted_from_run_id: null,
@@ -176,7 +177,9 @@ for (const source of [
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]).toEqual([
         expect.objectContaining({ runId: run.id, path: join(sourcePath, 'manifest.json') }),
-        expect.stringContaining(`archon workflow abandon ${run.id}`),
+        expect.stringMatching(
+          new RegExp(`archon workflow resume ${run.id}.*archon workflow abandon ${run.id}`)
+        ),
       ]);
     }
     expect(run.status).toBe('paused');
