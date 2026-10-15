@@ -16,7 +16,7 @@ export interface RegisteredWorktreeInput {
   workflowId?: string;
   createdByPlatform: string;
   createdByUserId?: string;
-  /** Caller-owned record metadata, stored beside the creation provenance. */
+  /** Caller-owned record metadata; the creation provenance keys always win. */
   metadata?: Record<string, unknown>;
 }
 
@@ -57,7 +57,7 @@ export async function createRegisteredWorktree(
     branch_name: env.branchName,
     created_by_platform: input.createdByPlatform,
     ...(input.createdByUserId ? { created_by_user_id: input.createdByUserId } : {}),
-    metadata: { ...worktreeRegistrationMetadata(env.metadata), ...input.metadata },
+    metadata: { ...input.metadata, ...worktreeRegistrationMetadata(env.metadata) },
   });
   const created = env.metadata.provenance === 'created' ? env.metadata : undefined;
   return {
