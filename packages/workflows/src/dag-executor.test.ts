@@ -5615,7 +5615,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     ['forge', true],
     ['gh', true],
   ] as const)(
-    'publish reconciles a hung %s create (delayed visibility: %s) without repeating the create',
+    'explicitly retried publish reconciles a hung %s create (delayed visibility: %s) without repeating the create',
     async (source, delayed) => {
       const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
       const parsed = parseWorkflow(
@@ -5732,7 +5732,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         // several processes (git for the push, then the client for view and for create):
         // about 0.5 s on a loaded Mac, and over 1 s on a Windows runner.
         timeout: 3000,
-        retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
+        retry: { max_attempts: 1, delay_ms: 1 },
         with: {
           repo: JSON.stringify(repo),
           head_repo: JSON.stringify(repo),

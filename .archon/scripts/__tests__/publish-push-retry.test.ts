@@ -3,18 +3,19 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { PR, PR_URL, gitCheckout, packScriptRunner } from './deliver-checks-harness';
+import { PACK, PR, PR_URL, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
 const pushArgs = ['push', 'upstream', 'HEAD:refs/heads/feature'];
 const readArgs = ['ls-remote', 'upstream', 'refs/heads/feature'];
 
-function publish(failures: number, wrongReadBack = false) {
+function publish(failures: number, wrongReadBack = false, deadline?: number) {
   const cwd = gitCheckout({}, track);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     cwd,
+    timeout: deadline,
     gh: { noOpenPr: true, pr: { headRefOid: head } },
     inputs: {
       INPUTS_REPO: JSON.stringify(PR.repo),
@@ -29,19 +30,26 @@ function publish(failures: number, wrongReadBack = false) {
     },
     artifacts: { 'pr-body.md': 'A body' },
     // Keep real git for successful pushes and remote verification. Only the
-    // failures and clock are controlled; no GitHub error wording is required.
+    // failures are controlled; the deadline case keeps the real clock.
     preload: `
 import { appendFileSync as recordFile } from 'node:fs';
 const spawn = Bun.spawnSync.bind(Bun);
+const sleep = Bun.sleepSync.bind(Bun);
 let pushes = 0;
 const record = event => recordFile(process.env.ARTIFACTS_DIR + '/push-events.jsonl', JSON.stringify(event) + '\\n');
-Bun.sleepSync = milliseconds => { record(['sleep', milliseconds]); };
+Bun.sleepSync = milliseconds => {
+  record(['sleep', milliseconds]);
+  if (${String(deadline !== undefined)}) sleep(milliseconds);
+};
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] === 'git' && argv[1] === 'push') {
     record(argv.slice(1));
-    if (++pushes <= ${String(failures)}) return {
-      exitCode: 7, stdout: Buffer.from(''), stderr: Buffer.from('opaque failure ' + pushes),
-    };
+    if (++pushes <= ${String(failures)}) {
+      if (${String(deadline !== undefined)} && pushes === 1) sleep(11_000);
+      return {
+        exitCode: 7, stdout: Buffer.from(''), stderr: Buffer.from(pushes === 1 ? '' : 'opaque failure ' + pushes),
+      };
+    }
   }
   if (argv[0] === 'git' && argv[1] === 'ls-remote') {
     record(argv.slice(1));
@@ -59,6 +67,31 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 }
 
 describe('publish-pr push retry', () => {
+  it.each([1, 2])('finishes %i slow failed pushes within the publication deadline', failures => {
+    const workflow: unknown = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8'));
+    if (!workflow || typeof workflow !== 'object' || !('nodes' in workflow) || !Array.isArray(workflow.nodes)) {
+      throw new Error('workflow nodes are missing');
+    }
+    const publishNode: unknown = workflow.nodes.find((node: unknown) => node !== null && typeof node === 'object' && 'id' in node && node.id === 'publish');
+    if (!publishNode || typeof publishNode !== 'object' || !('timeout' in publishNode)) {
+      throw new Error('publish node is missing');
+    }
+    const timeout = publishNode.timeout;
+    if (typeof timeout !== 'number') throw new Error('publish timeout is missing');
+    const result = publish(failures, false, timeout);
+    expect(result.events).toEqual(failures === 1
+      ? [pushArgs, ['sleep', 20_000], pushArgs, readArgs]
+      : [pushArgs, ['sleep', 20_000], pushArgs]);
+    expect(result.code).toBe(failures === 1 ? 0 : 1);
+    expect('retry' in publishNode).toBe(false);
+    if (failures === 1) {
+      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
+    } else {
+      expect(result.stderr).toBe('publish-pr: git push upstream HEAD:refs/heads/feature refused: opaque failure 2\n');
+      expect(result.gh).toEqual([]);
+    }
+  }, 90_000);
+
   it.each([0, 1])('publishes after %i failed pushes and verifies the remote head', failures => {
     const result = publish(failures);
     expect(result.code).toBe(0);
