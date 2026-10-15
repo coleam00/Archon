@@ -271,7 +271,13 @@ describe('project storage collisions', () => {
       }),
     ]);
     expect(warnings[0]).toMatchObject({
-      err: { message: expect.stringContaining('Remote error:') },
+      err: {
+        message: expect.stringContaining(
+          state === 'corrupt'
+            ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
+            : 'Remote error: Command failed: git'
+        ),
+      },
     });
     await expect(
       createManagedCodebase({
