@@ -37,9 +37,11 @@ import {
   ensureFolderProjectStructure,
   getFolderProjectRoot,
   getProjectSourcePath,
+  getProjectStoragePaths,
   createProjectSourceSymlink,
   isInsideArchonWorkspaces,
   parseOwnerRepo,
+  resolveProjectStorageKey,
   slugifyFolderName,
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
@@ -229,6 +231,56 @@ function rejectExistingChoice(options: RegistrationOptions): void {
     throw new ProjectRegistrationError(
       '--base-branch applies only to initial registration. This project is already registered; use --base for a run override.'
     );
+}
+
+type ProjectIdentity = Pick<Codebase, 'kind' | 'name' | 'default_cwd'>;
+
+function storageRoot(project: ProjectIdentity): string {
+  return getProjectStoragePaths(resolveProjectStorageKey(project, project.default_cwd)).root;
+}
+
+/**
+ * The `n`th candidate name for a project. A repo's storage root comes from an
+ * `owner/repo` name, or from its folder name when the name is bare, so a repo
+ * suffix is written as a safe `owner/repo` pair (bare names under `_local`) for
+ * the root to move with it.
+ */
+function candidateName(kind: Codebase['kind'], derived: string, n: number): string {
+  if (n === 1) return derived;
+  if (kind === 'folder') return `${derived}-${n}`;
+  const { owner, repo } = parseOwnerRepo(derived) ?? { owner: '_local', repo: derived };
+  return `${owner}/${repo.replace(/[^a-zA-Z0-9._-]/g, '-')}-${n}`;
+}
+
+/**
+ * The name a new project registers under: the derived name, or its first `-<n>`
+ * variant whose name and storage root no other project holds. Storage holds
+ * `$STATE_DIR`, memory every run of the project reads and overwrites, so two
+ * folders must never resolve to one root (#1192).
+ */
+export async function claimProjectName(
+  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
+  project: ProjectIdentity
+): Promise<string> {
+  const registered = await codebases.listCodebases();
+  const names = new Set(registered.map(codebase => codebase.name));
+  const roots = new Set(registered.map(storageRoot));
+  for (let n = 1; ; n++) {
+    const name = candidateName(project.kind, project.name, n);
+    if (!names.has(name) && !roots.has(storageRoot({ ...project, name }))) return name;
+  }
+}
+
+/** A remote URL reduced to host and path, so HTTPS and SSH spellings compare equal. */
+function remoteIdentity(url: string): string {
+  const cleaned = url
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '');
+  const scp = /^[^@/]+@([^:/]+):(.+)$/.exec(cleaned);
+  if (scp) return `${scp[1]}/${scp[2]}`.toLowerCase();
+  const parsed = safeParseUrl(cleaned);
+  return (parsed ? `${parsed.hostname}${parsed.pathname}` : cleaned).toLowerCase();
 }
 
 async function registrationRemote(path: string): Promise<string | null> {
@@ -654,8 +706,23 @@ export async function registerRepository(
     );
   }
 
-  if (sameName) rejectExistingChoice(options);
-  else await validateRegistrationChoice(localPath, options);
+  if (
+    sameName?.repository_url &&
+    remoteUrl &&
+    remoteIdentity(sameName.repository_url) === remoteIdentity(remoteUrl)
+  ) {
+    throw new ProjectRegistrationError(
+      `Project "${sameName.name}" is already registered at ${sameName.default_cwd}, ` +
+        `a different clone of the same remote than ${localPath}. Two clones of one remote ` +
+        'cannot be separate projects: use worktrees for parallel checkouts (`git worktree add` ' +
+        `from ${sameName.default_cwd}, or run workflows with --branch). If this checkout ` +
+        `replaces the registered one, run /update-project ${quoteCommandArg(sameName.name)} ` +
+        quoteCommandArg(localPath)
+    );
+  }
+
+  await validateRegistrationChoice(localPath, options);
+  name = await claimProjectName(codebases, { kind: 'repo', name, default_cwd: localPath });
 
   // Create project structure and source symlink
   const parsed = parseOwnerRepo(name);
@@ -669,7 +736,7 @@ export async function registerRepository(
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(codebases, localPath, name, remoteUrl, sameName, options);
+  return registerRepoAtPath(codebases, localPath, name, remoteUrl, null, options);
 }
 
 /**
@@ -748,7 +815,11 @@ export async function registerFolder(
     };
   }
 
-  const projectName = name?.trim() || basename(resolvedPath);
+  const projectName = await claimProjectName(codebases, {
+    kind: 'folder',
+    name: name?.trim() || basename(resolvedPath),
+    default_cwd: resolvedPath,
+  });
   const slug = slugifyFolderName(projectName);
 
   // Create the _folder/<slug>/{artifacts,logs} storage structure (no source/,

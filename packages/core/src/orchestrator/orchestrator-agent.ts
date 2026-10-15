@@ -1,4 +1,4 @@
-import { registerFolder } from '../handlers/sql-registration';
+import { claimProjectName, registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
   createRunWorktreeSetupExecutor,
@@ -3607,19 +3607,17 @@ Kind: folder project (runs in place)`;
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
+  const name = await claimProjectName({ kind, name: projectName, default_cwd: canonicalPath });
   const codebase = await codebaseDb.createCodebase({
-    name: projectName,
+    name,
     default_cwd: canonicalPath,
     default_branch: null,
     kind,
   });
 
-  getLog().info(
-    { name: projectName, path: canonicalPath, id: codebase.id, kind },
-    'project.register_completed'
-  );
+  getLog().info({ name, path: canonicalPath, id: codebase.id, kind }, 'project.register_completed');
   const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
-  return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
+  return `Project "${name}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
 }
 
 /**

@@ -1316,9 +1316,16 @@ describe('registerRepository', () => {
         mockFindCodebaseByName.mockResolvedValue(alreadyExists ? codebase : null);
         mockCreateCodebase.mockResolvedValue(codebase);
         mockFindCommandFiles.mockImplementation(discoverCommandFiles);
-        spyFsAccess.mockResolvedValue(undefined);
+        // A clone of an already-registered remote reloads the existing row's commands;
+        // its managed source has no `.git` yet, so the clone itself proceeds.
+        spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
+          if (String(path).endsWith('.git'))
+            throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
 
-        const result = await registerRepository(cwd);
+        const result = alreadyExists
+          ? await cloneRepository('https://github.com/owner/repo')
+          : await registerRepository(cwd);
 
         expect(mockUpdateCodebaseCommands).toHaveBeenCalledWith(codebase.id, {
           review: {
@@ -1865,30 +1872,6 @@ describe('name-based deduplication', () => {
     );
   });
 
-  test('preserves missing default_branch on existing local codebase', async () => {
-    const existingCodebase = makeCodebase({
-      id: 'existing-id',
-      name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
-      default_cwd: '/home/user/repo',
-      default_branch: null,
-    });
-    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
-      if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
-      if (args.includes('--abbrev-ref')) return Promise.resolve({ stdout: 'trunk\n', stderr: '' });
-      if (args.includes('get-url'))
-        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
-      return Promise.resolve({ stdout: '', stderr: '' });
-    });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
-
-    const result = await registerRepository('/home/user/repo');
-
-    expect(mockUpdateCodebase).not.toHaveBeenCalled();
-    expect(result.defaultBranch).toBeNull();
-  });
-
   test('should not downgrade default_cwd from local to managed path', async () => {
     // Existing codebase registered via local path
     const existingCodebase = makeCodebase({
@@ -1921,18 +1904,10 @@ describe('name-based deduplication', () => {
       repository_url: null,
       default_cwd: '/home/user/repo',
     });
-    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
-      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
-      if (args.includes('get-url'))
-        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
-      return Promise.resolve({ stdout: '', stderr: '' });
-    });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
 
-    await registerRepository('/home/user/repo');
+    await cloneRepository('https://github.com/owner/repo');
 
-    // updateCodebase should be called with repository_url
     expect(mockUpdateCodebase.mock.calls.length).toBe(1);
     const updateArgs = mockUpdateCodebase.mock.calls[0];
     expect(updateArgs?.[1].repository_url).toBe('https://github.com/owner/repo');

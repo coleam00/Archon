@@ -264,7 +264,11 @@ const mockRegisterFolder = mock(async (path: string, name?: string) => ({
   defaultCwd: path,
   alreadyExisted: false,
 }));
-mock.module('../handlers/sql-registration', () => ({ registerFolder: mockRegisterFolder }));
+const mockClaimProjectName = mock(async ({ name }: { name: string }) => name);
+mock.module('../handlers/sql-registration', () => ({
+  registerFolder: mockRegisterFolder,
+  claimProjectName: mockClaimProjectName,
+}));
 
 const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
@@ -5668,6 +5672,35 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       default_branch: null,
       kind: 'repo',
     });
+  });
+
+  test('registers under the claimed name when the requested storage is taken', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['app', '/path/app'],
+    });
+    mockClaimProjectName.mockResolvedValueOnce('_local/app-2');
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '/register-project app /path/app' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
+
+    const defaultCwd = await canonicalizeProjectPath('/path/app');
+    expect(mockClaimProjectName).toHaveBeenCalledWith({
+      kind: 'repo',
+      name: 'app',
+      default_cwd: defaultCwd,
+    });
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '_local/app-2', default_cwd: defaultCwd })
+    );
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      call => call[1] as string
+    );
+    expect(sent.some(msg => msg.includes('Project "_local/app-2" registered'))).toBe(true);
   });
 
   test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {

@@ -830,14 +830,12 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * COLLISIONS: distinct working directories sharing a basename share a project
- * root. For `artifacts/` and `logs/` that is benign — both are keyed by run id,
- * so the two projects' runs never touch the same file. `stateRoot` is NOT:
- * `$STATE_DIR` is per project by design and has no run-id segment, so two local
- * repos both called `api` share one `state/` and every file in it.
- * Register a colliding project with a distinct name, or
- * namespace inside `$STATE_DIR` (`$STATE_DIR/<something-unique>/`), if that
- * matters. Same caveat applies to `_folder` slug collisions.
+ * COLLISIONS: registration gives every registered project its own root (a new
+ * project whose root is taken registers under a suffixed name). The `'cwd'` key is
+ * not registered, so unregistered working directories sharing a basename share
+ * `_cwd/<basename>`. For `artifacts/` and `logs/` that is benign — both are keyed
+ * by run id. `stateRoot` is NOT: `$STATE_DIR` is per project by design and has no
+ * run-id segment, so those runs share one `state/` and every file in it.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -1012,11 +1010,8 @@ export function getRunWorkflowSourceDirForRoot(root: string, workflowRunId: stri
  * {@link SAFE_NAME}. Falls back to `'folder'` when the name slugifies to empty
  * (e.g. a name that is entirely separators or unicode).
  *
- * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
- * "my-app"). Run artifacts and logs stay separated by run-id subdirectories, so
- * a collision only co-mingles listing-level artifacts — but `state/` has no
- * run-id segment, so colliding projects genuinely SHARE their `$STATE_DIR`
- * files. Accepted for now — see plan Questionables.
+ * Distinct display names can slugify alike (e.g. "My App" and "my-app" both →
+ * "my-app"); registration suffixes a new project's name until its slug is free.
  */
 export function slugifyFolderName(name: string): string {
   const slug = name
