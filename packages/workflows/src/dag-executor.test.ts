@@ -22299,6 +22299,34 @@ describe('resolveNodeMcp', () => {
     expect(result).toEqual({ kind: 'load', path: absolutePath, servers: new Set(['foo', 'bar']) });
   });
 
+  it('loads an optional home config beside its YAML when the checkout has none', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    const cwd = join(testDir, 'checkout');
+    const yamlDir = join(testDir, 'home', 'workflows', 'nested');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      'name: home-mcp\nnodes:\n  - id: check\n    prompt: Check\n    mcp:\n      path: servers.json\n      optional: true\n'
+    );
+    await writeFile(join(yamlDir, 'servers.json'), '{"home-server":{"command":"example"}}');
+
+    const result = await resolveNodeMcp(
+      { path: 'servers.json', optional: true },
+      claude,
+      cwd,
+      yamlDir
+    );
+
+    expect(result).toEqual({
+      kind: 'load',
+      path: join(yamlDir, 'servers.json'),
+      servers: new Set(['home-server']),
+    });
+    if (result.kind !== 'load') throw new Error('Missing optional home MCP config');
+    expect((await loadMcpConfig(result.path, cwd)).serverNames).toEqual(['home-server']);
+  });
+
   it('withholds an optional declaration whose file does not exist', async () => {
     const { resolveNodeMcp } = await import('./dag-executor');
     expect(await resolveNodeMcp({ path: 'missing.json', optional: true }, claude, testDir)).toEqual(
