@@ -21,8 +21,8 @@ import {
  *
  * Holder kinds and their liveness:
  * - `run`: a workflow run, live until the run is terminal or gone, or until the run,
- *   paused where the engine continues it by itself, gives its slot back
- *   (`releasePausedRunSlot`).
+ *   paused at a pause `continuablePauseCursor` names, gives its slot back
+ *   (`releasePausedRunSlot`). A run released for an unreadable source keeps it.
  * - `attempt`: one provider attempt, released by its owner when the provider stream
  *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */

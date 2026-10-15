@@ -1148,4 +1148,19 @@ describe('isSourceReadFailure', () => {
   ])('%s → %p', (_label, error, expected) => {
     expect(isSourceReadFailure(error)).toBe(expected);
   });
+
+  test('a capture missing from this host is a read failure, not changed source', async () => {
+    const sourceRoot = await createTempRoot();
+    const captureRoot = join(await createTempRoot(), 'capture');
+    await mkdir(join(sourceRoot, '.archon', 'scripts'), { recursive: true });
+    await writeFile(join(sourceRoot, '.archon', 'scripts', 'check.ts'), 'console.log("ok")');
+    const capture = await captureWorkflowSource({ sourceRoot, captureRoot });
+    await rm(captureRoot, { recursive: true, force: true });
+
+    const error = await assertWorkflowSourceIntegrity(capturedSourceRoots(capture.anchor)).catch(
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(WorkflowSourceUnavailableError);
+    expect(isSourceReadFailure(error)).toBe(true);
+  });
 });

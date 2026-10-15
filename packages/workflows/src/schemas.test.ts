@@ -2762,6 +2762,18 @@ describe('runAttention', () => {
     expect(attention).toBeNull();
   });
 
+  test('a released container run asks for a manual resume, since no host continues it', () => {
+    const attention = runAttention({
+      id: 'run-1',
+      status: 'paused',
+      metadata: {
+        isolation: 'container',
+        source_release: { nodeId: 'check', releasedAt: '2026-08-28T10:00:00.000Z' },
+      },
+    });
+    expect(attention).toMatchObject({ kind: 'unreadable', reason: 'source_release_not_continued' });
+  });
+
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
     const attention = runAttention({ id: 'run-1', status: 'paused' as WorkflowRunStatus });
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });

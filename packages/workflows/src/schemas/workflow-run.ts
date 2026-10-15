@@ -1182,13 +1182,14 @@ export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string(
 export type GateAddress = z.infer<typeof gateAddressSchema>;
 
 /**
- * Why a run cannot be described. An enum rather than prose alone because the
+ * Why a run cannot be described, or why nothing will continue it unless someone looks.
+ * An enum rather than prose alone because the
  * reasons are not interchangeable to a reader: `assertRejectable` still rejects a
  * run whose gate metadata is unreadable, but must refuse one whose gate type this
  * build does not know — and no caller should tell those apart by matching strings.
  *
  * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
- * and `child_pointer_missing` come from
+ * `child_pointer_missing`, and `source_release_not_continued` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
  * produced by a reader that follows a `blocked_on_child` or `blocked_on_children`
  * pointer into the store (`resolveRunAttention`); the projection is pure and never does.
@@ -1200,6 +1201,7 @@ export const runAttentionUnreadableReasonSchema = z.enum([
   'child_pointer_missing',
   'child_run_missing',
   'child_chain_too_deep',
+  'source_release_not_continued',
 ]);
 export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
@@ -1376,9 +1378,18 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
   const raw = run.metadata?.approval;
   if (raw === undefined) {
     // No gate recorded. A durable `wait:` and a source release own their own
-    // resumption. Anything else is a run parked with nothing that describes why, which
-    // nothing but an outside response can unstick.
-    return isWorkflowWaitContext(run.metadata?.wait) || readSourceRelease(run.metadata)
+    // resumption, except a released container run: the host never continues one.
+    // Anything else is a run parked with nothing that describes why, which nothing but
+    // an outside response can unstick.
+    const release = readSourceRelease(run.metadata);
+    if (release && isContainerRun(run)) {
+      return unreadableAttention(
+        run.id,
+        'source_release_not_continued',
+        `paused because a host could not read its frozen source for node '${release.nodeId}'; a container run is only resumed by hand`
+      );
+    }
+    return isWorkflowWaitContext(run.metadata?.wait) || release
       ? null
       : unreadableAttention(
           run.id,
@@ -1460,8 +1471,8 @@ export type QueuedRunAttention = Extract<
 
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
- * pause someone must answer, or a paused run nothing can read, which needs someone to
- * look. The queue's list and single read both build items by this one rule.
+ * pause someone must answer, or a paused run nothing can read or will continue, which
+ * needs someone to look. The queue's list and single read both build items by this one rule.
  */
 export function queuedRunAttention(
   run: RunAttentionInput,

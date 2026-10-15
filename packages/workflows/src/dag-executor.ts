@@ -12083,7 +12083,11 @@ export async function executeDagWorkflow(
       conversationId,
       `⏸️ Run paused, not failed: this host could not read its frozen source${
         error.path !== undefined ? ` at ${error.path}` : ''
-      } for node '${error.nodeId}'. A host that can read it continues the run on its next continuation scan.\n` +
+      } for node '${error.nodeId}'. ${
+        execContext.kind === 'container'
+          ? 'A container run is not continued automatically; resume it by hand.'
+          : 'A host that can read it continues the run on its next continuation scan.'
+      }\n` +
         `Resume: \`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\` | ` +
         `Abandon: \`${spellWorkflowCommand(platform, `abandon ${workflowRun.id}`)}\``,
       { workflowId: workflowRun.id, nodeName: error.nodeId }

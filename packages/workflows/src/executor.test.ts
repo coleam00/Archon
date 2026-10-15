@@ -5394,6 +5394,27 @@ describe('hydrateResumableRun', () => {
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
   });
 
+  it('resumes a run released for unreadable source before any node completed', async () => {
+    const emptySnapshot = async () => ({
+      completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      tokens: { input: 0, output: 0 },
+      costUsd: 0,
+    });
+    const store = makeStore({ getDagResumeSnapshot: mock(emptySnapshot) });
+    const released = makeRun({
+      id: 'released',
+      status: 'paused',
+      metadata: { source_release: { nodeId: 'check', releasedAt: '2026-10-15T10:00:00.000Z' } },
+    });
+    const plain = makeRun({ id: 'plain', status: 'paused' });
+
+    expect(await inspectResumableRun(makeDeps(store), released)).not.toBeNull();
+    expect(await inspectResumableRun(makeDeps(store), plain)).toBeNull();
+  });
+
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const resumed = makeRun({ id: 'prior-failed', status: 'running' });

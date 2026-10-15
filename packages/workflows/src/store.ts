@@ -175,8 +175,9 @@ export type PauseCursor =
  * or event wait on its deadline, or a gate or attention wait, answered or not
  * (`continuablePause`). Only such a pause gives back the run's resource slot. A parent
  * blocked on a child workflow, a fan-out or a write-back keeps its slot: nothing retries
- * it if its continuation is refused for capacity. Container runs are excluded because the
- * host refuses to continue them.
+ * it if its continuation is refused for capacity. A run released for an unreadable source
+ * keeps its slot too: it is due again within a minute and re-enters without competing for
+ * capacity. Container runs are excluded because the host refuses to continue them.
  */
 export function continuablePauseCursor(
   run: Pick<WorkflowRun, 'status' | 'metadata'>

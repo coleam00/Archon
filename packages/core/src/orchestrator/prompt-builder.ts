@@ -144,6 +144,15 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   )
     return '';
 
+  if (attention.kind === 'unreadable' && attention.reason === 'source_release_not_continued') {
+    return (
+      header +
+      `Run \`${runId}\` (**${workflowName}**) has no gate: it is ${attention.detail}. ` +
+      `Tell the user to resume it with \`${cmd(`resume ${runId}`)}\` once a host can read ` +
+      `its source, or to abandon it with \`${cmd(`abandon ${runId}`)}\`.`
+    );
+  }
+
   if (attention.kind === 'unreadable') {
     return (
       header +

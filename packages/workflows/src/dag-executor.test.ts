@@ -21382,6 +21382,35 @@ describe('executeDagWorkflow -- script nodes', () => {
     }
   );
 
+  it('a capture removed from this host after admission releases the run instead of failing it', async () => {
+    const mockDeps = createMockDeps();
+    const scriptsDir = join(testDir, '.archon', 'scripts');
+    const captureRoot = join(testDir, 'capture');
+    await mkdir(scriptsDir, { recursive: true });
+    await writeFile(join(scriptsDir, 'check.ts'), 'console.log("ok")');
+    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    await rm(captureRoot, { recursive: true, force: true });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: 'capture-removed',
+          nodes: [{ id: 'run-check', kind: 'exec', runtime: 'bun', script: 'check' }],
+        },
+        workflowRun: makeWorkflowRun('capture-removed-run'),
+        workflowSourceRoots: capturedSourceRoots(capture.anchor),
+      })
+    );
+
+    expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+    expect(mockDeps.store.releaseRunForUnreadableSource.mock.calls[0]?.[1].path).toStartWith(
+      captureRoot
+    );
+  });
+
   it('refuses a captured named script changed by an earlier node without consuming retries', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

@@ -1278,6 +1278,22 @@ export function describeWorkflowStoreConformance(
       );
       expect(await types(store, run.id)).toContain('source_released');
     });
+    test('a container run released for an unreadable source is never due', async () => {
+      const run = await running(store, { metadata: { isolation: 'container' } });
+      const retryAt = new Date(Date.now() + 60_000).toISOString();
+      expect(
+        await store.releaseRunForUnreadableSource(run.id, {
+          nodeId: 'check',
+          error: 'EACCES',
+          retryAt,
+        })
+      ).toEqual({ released: true });
+      const due = await store.listDueWorkflowContinuations(
+        new Date(Date.parse(retryAt) + 1000),
+        50
+      );
+      expect(due.map(row => row.id)).not.toContain(run.id);
+    });
     test('a source release never overrides another transition', async () => {
       const release = {
         nodeId: 'check',

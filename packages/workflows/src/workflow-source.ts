@@ -500,8 +500,12 @@ function sourceReadError(path: string, error: unknown): unknown {
 /**
  * True when `error` means this host failed to read the source, as opposed to source that
  * was read and found wrong (a digest mismatch, a replaced capture, an unparseable
- * manifest) or simply absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
+ * manifest) or a script absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
  * Node system error (string `code` and `syscall`) on the error or its `cause` chain.
+ *
+ * A capture missing from this host (`ENOENT`) counts: captures live on the host that made
+ * them, so another host may still read it. If it never returns, the continuation host's
+ * pre-admission check refuses the run and warns after repeated refusals.
  */
 export function isSourceReadFailure(error: unknown): boolean {
   if (error instanceof WorkflowSourceUnavailableError) return true;
