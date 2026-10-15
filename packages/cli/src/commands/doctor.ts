@@ -287,8 +287,8 @@ async function runForgeCommand(
 
 /**
  * Diagnose the optional GitHub plugin's installation and read credential. Pack
- * preflight separately checks required operations. A missing plugin is skipped
- * and a missing token warns: installs that never opt in need neither.
+ * preflight separately checks required operations. Unavailable forge opt-ins fail;
+ * installs that never opt in need neither a plugin nor its token.
  *
  * The read is the SDLC preflight's: `pr.view` by head, which every released GitHub
  * plugin supports. It answers null when no open pull request has that head.
@@ -320,24 +320,22 @@ export async function checkGithubForge(
   if (response.ok)
     return { label, status: 'pass', message: `installed; the token is accepted${source}` };
   const { kind, message } = response.error;
-  // Which token names count belongs to the plugin, so with none installed doctor
-  // cannot tell a forge setup in progress from an install that never runs the pack.
   if (kind === 'no_plugin_for_host') {
     return {
       label,
-      status: 'skip',
+      status: selected === 'forge' ? 'fail' : 'skip',
       message: `not installed. The SDLC forge opt-in needs \`${FORGE_PLUGIN_INSTALL}\` and a credential: GH_TOKEN in ${envFile}, GITHUB_TOKEN, or gh auth login (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
     };
   }
   if (kind === 'unsupported_op') {
     return {
       label,
-      status: 'warn',
+      status: selected === 'forge' ? 'fail' : 'warn',
       message: `${message}. \`archon plugin update ${FORGE_GITHUB_PLUGIN}\` installs the latest released plugin, which may not support it either; ARCHON_SDLC_FORGE=gh uses gh instead.`,
     };
   }
   if (kind === 'no_credential') {
-    return appMode
+    return appMode && selected !== 'forge'
       ? {
           label,
           status: 'skip',
@@ -345,7 +343,7 @@ export async function checkGithubForge(
         }
       : {
           label,
-          status: 'warn',
+          status: selected === 'forge' ? 'fail' : 'warn',
           message: `installed, but no token. Set GH_TOKEN in ${envFile}, GITHUB_TOKEN, or run gh auth login. ${message}`,
         };
   }

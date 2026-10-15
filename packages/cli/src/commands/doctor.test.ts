@@ -176,6 +176,25 @@ describe('checkGithubForge', () => {
     expect(result.message).toContain('ARCHON_SDLC_FORGE=gh');
   });
 
+  it.each(['no_plugin_for_host', 'unsupported_op', 'no_credential'] as const)(
+    'fails doctor when the explicitly selected forge refuses with %s',
+    async kind => {
+      for (const app of [{}, { GITHUB_APP_ID: '1' }]) {
+        const result = await checkGithubForge(
+          { ARCHON_SDLC_FORGE: 'forge', ARCHON_HOME: '/srv/archon', ...app },
+          refusing(kind)
+        );
+        expect(result.status).toBe('fail');
+        const output = spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          expect(await doctorCommand([async () => result])).toBe(1);
+        } finally {
+          output.mockRestore();
+        }
+      }
+    }
+  );
+
   it('reads plugins and config from the diagnostic environment, not the ambient one', async () => {
     const diagnosticHome = mkdtempSync(join(tmpdir(), 'doctor-forge-'));
     const ambientHome = mkdtempSync(join(tmpdir(), 'doctor-forge-ambient-'));
