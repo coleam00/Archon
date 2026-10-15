@@ -274,6 +274,16 @@ describe('bench run', () => {
     });
   });
 
+  it('fails the batch when a run fails before any node starts, and not when its agent ran and failed', () => {
+    const launch = bench({ launchFails: true }).run('base');
+    expect([launch.status, launch.checks[0].checks.finished.ok]).toEqual([1, false]);
+    expect(launch.checks[0].checks.finished.problems).toEqual([expect.stringContaining('base 11: '), expect.stringContaining('base 12-outside: ')]);
+    // Row 11's judge ran and the run failed: its version's result. The outside row's run failed with no agent run.
+    const ran = bench({ runStatus: 'failed' }).run('base');
+    expect(ran.lines.find(line => line.row === '11')?.passed).toBe(false);
+    expect(ran.checks[0].checks.finished.problems).toEqual(['base 12-outside: the run is failed']);
+  });
+
   it('refuses before any run when a version cannot be resolved', () => {
     const { run } = bench({ baseline: null });
     const { status, stderr, lines } = run('base');

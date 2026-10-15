@@ -739,7 +739,7 @@ export interface BatchChecks {
     readonly outside_agent: Check;
     /** No comment was posted on any batch issue or copy; intake builds none. */
     readonly posted_text: Check;
-    /** Every run completed or failed on its own and was read, so the after-read came after its last write. */
+    /** Every run completed, or failed after an agent ran, and was read, so the after-read came after its last write. */
     readonly finished: Check;
   };
   readonly passed: boolean;
@@ -761,10 +761,13 @@ export function batchChecks(
       ...line.agent_nodes.map(node => `${line.version.label} ${line.row}: ${node} ran`),
       ...(line.status === 'completed' && line.path !== 'outside' ? [`${line.version.label} ${line.row}: intake took the ${String(line.path)} path`] : []),
     ]);
-  // A failed run is the version's own result and counts against its bars; a cancelled
-  // or unread one says nothing about the version, so the batch cannot be evaluated.
+  // A run that failed after an agent ran is the version's own result and counts against
+  // its bars. A cancelled or unread run, or one that failed before any agent ran (a
+  // refused credential at launch), says nothing about the version, so the batch cannot
+  // be evaluated.
+  const ownResult = (line: Line): boolean => line.status === 'completed' || (line.status === 'failed' && line.agent_nodes.length > 0);
   const finished = lines
-    .filter(line => line.status !== 'completed' && line.status !== 'failed')
+    .filter(line => !ownResult(line))
     .map(line => `${line.version.label} ${line.row}: ${line.problems.join('; ')}`);
   const checks = { writes: check(writes), outside_agent: check(outside), posted_text: check(posted), finished: check(finished) };
   return {

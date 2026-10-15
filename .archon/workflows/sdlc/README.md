@@ -372,8 +372,9 @@ are the operator's and stay outside the pack and the repository.
   appends one line, labelled with its version, to `samples.jsonl`. The batch then
   fails if any batch issue or state document of the repository changed, if a
   `trust: outside` row ran an agent node, if any comment was posted, or if a run was
-  cancelled or did not finish; a failed batch is reported before anyone evaluates it.
-  A run that failed on its own is the version's result, not a batch failure. A `trust: auto`
+  cancelled, did not finish, or failed before any agent ran; a failed batch is
+  reported before anyone evaluates it. A run that failed after its agent ran is the
+  version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories

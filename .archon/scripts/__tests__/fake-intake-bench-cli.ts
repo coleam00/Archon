@@ -49,7 +49,9 @@ export interface FakeConfig {
   /** The project key `archon state list` names. */
   readonly projectKey: string;
   /** Every launched run ends with this status, as a run another run's checkout lock cancelled would. */
-  readonly runStatus?: 'cancelled';
+  readonly runStatus?: 'cancelled' | 'failed';
+  /** Every launched run fails before any node starts, as a refused provider credential does. */
+  readonly launchFails?: true;
   /** Issue numbers a tracker search answers, by a fragment of its query. */
   readonly searches?: Record<string, number[]>;
 }
@@ -206,10 +208,11 @@ function answer(dir: string, args: readonly string[]): string {
       },
       events: events(nodes),
     };
-    writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(detail));
+    const failedLaunch = { id: detail.id, status: 'failed', output_root: null, started_at: detail.started_at, metadata: detail.metadata, terminal_record: { nodes: [], returns: { availability: 'unavailable', reason: 'graph_unavailable' } }, events: [] };
+    writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(config.launchFails === true ? failedLaunch : detail));
     return JSON.stringify({ runId: `run-${n}` });
   }
-  if (args[1] === 'wait') return JSON.stringify({ attention: { kind: 'terminal', status: config.runStatus ?? 'completed' } });
+  if (args[1] === 'wait') return JSON.stringify({ attention: { kind: 'terminal', status: config.launchFails === true ? 'failed' : (config.runStatus ?? 'completed') } });
   if (args[1] === 'get') return readFileSync(join(dir, `detail-${args[2]}.json`), 'utf8');
   throw new Error(`fake archon: unexpected command ${args.join(' ')}`);
 }
