@@ -1015,7 +1015,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowRunsCommand(workflowHost, effectiveCwd, {
+            return await workflowRunsCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
@@ -1023,7 +1023,6 @@ async function main(): Promise<number> {
               open: values.open as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             });
-            break;
           }
 
           case 'resume': {

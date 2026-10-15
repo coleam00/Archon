@@ -8382,11 +8382,12 @@ describe('workflowRunsCommand', () => {
   });
 
   it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {
-    await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+    const exitCode = await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
       status: 'bogus',
       json: true,
     });
 
+    expect(exitCode).toBe(1);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       ok: boolean;
       error: string;

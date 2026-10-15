@@ -5809,7 +5809,7 @@ export async function workflowRunsCommand(
     open?: boolean;
     verbose?: boolean;
   } = {}
-): Promise<void> {
+): Promise<number> {
   // Open-work inbox (#2747): terminal failed runs nothing has adopted or
   // superseded — the operator's "what ended with work on the table" query.
   // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
@@ -5818,7 +5818,7 @@ export async function workflowRunsCommand(
       const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5840,11 +5840,11 @@ export async function workflowRunsCommand(
         total: runs.length,
         scopeFallback: !opts.all && !codebase,
       });
-      return;
+      return 0;
     }
     if (runs.length === 0) {
       console.log('No open workflow runs — nothing ended with work on the table.');
-      return;
+      return 0;
     }
     console.log(`\nOpen work (${String(runs.length)}):\n`);
     for (const run of runs) {
@@ -5854,7 +5854,7 @@ export async function workflowRunsCommand(
       );
     }
     console.log('');
-    return;
+    return 0;
   }
 
   let statusFilter: WorkflowRunStatus | undefined;
@@ -5865,7 +5865,7 @@ export async function workflowRunsCommand(
       // --json never throws — emit one parseable {ok:false} line (write-command contract).
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5903,7 +5903,7 @@ export async function workflowRunsCommand(
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
     if (opts.json) {
       await writeJsonLine({ ok: false, error: err.message });
-      return;
+      return 1;
     }
     throw new Error(`Failed to list workflow runs: ${err.message}`);
   }
@@ -5917,12 +5917,12 @@ export async function workflowRunsCommand(
   if (opts.json) {
     if (!opts.verbose) {
       await writeJsonLine({ ...result, scopeFallback });
-      return;
+      return 0;
     }
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
     await writeJsonLine({ ...result, runs: await withRunDetail(host, result.runs), scopeFallback });
-    return;
+    return 0;
   }
 
   if (scopeFallback) {
@@ -5931,7 +5931,7 @@ export async function workflowRunsCommand(
 
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
-    return;
+    return 0;
   }
 
   console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
@@ -5944,6 +5944,7 @@ export async function workflowRunsCommand(
     );
   }
   console.log('');
+  return 0;
 }
 
 /**

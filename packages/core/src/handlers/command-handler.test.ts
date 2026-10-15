@@ -2453,6 +2453,38 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('node exploded');
       });
 
+      test('shows the gate and its answer commands for a paused run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-approval',
+            status: 'paused',
+            metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+          })
+        );
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow get run-approval',
+          operator
+        );
+
+        expect(result.message).toContain('/workflow approve run-approval');
+        expect(result.message).toContain('/workflow reject run-approval');
+      });
+
+      test('does not show a run that belongs to another project', async () => {
+        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({ id: 'run-other', codebase_id: 'other-project' })
+        );
+        const conversation = makeConversation({ ...baseConversation, codebase_id: 'codebase-123' });
+
+        const result = await handleCommand(conversation, '/workflow get run-other', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
+      });
+
       test('reports a missing run', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(null);
 

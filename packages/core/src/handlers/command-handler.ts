@@ -642,6 +642,29 @@ async function resolveChatRunId(arg: string, conversation: Conversation): Promis
   return matches[0]?.id ?? arg;
 }
 
+/** What a run needs from the operator, and the commands that answer it, one line each. */
+function runAttentionLines(
+  run: Parameters<typeof runAttention>[0] & { id: string },
+  surface: WorkflowCommandSurface
+): string {
+  const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  const attention = runAttention(run);
+  let msg = '';
+  if (attention?.kind === 'stalled_tool_calls') {
+    msg += '  Tool calls need attention; work remains running.\n';
+    for (const call of attention.calls)
+      msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
+  } else if (attention?.kind === 'attention') {
+    msg += `  Needs attention: ${attention.message}\n`;
+    for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
+    msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
+  } else if (attention?.kind === 'awaiting_response') {
+    msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
+    msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
+  }
+  return msg;
+}
+
 /** Workflow commands work with or without a project context. */
 async function resolveWorkflowCwd(conversation: Conversation): Promise<string> {
   const codebase = conversation.codebase_id
@@ -902,7 +925,9 @@ async function handleWorkflowCommand(
       try {
         const runId = await resolveChatRunId(arg, conversation);
         const run = await workflowDb.getWorkflowRun(runId);
-        if (!run) return { success: false, message: `Workflow run not found: ${arg}` };
+        // Same scope as the lookup above: a project conversation sees its own runs.
+        if (!run || (conversation.codebase_id && run.codebase_id !== conversation.codebase_id))
+          return { success: false, message: `Workflow run not found: ${arg}` };
         let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
         if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
         msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
@@ -911,6 +936,7 @@ async function handleWorkflowCommand(
         const error = run.metadata.error;
         if (typeof error === 'string' && error.length > 0)
           msg += `  Error: ${error.slice(0, 300)}\n`;
+        msg += runAttentionLines(run, surface);
         return { success: true, message: msg.trim() };
       } catch (error) {
         const err = error as Error;
@@ -937,19 +963,7 @@ async function handleWorkflowCommand(
             msg += `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}\n`;
           }
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
-          const attention = runAttention(run);
-          if (attention?.kind === 'stalled_tool_calls') {
-            msg += '  Tool calls need attention; work remains running.\n';
-            for (const call of attention.calls)
-              msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
-          } else if (attention?.kind === 'attention') {
-            msg += `  Needs attention: ${attention.message}\n`;
-            for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
-            msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
-          } else if (attention?.kind === 'awaiting_response') {
-            msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
-            msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
-          }
+          msg += runAttentionLines(run, surface);
           msg += '\n';
         }
 
