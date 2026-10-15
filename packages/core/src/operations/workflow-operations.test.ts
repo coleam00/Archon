@@ -3246,7 +3246,11 @@ describe('run action authorization precedes effects and state validation', () =>
           cancel: () => operations.cancelWorkflow(run.id, actor),
           abandon: () => operations.abandonWorkflow(run.id, actor),
           signal: () =>
-            operations.signalWorkflowWait(run.id, 'event', 'now', 'secret payload', actor),
+            operations.signalWorkflowWait(
+              run.id,
+              { event: 'event', resumeAt: 'now', payload: 'secret payload' },
+              actor
+            ),
           delete: () => operations.deleteWorkflowRun(run.id, actor),
         } satisfies Record<RunAction, () => Promise<unknown>>;
         await expect(calls[action]()).rejects.toBeInstanceOf(RunActionForbiddenError);
@@ -3375,9 +3379,7 @@ describe('starter, admin and operator can act through core', () => {
           signal: () =>
             operations.signalWorkflowWait(
               run.id,
-              'ready',
-              '2026-10-06T00:00:00.000Z',
-              undefined,
+              { event: 'ready', resumeAt: '2026-10-06T00:00:00.000Z' },
               actor
             ),
           delete: () => operations.deleteWorkflowRun(run.id, actor),

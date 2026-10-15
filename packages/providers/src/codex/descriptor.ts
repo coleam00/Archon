@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { z } from 'zod';
 import { BUNDLED_VERSION } from '@archon/paths';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
@@ -6,7 +7,7 @@ import { configSchemas } from './config';
 import { singleVendorCatalog } from '../credential-catalog';
 
 export const descriptor = providerPluginDescriptorSchema.parse({
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'codex',
   displayName: 'Codex (OpenAI)',
   version: BUNDLED_VERSION,

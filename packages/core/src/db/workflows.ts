@@ -1799,14 +1799,22 @@ export async function clearWorkflowWaitContext(
     `wait.${waitContext.kind === 'attention' ? 'waitingSince' : 'resumeAt'}`
   );
   const cursor = waitContext.kind === 'attention' ? waitContext.waitingSince : waitContext.resumeAt;
+  const pauseIdExpr = dialect.jsonText('metadata', 'wait.pauseId');
+  const occurrenceMatches =
+    waitContext.pauseId === undefined ? `${pauseIdExpr} IS NULL` : `${pauseIdExpr} = $4`;
   const clearWait = dialect.jsonRemove('metadata', 'wait');
   try {
     return await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${clearWait}
-         WHERE id = $1 AND status = 'running' AND ${nodeExpr} = $2 AND ${cursorExpr} = $3`,
-        [id, waitContext.nodeId, cursor]
+         WHERE id = $1 AND status = 'running' AND ${nodeExpr} = $2 AND ${cursorExpr} = $3 AND ${occurrenceMatches}`,
+        [
+          id,
+          waitContext.nodeId,
+          cursor,
+          ...(waitContext.pauseId === undefined ? [] : [waitContext.pauseId]),
+        ]
       );
       if ((result.rowCount ?? 0) === 0) return { cleared: false };
       const rows = waitCompletionEvents(id, completion);
@@ -1983,12 +1991,13 @@ export async function deferWorkflowContinuation(
     await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4)
+       WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4
+           AND (${waitPauseId} = $7 OR (${waitPauseId} IS NULL AND $7 IS NULL)))
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
          OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
          OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4)
-         OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $7))`,
+         OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $8))`,
       [
         id,
         JSON.stringify({ continuation_retry_at: retryAt }),
@@ -1996,6 +2005,7 @@ export async function deferWorkflowContinuation(
         cursor.kind === 'quota' ? null : cursor.nodeId,
         cursor.kind === 'quota' ? cursor.attempt : null,
         cursor.kind === 'answered' ? cursor.pauseId : null,
+        cursor.kind === 'wait' ? (cursor.pauseId ?? null) : null,
         cursor.kind === 'source' ? cursor.releasedAt : null,
       ]
     );
@@ -2106,6 +2116,12 @@ export async function signalWorkflowWait(
   const nodeExpr = dialect.jsonText('metadata', 'wait.nodeId');
   const signaledExpr = dialect.jsonText('metadata', 'wait.signaledAt');
   const resumeAtExpr = dialect.jsonText('metadata', 'wait.resumeAt');
+  const pauseIdExpr = dialect.jsonText('metadata', 'wait.pauseId');
+  const pauseIdParam = payload === undefined ? 6 : 7;
+  const occurrenceMatch =
+    parsedWaitContext.pauseId === undefined
+      ? `${pauseIdExpr} IS NULL`
+      : `${pauseIdExpr} = $${String(pauseIdParam)}`;
   const signaledAt = new Date().toISOString();
   const metadataWrite =
     payload === undefined
@@ -2122,6 +2138,7 @@ export async function signalWorkflowWait(
          SET metadata = ${metadataWrite}
          WHERE id = $1 AND status = 'paused' AND ${eventExpr} = $2
            AND ${nodeExpr} = $3 AND ${resumeAtExpr} = $4
+           AND ${occurrenceMatch}
            AND ${signaledExpr} IS NULL AND ${resumeAtExpr} > $5`,
         payload === undefined
           ? [
@@ -2130,6 +2147,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.nodeId,
               parsedWaitContext.resumeAt,
               signaledAt,
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
           : [
               id,
@@ -2138,6 +2156,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.resumeAt,
               signaledAt,
               JSON.stringify(payload),
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
       );
       const signaled = (result.rowCount ?? 0) > 0;

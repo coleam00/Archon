@@ -28,6 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import type { SETTING_SOURCES } from '@archon/paths/skills';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -68,7 +69,7 @@ import {
   type ProviderStopReason,
 } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
-import { CLAUDE_CAPABILITIES } from './capabilities';
+import { CLAUDE_CAPABILITIES, CLAUDE_SKILL_DISCOVERY } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import {
   resolveClaudeBinaryPath,
@@ -90,11 +91,10 @@ import {
   readClaudePluginIds,
   withPluginScopeCheck,
 } from './plugins';
-import { clampEffort, type AssertNever } from '@archon/provider-contract';
+import { clampEffort, declaredSkillRoots, type AssertNever } from '@archon/provider-contract';
 import {
-  claudeSkillSearchRoots,
   findInstalledSkillNames,
-  resolveClaudeSkillDirectories,
+  resolveSkillDirectoriesFromRoots,
   skillSearchRoots,
 } from '@archon/paths/skills';
 
@@ -608,7 +608,7 @@ async function applyNodeConfig(
   nodeConfig: NodeConfig,
   cwd: string,
   skillSearch: {
-    userConfigDir?: string;
+    env: Record<string, string | undefined>;
     includeProject: boolean;
     includeUser: boolean;
     isContainer: boolean;
@@ -632,7 +632,8 @@ async function applyNodeConfig(
     );
 
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
-      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
+      const roots = declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, skillSearch);
+      const { missing } = resolveSkillDirectoriesFromRoots(roots, nodeConfig.skills);
       if (missing.length > 0) {
         // Split by whether the name exists on disk at all. A skill that resolves
         // under some other root — `.agents/skills/`, or a scope this node's
@@ -644,11 +645,7 @@ async function applyNodeConfig(
         const unreachable = findInstalledSkillNames(
           [
             ...skillSearchRoots(cwd),
-            ...claudeSkillSearchRoots(cwd, {
-              ...(skillSearch.userConfigDir ? { userConfigDir: skillSearch.userConfigDir } : {}),
-              includeProject: true,
-              includeUser: true,
-            }),
+            ...declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, { env: skillSearch.env }),
           ],
           missing
         );
@@ -666,7 +663,7 @@ async function applyNodeConfig(
             ? ' Container workflows cannot use host user-global skills.'
             : '';
           getLog().error(
-            { nodeId: nodeConfig.nodeId, unreachable, skillSearch },
+            { nodeId: nodeConfig.nodeId, unreachable, roots },
             'claude.declared_skills_unreachable'
           );
           throw new ClassifiedProviderError(
@@ -676,7 +673,7 @@ async function applyNodeConfig(
         }
 
         getLog().warn(
-          { nodeId: nodeConfig.nodeId, missing, skillSearch },
+          { nodeId: nodeConfig.nodeId, missing, roots },
           'claude.declared_skills_unresolved'
         );
         warnings.push({
@@ -899,7 +896,7 @@ function buildBaseClaudeOptions(
   toolResultQueue: ToolResultEntry[],
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined,
-  settingSources: ('project' | 'user')[]
+  settingSources: (typeof SETTING_SOURCES)[number][]
 ): Options {
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
@@ -944,7 +941,13 @@ function buildBaseClaudeOptions(
       : {}),
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
-    systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
+    systemPrompt: requestOptions?.systemPrompt ?? {
+      type: 'preset',
+      preset: 'claude_code',
+      ...(requestOptions?.appendSystemPrompt !== undefined
+        ? { append: requestOptions.appendSystemPrompt }
+        : {}),
+    },
     // Per-node override wins over the assistant-level default; the final
     // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
     settingSources,
@@ -1689,7 +1692,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       if (requestOptions?.nodeConfig) {
         const skillSearch = {
-          ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+          env,
           includeProject: settingSources.includes('project'),
           includeUser: !isContainerRun && settingSources.includes('user'),
           isContainer: isContainerRun,

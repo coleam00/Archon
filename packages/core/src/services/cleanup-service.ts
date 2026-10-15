@@ -25,7 +25,7 @@ import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
-  hasUncommittedChanges,
+  hasUncommittedChangesStrict,
   isWorktreeRegistered,
   worktreeExists,
   getDefaultBranch,
@@ -380,6 +380,9 @@ export interface RemoveEnvironmentOptions {
   deleteRemoteBranch?: boolean;
 }
 
+const NON_WORKTREE_CLEANUP_REASON =
+  'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
+
 /**
  * Result from removeEnvironment indicating what actually happened
  */
@@ -395,6 +398,7 @@ export interface RemoveEnvironmentResult {
   skippedReason?:
     | 'environment not found'
     | 'already destroyed'
+    | typeof NON_WORKTREE_CLEANUP_REASON
     | 'has uncommitted changes'
     | 'filesystem removal incomplete; environment remains active'
     | UnknownPlatformReason;
@@ -426,6 +430,13 @@ export async function removeEnvironment(
     return { ...noopResult, skippedReason: 'already destroyed' };
   }
 
+  if (env.provider !== 'worktree') {
+    return {
+      ...noopResult,
+      skippedReason: NON_WORKTREE_CLEANUP_REASON,
+    };
+  }
+
   const reason = unknownPlatformReason(env.created_by_platform);
   if (reason) return { ...noopResult, skippedReason: reason };
 
@@ -451,7 +462,7 @@ export async function removeEnvironment(
   try {
     // If path exists, check for uncommitted changes (unless force)
     if (pathExists && !options?.force) {
-      const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
+      const hasChanges = await hasUncommittedChangesStrict(toWorktreePath(env.working_path));
       if (hasChanges) {
         getLog().warn({ envId, workingPath: env.working_path }, 'env_has_uncommitted_changes');
         return { ...noopResult, skippedReason: 'has uncommitted changes' };
@@ -638,8 +649,8 @@ async function checkRemoval(
   repoPath: RepoPath,
   settlement: CleanupSettlement
 ): Promise<RemovalCheck> {
-  const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
-  if (hasChanges) {
+  const workingPath = toWorktreePath(env.working_path);
+  if ((await worktreeExists(workingPath)) && (await hasUncommittedChangesStrict(workingPath))) {
     return { blocker: { reason: 'uncommitted_changes', display: 'has uncommitted changes' } };
   }
   const lock = await getCleanupRunLock(env, repoPath, settlement);
@@ -793,7 +804,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     for (const env of environments) {
       try {
         // Skip if already processing or destroyed
-        if (env.status !== 'active') continue;
+        if (env.status !== 'active' || env.provider !== 'worktree') continue;
         const reason = unknownPlatformReason(env.created_by_platform);
         if (reason) {
           report.skipped.push({ id: env.id, reason });
@@ -1021,7 +1032,9 @@ export async function getWorktreeStatusBreakdown(
   mainRepoPath: string
 ): Promise<WorktreeStatusBreakdown> {
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
 
   const repoPath = toRepoPath(mainRepoPath);
   const breakdown: WorktreeStatusBreakdown = {
@@ -1099,7 +1112,9 @@ export async function cleanupStaleWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [], releasedFailedRuns: [] };
   const repoPath = toRepoPath(mainRepoPath);
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
@@ -1149,7 +1164,9 @@ export async function cleanupMergedWorktrees(
   options: { includeClosed?: boolean } = {}
 ): Promise<MergedCleanupResult> {
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebase(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const result: MergedCleanupResult = {

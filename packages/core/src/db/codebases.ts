@@ -2,6 +2,11 @@
  * Database operations for codebases
  */
 import { resolve } from 'node:path';
+import {
+  ActiveContainerEnvironmentsError,
+  ActiveWorktreeEnvironmentsError,
+} from './codebase-delete-error';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
@@ -312,18 +317,44 @@ export async function listCodebases(): Promise<readonly Codebase[]> {
   return result.rows.map(validateCodebase);
 }
 
-export async function deleteCodebase(id: string): Promise<void> {
+export async function deleteCodebase(
+  id: string,
+  options: { requireWorktreeCleanup?: boolean } = {}
+): Promise<void> {
   getLog().debug({ codebaseId: id }, 'db.codebase_delete_cascade_started');
-  // First, unlink any sessions referencing this codebase (FK has no cascade)
-  await pool.query('UPDATE remote_agent_sessions SET codebase_id = NULL WHERE codebase_id = $1', [
-    id,
-  ]);
-  // Second, unlink any conversations referencing this codebase (FK has no cascade)
-  await pool.query(
-    'UPDATE remote_agent_conversations SET codebase_id = NULL WHERE codebase_id = $1',
-    [id]
-  );
-  // Then delete the codebase
-  await pool.query('DELETE FROM remote_agent_codebases WHERE id = $1', [id]);
+  await getDatabase().withTransaction(async query => {
+    // PostgreSQL FK inserts take a key-share lock on the parent. FOR UPDATE
+    // serializes registration with deletion; SQLite retries stale write snapshots.
+    await query(
+      'SELECT id FROM remote_agent_codebases WHERE id = $1' +
+        (getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''),
+      [id]
+    );
+    const containers = await query<{ id: string }>(
+      `SELECT e.id FROM remote_agent_isolation_environments e
+       WHERE e.codebase_id = $1 AND ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
+       ORDER BY e.id`,
+      [id]
+    );
+    if (containers.rows.length > 0) {
+      throw new ActiveContainerEnvironmentsError(containers.rows.map(env => env.id));
+    }
+    if (options.requireWorktreeCleanup) {
+      const worktrees = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_isolation_environments
+         WHERE codebase_id = $1 AND provider = 'worktree' AND status = 'active'
+         ORDER BY id`,
+        [id]
+      );
+      if (worktrees.rows.length > 0) {
+        throw new ActiveWorktreeEnvironmentsError(worktrees.rows.map(env => env.id));
+      }
+    }
+    await query('UPDATE remote_agent_sessions SET codebase_id = NULL WHERE codebase_id = $1', [id]);
+    await query('UPDATE remote_agent_conversations SET codebase_id = NULL WHERE codebase_id = $1', [
+      id,
+    ]);
+    await query('DELETE FROM remote_agent_codebases WHERE id = $1', [id]);
+  });
   getLog().info({ codebaseId: id }, 'db.codebase_delete_completed');
 }

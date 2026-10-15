@@ -5,6 +5,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
+  deadlineWaitCursor,
   type IWorkflowStore,
   type ResumeRefusal,
 } from '@archon/workflows/store';
@@ -161,7 +162,7 @@ function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined 
   const release = run.status === 'paused' ? readSourceRelease(run.metadata) : undefined;
   if (release) return { kind: 'source', nodeId: release.nodeId, releasedAt: release.releasedAt };
   const wait = pendingWorkflowWaitDeadline(run);
-  if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  if (wait) return deadlineWaitCursor(wait);
   const answered = answeredPauseContinuation(run);
   if (answered) return { kind: 'answered', ...answered };
   if (run.status === 'failed' && isScheduledWorkflowResume(run.metadata.scheduled_resume)) {

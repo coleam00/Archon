@@ -1,3 +1,4 @@
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -2609,8 +2610,6 @@ export async function handleMessage(
       }
     }
 
-    // Claude supports the preset object for prompt caching; other providers
-    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
     // Providers with in-process tools launch and register through typed tools; the
     // others still write command lines that the command scan reads from the reply.
     let systemAppend = await buildOrchestratorSystemAppend(
@@ -2628,17 +2627,12 @@ export async function handleMessage(
     if (conversation.codebase_id !== null && !caps.nativeTools) {
       systemAppend += `\n\n${buildRunManagementSection()}`;
     }
-    const systemPrompt =
-      providerKey === 'claude'
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
-        : systemAppend;
-
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
       model: chatRequest.model,
-      systemPrompt,
+      appendSystemPrompt: systemAppend,
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
@@ -2899,8 +2893,7 @@ interface ChatTurn {
  * The chat message for a failed turn's result. The provider's typed failure decides the
  * advice, as it decides retry in the workflow engine. A result without one comes from a
  * provider that does not report `failure` yet; its subtype and SDK detail still go
- * through the text formatter so actionable cases like "Not logged in" keep their advice
- * (#1983).
+ * through credential redaction and are shown as diagnostics without inferred advice.
  */
 function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
   if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
@@ -3693,7 +3686,12 @@ async function handleRemoveProject(message: string): Promise<string> {
     return `Project "${projectName}" not found.`;
   }
 
-  await codebaseDb.deleteCodebase(codebase.id);
+  try {
+    await codebaseDb.deleteCodebase(codebase.id);
+  } catch (error) {
+    if (error instanceof ActiveContainerEnvironmentsError) return error.message;
+    throw error;
+  }
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }

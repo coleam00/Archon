@@ -96,6 +96,7 @@ describe('continuation host scanner', () => {
           owner: 'node',
           nodeId: 'delay',
           kind: 'time',
+          pauseId: 'time-occurrence',
           waitingSince: '2026-08-24T10:00:00.000Z',
           resumeAt: '2026-08-24T11:00:00.000Z',
         },
@@ -110,7 +111,12 @@ describe('continuation host scanner', () => {
     expect(resume).toHaveBeenCalledTimes(2);
     expect(resume.mock.calls[0]).toEqual([
       expect.objectContaining({ id: 'wait-1' }),
-      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00.000Z' },
+      {
+        kind: 'wait',
+        nodeId: 'delay',
+        resumeAt: '2026-08-24T11:00:00.000Z',
+        pauseId: 'time-occurrence',
+      },
     ]);
     expect(resume.mock.calls[1]).toEqual([
       expect.objectContaining({ id: 'quota-1' }),
@@ -139,6 +145,7 @@ describe('continuation host scanner', () => {
           owner: 'node',
           nodeId: 'await-review',
           kind: 'event',
+          pauseId: 'event-occurrence',
           waitingSince: '2026-08-24T10:00:00.000Z',
           resumeAt: '2026-08-24T11:00:00.000Z',
           event: 'review.completed',
@@ -152,6 +159,7 @@ describe('continuation host scanner', () => {
     ).resolves.toBe(1);
     expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id: 'event-1' }), {
       kind: 'wait',
+      pauseId: 'event-occurrence',
       nodeId: 'await-review',
       resumeAt: '2026-08-24T11:00:00.000Z',
     });

@@ -275,6 +275,7 @@ export function createTransactionView(
         wait.event !== expected.event ||
         wait.nodeId !== expected.nodeId ||
         wait.resumeAt !== expected.resumeAt ||
+        wait.pauseId !== expected.pauseId ||
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
@@ -785,6 +786,7 @@ export function createTransactionView(
         run.status !== 'running' ||
         !isWorkflowWaitContext(current) ||
         current.nodeId !== wait.nodeId ||
+        current.pauseId !== wait.pauseId ||
         (current.kind === 'attention' ? current.waitingSince : current.resumeAt) !==
           (wait.kind === 'attention' ? wait.waitingSince : wait.resumeAt)
       )

@@ -3721,20 +3721,96 @@ describe('executeWorkflow', () => {
         conversationId: 'db-conv-1',
       });
 
-    it('gives back the resource slot of a pause the host continues', async () => {
-      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
-      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
-        released: true,
-      }));
-      const result = await run(
-        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
-      );
-      expect(result).toMatchObject({ success: true, paused: true });
-      expect(releasePausedRunSlot.mock.calls).toEqual([
-        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
-      ]);
-    });
-
+    for (const kind of ['approval', 'deadline'] as const) {
+      it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {
+        const paused =
+          kind === 'approval'
+            ? pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' })
+            : makeRun({
+                status: 'paused',
+                metadata: {
+                  wait: {
+                    owner: 'node',
+                    nodeId: 'review',
+                    kind: 'time',
+                    pauseId: 'p1',
+                    waitingSince: '2026-01-01T00:00:00.000Z',
+                    resumeAt: '2026-01-02T00:00:00.000Z',
+                  },
+                },
+              });
+        const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+          released: true,
+        }));
+        const result = await run(
+          makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+        );
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(releasePausedRunSlot.mock.calls).toEqual([
+          [
+            paused.id,
+            {
+              nodeId: 'review',
+              pauseId: 'p1',
+              ...(kind === 'deadline'
+                ? { kind: 'wait', resumeAt: '2026-01-02T00:00:00.000Z' }
+                : { kind: 'pause' }),
+            },
+          ],
+        ]);
+      });
+    }
+    for (const owner of ['node', 'loop_group'] as const) {
+      for (const kind of ['time', 'event'] as const) {
+        it(`returns the ${owner} ${kind} cursor captured before releasing the slot`, async () => {
+          const wait = {
+            owner,
+            kind,
+            nodeId: 'checks',
+            ...(owner === 'loop_group'
+              ? {
+                  bodyWaitId: 'body-wait',
+                  iteration: 2,
+                  sessionId: null,
+                  sessionProvider: null,
+                }
+              : {}),
+            ...(kind === 'event' ? { event: 'checks.complete' } : {}),
+            pauseId: 'occurrence-a',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-02T00:00:00.000Z',
+          };
+          const paused = makeRun({
+            status: 'paused',
+            metadata: {
+              wait,
+            },
+          });
+          const result = await run(
+            makeStore({
+              getWorkflowRun: mock(async () => paused),
+              releasePausedRunSlot: mock(async () => {
+                paused.metadata = {
+                  ...paused.metadata,
+                  wait: { ...wait, pauseId: 'occurrence-b' },
+                };
+                return { released: true };
+              }),
+            })
+          );
+          expect(result).toMatchObject({
+            success: true,
+            paused: true,
+            waitCursor: {
+              kind: 'wait',
+              nodeId: 'checks',
+              pauseId: 'occurrence-a',
+              resumeAt: '2026-01-02T00:00:00.000Z',
+            },
+          });
+        });
+      }
+    }
     it('keeps the slot of a parent blocked on its child', async () => {
       const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
         released: true,

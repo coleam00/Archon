@@ -95,6 +95,7 @@ import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import {
   continuablePauseCursor,
+  deadlineWaitCursor,
   type PersistedNodeOutput,
   type WorkflowResumeCursor,
 } from './store';
@@ -3529,8 +3530,15 @@ export async function executeWorkflow(
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
     } else if (finalStatus?.status === 'paused') {
+      const wait = pendingWorkflowWaitDeadline(finalStatus);
+      const waitCursor = wait ? deadlineWaitCursor(wait) : undefined;
       await releaseContinuablePauseSlot(deps, finalStatus);
-      return { success: true, paused: true, workflowRunId: workflowRun.id };
+      return {
+        success: true,
+        paused: true,
+        workflowRunId: workflowRun.id,
+        ...(waitCursor ? { waitCursor } : {}),
+      };
     } else {
       return {
         success: false,

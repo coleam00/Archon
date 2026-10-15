@@ -1,3 +1,4 @@
+import type { SkillDiscovery } from '@archon/provider-contract';
 import type { ProviderCapabilities } from '../types';
 
 /**
@@ -94,3 +95,10 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   nativeTools: true,
   containerExec: true, // spawns the CLI in-container via spawnClaudeCodeProcess
 };
+
+/** Claude Code's native skill roots: it never discovers `.agents/skills`. */
+export const CLAUDE_SKILL_DISCOVERY = {
+  project: ['.claude/skills'],
+  user: ['skills'],
+  userDirectory: { env: 'CLAUDE_CONFIG_DIR', home: '.claude' },
+} satisfies SkillDiscovery;
