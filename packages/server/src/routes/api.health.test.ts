@@ -2,6 +2,7 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import {
   makeDiscoverWorkflowsMock,
   makeLoaderMock,
@@ -33,13 +34,7 @@ const mockGetSchemaVersion = mock(async () => ({
 const mockIsDocker = mock(() => false);
 const mockIsWSL = mock(() => false);
 const mockGetWSLDistroName = mock((): string | undefined => undefined);
-const mockGetStats = mock(() => ({
-  active: 1,
-  queuedTotal: 2,
-  queuedByConversation: [] as { conversationId: string; queuedMessages: number }[],
-  maxConcurrent: 10,
-  activeConversationIds: [] as string[],
-}));
+const mockGetStats = mock(() => ({ ...makeIdleLockStats(), active: 1, queuedTotal: 2 }));
 
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
@@ -227,11 +222,8 @@ describe('GET /api/health', () => {
 
   test('returns status ok with adapter and concurrency info', async () => {
     mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
+      ...makeIdleLockStats(),
       queuedTotal: 2,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
     }));
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
       { id: 'run-1', conversation_id: 'conv-1', workflow_name: 'assist', started_at: '2026-01-01' },
@@ -261,13 +253,7 @@ describe('GET /api/health', () => {
   // Schema vintage (#2316): a bug report needs to be able to state which build
   // created this database and which last applied schema to it.
   test('reports the schema vintage', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
 
     const app = makeApp();
@@ -285,13 +271,7 @@ describe('GET /api/health', () => {
   });
 
   test('reports a null creation vintage rather than omitting it', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
 
     mockGetSchemaVersion.mockImplementationOnce(async () => ({
@@ -310,13 +290,7 @@ describe('GET /api/health', () => {
   });
 
   test('omits schema and still answers 200 when the vintage read fails', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
 
     mockGetSchemaVersion.mockImplementationOnce(async () => {
@@ -334,13 +308,7 @@ describe('GET /api/health', () => {
   });
 
   test('includes running background workflows in concurrency.active count', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
       { id: 'run-1', conversation_id: 'conv-1', workflow_name: 'assist', started_at: '2026-01-01' },
       { id: 'run-2', conversation_id: 'conv-2', workflow_name: 'plan', started_at: '2026-01-01' },
@@ -362,10 +330,8 @@ describe('GET /api/health', () => {
 
   test('deduplicates conversation IDs tracked by both lock manager and DB', async () => {
     mockGetStats.mockImplementationOnce(() => ({
+      ...makeIdleLockStats(),
       active: 1,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
       activeConversationIds: ['conv-1'],
     }));
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
@@ -386,10 +352,9 @@ describe('GET /api/health', () => {
 
   test('combines lock manager and background workflow counts', async () => {
     mockGetStats.mockImplementationOnce(() => ({
+      ...makeIdleLockStats(),
       active: 1,
       queuedTotal: 3,
-      queuedByConversation: [],
-      maxConcurrent: 10,
       activeConversationIds: ['conv-1'],
     }));
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
@@ -411,13 +376,7 @@ describe('GET /api/health', () => {
   });
 
   test('returns 200 without any auth requirements', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
 
     const app = makeApp();
@@ -426,13 +385,7 @@ describe('GET /api/health', () => {
   });
 
   test('includes is_docker: false in non-Docker environment', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
     mockIsDocker.mockReturnValueOnce(false);
 
@@ -445,13 +398,7 @@ describe('GET /api/health', () => {
   });
 
   test('includes is_docker: true in Docker environment', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
     mockIsDocker.mockReturnValueOnce(true);
 
@@ -464,13 +411,7 @@ describe('GET /api/health', () => {
   });
 
   test('includes is_wsl: false and omits wsl_distro in non-WSL environment', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
     mockIsWSL.mockReturnValueOnce(false);
     mockGetWSLDistroName.mockReturnValueOnce(undefined);
@@ -485,13 +426,7 @@ describe('GET /api/health', () => {
   });
 
   test('includes is_wsl: true and wsl_distro in WSL environment', async () => {
-    mockGetStats.mockImplementationOnce(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }));
+    mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
     mockIsWSL.mockReturnValueOnce(true);
     mockGetWSLDistroName.mockReturnValueOnce('Ubuntu');

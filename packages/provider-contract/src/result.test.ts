@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mergeTokenUsage, type TokenUsage } from './result';
+import { addResultUsage, mergeTokenUsage, type TokenUsage } from './result';
 
 describe('mergeTokenUsage', () => {
   test('returns undefined for no contributions', () => {
@@ -97,5 +97,36 @@ describe('mergeTokenUsage', () => {
     // Callers that need these compose them; folding them in here would change
     // OpenCode's `total` fallback semantics.
     expect(merged).toEqual({ input: 30, output: 3 });
+  });
+});
+
+describe('addResultUsage', () => {
+  test('passes a single result through untouched', () => {
+    const tokens = { input: 5, output: 1, total: 6 };
+    expect(addResultUsage({}, { cost: 0.1, tokens })).toEqual({ cost: 0.1, tokens });
+  });
+
+  test('sums cost and tokens across results', () => {
+    const total = addResultUsage(
+      addResultUsage({}, { cost: 0.1, tokens: { input: 1, output: 2 } }),
+      { cost: 0.2, tokens: { input: 3, output: 4 } }
+    );
+    expect(total.cost).toBeCloseTo(0.3);
+    expect(total.tokens).toEqual({ input: 4, output: 6 });
+  });
+
+  test('unknown tokens stay unknown for the rest of the turn, cost keeps summing', () => {
+    const unknown = addResultUsage(
+      addResultUsage({}, { cost: 0.1, tokens: { input: 1, output: 2 } }),
+      { cost: 0.1, tokensUnknown: true }
+    );
+    const total = addResultUsage(unknown, { cost: 0.1, tokens: { input: 3, output: 4 } });
+    expect(total.tokensUnknown).toBe(true);
+    expect(total.tokens).toBeUndefined();
+    expect(total.cost).toBeCloseTo(0.3);
+  });
+
+  test('a non-finite cost contributes nothing', () => {
+    expect(addResultUsage({ cost: 0.1 }, { cost: Number.NaN })).toEqual({ cost: 0.1 });
   });
 });

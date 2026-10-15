@@ -4,6 +4,7 @@ import { clearRegistry, getRegistration, registerProvider } from '@archon/provid
 import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers/in-process';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { EFFORT_LADDER } from '@archon/provider-contract';
 import { InvalidConfigError } from '@archon/core/config';
 import {
@@ -165,13 +166,7 @@ function makeApp(): Hono {
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    })),
+    getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;

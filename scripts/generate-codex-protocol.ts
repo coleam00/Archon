@@ -22,6 +22,7 @@ const OUTPUT_DIR = join(REPO_ROOT, 'packages/providers/src/codex/protocol');
 const ROOTS = [
   'ClientRequest',
   'ServerNotification',
+  'v2/DynamicToolCallParams',
   // Response shapes: the test fake builds its replies against them.
   'InitializeResponse',
   'v2/ThreadStartResponse',
@@ -32,6 +33,7 @@ const ROOTS = [
   'v2/LoginAccountResponse',
   'v2/GetAccountResponse',
   'v2/Account',
+  'v2/DynamicToolCallResponse',
   // Workflow-node capability scoping reads these.
   'v2/ConfigReadResponse',
   'v2/PluginInstalledResponse',
@@ -50,9 +52,12 @@ async function generate(): Promise<Map<string, string>> {
 
   const out = await mkdtemp(join(tmpdir(), 'codex-protocol-'));
   try {
-    const proc = Bun.spawnSync([codexBin, 'app-server', 'generate-ts', '--out', out], {
-      stderr: 'pipe',
-    });
+    const proc = Bun.spawnSync(
+      [codexBin, 'app-server', 'generate-ts', '--experimental', '--out', out],
+      {
+        stderr: 'pipe',
+      }
+    );
     if (proc.exitCode !== 0) {
       throw new Error(`codex app-server generate-ts failed: ${proc.stderr.toString()}`);
     }

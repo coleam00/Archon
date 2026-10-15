@@ -40,7 +40,7 @@ export async function getConversationById(id: string): Promise<Conversation | nu
 
 /**
  * Find a conversation by platform_conversation_id only (no platform_type filter).
- * Safe because all platform IDs are globally unique (they include platform prefix + timestamp + random).
+ * Rejects IDs shared by multiple platforms rather than selecting an arbitrary row.
  * Used by the Web UI API to load conversations from any platform.
  */
 export async function findConversationByPlatformId(
@@ -50,6 +50,7 @@ export async function findConversationByPlatformId(
     `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND ${notOriginAnchor('id')}`,
     [platformId]
   );
+  if (result.rows.length > 1) throw new Error('Ambiguous conversation platform ID');
   return result.rows[0] ?? null;
 }
 

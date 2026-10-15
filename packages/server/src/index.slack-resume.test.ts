@@ -352,6 +352,7 @@ const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRout
 mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
+  registerGitlabWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
   registerWebhookSourceRoutes: (): void => undefined,
 }));

@@ -152,13 +152,13 @@ function readNumberOrNull(obj: Record<string, unknown>, key: string): number | n
  * resume for already-completed nodes — doesn't fit that shape, and both skip
  * variants collapse to `skipped`.
  */
-const NODE_TRANSITION_BY_EVENT: Record<string, NodeTransitionEvent['transition']> = {
-  node_started: 'started',
-  node_completed: 'completed',
-  node_failed: 'failed',
-  node_skipped: 'skipped',
-  node_skipped_prior_success: 'skipped',
-};
+const NODE_TRANSITION_BY_EVENT = new Map<string, NodeTransitionEvent['transition']>([
+  ['node_started', 'started'],
+  ['node_completed', 'completed'],
+  ['node_failed', 'failed'],
+  ['node_skipped', 'skipped'],
+  ['node_skipped_prior_success', 'skipped'],
+]);
 
 /**
  * Best-effort normalizer from a raw workflow_events row to a typed RunEvent.
@@ -175,16 +175,8 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   const data = raw.data;
   const et = raw.event_type;
 
-  if (
-    et === 'node_started' ||
-    et === 'node_completed' ||
-    et === 'node_failed' ||
-    et === 'node_skipped' ||
-    et === 'node_skipped_prior_success'
-  ) {
-    // Guard above restricts `et` to the map's keys; `?? 'skipped'` is only a
-    // defensive default if a new node_* type is added to the guard but not the map.
-    const transition = NODE_TRANSITION_BY_EVENT[et] ?? 'skipped';
+  const transition = NODE_TRANSITION_BY_EVENT.get(et);
+  if (transition !== undefined) {
     return {
       ...base,
       kind: 'node_transition',

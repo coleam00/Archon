@@ -126,8 +126,9 @@ export interface AgentRequestOptions {
   /**
    * In-process tools the model may call this turn. Defined once by the caller
    * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
-   * `createSdkMcpServer`/`tool()`, Pi via `customTools`. Providers without an
-   * in-process tool path (Codex/OpenCode) ignore them. Gated on the
+   * `createSdkMcpServer`/`tool()`, Codex via dynamic tools, Pi via `customTools`.
+   * Providers without an
+   * in-process tool path (OpenCode/Copilot) ignore them. Gated on the
    * `nativeTools` capability.
    */
   nativeTools?: NativeTool[];
@@ -156,10 +157,15 @@ export type NativeToolProperty = z.infer<typeof nativeToolPropertySchema>;
  * provider maps this to its SDK's schema form, so the supported subset lives
  * here once instead of being re-derived by each converter.
  */
-export const nativeToolInputSchema = z.object({
-  properties: z.record(z.string(), nativeToolPropertySchema),
-  required: z.array(z.string()).readonly(),
-});
+export const nativeToolInputSchema = z
+  .object({
+    properties: z.record(z.string(), nativeToolPropertySchema),
+    required: z.array(z.string()).readonly(),
+  })
+  .refine(input => input.required.every(key => Object.hasOwn(input.properties, key)), {
+    message: 'Required tool keys must be declared in properties',
+    path: ['required'],
+  });
 export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 
 /**
@@ -182,9 +188,8 @@ export function defineNativeToolInputSchema<P extends Record<string, NativeToolP
  * boundary as data + a function on the request options.
  *
  * `inputSchema` is the closed typed shape each provider maps to its SDK's
- * schema form. The handler is expected to return a text result rather than
- * throw — provider adapters add no safety net, so an uncaught throw would
- * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
+ * schema form. Handlers should return a text result rather than throw; an
+ * uncaught throw may surface into the agent loop. (core's `buildManageRunTool` guarantees this with
  * an outer try/catch around its dispatch.)
  */
 export interface NativeTool {

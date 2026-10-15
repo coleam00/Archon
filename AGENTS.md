@@ -186,6 +186,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 Do not expand this file with copied reference material. Use the owning source:
 
 - Product direction: [`.archon/direction.md`](.archon/direction.md)
+- Code structure, flows, extension points and enforced boundaries: [`.archon/architecture.md`](.archon/architecture.md)
 - Workflow-language design: [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md)
 - Engineering craft and review values: [`.archon/engineering.md`](.archon/engineering.md)
 - CLI: [`packages/docs-web/src/content/docs/reference/cli.md`](packages/docs-web/src/content/docs/reference/cli.md) and `archon --help`

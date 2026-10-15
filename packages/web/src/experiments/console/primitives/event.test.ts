@@ -95,11 +95,10 @@ describe('toRunEvent — node transitions', () => {
     expect(e.skipReason).toBe('prior_success');
   });
 
-  test('node_failed maps to a failed transition (guards the map vs the skipped default)', () => {
+  test('node_failed maps to a failed transition', () => {
     const e = toRunEvent(raw({ event_type: 'node_failed' }));
     expect(e.kind).toBe('node_transition');
     if (e.kind !== 'node_transition') throw new Error('unreachable');
-    // Must NOT fall through to the `?? 'skipped'` default.
     expect(e.transition).toBe('failed');
     expect(e.skipReason).toBeNull();
   });

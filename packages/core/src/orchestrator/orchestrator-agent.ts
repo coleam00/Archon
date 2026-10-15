@@ -42,7 +42,12 @@ import type {
   WorkflowRequest,
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
-import { sessionPreview, toolCallDisplayName } from '@archon/provider-contract';
+import {
+  addResultUsage,
+  sessionPreview,
+  toolCallDisplayName,
+  type ResultUsageTotal,
+} from '@archon/provider-contract';
 import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -2646,9 +2651,9 @@ export async function handleMessage(
       workflows,
       caps.nativeTools ? 'tools' : 'commands'
     );
-    // Providers WITHOUT the in-process manage_run tool (Codex/OpenCode/Copilot) get a
+    // Providers WITHOUT the in-process manage_run tool (OpenCode/Copilot) get a
     // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
-    // project's runs over bash. Claude/Pi get the native tool below and are nudged to it
+    // project's runs over bash. Native-tool providers get the tool below and are nudged to it
     // — adding the CLI pointer there would be redundant and steer them onto a bash path
     // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
     // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
@@ -2706,7 +2711,7 @@ export async function handleMessage(
     // reason: on a foreground surface the run would otherwise block the agent loop.
     const pendingLaunch: { launch: ChatLaunch | null } = { launch: null };
 
-    // Providers with in-process native tools (Claude, Pi) launch workflows and
+    // Providers with in-process native tools launch workflows and
     // register projects through typed tools in every chat. Project-scoped chats also
     // get `manage_run` to inspect and operate that project's runs.
     if (caps.nativeTools) {
@@ -2964,7 +2969,8 @@ async function handleStreamMode(
   let newSessionId: string | undefined;
   let commandDetected = false;
   let commandFullyParsed = false;
-  let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
+  // Usage summed over every `result` chunk of the turn, as the workflow engine sums a node.
+  let turnResult: (ResultUsageTotal & { stopReason?: string }) | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -3070,10 +3076,9 @@ async function handleStreamMode(
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
-      lastResult = {
-        cost: msg.cost,
-        tokens: msg.tokens,
-        stopReason: msg.stopReason,
+      turnResult = {
+        ...addResultUsage(turnResult ?? {}, msg),
+        stopReason: msg.stopReason ?? turnResult?.stopReason,
       };
     }
   }
@@ -3144,7 +3149,7 @@ async function handleStreamMode(
       );
     });
   }
-  await maybeSendResultFooter(platform, conversationId, lastResult);
+  await maybeSendResultFooter(platform, conversationId, turnResult);
   // Anonymous telemetry: one completed direct-chat turn. The workflow-invocation
   // and project-registration paths return above without reaching this — those
   // are covered by workflow_invoked / codebase_registered instead. Platform +
@@ -3156,9 +3161,9 @@ async function handleStreamMode(
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turn.startedAt,
-    costUsd: lastResult?.cost,
-    tokensIn: lastResult?.tokens?.input,
-    tokensOut: lastResult?.tokens?.output,
+    costUsd: turnResult?.cost,
+    tokensIn: turnResult?.tokens?.input,
+    tokensOut: turnResult?.tokens?.output,
     outcome: 'completed',
   });
 }
@@ -3194,7 +3199,8 @@ async function handleBatchMode(
   let newSessionId: string | undefined;
   let commandDetected = false;
   let commandFullyParsed = false;
-  let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
+  // Usage summed over every `result` chunk of the turn, as the workflow engine sums a node.
+  let turnResult: (ResultUsageTotal & { stopReason?: string }) | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -3299,10 +3305,9 @@ async function handleBatchMode(
         });
         return;
       }
-      lastResult = {
-        cost: msg.cost,
-        tokens: msg.tokens,
-        stopReason: msg.stopReason,
+      turnResult = {
+        ...addResultUsage(turnResult ?? {}, msg),
+        stopReason: msg.stopReason ?? turnResult?.stopReason,
       };
     }
 
@@ -3405,7 +3410,7 @@ async function handleBatchMode(
       );
     });
   }
-  await maybeSendResultFooter(platform, conversationId, lastResult);
+  await maybeSendResultFooter(platform, conversationId, turnResult);
   // Anonymous telemetry: one completed direct-chat turn (same exclusion
   // rationale as the stream-mode capture in handleStreamMode above).
   reportChatTurn(turn, {
@@ -3415,9 +3420,9 @@ async function handleBatchMode(
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turn.startedAt,
-    costUsd: lastResult?.cost,
-    tokensIn: lastResult?.tokens?.input,
-    tokensOut: lastResult?.tokens?.output,
+    costUsd: turnResult?.cost,
+    tokensIn: turnResult?.tokens?.input,
+    tokensOut: turnResult?.tokens?.output,
     outcome: 'completed',
   });
 }
