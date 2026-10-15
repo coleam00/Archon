@@ -20,9 +20,8 @@ import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallRespo
 import { toolResponse } from './native-tools';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
-import type { ServerRequest } from './protocol/ServerRequest';
 
-const TOOL_CALL_METHOD = 'item/tool/call' satisfies ServerRequest['method'];
+const TOOL_CALL_METHOD = 'item/tool/call';
 import type { CodexBinary } from './binary-resolver';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;

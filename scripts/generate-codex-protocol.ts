@@ -22,7 +22,7 @@ const OUTPUT_DIR = join(REPO_ROOT, 'packages/providers/src/codex/protocol');
 const ROOTS = [
   'ClientRequest',
   'ServerNotification',
-  'ServerRequest',
+  'v2/DynamicToolCallParams',
   // Response shapes: the test fake builds its replies against them.
   'InitializeResponse',
   'v2/ThreadStartResponse',

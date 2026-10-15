@@ -15,7 +15,6 @@ import type { ChildProcessWithoutNullStreams } from 'child_process';
 import type { Spawner } from '../codex/app-server';
 import type { ClientRequest } from '../codex/protocol/ClientRequest';
 import type { InitializeResponse } from '../codex/protocol/InitializeResponse';
-import type { ServerRequest } from '../codex/protocol/ServerRequest';
 import type { ServerNotification } from '../codex/protocol/ServerNotification';
 import type { CodexErrorInfo } from '../codex/protocol/v2/CodexErrorInfo';
 import type { ConfigReadResponse } from '../codex/protocol/v2/ConfigReadResponse';
@@ -113,7 +112,7 @@ export const TURN_ID = 'turn-1';
 type OutgoingFrame =
   | { id: number | string; result: unknown }
   | { id: number | string; error: { code: number; message: string } }
-  | Extract<ServerRequest, { method: 'item/tool/call' }>
+  | { id: number | string; method: 'item/tool/call'; params: DynamicToolCallParams }
   | ServerNotification;
 
 export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): Spawner & {
