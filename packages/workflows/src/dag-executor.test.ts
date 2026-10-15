@@ -21274,13 +21274,13 @@ describe('executeDagWorkflow -- script nodes', () => {
         script: 'check',
       };
 
-      /** Capture `check.ts` (which writes `marker`), then make the captured scripts unreadable. */
-      async function unreadableCapture(
+      async function scriptCapture(
         marker: string,
         commandFolder?: string
       ): Promise<{
         roots: WorkflowSourceRoots;
         captureRoot: string;
+        makeUnreadable: () => Promise<void>;
         restore: () => Promise<void>;
       }> {
         const scriptsDir = join(testDir, '.archon', 'scripts');
@@ -21300,10 +21300,10 @@ describe('executeDagWorkflow -- script nodes', () => {
           },
         });
         const capturedScripts = join(captureRoot, 'project', '.archon', 'scripts');
-        await chmod(capturedScripts, 0o000);
         return {
           roots: capturedSourceRoots(capture.anchor),
           captureRoot,
+          makeUnreadable: () => chmod(capturedScripts, 0o000),
           restore: () => chmod(capturedScripts, 0o755),
         };
       }
@@ -21322,7 +21322,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       for (const sibling of ['none', 'paid', 'mixed'] as const) {
         it(`source recovery stops the old owner after release (${sibling})`, async () => {
           const deps = createMockDeps();
-          const capture = await unreadableCapture(join(testDir, 'ran'));
+          const capture = await scriptCapture(join(testDir, 'ran'));
           let writesAtRelease = 0;
           if (sibling !== 'none')
             mockSendQueryDag.mockImplementation(async function* () {
@@ -21344,6 +21344,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             return { released: true };
           });
           try {
+            await capture.makeUnreadable();
             const result = await executeDagWorkflow(
               dagOptions({
                 deps,
@@ -21397,8 +21398,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           await mkdir(commandFolder, { recursive: true });
           await writeFile(join(commandFolder, 'work.md'), 'DONE');
           await writeFile(join(commandFolder, 'servers.json'), '{}');
-          const capture = await unreadableCapture(join(testDir, 'ran'), configuredFolder);
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'), configuredFolder);
           const base = join(capture.captureRoot, 'project/.archon');
           const commandRoot = join(base, configuredFolder ? 'team-commands' : 'commands');
           const roots = kind.startsWith('global-command')
@@ -21501,8 +21501,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           );
           await mkdir(join(testDir, '.archon/commands'), { recursive: true });
           await writeFile(join(testDir, '.archon/commands/work.md'), 'DONE');
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const dir = join(
             capture.captureRoot,
             'project/.archon',
@@ -21596,8 +21595,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             join(testDir, '.archon/workflows/block.yaml'),
             `name: block\ndescription: block\nnodes:\n  - id: work\n    command: ${command}\n`
           );
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const node =
             kind === 'compose'
               ? {
@@ -21934,8 +21932,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       it('an unreadable captured scripts directory after admission leaves the run resumable, not failed', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');
-        const capture = await unreadableCapture(marker);
+        const capture = await scriptCapture(marker);
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(
             dagOptions({
               deps: mockDeps,
@@ -21959,7 +21958,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       it('a released run completes when a later pass can read its source', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');
-        const capture = await unreadableCapture(marker);
+        const capture = await scriptCapture(marker);
         const workflowRun = makeWorkflowRun('source-released-run', { status: 'paused' });
         const options = dagOptions({
           deps: mockDeps,
@@ -21972,6 +21971,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
         );
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(options);
         } finally {
           await capture.restore();
@@ -22026,8 +22026,9 @@ describe('executeDagWorkflow -- script nodes', () => {
 
       it('a loop_group body that cannot read its source releases the run', async () => {
         const mockDeps = createMockDeps();
-        const capture = await unreadableCapture(join(testDir, 'ran'));
+        const capture = await scriptCapture(join(testDir, 'ran'));
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(
             dagOptions({
               deps: mockDeps,
@@ -22069,7 +22070,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           const mockDeps = createMockDeps();
           await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
           await writeFile(join(testDir, '.archon', 'commands', 'my-cmd.md'), 'Do the thing.');
-          const capture = await unreadableCapture(join(testDir, 'ran'));
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const options = dagOptions({
             deps: mockDeps,
             cwd: testDir,
@@ -22085,6 +22086,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
           );
           try {
+            await capture.makeUnreadable();
             await executeDagWorkflow(options);
           } finally {
             await capture.restore();
@@ -22113,8 +22115,9 @@ describe('executeDagWorkflow -- script nodes', () => {
           join(testDir, '.archon', 'workflows', 'compose-blk.yaml'),
           'name: compose-blk\ndescription: b\nnodes:\n  - id: work\n    script: check\n    runtime: bun\n'
         );
-        const capture = await unreadableCapture(join(testDir, 'ran'));
+        const capture = await scriptCapture(join(testDir, 'ran'));
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(
             dagOptions({
               deps: mockDeps,
@@ -22237,7 +22240,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       it('preserves a paid sibling and its usage when source release unwinds the layer', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');
-        const capture = await unreadableCapture(marker);
+        const capture = await scriptCapture(marker);
         const workflowRun = makeWorkflowRun('source-sibling-run');
         const options = dagOptions({
           deps: mockDeps,
@@ -22262,6 +22265,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           };
         });
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(options);
         } finally {
           await capture.restore();
@@ -22288,8 +22292,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       for (const code of ['EIO', 'EMFILE']) {
         it(`releases composed preflight on a raw ${code} source error`, async () => {
           const mockDeps = createMockDeps();
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const cause = Object.assign(new Error('source read failed'), {
             code,
             syscall: 'open',
@@ -22536,8 +22539,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           const commandsDir = join(testDir, '.archon', 'commands');
           await mkdir(commandsDir, { recursive: true });
           await writeFile(join(commandsDir, 'my-cmd.md'), 'Do the thing.');
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const capturedCommands = join(capture.captureRoot, 'project', '.archon', 'commands');
           const commandFile = join(capturedCommands, 'my-cmd.md');
           const findCommands = commandPaths.findCommandFiles;
@@ -22594,8 +22596,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           const folder = join(testDir, '.archon', 'workflows', 'team', 'block', 'commands');
           await mkdir(folder, { recursive: true });
           await writeFile(join(folder, 'work.md'), 'Do the work.');
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const command = formatPackagedResourceReference(
             { source: 'project', pack: 'team', workflow: 'block' },
             'work'
@@ -22671,8 +22672,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       for (const loop of [false, true]) {
         it(`keeps a genuinely absent packaged command ${loop ? 'loop' : 'agent'} as a configuration failure`, async () => {
           const mockDeps = createMockDeps();
-          const capture = await unreadableCapture(join(testDir, 'ran'));
-          await capture.restore();
+          const capture = await scriptCapture(join(testDir, 'ran'));
           const command = formatPackagedResourceReference(
             { source: 'project', pack: 'team', workflow: 'block' },
             'missing'
@@ -22704,7 +22704,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       it('a captured home MCP source read releases before reserving an agent work unit', async () => {
         const mockDeps = createMockDeps();
         await writeFile(join(testDir, 'servers.json'), '{"local":{"command":"example"}}');
-        const capture = await unreadableCapture(join(testDir, 'ran'));
+        const capture = await scriptCapture(join(testDir, 'ran'));
         const node = dagNodeSchema.parse({
           id: 'step',
           prompt: 'Do the work.',
@@ -22722,6 +22722,7 @@ describe('executeDagWorkflow -- script nodes', () => {
           foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
         );
         try {
+          await capture.makeUnreadable();
           await executeDagWorkflow(options);
         } finally {
           await capture.restore();
@@ -22745,8 +22746,9 @@ describe('executeDagWorkflow -- script nodes', () => {
           return { released: false };
         });
         const platform = createMockPlatform();
-        const capture = await unreadableCapture(join(testDir, 'ran'));
+        const capture = await scriptCapture(join(testDir, 'ran'));
         try {
+          await capture.makeUnreadable();
           const result = await executeDagWorkflow(
             dagOptions({
               deps: mockDeps,
