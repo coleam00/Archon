@@ -1,0 +1,832 @@
+/**
+ * The intake bench runner: every version on the same batch of five rows, one ordinary
+ * run per (version, row), one JSONL line per run.
+ *
+ * A version is one model on triage's tier, the only tier intake's agent node uses, so
+ * versions differ in nothing else. The baseline is whatever that tier resolves to in
+ * the checkout's own configuration today; every version, the baseline included, runs
+ * with a config layer pinning that tier, so a config edit mid-bench cannot move it.
+ *
+ * Eval batches read the set's own repository and must write nothing to it: its batch
+ * issues and its state documents are read before and after, and any difference fails
+ * the batch. Live batches run intake for real, but only on scratch repositories that
+ * hold copies of the batch's issues, one repository per version.
+ */
+
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join, relative } from 'node:path';
+import {
+  type NodeBinding,
+  type RunDetail,
+  type RunNode,
+  agentBinding,
+  appendLine,
+  archonJson,
+  artifactsOf,
+  canonical,
+  getRun,
+  isId,
+  launch,
+  readLines,
+  returnedValue,
+  snapshotSource,
+  waitRun,
+} from '../../../.shared/bench.ts';
+import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
+import { git, gitOrThrow } from '../../../.shared/git.ts';
+import type { Contract, Route } from '../../../.shared/labels.ts';
+import { remoteFor, urlRepo } from '../../../.shared/remote.ts';
+import { isObject } from '../../../.shared/typed.ts';
+import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts';
+
+type Repo = QualifiedPr['repo'];
+
+export const TIERS = ['small', 'medium', 'large'] as const;
+export type Tier = (typeof TIERS)[number];
+
+export const SAMPLES_FILE = 'samples.jsonl';
+export const CHECKS_FILE = 'checks.jsonl';
+
+/** What one version pins. Versions differ only in `provider` and `model`. */
+export interface Version {
+  readonly label: string;
+  /** The full commit the pack source is read from. */
+  readonly pack_sha: string;
+  /** Blob SHA of the triage prompt at `pack_sha`; there is no other agent prompt on intake's path. */
+  readonly prompt_sha: { readonly triage: string };
+  readonly provider: string;
+  readonly model: string;
+  /** The tier archon-triage declares, which the version's config layer pins. */
+  readonly tier: Tier;
+  readonly effort?: string;
+}
+
+export interface ResolvedVersion {
+  readonly version: Version;
+  /** The extracted `.archon` snapshot a run reads its workflow from (`--workflow-source`). */
+  readonly source: string;
+  /** The run config layer pinning the version's tier (`--config`). */
+  readonly config: string;
+}
+
+interface Binding {
+  readonly provider: string;
+  readonly model: string;
+  readonly effort?: string;
+}
+
+/** The message every run starts with; the target, not the message, carries the issue. */
+export const BENCH_MESSAGE = 'Triage the target.';
+
+// A dry run stops at a node it cannot simulate; these stand in for every node of
+// archon-triage so the simulation completes and reports the agent node's binding.
+const TRIAGE_STUBS = {
+  policy: { defaults: 'unused' },
+  triage: {
+    decision: { contract: 'NO_ACTION' },
+    type: { value: 'bug', reason: 'stub' },
+    size: { value: 's', reason: 'stub' },
+    complexity: { value: 'low', reason: 'stub' },
+    importance: { value: 'low', reason: 'stub' },
+    urgency: { value: 'none', reason: 'stub' },
+    item: { repo: { host: '', path: '' }, number: 0 },
+    area_labels: [],
+    summary: 'stub',
+    report: { type: 'archon_artifact', run_id: 'stub', path: 'triage.md' },
+  },
+  verdict: {
+    contract: 'NO_ACTION',
+    route: 'no_action',
+    pull_request: null,
+    ready: false,
+    type: { value: 'bug', reason: 'stub' },
+    size: { value: 's', reason: 'stub' },
+    complexity: { value: 'low', reason: 'stub' },
+    importance: { value: 'low', reason: 'stub' },
+    urgency: { value: 'none', reason: 'stub' },
+    labels: [],
+    published: false,
+    proposed_edits: { title: '', body: '' },
+    blocked_reason: '',
+    blocked_by: [],
+    summary: 'stub',
+    report: { type: 'archon_artifact', run_id: 'stub', path: 'triage.md' },
+  },
+};
+
+/** The binding archon-triage's agent node resolves to in `cwd`, with an optional config layer. */
+async function dryRunBinding(cwd: string, source: string, outDir: string, config?: string): Promise<Binding> {
+  const stubs = join(outDir, 'versions', 'triage.stubs.yaml');
+  mkdirSync(join(outDir, 'versions'), { recursive: true });
+  writeFileSync(stubs, Bun.YAML.stringify(TRIAGE_STUBS, null, 2));
+  const trace = await archonJson(
+    [
+      'workflow',
+      'run',
+      WORKFLOWS.triage,
+      '--cwd',
+      cwd,
+      '--workflow-source',
+      source,
+      ...(config === undefined ? [] : ['--config', config]),
+      '--dry-run',
+      '--stubs',
+      stubs,
+      '--json',
+      '--input',
+      'target=resolve',
+    ],
+    cwd
+  );
+  const node = Array.isArray(trace.trace) ? trace.trace.find(entry => isObject(entry) && entry.nodeId === 'triage') : undefined;
+  const resolution = isObject(node) && isObject(node.resolution) ? node.resolution : {};
+  const { provider, model, effort } = resolution;
+  if (typeof provider !== 'string' || provider === '' || typeof model !== 'string' || model === '') {
+    throw new Error(`the triage node resolved no provider and model in ${cwd}: ${JSON.stringify(resolution)}`);
+  }
+  return typeof effort === 'string' ? { provider, model, effort } : { provider, model };
+}
+
+/** The one tracked file at `sha` under `.archon/workflows` whose path ends with `suffix`. */
+function packFile(repoRoot: string, sha: string, suffix: string): string {
+  const paths = gitOrThrow('-C', repoRoot, 'ls-tree', '-r', '--name-only', sha, '--', '.archon/workflows')
+    .split('\n')
+    .filter(path => path.endsWith(suffix));
+  if (paths.length !== 1) throw new Error(`expected one ${suffix} at ${sha}, found ${String(paths.length)}`);
+  return paths[0];
+}
+
+/**
+ * Read a version file (`{label, pack_sha}`, plus `provider` and `model` for anything
+ * but the baseline) and pin it, or refuse before anything runs. A label means one
+ * record for the life of an output directory, so a label already recorded with
+ * another version is refused.
+ */
+export async function resolveVersion(file: string, repoRoot: string, checkout: string, outDir: string): Promise<ResolvedVersion> {
+  const refuse = (reason: string): never => {
+    throw new Error(`version ${file}: ${reason}`);
+  };
+  let raw: unknown;
+  try {
+    raw = Bun.YAML.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    return refuse(`cannot be read (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (!isObject(raw)) return refuse('is not a mapping');
+  const { label, pack_sha: packRef, provider, model } = raw;
+  if (!isId(label)) return refuse('`label` must be letters, digits, `.`, `_` or `-`');
+  if (typeof packRef !== 'string' || packRef === '') return refuse('`pack_sha` is missing');
+  if ((provider === undefined) !== (model === undefined)) return refuse('name both `provider` and `model`, or neither for the baseline');
+  if (provider !== undefined && (typeof provider !== 'string' || provider === '' || typeof model !== 'string' || model === '')) {
+    return refuse('`provider` and `model` must be names');
+  }
+
+  const commit = git('-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${packRef}^{commit}`);
+  if (commit.code !== 0) return refuse(`pack_sha ${packRef} is not a commit in ${repoRoot}`);
+  const packSha = commit.stdout;
+  const workflowPath = packFile(repoRoot, packSha, `/${WORKFLOWS.triage}.yaml`);
+  const declared: unknown = Bun.YAML.parse(gitOrThrow('-C', repoRoot, 'show', `${packSha}:${workflowPath}`));
+  const tier = isObject(declared) ? declared.model : undefined;
+  if (!TIERS.includes(tier as Tier)) return refuse(`${workflowPath} at ${packSha} names no tier as its model`);
+  const promptPath = `${workflowPath.slice(0, workflowPath.lastIndexOf('/'))}/commands/triage.md`;
+  const prompt = git('-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${packSha}:${promptPath}`);
+  if (prompt.code !== 0) return refuse(`${promptPath} does not exist at ${packSha}`);
+
+  const source = snapshotSource(repoRoot, packSha, outDir);
+  const baseline = await dryRunBinding(checkout, source, outDir);
+  // Only the model moves; the baseline's effort stays, so effort is not a second variable.
+  const wanted: Binding =
+    typeof provider === 'string' && typeof model === 'string'
+      ? { provider, model, ...(baseline.effort === undefined ? {} : { effort: baseline.effort }) }
+      : baseline;
+  const config = join(outDir, 'versions', `${label}.config.yaml`);
+  writeFileSync(config, Bun.YAML.stringify({ tiers: { [tier as Tier]: wanted } }, null, 2));
+  const pinned = await dryRunBinding(checkout, source, outDir, config);
+  if (canonical(pinned) !== canonical(wanted)) {
+    return refuse(`the pinned tier resolved to ${JSON.stringify(pinned)}, not ${JSON.stringify(wanted)}`);
+  }
+
+  const version: Version = {
+    label,
+    pack_sha: packSha,
+    prompt_sha: { triage: prompt.stdout },
+    ...wanted,
+    tier: tier as Tier,
+  };
+  for (const line of readLines(join(outDir, SAMPLES_FILE))) {
+    if (isObject(line.version) && line.version.label === label && canonical(line.version) !== canonical(version)) {
+      return refuse(`label ${label} already names another version in ${join(outDir, SAMPLES_FILE)}; choose a new label`);
+    }
+  }
+  return { version, source, config };
+}
+
+/**
+ * The version's eval checkout of the set's repository at `base`: a shared clone whose
+ * remote is the repository itself, so triage reads the code and the tracker as a run
+ * in the operator's checkout would, and no run touches the operator's checkout.
+ */
+export function evalCheckout(repoRoot: string, repo: Repo, base: string, path: string): string {
+  if (!existsSync(path)) {
+    const url = gitOrThrow('-C', repoRoot, 'remote', 'get-url', remoteFor(repo));
+    gitOrThrow('clone', '--quiet', '--shared', '--no-checkout', repoRoot, path);
+    gitOrThrow('-C', path, 'remote', 'set-url', 'origin', url);
+  } else if (gitOrThrow('-C', path, 'status', '--porcelain') !== '') {
+    throw new Error(`${path} has changes a run left behind; inspect it, then remove it to start clean`);
+  }
+  gitOrThrow('-C', path, 'checkout', '--quiet', '--detach', base);
+  return path;
+}
+
+// --- live scratch repositories ---------------------------------------------------
+
+export interface Scratch {
+  readonly repo: Repo;
+  readonly checkout: string;
+}
+
+/** The operator's scratch repository for each version label, from the live file. */
+export function loadLive(file: string, set: BenchSet): Map<string, Scratch> {
+  const raw: unknown = Bun.YAML.parse(readFileSync(file, 'utf8'));
+  const refuse = (reason: string): never => {
+    throw new Error(`live ${file}: ${reason}`);
+  };
+  if (!isObject(raw)) return refuse('must map version labels to {repo: {host, path}, checkout}');
+  const live = new Map<string, Scratch>();
+  for (const [label, entry] of Object.entries(raw)) {
+    const repo = isObject(entry) && isObject(entry.repo) ? entry.repo : undefined;
+    if (!isObject(entry) || typeof repo?.host !== 'string' || typeof repo.path !== 'string' || typeof entry.checkout !== 'string') {
+      return refuse(`${label} needs repo: {host, path} and checkout`);
+    }
+    const scratch = { repo: { host: repo.host, path: repo.path }, checkout: entry.checkout };
+    if (sameRepo(scratch.repo, set.repo)) return refuse(`${label}'s scratch repository is the set's own repository`);
+    for (const [other, taken] of live) {
+      if (sameRepo(taken.repo, scratch.repo)) return refuse(`${label} and ${other} share ${repo.path}; each version needs its own`);
+    }
+    live.set(label, scratch);
+  }
+  return live;
+}
+
+/** Refuse a scratch checkout that is not of its repository, or not at `base`. */
+export function checkScratch(label: string, scratch: Scratch, base: string): void {
+  const listed = git('-C', scratch.checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
+  const names = listed.stdout.split('\n').map(line => urlRepo(line.slice(line.indexOf(' ') + 1)));
+  if (!names.some(named => named !== undefined && sameRepo(named, scratch.repo))) {
+    throw new Error(`${label}: ${scratch.checkout} has no remote for ${scratch.repo.path}`);
+  }
+  const head = git('-C', scratch.checkout, 'rev-parse', 'HEAD').stdout;
+  if (head !== base) throw new Error(`${label}: ${scratch.checkout} is at ${head}, not the batch base ${base}`);
+}
+
+function copiesFile(outDir: string, label: string): string {
+  return join(outDir, 'live', `${label}.json`);
+}
+
+/** Row id to issue number of its copy in the version's scratch repository. */
+export function readCopies(outDir: string, label: string, repo: Repo): Record<string, number> {
+  const file = copiesFile(outDir, label);
+  if (!existsSync(file)) return {};
+  const copies: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  if (!isObject(copies) || !isObject(copies.repo) || !isObject(copies.copies)) throw new Error(`${file} is not a copy map`);
+  if (!sameRepo(copies.repo as Repo, repo)) throw new Error(`${file} maps copies in ${String(copies.repo.path)}, not ${repo.path}`);
+  return copies.copies as Record<string, number>;
+}
+
+/** Open a copy of every batch row in the scratch repository that has none yet. */
+export function copyRows(outDir: string, label: string, scratch: Scratch, rows: readonly Row[]): Record<string, number> {
+  const copies = readCopies(outDir, label, scratch.repo);
+  for (const row of rows) {
+    if (copies[row.id] !== undefined) continue;
+    const result = Bun.spawnSync(
+      ['gh', 'api', '--hostname', scratch.repo.host, '-X', 'POST', `repos/${scratch.repo.path}/issues`, '-f', `title=${row.title}`, '-f', `body=${row.body}`],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+    if (result.exitCode !== 0) throw new Error(`copying row ${row.id} to ${scratch.repo.path} failed: ${result.stderr.toString().trim()}`);
+    const created: unknown = JSON.parse(result.stdout.toString());
+    if (!isObject(created) || typeof created.number !== 'number') throw new Error(`copying row ${row.id} returned no issue number`);
+    copies[row.id] = created.number;
+    mkdirSync(join(outDir, 'live'), { recursive: true });
+    writeFileSync(copiesFile(outDir, label), `${JSON.stringify({ repo: scratch.repo, copies }, null, 2)}\n`);
+  }
+  return copies;
+}
+
+// --- what a batch must not write ---------------------------------------------------
+
+export interface IssueFacts {
+  readonly labels: readonly string[];
+  readonly state: string;
+  readonly title: string;
+  readonly body_digest: string;
+  readonly comments: number;
+}
+
+export interface Snapshot {
+  /** `host/path#number` to the issue's facts. */
+  readonly issues: Readonly<Record<string, IssueFacts>>;
+  /** Project key to each state document's latest revision, -1 for a deleted one. */
+  readonly state: Readonly<Record<string, Readonly<Record<string, number>>>>;
+}
+
+export function issueKey(repo: Repo, number: number): string {
+  return `${repo.host}/${repo.path}#${String(number)}`;
+}
+
+function readIssueFacts(repo: Repo, number: number): IssueFacts {
+  const result = Bun.spawnSync(['gh', 'api', '--hostname', repo.host, `repos/${repo.path}/issues/${String(number)}`], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.exitCode !== 0) throw new Error(`reading ${issueKey(repo, number)} failed: ${result.stderr.toString().trim()}`);
+  const issue: unknown = JSON.parse(result.stdout.toString());
+  if (!isObject(issue) || typeof issue.title !== 'string' || typeof issue.state !== 'string' || typeof issue.comments !== 'number') {
+    throw new Error(`${issueKey(repo, number)} answered without its facts`);
+  }
+  const labels = Array.isArray(issue.labels) ? issue.labels : [];
+  return {
+    labels: labels.flatMap(label => (isObject(label) && typeof label.name === 'string' ? [label.name] : [])).sort(),
+    state: issue.state,
+    title: issue.title,
+    body_digest: createHash('sha256').update(typeof issue.body === 'string' ? issue.body : '').digest('hex'),
+    comments: issue.comments,
+  };
+}
+
+async function readState(cwd: string): Promise<[string, Record<string, number>]> {
+  const listed = await archonJson(['state', 'list'], cwd);
+  const scope = isObject(listed.scope) ? listed.scope : {};
+  if (scope.kind !== 'project' || typeof scope.key !== 'string' || !Array.isArray(listed.documents)) {
+    throw new Error(`archon state list in ${cwd} named no project scope`);
+  }
+  const documents: Record<string, number> = {};
+  for (const document of listed.documents) {
+    if (!isObject(document) || typeof document.name !== 'string' || typeof document.revision !== 'number') {
+      throw new Error(`archon state list in ${cwd} listed a document without a name and revision`);
+    }
+    documents[document.name] = document.deleted === true ? -1 : document.revision;
+  }
+  return [scope.key, documents];
+}
+
+export async function snapshot(issues: readonly { repo: Repo; number: number }[], stateDirs: readonly string[]): Promise<Snapshot> {
+  const facts: Record<string, IssueFacts> = {};
+  for (const { repo, number } of issues) facts[issueKey(repo, number)] = readIssueFacts(repo, number);
+  const state: Record<string, Record<string, number>> = {};
+  for (const dir of stateDirs) {
+    const [key, documents] = await readState(dir);
+    state[key] = documents;
+  }
+  return { issues: facts, state };
+}
+
+/** Every difference between two snapshots, each named. */
+export function snapshotChanges(before: Snapshot, after: Snapshot): string[] {
+  const changes: string[] = [];
+  for (const [key, was] of Object.entries(before.issues)) {
+    const now = after.issues[key];
+    if (now === undefined) continue;
+    for (const field of ['labels', 'state', 'title', 'body_digest', 'comments'] as const) {
+      if (canonical(was[field]) !== canonical(now[field])) {
+        changes.push(`${key}: ${field} changed from ${JSON.stringify(was[field])} to ${JSON.stringify(now[field])}`);
+      }
+    }
+  }
+  for (const [project, documents] of Object.entries(after.state)) {
+    const earlier = before.state[project] ?? {};
+    for (const [name, revision] of Object.entries(documents)) {
+      if (earlier[name] !== revision) changes.push(`state ${project}/${name}: revision ${String(earlier[name] ?? 'none')} became ${String(revision)}`);
+    }
+  }
+  return changes;
+}
+
+/** Comments added to any snapshotted issue: the bench's posted-text check. */
+export function postedComments(before: Snapshot, after: Snapshot): string[] {
+  return Object.entries(before.issues).flatMap(([key, was]) => {
+    const now = after.issues[key];
+    return now !== undefined && now.comments > was.comments ? [`${key}: ${String(now.comments - was.comments)} comment(s) posted`] : [];
+  });
+}
+
+// --- one run, one line --------------------------------------------------------------
+
+/** Triage's judgement, as every bench path reports it. A field the path cannot see is absent. */
+export interface Verdict {
+  readonly contract: Contract;
+  readonly route: Route | null;
+  readonly pull_request: number | null;
+  readonly type: Field;
+  readonly size: Field;
+  readonly complexity: Field;
+  readonly importance: Field;
+  readonly urgency: Field;
+  readonly labels?: readonly string[];
+  readonly summary?: string;
+  readonly proposed_edits?: { readonly title: string; readonly body: string } | null;
+  readonly blocked_reason?: string | null;
+  readonly blocked_by?: readonly string[];
+}
+
+interface Field {
+  readonly value: string;
+  readonly reason: string;
+}
+
+export interface Line {
+  readonly at: string;
+  readonly batch: number;
+  /** One `run` invocation over the batch; its hard checks are recorded under the same id. */
+  readonly batch_run: string;
+  readonly mode: 'eval' | 'live';
+  readonly base: string;
+  readonly row: string;
+  readonly number: number;
+  readonly group: Row['group'];
+  readonly workflow: BenchWorkflow;
+  readonly trust: Row['trust'];
+  readonly version: Version;
+  readonly run_id: string | null;
+  readonly status: string;
+  /** The run completed on its version and its verdict was read. */
+  readonly passed: boolean;
+  readonly problems: readonly string[];
+  /** Intake's path for the row; null for a triage run. */
+  readonly path: string | null;
+  /** Agent nodes that ran, and nodes whose kind the run did not record. */
+  readonly agent_nodes: readonly string[];
+  readonly binding: NodeBinding | null;
+  readonly verdict: Verdict | null;
+  readonly cost_usd: number | null;
+  readonly duration_ms: number | null;
+  /** Tool calls that looked up the issue being judged. */
+  readonly leak: readonly string[];
+  /** The run's triage report, copied under the output directory. */
+  readonly report: string | null;
+}
+
+/** The agent node that judges the row: archon-triage's own, or the one intake includes. */
+export function triageNodeId(workflow: BenchWorkflow): string {
+  return workflow === 'intake' ? 'triage__triage' : 'triage';
+}
+
+/** Nodes that ran an agent; a node that ran without recording its kind cannot be cleared. */
+export function agentNodesRan(nodes: readonly RunNode[]): string[] {
+  return nodes
+    .filter(node => node.state !== 'skipped' && node.state !== 'pending')
+    .filter(node => node.execution?.node?.kind === undefined || node.execution.node.kind === 'agent')
+    .map(node => node.nodeId);
+}
+
+/** Total cost over agent nodes that ran; null when any of them reported none. */
+export function runCost(nodes: readonly RunNode[]): number | null {
+  let total = 0;
+  for (const node of nodes) {
+    if (node.execution?.node?.kind !== 'agent' || node.state === 'skipped') continue;
+    const cost = node.execution.spend?.costUsd;
+    if (cost?.source !== 'provider') return null;
+    total += cost.value;
+  }
+  return total;
+}
+
+/**
+ * The machine tokens by which a tool call names one issue: its URL, its REST path,
+ * and `gh issue view <n>`. A match is a reporting flag that moves the row out of the
+ * accuracy numbers; it never changes how a run is launched or retried.
+ */
+export function issueTokens(repo: Repo, number: number): RegExp[] {
+  const path = repo.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const host = repo.host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const n = String(number);
+  return [
+    new RegExp(`${host}/${path}/issues/${n}(?!\\d)`, 'i'),
+    new RegExp(`repos/${path}/issues/${n}(?!\\d)`, 'i'),
+    new RegExp(`issue view #?${n}(?!\\d)`),
+  ];
+}
+
+/** Each tool call in a run's transcript that names the issue, by its title. */
+export function findLeaks(transcript: string, tokens: readonly RegExp[]): string[] {
+  const leaks: string[] = [];
+  for (const text of transcript.split('\n')) {
+    if (text.trim() === '') continue;
+    let line: unknown;
+    try {
+      line = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!isObject(line) || line.type !== 'provider_event' || !isObject(line.event) || line.event.type !== 'tool_call') continue;
+    const call = JSON.stringify({ title: line.event.title, input: line.event.rawInput });
+    if (tokens.some(token => token.test(call))) leaks.push(`${String(line.step)}: ${String(line.event.title ?? line.event.name)}`);
+  }
+  return leaks;
+}
+
+const nonEmpty = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
+
+/** Normalise a triage verdict as archon-triage returns it and intake's evaluation carries it. */
+export function toVerdict(value: unknown): Verdict {
+  if (!isObject(value) || typeof value.contract !== 'string') throw new Error('the verdict names no contract');
+  const edits = isObject(value.proposed_edits) && nonEmpty(value.proposed_edits.title) !== null ? value.proposed_edits : null;
+  return {
+    contract: value.contract as Contract,
+    route: value.route === 'no_action' || typeof value.route !== 'string' ? null : (value.route as Route),
+    pull_request: typeof value.pull_request === 'number' ? value.pull_request : null,
+    type: value.type as Field,
+    size: value.size as Field,
+    complexity: value.complexity as Field,
+    importance: value.importance as Field,
+    urgency: value.urgency as Field,
+    labels: Array.isArray(value.labels) ? (value.labels as string[]) : [],
+    summary: typeof value.summary === 'string' ? value.summary : '',
+    proposed_edits: edits === null ? null : { title: String(edits.title), body: String(edits.body) },
+    blocked_reason: nonEmpty(value.blocked_reason),
+    blocked_by: Array.isArray(value.blocked_by) ? (value.blocked_by as string[]) : [],
+  };
+}
+
+/** A live item's verdict, as intake recorded it on the item's work document. */
+export function liveVerdict(document: unknown): Verdict | null {
+  const facts = isObject(document) && isObject(document.facts) ? document.facts.triage : undefined;
+  if (!isObject(facts) || !isObject(facts.verdict)) return null;
+  const { verdict } = facts;
+  return {
+    contract: verdict.contract as Contract,
+    route: typeof verdict.route === 'string' ? (verdict.route as Route) : null,
+    pull_request: typeof facts.pull_request === 'number' ? facts.pull_request : null,
+    type: facts.type as Field,
+    size: facts.size as Field,
+    complexity: facts.complexity as Field,
+    importance: facts.importance as Field,
+    urgency: facts.urgency as Field,
+  };
+}
+
+export interface RowRun {
+  readonly row: Row;
+  readonly resolved: ResolvedVersion;
+  /** Where the run executes: the eval checkout, or the version's scratch checkout. */
+  readonly cwd: string;
+  /** The scratch repository and the row's copy number there; absent in eval. */
+  readonly live?: { readonly repo: Repo; readonly number: number };
+}
+
+export interface BatchContext {
+  readonly set: BenchSet;
+  readonly batch: number;
+  readonly batchRun: string;
+  readonly base: string;
+  readonly outDir: string;
+}
+
+function inputsFor(run: RowRun, set: BenchSet): Record<string, string> {
+  const { row, live } = run;
+  if (live !== undefined) {
+    return {
+      repo_host: live.repo.host,
+      repo_path: live.repo.path,
+      number: String(live.number),
+      kind: 'issue',
+      action: 'opened',
+      mode: 'live',
+      trust: row.trust,
+    };
+  }
+  if (row.workflow === 'triage') return { target: `# ${row.title}\n\n${row.body}`, publish: 'false' };
+  return { repo_host: set.repo.host, repo_path: set.repo.path, number: String(row.number), mode: 'eval', trust: row.trust };
+}
+
+/** What a finished run decided, read from where its path records it. */
+async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: string | null; verdict: Verdict | null }> {
+  const returned = returnedValue(detail);
+  if (run.live === undefined && run.row.workflow === 'triage') return { path: null, verdict: toVerdict(returned) };
+  if (!isObject(returned) || typeof returned.path !== 'string') throw new Error('intake returned no path');
+  if (run.live !== undefined) {
+    if (returned.item !== run.live.number) {
+      throw new Error(`intake claimed issue ${String(returned.item)}, not the row's copy ${String(run.live.number)}`);
+    }
+    const document = await archonJson(['state', 'get', `work/${String(run.live.number)}`], run.cwd);
+    return { path: returned.path, verdict: liveVerdict(document.value) };
+  }
+  const evaluation = isObject(returned.evaluation) ? returned.evaluation : undefined;
+  if (evaluation === undefined) throw new Error('eval intake returned no evaluation');
+  return { path: returned.path, verdict: evaluation.triage === null ? null : toVerdict(evaluation.triage) };
+}
+
+/** Launch one row on one version, wait for it, and record its line, whatever happened. */
+export async function runRow(run: RowRun, context: BatchContext): Promise<Line> {
+  const { row, resolved } = run;
+  const { version } = resolved;
+  const problems: string[] = [];
+  let runId: string | null = null;
+  let status = 'not_started';
+  let detail: RunDetail | undefined;
+  let decided: { path: string | null; verdict: Verdict | null } = { path: null, verdict: null };
+  try {
+    runId = await launch({
+      workflow: WORKFLOWS[run.live === undefined ? row.workflow : 'intake'],
+      cwd: run.cwd,
+      source: resolved.source,
+      config: resolved.config,
+      inputs: inputsFor(run, context.set),
+      message: BENCH_MESSAGE,
+    });
+    status = await waitRun(runId);
+    detail = await getRun(runId);
+    if (status !== 'completed') problems.push(`the run is ${status}`);
+    else decided = await readDecision(run, detail);
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+    if (runId !== null && status === 'not_started') status = 'unknown';
+  }
+
+  const nodes = detail?.nodes ?? [];
+  const judge = nodes.find(node => node.nodeId === triageNodeId(row.workflow));
+  const binding = agentBinding(judge) ?? null;
+  if (binding !== null && (binding.provider !== version.provider || binding.requested !== version.model)) {
+    problems.push(`triage ran ${String(binding.provider)}/${String(binding.requested)}, not ${version.provider}/${version.model}`);
+  }
+  let leak: string[] = [];
+  if (detail?.transcript_path != null && existsSync(detail.transcript_path)) {
+    const tokens = [
+      ...issueTokens(context.set.repo, row.number),
+      ...(run.live === undefined ? [] : issueTokens(run.live.repo, run.live.number)),
+    ];
+    leak = findLeaks(readFileSync(detail.transcript_path, 'utf8'), tokens);
+  }
+  let report: string | null = null;
+  if (detail !== undefined && existsSync(join(artifactsOf(detail), 'triage.md'))) {
+    const target = join(context.outDir, 'items', detail.id, 'triage.md');
+    mkdirSync(join(context.outDir, 'items', detail.id), { recursive: true });
+    copyFileSync(join(artifactsOf(detail), 'triage.md'), target);
+    report = relative(context.outDir, target);
+  }
+  const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
+
+  const line: Line = {
+    at: new Date().toISOString(),
+    batch: context.batch,
+    batch_run: context.batchRun,
+    mode: run.live === undefined ? 'eval' : 'live',
+    base: context.base,
+    row: row.id,
+    number: row.number,
+    group: row.group,
+    workflow: run.live === undefined ? row.workflow : 'intake',
+    trust: row.trust,
+    version,
+    run_id: runId,
+    status,
+    passed: status === 'completed' && problems.length === 0,
+    problems,
+    path: decided.path,
+    agent_nodes: agentNodesRan(nodes),
+    binding,
+    verdict: decided.verdict,
+    cost_usd: detail === undefined ? null : runCost(nodes),
+    duration_ms: Number.isFinite(ended) ? ended : null,
+    leak,
+    report,
+  };
+  appendLine(join(context.outDir, SAMPLES_FILE), line);
+  return line;
+}
+
+// --- the batch's hard checks ----------------------------------------------------------
+
+export interface Check {
+  readonly ok: boolean;
+  readonly problems: readonly string[];
+}
+
+export interface BatchChecks {
+  readonly at: string;
+  readonly batch: number;
+  readonly batch_run: string;
+  readonly mode: 'eval' | 'live';
+  readonly labels: readonly string[];
+  readonly checks: {
+    /** The set's repository and its state documents are as they were before the batch. */
+    readonly writes: Check;
+    /** No `trust: outside` row ran an agent node, and each took intake's outside path. */
+    readonly outside_agent: Check;
+    /** No comment was posted on any batch issue or copy; intake builds none. */
+    readonly posted_text: Check;
+    /** Every run finished and was read, so the after-read came after its last write. */
+    readonly finished: Check;
+  };
+  readonly passed: boolean;
+}
+
+const check = (problems: readonly string[]): Check => ({ ok: problems.length === 0, problems });
+
+export function batchChecks(
+  context: BatchContext,
+  mode: 'eval' | 'live',
+  labels: readonly string[],
+  lines: readonly Line[],
+  writes: readonly string[],
+  posted: readonly string[]
+): BatchChecks {
+  const outside = lines
+    .filter(line => line.trust === 'outside')
+    .flatMap(line => [
+      ...line.agent_nodes.map(node => `${line.version.label} ${line.row}: ${node} ran`),
+      ...(line.status === 'completed' && line.path !== 'outside' ? [`${line.version.label} ${line.row}: intake took the ${String(line.path)} path`] : []),
+    ]);
+  const finished = lines.filter(line => line.status === 'unknown' || line.status === 'not_started').map(line => `${line.version.label} ${line.row}: ${line.problems.join('; ')}`);
+  const checks = { writes: check(writes), outside_agent: check(outside), posted_text: check(posted), finished: check(finished) };
+  return {
+    at: new Date().toISOString(),
+    batch: context.batch,
+    batch_run: context.batchRun,
+    mode,
+    labels,
+    checks,
+    passed: Object.values(checks).every(entry => entry.ok),
+  };
+}
+
+/** Run `tasks` with at most `limit` in flight; no limit runs them all at once. */
+export async function pooled<T>(tasks: readonly (() => Promise<T>)[], limit: number | undefined): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const index = next++;
+      results[index] = await tasks[index]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit ?? tasks.length, tasks.length) }, worker));
+  return results;
+}
+
+export interface BatchOptions {
+  readonly set: BenchSet;
+  readonly rows: readonly Row[];
+  readonly batch: number;
+  readonly base: string;
+  readonly outDir: string;
+  readonly repoRoot: string;
+  readonly versions: readonly { readonly resolved: ResolvedVersion; readonly cwd: string }[];
+  /** Present for a live batch: each label's scratch repository and its copies of the rows. */
+  readonly live?: ReadonlyMap<string, { readonly scratch: Scratch; readonly copies: Readonly<Record<string, number>> }>;
+  readonly concurrency?: number;
+}
+
+/**
+ * Run every version over the batch and record its hard checks. Eval runs share one
+ * pool; a live version's runs go one after another, because each live intake run
+ * claims whichever waiting item its scratch project ranks first.
+ */
+export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; checks: BatchChecks }> {
+  const { set, rows, outDir, live } = options;
+  const stamp = new Date().toISOString().replace(/[-:.]/g, '');
+  const context: BatchContext = { set, batch: options.batch, batchRun: `${String(options.batch)}-${stamp}`, base: options.base, outDir };
+  const runs = options.versions.map(({ resolved, cwd }) =>
+    rows.map((row): RowRun => {
+      const scratch = live?.get(resolved.version.label);
+      if (scratch === undefined) return { row, resolved, cwd };
+      const number = scratch.copies[row.id];
+      if (number === undefined) throw new Error(`${resolved.version.label}: row ${row.id} has no copy; run copy first`);
+      return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number } };
+    })
+  );
+  const watched = [
+    ...rows.map(row => ({ repo: set.repo, number: row.number })),
+    ...runs.flat().flatMap(run => (run.live === undefined ? [] : [run.live])),
+  ];
+  // The state documents of the set's project, from the operator's checkout and from
+  // each eval checkout; a live batch writes its scratch projects by design.
+  const stateDirs = [options.repoRoot, ...(live === undefined ? options.versions.map(version => version.cwd) : [])];
+  const before = await snapshot(watched, stateDirs);
+
+  const lines =
+    live === undefined
+      ? await pooled(runs.flat().map(run => () => runRow(run, context)), options.concurrency)
+      : (await Promise.all(runs.map(async versionRuns => {
+          const done: Line[] = [];
+          for (const run of versionRuns) done.push(await runRow(run, context));
+          return done;
+        }))).flat();
+
+  const after = await snapshot(watched, stateDirs);
+  const setKeys = new Set(rows.map(row => issueKey(set.repo, row.number)));
+  const onSet = (snap: Snapshot): Snapshot => ({
+    issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setKeys.has(key))),
+    state: snap.state,
+  });
+  const checks = batchChecks(
+    context,
+    live === undefined ? 'eval' : 'live',
+    options.versions.map(version => version.resolved.version.label),
+    lines,
+    snapshotChanges(onSet(before), onSet(after)),
+    postedComments(before, after)
+  );
+  appendLine(join(outDir, CHECKS_FILE), checks);
+  return { lines, checks };
+}
