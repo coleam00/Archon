@@ -47,7 +47,6 @@ import {
   isId,
   latestLines,
   launch,
-  readLines,
   resolveVersion,
   spendOf,
   waitRun,
@@ -577,6 +576,7 @@ interface RunOptions {
   readonly prepared: PreparedCase;
   readonly variants: readonly string[];
   readonly samples: number;
+  readonly savedSamples: readonly SampleLine[];
   readonly outDir: string;
   readonly repoRoot: string;
   readonly judge: Judge;
@@ -612,9 +612,9 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion, judgin
   const workOrder = readFileSync(bench.work_order, 'utf8');
   for (const variant of options.variants) {
     const expected = prepared.variants.get(variant) as string;
-    const taken = readLines(samplesFile)
-      .filter(line => isObject(line.version) && line.version.label === version.label && line.case === bench.id && line.variant === variant)
-      .map(line => (typeof line.sample === 'number' ? line.sample : 0));
+    const taken = options.savedSamples
+      .filter(line => line.label === version.label && line.variant === variant)
+      .map(line => line.sample);
     const first = Math.max(0, ...taken) + 1;
     for (let sample = first; sample < first + options.samples; sample++) {
       const name = `${version.label} ${bench.id}/${variant} #${sample}`;
@@ -840,7 +840,7 @@ export interface SampleLine extends Omit<JudgedSample, 'item'> {
   readonly problems: readonly string[];
 }
 
-export function readSamples(outDir: string): SampleLine[] {
+export function readSamples(outDir: string, selectedCase?: string): SampleLine[] {
   const number = (value: unknown): number | null => (typeof value === 'number' ? value : null);
   const file = join(outDir, SAMPLES_FILE);
   if (!existsSync(file)) return [];
@@ -856,6 +856,7 @@ export function readSamples(outDir: string): SampleLine[] {
       return invalid('invalid JSON');
     }
     if (!isObject(line)) return invalid('sample is not an object');
+    if (selectedCase !== undefined && typeof line.case === 'string' && line.case !== selectedCase) return [];
     const { case: caseId, variant, sample, run_id: runId, version, checks } = line;
     if (typeof caseId !== 'string' || typeof variant !== 'string' || typeof sample !== 'number' || !Number.isInteger(sample) || sample < 1 || typeof runId !== 'string') return invalid('expected case, variant, positive integer sample and run_id');
     if (!isObject(version) || typeof version.label !== 'string') return invalid('expected version.label');
@@ -900,28 +901,26 @@ interface BatchSample {
 
 function batchSamples(outDir: string, caseId: string, judge: Judge): BatchSample[] {
   const judgements = latestJudgements(outDir, judge);
-  return readSamples(outDir)
-    .filter(line => line.case === caseId)
-    .map(line => {
-      const itemDir = line.item === null ? null : join(outDir, line.item);
-      const recorded = judgements.get(line.run_id);
-      try {
-        const item = itemDir !== null && existsSync(join(itemDir, ITEM_FILE)) ? readItem(itemDir) : null;
-        const findings = itemDir !== null && line.passed ? readFindings(itemDir) : [];
-        const judgement =
-          recorded === undefined
-            ? null
-            : recorded.valid === true && item !== null
-              ? validateJudgement(recorded, item, findings)
-              : { valid: false as const, reason: typeof recorded.reason === 'string' ? recorded.reason : 'its item is missing' };
-        return { line, item, findings, judgement };
-      } catch (error) {
-        return {
-          line, item: null, findings: [],
-          judgement: { valid: false as const, reason: error instanceof Error ? error.message : String(error) },
-        };
-      }
-    });
+  return readSamples(outDir, caseId).map(line => {
+    const itemDir = line.item === null ? null : join(outDir, line.item);
+    const recorded = judgements.get(line.run_id);
+    try {
+      const item = itemDir !== null && existsSync(join(itemDir, ITEM_FILE)) ? readItem(itemDir) : null;
+      const findings = itemDir !== null && line.passed ? readFindings(itemDir) : [];
+      const judgement =
+        recorded === undefined
+          ? null
+          : recorded.valid === true && item !== null
+            ? validateJudgement(recorded, item, findings)
+            : { valid: false as const, reason: typeof recorded.reason === 'string' ? recorded.reason : 'its item is missing' };
+      return { line, item, findings, judgement };
+    } catch (error) {
+      return {
+        line, item: null, findings: [],
+        judgement: { valid: false as const, reason: error instanceof Error ? error.message : String(error) },
+      };
+    }
+  });
 }
 
 /** Findings no judged defect accounts for: on a clean sample, the false-positive candidates. */
@@ -1144,7 +1143,7 @@ async function main(argv: readonly string[]): Promise<void> {
   if (command === 'judge') {
     if (values.judge === undefined) throw new Error('judge needs --judge <spec>');
     const judge = resolveJudge(values.judge);
-    const samples = readSamples(outDir).filter(line => line.passed && (values.batch === undefined || line.case === values.batch));
+    const samples = readSamples(outDir, values.batch).filter(line => line.passed);
     const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
     if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
     await Promise.all(judged.map(line => judgeSample(line, { outDir, repoRoot, judge })));
@@ -1180,6 +1179,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = Number(values.samples);
   if (!Number.isInteger(samples) || samples < 1) throw new Error('--samples must be a positive integer');
   const bench = caseOf(set, values.batch);
+  const savedSamples = readSamples(outDir, bench.id);
   const prepared = prepareCase(set, bench, repoRoot, outDir);
   const variants = values.variant ?? [...prepared.variants.keys()];
   const unknown = variants.filter(id => !prepared.variants.has(id));
@@ -1190,7 +1190,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const repeated = labels.find((label, index) => labels.indexOf(label) !== index);
   if (repeated !== undefined) throw new Error(`two versions are labelled ${repeated}`);
 
-  const options: RunOptions = { bench, prepared, variants, samples, outDir, repoRoot, judge };
+  const options: RunOptions = { bench, prepared, variants, samples, savedSamples, outDir, repoRoot, judge };
   const judging: Promise<boolean>[] = [];
   const results = await Promise.allSettled(resolved.map(entry => runVersion(options, entry, judging)));
   for (const [index, result] of results.entries()) {
