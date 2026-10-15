@@ -1,16 +1,11 @@
 import { join } from 'node:path';
 import type { ChatPluginDescriptor } from '@archon/chat-contract';
 import { isChatReceipt } from '@archon/plugin-manifest';
-import { readReceipts } from '@archon/plugin-manifest/store';
+import { loadRuntimeReceipts } from '../utils/plugin-receipts';
 import type { PlatformPolicy } from './types';
 
 export async function chatPluginPolicies(pluginsDir: string): Promise<PlatformPolicy[]> {
-  const receipts = await readReceipts(pluginsDir).catch((error: unknown) => {
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}. Run archon plugin update <id> or archon plugin remove <id>`,
-      { cause: error }
-    );
-  });
+  const receipts = await loadRuntimeReceipts(pluginsDir);
   return receipts.filter(isChatReceipt).map(({ descriptor }) => ({
     id: descriptor.id,
     ...descriptor.policy,
@@ -32,7 +27,7 @@ export async function loadChatPlugins(pluginsDir: string): Promise<
     argv: readonly [string, ...string[]];
   }[]
 > {
-  const receipts = (await readReceipts(pluginsDir)).filter(isChatReceipt);
+  const receipts = (await loadRuntimeReceipts(pluginsDir)).filter(isChatReceipt);
   const ids = new Set<string>();
   return receipts.map(receipt => {
     const { descriptor, manifest } = receipt;

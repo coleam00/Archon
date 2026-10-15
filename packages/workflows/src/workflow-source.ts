@@ -82,7 +82,7 @@ import {
   workflowPackManifestSchema,
   type WorkflowPackManifest,
 } from '@archon/plugin-manifest';
-import { packTreePath, readReceipts } from '@archon/plugin-manifest/store';
+import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import { parsePackagedResourceReference, type WorkflowResourceOwner } from './packaged-workflow';
 import type { WorkflowConfig } from './deps';
 
@@ -317,14 +317,15 @@ export async function listInstalledPacks(
   const packs: InstalledPack[] = [];
   const errors: { path: string; message: string }[] = [];
   if (root.kind === 'receipts') {
-    let receipts: Awaited<ReturnType<typeof readReceipts>>;
+    let scan: Awaited<ReturnType<typeof scanReceipts>>;
     try {
-      receipts = await readReceipts(root.pluginsDir);
+      scan = await scanReceipts(root.pluginsDir);
     } catch (error) {
       errors.push({ path: root.pluginsDir, message: (error as Error).message });
       return { packs, errors };
     }
-    for (const receipt of receipts) {
+    errors.push(...scan.broken.map(entry => ({ path: entry.file, message: entry.message })));
+    for (const receipt of scan.receipts) {
       if (receipt.manifest.kind !== 'workflow-pack') continue;
       const owner = receipt.id.split('/')[0];
       const dir = packTreePath(root.pluginsDir, receipt.id, receipt.commit);

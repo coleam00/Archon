@@ -1,10 +1,9 @@
 // @archon-test-isolated
-import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import * as paths from '@archon/paths';
 import { clearRegistry, providerRegistry } from '@archon/providers';
 import { requireProvider } from '@archon/provider-contract';
 import { afterEach, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -49,13 +48,11 @@ test('receipt loading builds registrations without spawning and leaves an empty 
   expect(() => registration.parseConfig({ model: 42 }, 'run')).toThrow();
 });
 
-test('invalid descriptors, executable identities and delivery rules name the receipt and repair commands', async () => {
+test('invalid executable identities and delivery rules name the receipt and repair commands', async () => {
   const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-receipts-invalid-')));
   const file = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
   for (const value of [
-    { ...receipt, descriptor: { id: descriptor.id } },
-    { ...receipt, descriptor: { ...descriptor, protocol: 1 } },
     { ...receipt, descriptor: { ...descriptor, id: 'other' } },
     { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
     {
@@ -73,12 +70,6 @@ test('invalid descriptors, executable identities and delivery rules name the rec
     await expect(loadProviderPlugins(dir)).rejects.toThrow(file);
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin update');
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin remove');
-    if (
-      !('protocol' in value.descriptor) ||
-      value.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL
-    ) {
-      await expect(readReceipts(dir)).rejects.toThrow(`Invalid plugin receipt ${file}`);
-    }
   }
 });
 
@@ -123,6 +114,37 @@ test('source registration skips maintained receipts and warns with the receipt p
   try {
     expect(await loadProviderPlugins(dir, { maintained: 'source' })).toEqual([]);
     expect(warning).toHaveBeenCalledWith({ receipt: file }, 'provider.receipt_skipped_source');
+  } finally {
+    loggerFactory.mockRestore();
+    warning.mockRestore();
+  }
+});
+
+test('incompatible receipts are reported and retained while valid providers still load', async () => {
+  const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-protocol-recovery-')));
+  const stale = receiptPath(dir, 'owner/stale');
+  const good = receiptPath(dir, id);
+  await mkdir(dirname(stale), { recursive: true });
+  await mkdir(dirname(good), { recursive: true });
+  const contents = JSON.stringify({
+    ...receipt,
+    id: 'owner/stale',
+    descriptor: { ...descriptor, protocol: 1 },
+  });
+  await writeFile(stale, contents);
+  await writeFile(good, JSON.stringify(receipt));
+  const logger = paths.createLogger('test');
+  const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
+  const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
+  try {
+    expect((await loadProviderPlugins(dir)).map(registration => registration.id)).toEqual([
+      descriptor.id,
+    ]);
+    expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin update owner/stale');
+    expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin remove owner/stale');
+    expect(warning.mock.calls[0][0]).toMatchObject({ receipt: stale });
+    expect(await readFile(stale, 'utf8')).toBe(contents);
+    await expect(readReceipts(dir)).rejects.toThrow(stale);
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();

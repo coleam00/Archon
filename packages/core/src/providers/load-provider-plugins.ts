@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { isMaintainedProviderPlugin, isProviderReceipt } from '@archon/plugin-manifest';
-import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
+import { receiptPath } from '@archon/plugin-manifest/store';
 import {
   isMaintainedProvider,
   providerVersionMismatchMessage,
@@ -8,17 +8,14 @@ import {
 } from '@archon/provider-contract';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { markProviderUnavailable } from '@archon/providers';
+import { loadRuntimeReceipts } from '../utils/plugin-receipts';
 import { processProviderRegistration } from './process-registration';
 
 export async function loadProviderPlugins(
   pluginsDir: string,
   options: { maintained?: 'source' | 'installed'; version?: string } = {}
 ): Promise<ProviderRegistration[]> {
-  const receipts = await readReceipts(pluginsDir).catch((error: unknown) => {
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}. Run archon plugin update <id> or archon plugin remove <id>`
-    );
-  });
+  const receipts = await loadRuntimeReceipts(pluginsDir);
   const registrations: ProviderRegistration[] = [];
   for (const receipt of receipts.filter(isProviderReceipt)) {
     try {

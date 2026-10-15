@@ -70,7 +70,11 @@ await serveProvider({ descriptor, create: () => new ExampleProvider() });
 ```
 
 `capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
-`configSchema` validates all configuration scopes for existing v1 plugins. A provider can
+`configSchema` is the fallback for all configuration scopes within protocol 2. Protocol-1
+plugins and hosts must update to protocol 2 before they can initialize together.
+Runtime discovery reports and skips incompatible installed receipts, leaving other
+plugins available. Use `archon plugin update <id>` or `archon plugin remove <id>` to
+repair the install. A provider can
 add `config: { install, run, snapshot, stripUnknownKeys? }` to use separate JSON
 Schemas for install defaults, per-run settings, and persisted snapshots. Newer hosts
 prefer `config`. Generate these schemas from the same schemas used by the in-process
@@ -78,7 +82,8 @@ parser, using `z.toJSONSchema(schema, { io: 'input' })` for Zod schemas. Set
 `stripUnknownKeys: true` to strip undeclared fields recursively at object schemas that
 omit `additionalProperties`. Explicit `additionalProperties: false` still rejects
 unknown fields; `true` or a schema preserves allowed fields, including record keys.
-Snapshot projection derives its retained root fields from `snapshot.properties`.
+Snapshot projection retains fields declared by the snapshot schema, including
+referenced and composed schemas and matching `patternProperties`.
 An explicit `additionalProperties: false` also rejects unknown snapshot fields.
 For snapshots that validate install settings before excluding them, use
 `snapshotConfigSchema(portableFields, localFields)` from `@archon/provider-contract`.
@@ -93,12 +98,11 @@ the first slash in a structured reference. These helpers generate the
 owner. Scoped process registration applies normalization after validation. Credential lookup has only a model: alternative run branches must agree on its normalization, or lookup returns no vendor.
 
 
-Keep `configSchema` as a compatibility superset of every configuration accepted in
-any scope by older hosts, which use that one schema for install, run, and snapshot.
-Older hosts cannot apply scoped snapshot exclusion, recursive stripping, or these normalization annotations. Providers
-that require those semantics must raise their minimum compatible Archon version to
-one supporting scoped configuration; retaining `configSchema` alone does not provide
-that compatibility.
+Keep `configSchema` as the fallback schema for install, run, and snapshot when
+`config` is omitted. This fallback is part of protocol 2; it does not provide
+compatibility with protocol-1 peers. Providers that need scoped snapshot exclusion,
+recursive stripping, or normalization annotations must declare scoped `config`
+schemas and require a host version that supports those semantics.
 
 Credentials are a static
 list of vendor specs; declare only vendors the provider consumes. API-key vendors must

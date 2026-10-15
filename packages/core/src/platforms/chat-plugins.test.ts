@@ -1,7 +1,9 @@
-import { expect, test } from 'bun:test';
+// @archon-test-isolated
+import { expect, test, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { receiptPath } from '@archon/plugin-manifest/store';
 import { chatPluginPolicies, loadPlatformPolicies, loadChatPlugins } from './chat-plugins';
@@ -55,26 +57,46 @@ test('loads descriptor policies without requiring or executing the binary', asyn
   expect(await chatPluginPolicies(dir)).toEqual([]);
 });
 
-test('invalid receipts name their path and repair commands without echoing contents', async () => {
+test('invalid receipts do not block valid chat policies or runtime loading', async () => {
   const dir = trackRoot(await mkdtemp(join(tmpdir(), 'invalid-chat-policies-')));
-  const file = receiptPath(dir, receipt.id);
+  const file = receiptPath(dir, 'owner/broken');
+  const valid = receiptPath(dir, receipt.id);
   await mkdir(dirname(file), { recursive: true });
-  for (const contents of [
-    JSON.stringify({ ...receipt, descriptor: undefined }),
-    JSON.stringify({
-      ...receipt,
-      descriptor: { ...receipt.descriptor, protocol: 'archon-chat/2' },
-    }),
-    '{"credential": SECRET_TOKEN_AND_MESSAGE}',
-  ]) {
-    await writeFile(file, contents);
-    const error = await chatPluginPolicies(dir).catch((error: unknown) => error);
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : '';
-    expect(message).toContain(file);
-    expect(message).toContain('archon plugin update');
-    expect(message).toContain('archon plugin remove');
-    expect(message).not.toContain('SECRET_TOKEN_AND_MESSAGE');
+  await mkdir(dirname(valid), { recursive: true });
+  const executable = receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
+  await writeFile(
+    valid,
+    JSON.stringify({ ...receipt, files: [{ path: executable, sha256: 'b'.repeat(64) }] })
+  );
+  const logger = paths.createLogger('test');
+  const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
+  const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
+  try {
+    for (const contents of [
+      JSON.stringify({ ...receipt, descriptor: undefined }),
+      JSON.stringify({
+        ...receipt,
+        descriptor: { ...receipt.descriptor, protocol: 'archon-chat/2' },
+      }),
+      '{"credential": SECRET_TOKEN_AND_MESSAGE}',
+    ]) {
+      await writeFile(file, contents);
+      warning.mockClear();
+      expect(await chatPluginPolicies(dir)).toEqual([
+        { id: 'matrix-chat', ...receipt.descriptor.policy },
+      ]);
+      expect(await loadChatPlugins(dir)).toEqual([
+        { descriptor: receipt.descriptor, argv: [join(dir, executable)] },
+      ]);
+      const warnings = JSON.stringify(warning.mock.calls);
+      expect(warnings).toContain(file);
+      expect(warnings).toContain('archon plugin update owner/broken');
+      expect(warnings).toContain('archon plugin remove owner/broken');
+      expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
+    }
+  } finally {
+    loggerFactory.mockRestore();
+    warning.mockRestore();
   }
 });
 
