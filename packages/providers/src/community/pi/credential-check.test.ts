@@ -154,6 +154,25 @@ describe('Pi native credentials', () => {
       source: 'native',
     });
   });
+  test('a broken delivered key never falls back to a working native key', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'api_key', key: secret },
+      })
+    );
+    const authPath = join(root, 'delivered-auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: { type: 'api_key', key: '!exit 1' },
+      })
+    );
+    expect(await check(undefined, { ARCHON_PI_AUTH_PATH: authPath })).toMatchObject({
+      state: 'unusable',
+      source: 'native',
+    });
+  });
   test('substitutes a custom provider key from the request env the way a turn does', async () => {
     writeFileSync(
       join(root, 'models.json'),
@@ -390,7 +409,9 @@ describe('Pi native credentials', () => {
       server = Bun.serve({
         port: 0,
         fetch(request) {
-          authorizations.push(request.headers.get('authorization'));
+          authorizations.push(
+            request.headers.get('authorization') ?? request.headers.get('x-api-key')
+          );
           return Response.json({ error: { message: 'fixture rejection' } }, { status: 401 });
         },
       });
@@ -548,6 +569,51 @@ describe('Pi native credentials', () => {
       }
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
       expect(pin).not.toHaveBeenCalled();
+    });
+    test('a delivered vendor leaves native Anthropic auth usable for preflight and a turn', async () => {
+      writeFileSync(
+        join(root, 'auth.json'),
+        JSON.stringify({
+          anthropic: { type: 'api_key', key: secret },
+          openrouter: { type: 'api_key', key: 'native-openrouter' },
+        })
+      );
+      const authPath = join(root, 'delivered-auth.json');
+      writeFileSync(
+        authPath,
+        JSON.stringify({
+          openrouter: { type: 'api_key', key: 'delivered-openrouter' },
+        })
+      );
+      writeFileSync(
+        join(root, 'models.json'),
+        JSON.stringify({
+          providers: {
+            anthropic: {
+              baseUrl: `http://127.0.0.1:${server.port}/v1`,
+              api: 'openai-completions',
+            },
+          },
+        })
+      );
+      expect(await check()).toEqual({ state: 'usable', source: 'native' });
+      const env = { ARCHON_PI_AUTH_PATH: authPath };
+      expect(await check(undefined, env)).toEqual({ state: 'usable', source: 'native' });
+      const chunks = [];
+      for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+        model: 'anthropic/claude-sonnet-4-6',
+        env,
+      }))
+        chunks.push(chunk);
+      expect(new Set(authorizations)).toEqual(new Set([secret]));
+      expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+        isError: true,
+        errors: [expect.stringContaining('fixture rejection')],
+      });
+      expect(JSON.parse(readFileSync(authPath, 'utf8'))).toEqual({
+        openrouter: { type: 'api_key', key: 'delivered-openrouter' },
+      });
+      expect(JSON.parse(readFileSync(join(root, 'auth.json'), 'utf8')).anthropic.key).toBe(secret);
     });
     test('a stored auth.json key is not pinned, so Pi keeps resolving it', async () => {
       localProvider();
