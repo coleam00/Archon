@@ -35,6 +35,7 @@ import type * as CodebaseDb from '../db/codebases';
 import type * as ConversationDb from '../db/conversations';
 import type * as IsolationEnvironmentDb from '../db/isolation-environments';
 import type * as SessionDb from '../db/sessions';
+import type * as CleanupService from '../services/cleanup-service';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -350,9 +351,6 @@ const mockIsolationEnvDbGet = mock<typeof IsolationEnvironmentDb.getById>(() =>
 const mockIsolationEnvDbUpdate = mock<typeof IsolationEnvironmentDb.updateStatus>(() =>
   Promise.resolve()
 );
-const mockGetLiveRunOwningEnv = mock<typeof IsolationEnvironmentDb.getLiveRunOwningEnv>(() =>
-  Promise.resolve(null)
-);
 
 const mockCountActiveByCodebase = mock<typeof IsolationEnvironmentDb.countActiveByCodebase>(() =>
   Promise.resolve(0)
@@ -361,7 +359,6 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationEnvDbCreate,
   getById: mockIsolationEnvDbGet,
   getByWorkingPath: mock(() => Promise.resolve(null)),
-  getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   updateStatus: mockIsolationEnvDbUpdate,
   markDestroyed: mock(() => Promise.resolve()),
   getActiveByCodebase: mock(() => Promise.resolve([])),
@@ -456,7 +453,11 @@ mock.module('../services/run-owner-stop', () => ({
 }));
 
 const mockReclaimContainerEnv = mock(async () => {});
+const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+  Promise.resolve(null)
+);
 mock.module('../services/cleanup-service', () => ({
+  getLiveRunBlocker: mockGetLiveRunBlocker,
   reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
@@ -528,7 +529,8 @@ function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockIsolationEnvDbUpdate.mockClear();
-  mockGetLiveRunOwningEnv.mockClear();
+  mockGetLiveRunBlocker.mockReset();
+  mockGetLiveRunBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();
@@ -1775,14 +1777,18 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
+          mockGetLiveRunBlocker.mockResolvedValue({
+            reason: 'live_run',
+            display: 'run run-live is paused',
+            runId: 'run-live-1234',
+            runStatus: 'paused',
+          });
 
           const result = await handleCommand(convWithWorktree, '/worktree remove', operator);
 
           expect(result.success).toBe(false);
-          expect(result.message).toContain('run-live');
-          expect(result.message).toContain('paused');
-          expect(mockGetLiveRunOwningEnv).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(result.message).toContain('Worktree kept: run run-live is paused.');
+          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
@@ -1794,7 +1800,12 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
+          mockGetLiveRunBlocker.mockResolvedValue({
+            reason: 'live_run',
+            display: 'run run-live is paused',
+            runId: 'run-live-1234',
+            runStatus: 'paused',
+          });
 
           const result = await handleCommand(
             convWithWorktree,
@@ -1803,9 +1814,8 @@ describe('CommandHandler', () => {
           );
 
           expect(result.success).toBe(false);
-          expect(result.message).toContain('run-live');
-          expect(result.message).toContain('paused');
-          expect(mockGetLiveRunOwningEnv).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(result.message).toContain('Worktree kept: run run-live is paused.');
+          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
