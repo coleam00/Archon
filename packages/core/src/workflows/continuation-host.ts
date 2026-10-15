@@ -1,5 +1,12 @@
+import { resolveRunSourceCapture, WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import type { WorkflowHost } from './host-store';
-import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
+import {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  resumeCursorMatches,
+  type IWorkflowStore,
+  type ResumeRefusal,
+} from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { resolveRunWorkflow } from './resolve-run-workflow';
@@ -10,17 +17,40 @@ import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 
 const log = createLogger('workflow-continuation-host');
+
+/** Operator guidance for a run whose frozen source cannot be verified, shared by every host. */
+export function unverifiableSourceGuidance(
+  runId: string,
+  error: WorkflowSourceIntegrityError
+): string {
+  return `frozen workflow source cannot be verified (${error.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${runId}, or abandon with archon workflow abandon ${runId}.`;
+}
 type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
-  | { kind: 'unavailable'; reason: string };
+  /** The run's resource is full; it stays paused and keeps its place as a capacity waiter. */
+  | {
+      kind: 'waiting_for_capacity';
+      blocker: WorkflowResourceBusyError['blocker'];
+      /** The refusal as an operator reads it (`WorkflowResourceBusyError`). */
+      message: string;
+    }
+  /** The run's resource is full; it stays failed or not-ready paused and holds no place. */
+  | {
+      kind: 'resource_busy';
+      blocker: WorkflowResourceBusyError['blocker'];
+      refusal: Exclude<ResumeRefusal, 'waiting'>;
+      message: string;
+    }
+  | { kind: 'unavailable'; reason: string; sourceError?: WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
   | { kind: 'unavailable'; reason: string };
@@ -35,8 +65,18 @@ export async function resumeWorkflowContinuation(
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
+  try {
+    await resolveRunSourceCapture(run.metadata);
+  } catch (error) {
+    if (!(error instanceof WorkflowSourceIntegrityError)) throw error;
+    return {
+      kind: 'unavailable',
+      reason: `its recorded workflow source is unavailable: ${error.message}`,
+      sourceError: error,
+    };
+  }
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
-  if (run.metadata.isolation === 'container') {
+  if (isContainerRun(run)) {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };
   }
   const context = await resolveContext(run);
@@ -50,7 +90,8 @@ export async function resumeWorkflowContinuation(
     codebase?.default_cwd ?? getArchonWorkspacesPath(),
     context.platform
   );
-  if (!source.ok) return { kind: 'unavailable', reason: source.message };
+  if (!source.ok)
+    return { kind: 'unavailable', reason: source.message, sourceError: source.sourceError };
   try {
     const owner = await startRunLiveOwner(run.id);
     let closing: Promise<void> | undefined;
@@ -104,6 +145,12 @@ export async function resumeWorkflowContinuation(
       error instanceof RunLiveOwnerAlreadyOwnedError
     )
       return { kind: 'not-accepted' };
+    if (error instanceof WorkflowResourceBusyError) {
+      const { blocker, refusal, message } = error;
+      return refusal === 'waiting'
+        ? { kind: 'waiting_for_capacity', blocker, message }
+        : { kind: 'resource_busy', blocker, refusal, message };
+    }
     throw error;
   }
 }
@@ -128,12 +175,33 @@ export type ContinuationWakeOutcome = { runId: string; deferError?: unknown } & 
   | { kind: 'failed'; error: unknown }
 );
 
+type ContinuationStore = Pick<
+  IWorkflowStore,
+  'listDueWorkflowContinuations' | 'deferWorkflowContinuation'
+>;
+const structuralFailures = new Map<string, { cursor: WorkflowResumeCursor; count: number }>();
+const warnedRuns = new Set<string>();
+const MAX_SOURCE_FAILURES = 3;
+
 export async function wakeDueWorkflowContinuations(
-  store: Pick<IWorkflowStore, 'listDueWorkflowContinuations' | 'deferWorkflowContinuation'>,
+  store: ContinuationStore,
   now: Date,
   resume: (run: WorkflowRun, cursor: WorkflowResumeCursor) => Promise<ContinuationAdmission>
 ): Promise<ContinuationWakeOutcome[]> {
-  const due = await store.listDueWorkflowContinuations(now, 25);
+  const blockedCount = [...structuralFailures.values()].filter(
+    state => state.count >= MAX_SOURCE_FAILURES
+  ).length;
+  // Blocked rows remain due for other hosts; fetch past them so they cannot starve this host.
+  const due = (await store.listDueWorkflowContinuations(now, 25 + blockedCount))
+    .filter(run => {
+      const state = structuralFailures.get(run.id);
+      if (state && !resumeCursorMatches(run, state.cursor)) {
+        structuralFailures.delete(run.id);
+        return true;
+      }
+      return (state?.count ?? 0) < MAX_SOURCE_FAILURES;
+    })
+    .slice(0, 25);
   return Promise.all(
     due.map(async (run): Promise<ContinuationWakeOutcome> => {
       const cursor = continuationCursor(run);
@@ -149,8 +217,36 @@ export async function wakeDueWorkflowContinuations(
       try {
         outcome = { runId: run.id, ...(await resume(run, cursor)) };
       } catch (error) {
-        log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
+        if (!(error instanceof WorkflowSourceIntegrityError))
+          log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
+      }
+      if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy')
+        log.info(
+          { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
+          'workflow_continuation_capacity_refused'
+        );
+      const sourceError =
+        outcome.kind === 'unavailable'
+          ? outcome.sourceError
+          : outcome.kind === 'failed' && outcome.error instanceof WorkflowSourceIntegrityError
+            ? outcome.error
+            : undefined;
+      if (sourceError) {
+        const count = (structuralFailures.get(run.id)?.count ?? 0) + 1;
+        structuralFailures.set(run.id, { cursor, count });
+        if (count >= MAX_SOURCE_FAILURES) {
+          if (!warnedRuns.has(run.id)) {
+            warnedRuns.add(run.id);
+            log.warn(
+              { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
+              `This host stopped automatically resuming run ${run.id}: ${unverifiableSourceGuidance(run.id, sourceError)}`
+            );
+          }
+          return outcome;
+        }
+      } else if (outcome.kind === 'accepted') {
+        structuralFailures.delete(run.id);
       }
       if (outcome.kind !== 'accepted') {
         try {

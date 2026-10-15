@@ -1,13 +1,15 @@
 import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import type { IStateDocumentStore } from './state-document-store';
-import type { IResourceStartStore } from './resource-start-store';
+import type { IResourceStartStore, ResourceBlocker } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   answeredPauseContinuation,
+  continuablePause,
   attentionLabels,
   attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type AttentionAnswer,
@@ -15,7 +17,6 @@ import {
 } from './schemas/workflow-run';
 import type { AttentionLabels } from './schemas/dag-node';
 import type { RecordSurface } from './schemas/record-surface';
-import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
 import {
@@ -149,6 +150,41 @@ export function resumeCursorMatches(
       return answered?.nodeId === cursor.nodeId && answered.pauseId === cursor.pauseId;
     }
   }
+}
+
+/** A pause the engine continues by itself, named exactly (`continuablePauseCursor`). */
+export type PauseCursor =
+  | Extract<WorkflowResumeCursor, { kind: 'wait' }>
+  | { kind: 'pause'; nodeId: string; pauseId: string };
+
+/**
+ * The pause a paused run sits at, if the continuation host continues it by itself: a time
+ * or event wait on its deadline, or a gate or attention wait, answered or not
+ * (`continuablePause`). Only such a pause gives back the run's resource slot. A parent
+ * blocked on a child workflow, a fan-out or a write-back keeps its slot: nothing retries
+ * it if its continuation is refused for capacity. Container runs are excluded because the
+ * host refuses to continue them.
+ */
+export function continuablePauseCursor(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): PauseCursor | undefined {
+  if (isContainerRun(run)) return undefined;
+  const wait = pendingWorkflowWaitDeadline(run);
+  if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  const pause = continuablePause(run);
+  return pause && { kind: 'pause', nodeId: pause.nodeId, pauseId: pause.pauseId };
+}
+
+/** True when `run` is still paused at exactly the pause `cursor` names. */
+export function pauseCursorMatches(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  cursor: PauseCursor
+): boolean {
+  const current = continuablePauseCursor(run);
+  if (current?.kind !== cursor.kind || current.nodeId !== cursor.nodeId) return false;
+  return current.kind === 'wait'
+    ? cursor.kind === 'wait' && current.resumeAt === cursor.resumeAt
+    : cursor.kind === 'pause' && current.pauseId === cursor.pauseId;
 }
 
 /** Composite primary key identifying a single persisted node session row. */
@@ -744,7 +780,21 @@ export interface IWorkflowStore
     wait: Extract<WorkflowWaitContext, { kind: 'event' }>,
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
+  /**
+   * A resume of a run admitted through a resource start takes a slot or throws
+   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
+   * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
+   * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
+   * while the host retries (`resumeRefusal`).
+   */
   resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
+  /**
+   * Give back the resource slot of a run admitted through a resource start, while it is
+   * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once
+   * nothing of the run executes any more. `released` is false when the run moved on, never
+   * held a slot, or already gave it back; a capacity wait then stays, keeping its place.
+   */
+  releasePausedRunSlot(id: string, cursor: PauseCursor): Promise<{ released: boolean }>;
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
@@ -964,13 +1014,25 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
+/**
+ * What a refused resume leaves behind: a failed run stays failed; a paused run stays
+ * paused, and `waiting` means it also keeps its place as a capacity waiter.
+ */
+export type ResumeRefusal = 'failed' | 'paused' | 'waiting';
+
 export class WorkflowResourceBusyError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
+    public readonly blocker: ResourceBlocker,
+    public readonly refusal: ResumeRefusal = 'failed'
   ) {
+    const reason = `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`;
     super(
-      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
+      refusal === 'waiting'
+        ? `${reason} It stays paused and keeps its place; a continuation host continues it once capacity frees.`
+        : refusal === 'paused'
+          ? `${reason} It stays paused; a continuation host continues it once its wait ends and capacity frees.`
+          : reason
     );
     this.name = 'WorkflowResourceBusyError';
   }

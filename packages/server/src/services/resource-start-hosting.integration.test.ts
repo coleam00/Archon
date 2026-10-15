@@ -104,7 +104,10 @@ interface Fixture {
 
 async function fixture(
   autoDrain = true,
-  isolation: { kind: 'in-place' } | { kind: 'worktree' } | { kind: 'default' } = {
+  isolation:
+    | { kind: 'in-place' }
+    | { kind: 'worktree'; fromBranch?: string }
+    | { kind: 'default' } = {
     kind: 'in-place',
   },
   initGit = true,
@@ -700,6 +703,25 @@ describe('server resource-start host', () => {
 
     await Promise.allSettled([start(), start()]);
     expect(engine.claimed).toEqual([requestId]);
+  });
+
+  test('a worktree creation failure reports the classified isolation message, not raw git output', async () => {
+    const { deliver, engine } = await fixture(false, {
+      kind: 'worktree',
+      fromBranch: 'no-such-branch',
+    });
+    expect((await deliver('first', 'queue')).status).toBe(200);
+    const requestId = await admitWithoutStarting();
+
+    await expect(
+      startAdmittedResourceStart({
+        requestId,
+        hostId: HOST_ID,
+        host: { ...createSqlWorkflowHost(), engine },
+        createPlatform: () => new HeadlessPlatform(),
+      })
+    ).rejects.toThrow(/^\*\*Error:\*\* /);
+    expect(engine.submitted).toHaveLength(0);
   });
 
   test('an unbranched worktree start that failed before submission reuses its checkout on retry', async () => {

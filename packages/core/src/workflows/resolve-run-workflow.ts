@@ -1,5 +1,8 @@
 import { createLogger } from '@archon/paths';
-import { resolveContinuationWorkflow } from '@archon/workflows/executor';
+import {
+  WorkflowSourceIntegrityError,
+  resolveContinuationWorkflow,
+} from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow, WorkflowLoadError } from '@archon/workflows/schemas/workflow';
 import {
@@ -26,18 +29,26 @@ export async function resolveRunWorkflow(
   workflowCwd: string,
   surface: WorkflowCommandSurface
 ): Promise<
-  { ok: true; workflow: ResolvedWorkflow } | { ok: false; message: string; resumeHint?: string }
+  | { ok: true; workflow: ResolvedWorkflow }
+  | {
+      ok: false;
+      message: string;
+      resumeHint?: string;
+      sourceError?: WorkflowSourceIntegrityError;
+    }
 > {
   try {
     const continuation = await resolveContinuationWorkflow(deps, run, workflowCwd);
     if (continuation) return { ok: true, workflow: continuation.workflow };
   } catch (error) {
     const err = toError(error);
-    log.error({ err, runId: run.id }, 'workflow.continuation_source_failed');
+    if (!(error instanceof WorkflowSourceIntegrityError))
+      log.error({ err, runId: run.id }, 'workflow.continuation_source_failed');
     return {
       ok: false,
       message: `its recorded workflow source is unavailable: ${err.message}`,
       resumeHint: 'Start a fresh run to execute the current workflow.',
+      ...(error instanceof WorkflowSourceIntegrityError ? { sourceError: error } : {}),
     };
   }
 

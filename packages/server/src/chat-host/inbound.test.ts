@@ -10,6 +10,8 @@ import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/conne
 import { findOrCreateUserByPlatformIdentity, setUserRole } from '@archon/core/db/users';
 import { createWorkflowRun, getWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import { resumeRefusal } from '@archon/workflows/resource-start-store';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { descriptor } from './fixtures/descriptor';
 import { ChatPluginPlatform } from './platform';
 
@@ -18,13 +20,23 @@ mock.module('@archon/core', () => ({
   handleMessage,
   classifyAndFormatError: () => 'Message processing failed',
 }));
-const resume = mock(async (..._args: unknown[]) => true);
+const resume = mock(async (..._args: unknown[]) => ({ kind: 'resumed' }));
 const target = { kind: 'unavailable', reason: 'test destination' };
 mock.module('../services/workflow-resume-service', () => ({
   workflowResumeTargetForRun: async () => target,
   resumeWorkflowRunFromServer: resume,
 }));
 const { registerChatInbound } = await import('./inbound');
+/** A resume refused for capacity, with the refusal the store derives from the run's state. */
+const refuseForCapacity = (): void => {
+  resume.mockImplementationOnce(async (_host: unknown, run: unknown) => ({
+    kind:
+      resumeRefusal(run as WorkflowRun, undefined) === 'waiting'
+        ? 'waiting_for_capacity'
+        : 'resource_busy',
+    message: 'busy',
+  }));
+};
 
 let inbound: Parameters<ConnectedChat['onInbound']>[0];
 let action: Parameters<ConnectedChat['onRunAction']>[0];
@@ -36,6 +48,7 @@ const connection: ConnectedChat = {
   send: async () => {},
   resultFooter: async () => {},
   runEvent: async () => {},
+  attentionNotice: async () => ({}),
   onInbound: handler => {
     inbound = handler;
   },
@@ -177,7 +190,10 @@ test('approve and declared response preserve gate occurrence and resume with hos
       response: { nodeId: 'gate', pauseId: 'wrong' },
       sender: { platformUserId: 'starter' },
     })
-  ).toMatchObject({ status: 'refused' });
+  ).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("It is now awaiting occurrence 'pause-1'"),
+  });
   expect(resume).not.toHaveBeenCalled();
   expect(
     await action({
@@ -213,6 +229,128 @@ test('approve and declared response preserve gate occurrence and resume with hos
   });
 });
 
+async function waiting(wait: Record<string, unknown>) {
+  const started = await run();
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+    [
+      JSON.stringify({
+        wait: {
+          kind: 'attention',
+          owner: 'node',
+          nodeId: 'hold',
+          waitingSince: '2026-10-13T01:00:00.000Z',
+          message: 'Pick a base',
+          ...wait,
+        },
+      }),
+      started.id,
+    ]
+  );
+  return started.id;
+}
+const select = {
+  pauseId: 'w1',
+  form: 'select',
+  options: [{ id: 'use-main' }, { id: 'use-dev' }],
+};
+const waitOf = async (runId: string) => (await getWorkflowRun(runId))?.metadata.wait;
+
+test('a typed answer is authorized, names its occurrence, records the surface and resumes', async () => {
+  const runId = await waiting(select);
+  const answer = (platformUserId: string, pauseId: string, choose: string[]) =>
+    action({
+      runId,
+      action: 'answer',
+      response: { nodeId: 'hold', pauseId, choose },
+      sender: { platformUserId },
+    });
+  expect(await answer('other', 'w1', ['use-main'])).toMatchObject({ status: 'forbidden' });
+  // A stale occurrence is still forbidden, so the refusal never names the live one.
+  const forbiddenStale = await answer('other', 'w0', ['use-main']);
+  expect(forbiddenStale).toMatchObject({ status: 'forbidden' });
+  expect(JSON.stringify(forbiddenStale)).not.toContain('w1');
+  expect(await answer('starter', 'w0', ['use-main'])).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("It is now awaiting occurrence 'w1'"),
+  });
+  expect(await answer('starter', 'w1', ['use-elsewhere'])).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("does not declare option 'use-elsewhere'"),
+  });
+  expect(await waitOf(runId)).not.toHaveProperty('answer');
+  expect(resume).not.toHaveBeenCalled();
+  expect(await answer('starter', 'w1', ['use-dev'])).toEqual({
+    status: 'done',
+    result: { kind: 'answered', resumed: true },
+  });
+  expect(await waitOf(runId)).toMatchObject({
+    answer: { decision: 'use-dev' },
+    answeredVia: descriptor.id,
+  });
+  expect(resume.mock.calls[0]?.[2]).toBe(userId);
+});
+
+test('resume continues a wait paused before answers, and refuses an unanswered form', async () => {
+  const legacy = await waiting({});
+  expect(
+    await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'other' } })
+  ).toMatchObject({ status: 'forbidden' });
+  expect(
+    await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'starter' } })
+  ).toEqual({ status: 'done', result: { kind: 'resumed', resumed: true } });
+  expect(resume.mock.calls[0]?.[2]).toBe(userId);
+  const unanswered = await waiting(select);
+  expect(
+    await action({ runId: unanswered, action: 'resume', sender: { platformUserId: 'starter' } })
+  ).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("waiting for an answer to its 'select' attention wait"),
+  });
+  expect(resume).toHaveBeenCalledTimes(1);
+});
+
+test('a resume refused for capacity reports a wait only for a run that keeps its place', async () => {
+  const resumeAs = (runId: string) =>
+    action({ runId, action: 'resume', sender: { platformUserId: 'starter' } });
+  // An early resume of a pause that is not ready holds no place.
+  const notReady = await waiting({});
+  refuseForCapacity();
+  expect(await resumeAs(notReady)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false },
+  });
+  const failed = await run();
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
+    [failed.id]
+  );
+  refuseForCapacity();
+  expect(await resumeAs(failed.id)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false },
+  });
+  const answered = await waiting(select);
+  refuseForCapacity();
+  expect(
+    await action({
+      runId: answered,
+      action: 'answer',
+      response: { nodeId: 'hold', pauseId: 'w1', choose: ['use-dev'] },
+      sender: { platformUserId: 'starter' },
+    })
+  ).toEqual({
+    status: 'done',
+    result: { kind: 'answered', resumed: false, waitingForCapacity: true },
+  });
+  refuseForCapacity();
+  expect(await resumeAs(answered)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false, waitingForCapacity: true },
+  });
+  expect(resume).toHaveBeenCalledTimes(4);
+});
+
 test('a failed resume reports the recorded approval as not resumed, not refused', async () => {
   const paused = await run(true);
   resume.mockImplementationOnce(async () => {
@@ -226,6 +364,22 @@ test('a failed resume reports the recorded approval as not resumed, not refused'
   });
   expect((await getWorkflowRun(paused.id))?.metadata).toMatchObject({
     approval: { resolved: 'approved' },
+  });
+});
+
+test('an approval refused for capacity reports the run as waiting, not refused', async () => {
+  const paused = await run(true);
+  refuseForCapacity();
+  expect(
+    await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'starter' } })
+  ).toEqual({
+    status: 'done',
+    result: {
+      kind: 'approved',
+      type: 'approval_gate',
+      resumed: false,
+      waitingForCapacity: true,
+    },
   });
 });
 
@@ -245,8 +399,9 @@ test('message failures send an error reply despite the lock swallowing handler f
   const failedPlatform = new ChatPluginPlatform(
     descriptor,
     {
-      request: async () => {
+      request: async operation => {
         await send();
+        return operation(connection);
       },
     },
     {}

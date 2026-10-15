@@ -748,6 +748,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
 
     if (repositoryExists) {
+      await addSafeDirectory(toRepoPath(repoPath));
       await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
@@ -799,6 +800,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
@@ -836,8 +838,6 @@ export class GitHubAdapter implements IPlatformAdapter {
     repo: string,
     repoPath: string
   ): Promise<void> {
-    await addSafeDirectory(toRepoPath(repoPath));
-
     // App mode requires a refreshable credential source after the
     // request-scoped clone token expires.
     if (this.auth.kind === 'app') {

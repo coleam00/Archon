@@ -148,6 +148,33 @@ export async function runChatConformance(
           await chat.send({ conversationId: 'fixture', text: 'still connected' });
         });
       }
+      if (chat.descriptor.capabilities.attentionNotices) {
+        await check('attention notice', async () => {
+          const opened = await chat.attentionNotice({
+            destination: 'fixture',
+            notice: {
+              type: 'attention',
+              runId: 'fixture',
+              workflowName: 'fixture',
+              nodeId: 'fixture',
+              pauseId: 'fixture',
+              message: 'fixture',
+              form: 'select',
+              options: [{ id: 'fixture' }],
+            },
+          });
+          await chat.attentionNotice({
+            destination: 'fixture',
+            ...(opened.conversationId ? { conversationId: opened.conversationId } : {}),
+            notice: {
+              type: 'terminal',
+              runId: 'fixture',
+              workflowName: 'fixture',
+              status: 'completed',
+            },
+          });
+        });
+      }
       if (chat.descriptor.capabilities.resultFooter) {
         await check('result footer', () =>
           chat.resultFooter({ conversationId: 'fixture', cost: 0.01 })

@@ -13,6 +13,7 @@ import {
 import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import { RunActionForbiddenError } from './run-authorization';
 import {
+  ResumeRefusedError,
   StaleGateAnswerError,
   createWorkflowOperations,
   expectedGateForOccurrence,
@@ -186,6 +187,21 @@ describe('answering an attention wait', () => {
     ).rejects.toThrow("does not declare option 'c'");
   });
 
+  test('whitespace-only approve and reject text answers an attention wait with no text', async () => {
+    await setup();
+    const rejected = await paused('approval');
+    await operations.rejectWorkflow(rejected, '   ', operator, cli);
+    expect(await storedWait(rejected)).toMatchObject({
+      answer: { decision: 'reject', text: '' },
+    });
+
+    const approved = await paused('approval');
+    await operations.approveWorkflow(approved, '   ', operator, cli);
+    expect(await storedWait(approved)).toMatchObject({
+      answer: { decision: 'approve', text: '' },
+    });
+  });
+
   test('a wait from before answers resumes; an unanswered form wait refuses resume', async () => {
     await setup();
     const legacy = await paused(undefined, null);
@@ -193,9 +209,9 @@ describe('answering an attention wait', () => {
       'Continue it with resume'
     );
     expect((await operations.resumeWorkflow(legacy, operator)).id).toBe(legacy);
-    await expect(operations.resumeWorkflow(await paused('select'), operator)).rejects.toThrow(
-      "waiting for an answer to its 'select' attention wait"
-    );
+    const refusal = operations.resumeWorkflow(await paused('select'), operator);
+    await expect(refusal).rejects.toBeInstanceOf(ResumeRefusedError);
+    await expect(refusal).rejects.toThrow("waiting for an answer to its 'select' attention wait");
   });
 });
 

@@ -1,9 +1,9 @@
 /**
  * Typed errors for the GitHub App auth module.
  *
- * Both classes carry enough context (owner/repo or cause) for adapter code to
- * surface a clean user message via classifyAndFormatError without losing the
- * underlying detail in logs.
+ * AppNotInstalledError carries owner/repo so adapter code can surface a clean
+ * user message via classifyAndFormatError. AppPrivateKeyError messages never
+ * repeat configured values, which may be key material.
  */
 
 export class AppNotInstalledError extends Error {
@@ -23,10 +23,7 @@ export class AppNotInstalledError extends Error {
 }
 
 export class AppPrivateKeyError extends Error {
-  constructor(
-    message: string,
-    public readonly cause?: unknown
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = 'AppPrivateKeyError';
   }

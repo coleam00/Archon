@@ -554,10 +554,10 @@ describe('required workflow credential delivery', () => {
     mockListDecryptedUserProviderCredentials.mockResolvedValue([
       { provider: 'codex', cred: { kind: 'oauth', oauthApiKey: 'legacy', rawCreds: {} } },
     ]);
-    expect(await createWorkflowDeps().getUserProviderCredentialStatus?.('u', 'openai')).toEqual({
-      kind: 'oauth',
-      status: { state: 'usable', source: 'archon' },
-    });
+    const stored = await createWorkflowDeps().getUserProviderCredential?.('u', 'openai');
+    expect(stored?.kind).toBe('oauth');
+    expect(status).not.toHaveBeenCalled();
+    expect(await stored?.getStatus()).toEqual({ state: 'usable', source: 'archon' });
     expect(status).toHaveBeenCalledWith('u', 'codex');
   });
 
@@ -566,10 +566,9 @@ describe('required workflow credential delivery', () => {
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
     ]);
     const deps = createWorkflowDeps();
-    expect(await deps.getUserProviderCredentialStatus?.('u', 'anthropic')).toMatchObject({
-      kind: 'api_key',
-      status: { state: 'usable' },
-    });
+    const stored = await deps.getUserProviderCredential?.('u', 'anthropic');
+    expect(stored?.kind).toBe('api_key');
+    expect(await stored?.getStatus()).toMatchObject({ state: 'usable' });
     mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
     await expect(
       deps.getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], ['anthropic'])

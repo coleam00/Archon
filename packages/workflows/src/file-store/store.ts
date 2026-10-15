@@ -1,5 +1,11 @@
 import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
-import { NODE_LIFECYCLE_EVENT_TYPES, foldActiveNodeIds } from '../store';
+import { resumeRefusal } from '../resource-start-store';
+import {
+  NODE_LIFECYCLE_EVENT_TYPES,
+  WorkflowResourceBusyError,
+  foldActiveNodeIds,
+  pauseCursorMatches,
+} from '../store';
 import { createFileStateDocumentStore } from './state-documents';
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
@@ -196,12 +202,26 @@ export async function createFileWorkflowStore(
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: (id, cursor) =>
+    resumeWorkflowRun: async (id, cursor) => {
+      // A paused run's first refusal commits its capacity wait, so it is thrown after the write.
+      const outcome = await write([id], async (view, admission) => {
+        const run = view.resumableRun(id, cursor);
+        const blocker = await admission.resume(run);
+        if (!blocker) return await view.resumeWorkflowRun(id, cursor);
+        const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
+        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        return busy;
+      });
+      if (outcome instanceof WorkflowResourceBusyError) throw outcome;
+      return outcome;
+    },
+    releasePausedRunSlot: (id, cursor) =>
       write([id], async (view, admission) => {
-        const prior = await view.getWorkflowRun(id);
-        const resumed = await view.resumeWorkflowRun(id, cursor);
-        if (prior) await admission.resume(prior);
-        return resumed;
+        const run = await view.getWorkflowRun(id);
+        if (!run || !pauseCursorMatches(run, cursor)) return { released: false };
+        const released = await admission.release(id);
+        if (released) view.clearCapacityWait(id);
+        return { released };
       }),
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, event) =>

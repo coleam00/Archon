@@ -69,6 +69,8 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
         }
         if (path === '/action') {
           const action = chatRunActionSchema.parse(raw);
+          if (action.action === 'answer' || action.action === 'resume')
+            throw new Error(`Slack renders no ${action.action} control`);
           const actionId = action.action === 'cancel' ? `cancel:${action.runId}` : 'respond:0';
           const handler = slack.actions.find(entry => entry.pattern.test(actionId));
           if (!handler) throw new Error('missing Slack action handler');

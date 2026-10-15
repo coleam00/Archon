@@ -1275,17 +1275,23 @@ export const sqliteDialect: SqlDialect = {
     return `json_patch(${column}, $${String(paramIndex)})`;
   },
 
-  jsonArrayContains(column: string, path: string, paramIndex: number): string {
-    // SQLite: check if JSON array contains value using instr
-    // Use $N placeholder for consistent param ordering
-    return `instr(json_extract(${column}, '$.${path}'), $${String(paramIndex)}) > 0`;
-  },
-
   nowMinusDays(paramIndex: number): string {
     return `datetime('now', '-' || $${String(paramIndex)} || ' days')`;
   },
 
   daysSince(column: string): string {
     return `(julianday('now') - julianday(${column}))`;
+  },
+
+  jsonText(column: string, path: string): string {
+    return `json_extract(${column}, '$.${path}')`;
+  },
+
+  jsonRemove(column: string, ...keys: string[]): string {
+    return `json_remove(${[column, ...keys.map(key => `'$.${key}'`)].join(', ')})`;
+  },
+
+  rowLock(): string {
+    return '';
   },
 };

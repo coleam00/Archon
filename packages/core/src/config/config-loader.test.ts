@@ -14,8 +14,6 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => archonHome),
   getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),
-  getArchonWorkspacesPath: mock(() => join(archonHome, 'workspaces')),
-  getArchonWorktreesPath: mock(() => join(archonHome, 'worktrees')),
   getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
@@ -129,6 +127,29 @@ describe('config-loader', () => {
       'Invalid streaming config'
     );
     expect(mockFsWriteFile).not.toHaveBeenCalled();
+  });
+
+  test('attention notice routes load from global config only', async () => {
+    const routes = 'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n';
+    mockFsReadFile.mockImplementation(async (path: string) =>
+      path.replace(/\\/g, '/').includes('/repo/.archon/')
+        ? 'attentionNotices:\n  - platform: repo-chat\n    destination: repo\n'
+        : routes
+    );
+    expect((await loadConfig('/repo')).attentionNotices).toEqual([
+      { platform: 'matrix-chat', destination: 'ops' },
+    ]);
+    expect(toSafeConfig(await loadConfig())).not.toHaveProperty('attentionNotices');
+  });
+
+  test.each([
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n  - platform: matrix-chat\n    destination: ops\n',
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ""\n',
+    'attentionNotices:\n  - platform: Matrix Chat\n    destination: ops\n',
+  ])('an invalid attention notice route degrades to no routes: %s', async yaml => {
+    mockFsReadFile.mockResolvedValue(yaml);
+    expect(await loadGlobalConfig()).toEqual({});
+    expect((await loadConfig()).attentionNotices).toEqual([]);
   });
 
   test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
@@ -533,6 +554,26 @@ recommendedWorkflows: "archon-plan"
   });
 
   describe('loadConfig', () => {
+    test('tolerates retired YAML keys without merging or exposing them', async () => {
+      mockFsReadFile.mockResolvedValueOnce(`
+paths:
+  workspaces: /unused/workspaces
+  worktrees: /unused/worktrees
+concurrency:
+  maxConversations: 7
+`).mockResolvedValueOnce(`
+defaults:
+  copyDefaults: false
+  loadDefaultCommands: false
+`);
+      const config = await loadConfig('/test/repo');
+      expect(config.concurrency.maxConversations).toBe(7);
+      expect(config.defaults.loadDefaultCommands).toBe(false);
+      expect(config).not.toHaveProperty('paths');
+      expect(config.defaults).not.toHaveProperty('copyDefaults');
+      expect(toSafeConfig(config).defaults).not.toHaveProperty('copyDefaults');
+    });
+
     test('returns defaults when no configs exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
@@ -1026,17 +1067,6 @@ env:
 
       const config = await loadConfig('/test/repo');
       expect(config.envVars).toBeUndefined();
-    });
-
-    test('paths use archon defaults', async () => {
-      const error = new Error('ENOENT') as NodeJS.ErrnoException;
-      error.code = 'ENOENT';
-      mockFsReadFile.mockRejectedValue(error);
-
-      const config = await loadConfig();
-
-      expect(config.paths.workspaces).toBe(join(homedir(), '.archon', 'workspaces'));
-      expect(config.paths.worktrees).toBe(join(homedir(), '.archon', 'worktrees'));
     });
   });
 

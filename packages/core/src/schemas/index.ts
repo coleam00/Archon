@@ -26,8 +26,8 @@ export { codebaseRowSchema } from './codebase';
 export type { Codebase } from './codebase';
 
 // Session
-export { sessionRowSchema, sessionMetadataSchema } from './session';
-export type { Session, SessionMetadata } from './session';
+export { sessionRowSchema, sessionMetadataSchema, SESSION_TRANSITION_REASONS } from './session';
+export type { Session, SessionMetadata, TransitionTrigger } from './session';
 
 // WorkflowEvent
 export { workflowEventRowSchema } from './workflow-event';

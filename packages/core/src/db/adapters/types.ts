@@ -106,14 +106,6 @@ export interface SqlDialect {
   jsonMerge(column: string, paramIndex: number): string;
 
   /**
-   * SQL expression to check if JSON array contains value
-   * @param column - Column name containing JSON
-   * @param path - JSON path to array (e.g., 'related_issues')
-   * @param paramIndex - Parameter placeholder index for value
-   */
-  jsonArrayContains(column: string, path: string, paramIndex: number): string;
-
-  /**
    * SQL expression for interval subtraction from now
    * @param paramIndex - Parameter placeholder index for days
    */
@@ -124,4 +116,32 @@ export interface SqlDialect {
    * @param column - Timestamp column name
    */
   daysSince(column: string): string;
+
+  /**
+   * SQL expression reading the JSON value at a dotted key path (`approval.nodeId`).
+   * A JSON string reads as its unquoted text on both dialects, and a JSON null or an
+   * absent key reads as SQL NULL. Postgres returns every scalar as text; SQLite
+   * returns numbers and booleans as SQL numbers.
+   * @param column - JSON column, optionally table-qualified (`r.metadata`)
+   * @param path - Dot-separated object keys
+   */
+  jsonText(column: string, path: string): string;
+
+  /**
+   * SQL expression for a JSON object with the given top-level keys removed.
+   * @param column - JSON object expression
+   * @param keys - Top-level keys to remove
+   */
+  jsonRemove(column: string, ...keys: string[]): string;
+
+  /**
+   * Suffix for a SELECT whose rows a later write in the same transaction depends on:
+   * ` FOR UPDATE` on Postgres (` FOR UPDATE OF <table>` when named), empty on SQLite.
+   * SQLite needs no row lock: the adapter serializes transactions on one connection,
+   * and a cross-process writer that commits between the read and the write fails the
+   * deferred transaction's read-to-write upgrade with SQLITE_BUSY, which the adapter
+   * answers by rerunning the whole transaction.
+   * @param table - Table or alias to lock when the SELECT joins others
+   */
+  rowLock(table?: string): string;
 }

@@ -279,6 +279,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+      Promise.resolve({ released: false })
+    ),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
@@ -392,9 +395,9 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({
+    getUserProviderCredential: mock(async () => ({
       kind: 'api_key' as const,
-      status: { state: 'usable' as const, source: 'archon' as const },
+      getStatus: async () => ({ state: 'usable' as const, source: 'archon' as const }),
     })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
@@ -1602,7 +1605,7 @@ describe('executeWorkflow', () => {
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(sentMessage).toContain('archon-implement');
       expect(sentMessage).toContain('abc12345');
-      expect(sentMessage).toContain('2m 5s');
+      expect(sentMessage).toContain('2m5s');
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
@@ -3707,6 +3710,61 @@ describe('executeWorkflow', () => {
     });
   });
 
+  describe('paused exit', () => {
+    const pausedAt = (approval: Record<string, unknown>) =>
+      makeRun({ status: 'paused', metadata: { approval } });
+    const run = (store: IWorkflowStore) =>
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      });
+
+    it('gives back the resource slot of a pause the host continues', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const result = await run(
+        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(releasePausedRunSlot.mock.calls).toEqual([
+        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
+      ]);
+    });
+
+    it('keeps the slot of a parent blocked on its child', async () => {
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const paused = pausedAt({
+        type: 'child_workflow',
+        nodeId: 'child',
+        message: '',
+        pauseId: 'p1',
+        childRunId: 'child-run',
+      });
+      await run(makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot }));
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+    });
+
+    it('still reports the pause when the release fails', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const result = await run(
+        makeStore({
+          getWorkflowRun: mock(async () => paused),
+          releasePausedRunSlot: mock(async () => {
+            throw new Error('database unavailable');
+          }),
+        })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowRunId: paused.id }),
+        'workflow.paused_slot_release_failed'
+      );
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Scope artifacts dir threading (#1846)
   // -------------------------------------------------------------------------
@@ -4374,6 +4432,29 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('blocking message status awareness', () => {
+    it.each([
+      [500, '500ms'],
+      [1500, '1.5s'],
+      [90000, '1m30s'],
+      [119500, '2m0s'],
+    ])('shows the shared duration policy for a blocker at %s ms', async (elapsed, expected) => {
+      const now = Date.UTC(2026, 9, 15, 12);
+      const clock = spyOn(Date, 'now').mockReturnValue(now);
+      const platform = makePlatform();
+      const sendMessage = spyOn(platform, 'sendMessage').mockResolvedValue(undefined);
+      try {
+        const run = makeRun({ status: 'running', started_at: new Date(now - elapsed) });
+        const deps = makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => run) }));
+        await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+          conversationId: 'db-conv-1',
+        });
+        expect(sendMessage.mock.calls[0]?.[1]).toContain(`running ${expected},`);
+      } finally {
+        clock.mockRestore();
+        sendMessage.mockRestore();
+      }
+    });
+
     it('uses paused-specific copy when blocker is paused', async () => {
       const pausedRun = makeRun({
         id: 'paused-run-id',
@@ -6145,14 +6226,14 @@ describe('credential preflight lifecycle', () => {
       const getStatus = mock(
         async (): Promise<import('./deps').StoredProviderCredential> => ({
           kind: 'api_key',
-          status: {
+          getStatus: async () => ({
             state: 'unusable',
             source: 'archon',
             evidence: 'stored credential unreadable',
-          },
+          }),
         })
       );
-      deps.getUserProviderCredentialStatus = getStatus;
+      deps.getUserProviderCredential = getStatus;
       mockExecuteDagWorkflow.mockClear();
       const result = await executeWorkflow(
         deps,
@@ -6185,11 +6266,14 @@ describe('credential preflight lifecycle', () => {
   it('a Pi-only run with its own login neither refreshes nor delivers a stored Claude subscription', async () => {
     const deps = makeDeps(makeStore());
     deps.isPerUserProviderKeysEnabled = () => true;
-    deps.getUserProviderCredentialStatus = mock(
+    const storedStatus = mock(async (): Promise<never> => {
+      throw new Error('unused credential must not be refreshed');
+    });
+    deps.getUserProviderCredential = mock(
       async () =>
         ({
           kind: 'oauth',
-          status: { state: 'unusable', source: 'archon', evidence: 'refresh token revoked' },
+          getStatus: storedStatus,
         }) as const
     );
     deps.getAgentProvider = mock(() => ({
@@ -6212,6 +6296,7 @@ describe('credential preflight lifecycle', () => {
       {}
     );
     expect(result.success).toBe(true);
+    expect(storedStatus).not.toHaveBeenCalled();
     expect(getUserProviderEnv).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
@@ -6221,12 +6306,11 @@ describe('credential preflight lifecycle', () => {
     const deps = makeDeps(store);
     deps.isPerUserProviderKeysEnabled = () => true;
     const { StoredCredentialDeliveryError } = await import('./run-preflight');
-    deps.getUserProviderCredentialStatus = mock(
-      async () =>
-        ({
-          kind: 'api_key',
-          status: { state: 'usable', source: 'archon' },
-        }) as const
+    deps.getUserProviderCredential = mock<NonNullable<WorkflowDeps['getUserProviderCredential']>>(
+      async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({ state: 'usable', source: 'archon' }),
+      })
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
       expect(vendors).toEqual(['anthropic']);

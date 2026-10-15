@@ -1,5 +1,5 @@
 /**
- * Shared isolation business logic — list, cleanup stale, cleanup merged.
+ * Shared isolation business logic — list and cleanup merged.
  *
  * CLI and command-handler are thin formatting adapters over these functions.
  */
@@ -7,12 +7,8 @@ import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platfor
 import { createLogger } from '@archon/paths';
 import { lstat } from 'node:fs/promises';
 import * as isolationDb from '../db/isolation-environments';
-import {
-  cleanupStaleWorktrees,
-  cleanupMergedWorktrees,
-  getLiveRunBlocker,
-} from '../services/cleanup-service';
-import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
+import { cleanupMergedWorktrees, getLiveRunBlocker } from '../services/cleanup-service';
+import type { MergedCleanupResult } from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -185,23 +181,6 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
   }
 
   return { codebases: result, totalEnvironments, ghostsReconciled: totalGhosts };
-}
-
-/**
- * Cleanup stale worktrees for a codebase.
- * Wraps cleanupStaleWorktrees from cleanup-service.
- */
-export async function cleanupStaleEnvironments(
-  codebaseId: string,
-  mainPath: string
-): Promise<CleanupOperationResult> {
-  // First reconcile ghost entries
-  getRegisteredPlatformPolicies();
-  const allActive = await isolationDb.listAllActiveWithCodebase();
-  const codebaseEnvs = allActive.filter(e => e.codebase_id === codebaseId);
-  await reconcileGhosts(codebaseEnvs);
-
-  return cleanupStaleWorktrees(codebaseId, mainPath);
 }
 
 /**

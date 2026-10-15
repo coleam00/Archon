@@ -1494,7 +1494,7 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
-    paths: { workspaces: '/tmp', worktrees: '/tmp' },
+    attentionNotices: [],
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
@@ -1502,7 +1502,7 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
       quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
-    defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+    defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
     envVars: {},
     ...overrides,
   };
@@ -3621,9 +3621,9 @@ describe('workflow dispatch routing', () => {
     const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original,
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async () => ({
+      getUserProviderCredential: async () => ({
         kind: 'api_key',
-        status: { state: 'unusable', source: 'archon', evidence: 'cannot read' },
+        getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'cannot read' }),
       }),
     }));
     const platform = makeForegroundPlatform();
@@ -3990,10 +3990,11 @@ describe('workflow dispatch routing', () => {
     expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });
 
-  /** Drive the lost-resume-race path with an optional supplied-input map. */
+  /** Drive a refused resume (a lost race by default) with an optional supplied-input map. */
   async function dispatchLosingResumeRace(
     platform: ReturnType<typeof makePlatform>,
-    workflowInputs?: Record<string, string>
+    workflowInputs?: Record<string, string>,
+    refusal?: Error
   ): Promise<void> {
     // `mock.module` MERGES, so `WorkflowNotResumableError` is the real class here.
     const { WorkflowNotResumableError } = await import('../db/workflows');
@@ -4012,7 +4013,7 @@ describe('workflow dispatch routing', () => {
       )
     );
     mockHydrateResumableRun.mockReturnValueOnce(
-      Promise.reject(new WorkflowNotResumableError('raced-run-1', 'running'))
+      Promise.reject(refusal ?? new WorkflowNotResumableError('raced-run-1', 'running'))
     );
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
@@ -4046,6 +4047,26 @@ describe('workflow dispatch routing', () => {
     expect(sent).not.toContain('--input');
     expect(sent).not.toContain("requires input 'diff'");
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('a resume refused for capacity says so and starts no fresh run', async () => {
+    const { WorkflowResourceBusyError } = await import('../db/workflows');
+    const platform = makePlatform();
+    await dispatchLosingResumeRace(
+      platform,
+      undefined,
+      new WorkflowResourceBusyError('raced-run-1', { kind: 'run', id: 'holder-1' }, 'paused')
+    );
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('**test-workflow** cannot resume yet.');
+    expect(sent).toContain("resource owner 'holder-1' has priority. It stays paused");
+    expect(sent).not.toContain('Error:');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'raced-run-1', refusal: 'paused' }),
+      'orchestrator.resume_resource_busy'
+    );
   });
 
   test('refuses immediately when the resumable run is not a continuation candidate', async () => {

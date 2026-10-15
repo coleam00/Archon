@@ -71,15 +71,19 @@ export class ChatSupervisor implements ChatConnection {
     }
   }
 
-  async request(
-    operation: (connection: ConnectedChat) => Promise<void>,
+  async request<T>(
+    operation: (connection: ConnectedChat) => Promise<T>,
     acknowledged = true
-  ): Promise<void> {
+  ): Promise<T> {
     const connection = this.connection;
     if (!connection) throw new ChatPluginUnavailableError(this.plugin.descriptor.id);
     try {
-      await withTimeout(operation(connection), this.options.requestTimeoutMs ?? 30_000);
+      const result = await withTimeout(
+        operation(connection),
+        this.options.requestTimeoutMs ?? 30_000
+      );
       if (acknowledged && this.connection === connection) this.sendTimeouts = 0;
+      return result;
     } catch (error) {
       if (error instanceof ChatRequestTimeoutError && this.connection === connection) {
         if (++this.sendTimeouts >= 2) {

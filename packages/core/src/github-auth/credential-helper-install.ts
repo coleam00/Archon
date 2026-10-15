@@ -10,7 +10,7 @@
  *      `credential.https://github.com.useHttpPath = true`
  *   3. Strip credentials from the worktree's github.com remote URLs.
  *
- * The caller (the GitHub adapter in App mode) decides whether to
+ * The caller (the GitHub adapter or URL registration in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
@@ -50,11 +50,29 @@ export function installCredentialHelperScript(): string {
   return helperPath;
 }
 
-/** Never throws. The caller serializes setup per repository. */
-export async function installCredentialHelper(
+/**
+ * Git takes `.git/config.lock` for each write and fails instead of waiting, so
+ * overlapping setup on one repository (the adapter and URL registration both
+ * call this) is chained per resolved path.
+ */
+const pendingInstalls = new Map<string, Promise<CredentialHelperInstallResult>>();
+
+/** Never throws. */
+export function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const repoPath = resolve(worktreePath);
+  const previous = pendingInstalls.get(repoPath) ?? Promise.resolve();
+  const pending = previous
+    .then(() => install(repoPath))
+    .finally(() => {
+      if (pendingInstalls.get(repoPath) === pending) pendingInstalls.delete(repoPath);
+    });
+  pendingInstalls.set(repoPath, pending);
+  return pending;
+}
+
+async function install(repoPath: string): Promise<CredentialHelperInstallResult> {
   try {
     const helperPath = installCredentialHelperScript();
     const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
@@ -88,7 +106,7 @@ export async function installCredentialHelper(
 /**
  * Git uses credentials embedded in a remote URL without asking any helper, so
  * a clone made with an older PAT would keep pushing with it. Returns the
- * rewritten config keys; the URLs themselves are never logged.
+ * rewritten config keys; URL-write failures expose only the key and Git exit code.
  */
 async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
   let listed: string;
@@ -112,17 +130,34 @@ async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
   }
   const cleanedKeys: string[] = [];
   for (const [key, urls] of urlsByKey) {
-    const cleaned = urls.map(withoutGitHubCredentials);
-    if (cleaned.every((url, index) => url === urls[index])) continue;
-    // A failure message repeats argv; its GitHub URLs are already cleaned.
-    const [first, ...rest] = cleaned;
-    await execFileAsync('git', ['-C', repoPath, 'config', '--local', '--replace-all', key, first], {
-      timeout: 5000,
-    });
-    for (const url of rest) {
-      await execFileAsync('git', ['-C', repoPath, 'config', '--local', '--add', key, url], {
-        timeout: 5000,
-      });
+    const changed = urls.filter(url => withoutGitHubCredentials(url) !== url);
+    if (changed.length === 0) continue;
+    for (const url of new Set(changed)) {
+      try {
+        await execFileAsync(
+          'git',
+          [
+            '-C',
+            repoPath,
+            'config',
+            '--local',
+            '--fixed-value',
+            '--replace-all',
+            key,
+            withoutGitHubCredentials(url),
+            url,
+          ],
+          { timeout: 5000 }
+        );
+      } catch (error) {
+        // execFile errors contain argv, including the credential-bearing match value.
+        // Keep only the structured exit code; never retain the original as a cause.
+        const code = error instanceof Error && 'code' in error ? error.code : undefined;
+        throw new Error(
+          `Failed to remove credentials from ${key}` +
+            (typeof code === 'number' ? ` (git exit ${code})` : '')
+        );
+      }
     }
     cleanedKeys.push(key);
   }

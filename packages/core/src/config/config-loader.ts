@@ -14,11 +14,7 @@ import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-co
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
-import {
-  getArchonConfigPath,
-  getArchonWorkspacesPath,
-  getArchonWorktreesPath,
-} from '@archon/paths';
+import { getArchonConfigPath } from '@archon/paths';
 
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
@@ -42,7 +38,11 @@ import type {
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { platformStreamingSchema, workflowContinuationConfigSchema } from './config-types';
+import {
+  attentionNoticeRoutesSchema,
+  platformStreamingSchema,
+  workflowContinuationConfigSchema,
+} from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -380,6 +380,18 @@ function validateStreamingConfig(parsed: unknown, configPath: string): void {
   parsed.streaming = result.data;
 }
 
+function validateAttentionNoticesConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.attentionNotices === undefined) return;
+  const result = attentionNoticeRoutesSchema.safeParse(parsed.attentionNotices);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `attentionNotices.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid attentionNotices config', configPath, issues);
+  }
+  parsed.attentionNotices = result.data;
+}
+
 function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
   if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
@@ -404,7 +416,8 @@ function validateConversationConcurrencyConfig(parsed: unknown, configPath: stri
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
  * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
- * `streaming`, `concurrency` or `workflows` block — is logged and the install falls back to defaults.
+ * `streaming`, `attentionNotices`, `concurrency` or `workflows` block — is logged and the
+ * install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -413,6 +426,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
     validateStreamingConfig(parsed, configPath);
+    validateAttentionNoticesConfig(parsed, configPath);
     validateConversationConcurrencyConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
@@ -547,10 +561,7 @@ function getDefaults(): MergedConfig {
     assistant: installed.length === 1 ? installed[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
-    paths: {
-      workspaces: getArchonWorkspacesPath(),
-      worktrees: getArchonWorktreesPath(),
-    },
+    attentionNotices: [],
     concurrency: {
       maxConversations: 10,
     },
@@ -565,7 +576,6 @@ function getDefaults(): MergedConfig {
       autoLoad: true,
     },
     defaults: {
-      copyDefaults: true,
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
@@ -617,9 +627,6 @@ function applyEnvOverrides(
     if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
 
-  // Path overrides (these come from archon-paths.ts which already checks env vars)
-  // No need to re-apply here since getDefaults() uses those functions
-
   // Concurrency override
   const maxConcurrent = process.env.MAX_CONCURRENT_CONVERSATIONS;
   if (maxConcurrent) {
@@ -666,11 +673,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.streaming = { ...result.streaming, ...global.streaming };
   }
 
-  // Path preferences
-  if (global.paths) {
-    if (global.paths.workspaces) result.paths.workspaces = global.paths.workspaces;
-    if (global.paths.worktrees) result.paths.worktrees = global.paths.worktrees;
-  }
+  if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
 
   // Concurrency preferences
   if (global.concurrency?.maxConversations) {
@@ -731,7 +734,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   if (repo.defaults) {
     result.defaults = {
       ...result.defaults,
-      copyDefaults: repo.defaults.copyDefaults ?? result.defaults.copyDefaults,
       loadDefaultCommands: repo.defaults.loadDefaultCommands ?? result.defaults.loadDefaultCommands,
       loadDefaultWorkflows:
         repo.defaults.loadDefaultWorkflows ?? result.defaults.loadDefaultWorkflows,
@@ -947,6 +949,7 @@ export async function updateGlobalConfig(
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateStreamingConfig(merged, configPath);
+    validateAttentionNoticesConfig(merged, configPath);
     validateConversationConcurrencyConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
@@ -1013,7 +1016,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     streaming: { ...config.streaming },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {
-      copyDefaults: config.defaults.copyDefaults,
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },

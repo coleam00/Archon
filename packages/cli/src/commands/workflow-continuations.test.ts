@@ -127,6 +127,33 @@ test('reports refusal, deferral and settlement failures instead of admission-onl
   });
 });
 
+test('a continuation refused for capacity is reported as what it is and the pass succeeds', async () => {
+  scan.mockResolvedValue([
+    {
+      runId: 'full',
+      kind: 'waiting_for_capacity',
+      blocker: { kind: 'run', id: 'holder' },
+      message: 'busy',
+    },
+    {
+      runId: 'quota',
+      kind: 'resource_busy',
+      blocker: { kind: 'request', id: 'queued' },
+      refusal: 'failed',
+      message: 'busy',
+    },
+  ]);
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(0);
+  expect(output[0]).toMatchObject({
+    ok: true,
+    accepted: 0,
+    outcomes: [
+      { runId: 'full', kind: 'waiting_for_capacity', blocker: { id: 'holder' } },
+      { runId: 'quota', kind: 'resource_busy', refusal: 'failed', blocker: { id: 'queued' } },
+    ],
+  });
+});
+
 test('watch drains accepted segments on shutdown', async () => {
   let finish!: (value: { success: true; workflowRunId: string }) => void;
   const settled = new Promise<{ success: true; workflowRunId: string }>(resolve => {
@@ -174,6 +201,7 @@ test('schedule validates intervals and removes the exact installed identity', as
   expect(config).toMatchObject({
     id: expect.stringContaining('workflow-wake-'),
     schedule: { intervalSeconds: 10, runAtLoad: true },
+    programArguments: expect.arrayContaining(['workflow', 'wake', '--watch', '--json']),
   });
 });
 
