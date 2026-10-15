@@ -146,7 +146,7 @@ try {
   return fixture;
 }
 function metadata(f: Fixture): {
-  wait: { resumeAt: string; signaledAt?: string };
+  wait: { resumeAt: string; pauseId: string; signaledAt?: string };
   continuation_retry_at?: string;
 } {
   return JSON.parse(row(f).metadata) as ReturnType<typeof metadata>;
@@ -309,8 +309,8 @@ describe('cold CLI continuation host', () => {
       '  - id: second\n    depends_on: [first]\n    wait:\n      event: ready\n      deadline_ms: 60000\n'
     );
     const id = row(f).id;
-    const first = metadata(f).wait.resumeAt;
-    const signal = (resumeAt: string): ReturnType<typeof runProcess> =>
+    const first = metadata(f).wait.pauseId;
+    const signal = (occurrence: string): ReturnType<typeof runProcess> =>
       runProcess(f, [
         cli,
         'workflow',
@@ -318,8 +318,8 @@ describe('cold CLI continuation host', () => {
         id,
         '--event',
         'ready',
-        '--resume-at',
-        resumeAt,
+        '--occurrence',
+        occurrence,
         '--data',
         '{"answer":42}',
         '--json',
@@ -332,7 +332,7 @@ describe('cold CLI continuation host', () => {
       accepted: 1,
       outcomes: [{ status: 'paused' }],
     });
-    const second = metadata(f).wait.resumeAt;
+    const second = metadata(f).wait.pauseId;
     expect(second).not.toBe(first);
     const stale = await signal(first);
     expect(stale.exitCode).toBe(1);

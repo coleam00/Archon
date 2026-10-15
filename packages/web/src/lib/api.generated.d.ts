@@ -1293,6 +1293,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Active container environments or newly registered worktrees require cleanup */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -2110,7 +2119,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Signal the exact external event awaited by a paused workflow run */
+    /** Signal an external event awaited by a paused workflow run; use occurrence for an exact match */
     post: {
       parameters: {
         query?: never;
@@ -2122,12 +2131,21 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': {
-            event: string;
-            /** Format: date-time */
-            resumeAt: string;
-            payload?: unknown;
-          };
+          'application/json':
+            | {
+                event: string;
+                occurrence: string;
+                /** Format: date-time */
+                resumeAt?: string;
+                payload?: unknown;
+              }
+            | {
+                event: string;
+                occurrence?: string;
+                /** Format: date-time */
+                resumeAt: string;
+                payload?: unknown;
+              };
         };
       };
       responses: {
@@ -5706,6 +5724,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5717,6 +5736,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5786,6 +5806,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5815,6 +5836,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */

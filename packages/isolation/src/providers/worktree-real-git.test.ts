@@ -21,7 +21,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { execFileAsync, resolveBashPath, toBranchName, toRepoPath } from '@archon/git';
+import {
+  execFileAsync,
+  hasUncommittedChangesStrict,
+  resolveBashPath,
+  toBranchName,
+  toRepoPath,
+  toWorktreePath,
+} from '@archon/git';
 import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
@@ -31,6 +38,7 @@ import {
   classifyIsolationError,
   ExistingBranchDivergedError,
   MissingProjectDirectoryError,
+  WorktreeUncommittedChangesError,
 } from '../errors';
 
 // The provider logs a full setup failure and its rollback. Both are expected here,
@@ -315,6 +323,80 @@ describe('WorktreeProvider against real git', () => {
     provider = new WorktreeProvider(async () => ({ postCreate: ['true'] }));
     await expect(provider.create(request)).rejects.toThrow('requires a worktree setup executor');
     expect(await registeredWorktrees()).toEqual([repoPath]);
+  });
+
+  describe('ordinary destruction status', () => {
+    async function createOwned() {
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('owned'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      return {
+        created,
+        options: {
+          canonicalRepoPath: request.canonicalRepoPath,
+          creationId: created.metadata.creationId,
+          branchName: created.branchName,
+        },
+      };
+    }
+
+    test.each(['tracked', 'staged', 'untracked'])(
+      'refuses %s changes without removing files or registration',
+      async kind => {
+        const { created, options } = await createOwned();
+        const file = kind === 'untracked' ? 'new-file' : 'README.md';
+        await writeFile(join(created.workingPath, file), 'valuable work');
+        if (kind === 'staged') await git(created.workingPath, 'add', file);
+        if (kind === 'untracked')
+          await git(created.workingPath, 'config', 'status.showUntrackedFiles', 'no');
+
+        expect(await hasUncommittedChangesStrict(toWorktreePath(created.workingPath))).toBe(true);
+
+        await expect(provider.destroy(created.workingPath, options)).rejects.toBeInstanceOf(
+          WorktreeUncommittedChangesError
+        );
+
+        expect(await readFile(join(created.workingPath, file), 'utf8')).toBe('valuable work');
+        expect(await registeredWorktrees()).toContain(resolve(created.workingPath));
+        expect(await git(repoPath, 'branch', '--list', created.branchName)).toContain(
+          created.branchName
+        );
+      }
+    );
+
+    test.each([false, true])(
+      'removes a clean checkout or explicitly forced dirty checkout (force: %s)',
+      async force => {
+        const { created, options } = await createOwned();
+        expect(await hasUncommittedChangesStrict(toWorktreePath(created.workingPath))).toBe(false);
+        if (force) await writeFile(join(created.workingPath, 'new-file'), 'discard by request');
+        const result = await provider.destroy(created.workingPath, { ...options, force });
+        expect(result.worktreeRemoved).toBe(true);
+        expect(result.directoryClean).toBe(true);
+        expect(existsSync(created.workingPath)).toBe(false);
+        expect(await registeredWorktrees()).not.toContain(resolve(created.workingPath));
+      }
+    );
+
+    test('a clean operator-locked checkout fails without claiming uncommitted changes', async () => {
+      const { created, options } = await createOwned();
+      await git(repoPath, 'worktree', 'lock', '--reason', 'operator lock', created.workingPath);
+      const error = await provider
+        .destroy(created.workingPath, options)
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WorktreeUncommittedChangesError);
+      expect(await registeredWorktrees()).toContain(resolve(created.workingPath));
+      expect(await lockReasonOf(created.workingPath)).toBe('operator lock');
+    });
   });
 
   test('ordinary destruction preserves a replacement clone', async () => {

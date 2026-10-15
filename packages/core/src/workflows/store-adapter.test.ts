@@ -97,7 +97,9 @@ mock.module('../db/codebases', () => ({
 }));
 
 const credentialCatalog = await import('../../../providers/src/credential-catalog');
+const codexCredentialEnv = await import('../../../providers/src/codex/credential-env');
 mock.module('@archon/providers', () => ({
+  CODEX_CREDENTIAL_ENV: codexCredentialEnv.CODEX_CREDENTIAL_ENV,
   providerRegistry: { get: () => undefined, list: () => [] } satisfies ProviderRegistry,
   LEGACY_VENDOR_ALIASES: credentialCatalog.LEGACY_VENDOR_ALIASES,
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,

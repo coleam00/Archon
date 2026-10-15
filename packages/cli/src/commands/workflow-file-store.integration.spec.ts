@@ -3,6 +3,7 @@ import {
   type ResourceStartDisposition,
 } from '@archon/workflows/schemas/resource-start';
 import { z } from '@hono/zod-openapi';
+import { answeredPauseContinuation, runAttention } from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { expect, test, setSystemTime } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -16,7 +17,7 @@ import {
   readFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 const roots = trackTempRoots();
@@ -142,7 +143,14 @@ test('pause, approve in another process, and resume without any SQL connection',
   const id = rows[0].id;
   const approved = await cli(f, ['workflow', 'approve', id, 'Ship it', '--json']);
   expect(approved.code).toBe(0);
-  expect(JSON.parse(approved.output)).toMatchObject({ action: 'approve', resumable: true });
+  expect(JSON.parse(approved.output)).toEqual({
+    ok: true,
+    runId: id,
+    action: 'approve',
+    type: 'approval_gate',
+    workflowName: 'portable',
+    resumable: true,
+  });
   const resumed = await cli(f, ['workflow', 'resume', id]);
   expect(resumed.error).not.toContain('SQL open trap');
   expect(resumed.code).toBe(0);
@@ -172,6 +180,20 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 60000);
+test('detached JSON resume returns a refusal status to the process', async () => {
+  const f = fixture();
+  const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const id = randomUUID();
+  const result = await cli(f, ['workflow', 'resume', id, '--detach', '--json']);
+  expect(result.code).toBe(1);
+  expect(JSON.parse(result.output)).toEqual({
+    ok: false,
+    runId: id,
+    action: 'resume',
+    error: `Workflow run not found: ${id}`,
+  });
+}, 30000);
 test.each([
   {
     config: 'store: files\n',
@@ -527,3 +549,210 @@ nodes:
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 30000);
+
+for (const action of ['answer', 'respond', 'approve', 'reject'] as const) {
+  test(`${action} preserves its JSON answer acknowledgment fields`, async () => {
+    const f = fixture();
+    writeFileSync(
+      join(f.project, '.archon/workflows/portable.yaml'),
+      `name: portable
+description: JSON answer acknowledgment
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    wait:
+      attention: Continue?
+      form: select
+      options:
+        - { id: approve }
+        - { id: reject }
+        - { id: retry }
+`
+    );
+    const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+    const {
+      runs: [run],
+    } = await store.listWorkflowRuns();
+    if (!run) throw new Error('Missing paused run');
+    const attention = runAttention(run);
+    if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
+    const result = await cli(f, [
+      'workflow',
+      action,
+      run.id,
+      ...(action === 'answer' ? ['--choose', 'approve'] : action === 'respond' ? ['retry'] : []),
+      '--occurrence',
+      attention.occurrence,
+      '--json',
+    ]);
+    expect(result, result.output + result.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(result.output)).toEqual({
+      ok: true,
+      runId: run.id,
+      action,
+      workflowName: 'portable',
+      resumable: true,
+      ...(action === 'answer'
+        ? { answer: { decision: 'approve', text: '' } }
+        : action === 'approve'
+          ? { type: 'attention' }
+          : action === 'reject'
+            ? { cancelled: false, maxAttemptsReached: false }
+            : { decision: 'retry' }),
+    });
+  }, 30000);
+
+  test(`${action} accepts an answer at capacity and refuses stale answers in both modes`, async () => {
+    const f = fixture();
+    f.env.LOG_LEVEL = 'error';
+    writeFileSync(
+      join(f.project, '.archon/workflows/portable.yaml'),
+      `name: portable
+description: answer while resource is full
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    wait:
+      attention: Continue?
+      form: select
+      options:
+        - { id: approve }
+        - { id: reject }
+        - { id: retry }
+  - id: after
+    depends_on: [review]
+    bash: echo finished >> result.txt
+`
+    );
+    writeFileSync(
+      join(f.project, '.archon/workflows/register.yaml'),
+      'name: register\ndescription: register project\nnodes:\n  - id: ready\n    bash: echo ready\n'
+    );
+    const registered = await cli(f, [
+      'workflow',
+      'run',
+      'register',
+      '--folder',
+      '--no-worktree',
+      '--quiet',
+    ]);
+    expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
+    const identity = await cli(f, ['trigger', 'whoami']);
+    expect(identity, identity.output + identity.error).toMatchObject({ code: 0 });
+    const config = join(f.root, 'trigger.json');
+    writeFileSync(
+      config,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'answer-test',
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+        binding: {
+          bindingId: 'answer-test',
+          bindingRevision: null,
+          hostId: 'answer-test',
+          runAsUserId: JSON.parse(identity.output).runAsUserId,
+          resource: 'answer-test',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: f.project,
+            workflowName: 'portable',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      })
+    );
+    const fired = await cli(f, ['trigger', 'fire', '--config', config]);
+    expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
+    const disposition = resourceStartDispositionSchema.parse(
+      JSON.parse(fired.output).bindings[0].disposition
+    );
+    if (disposition.status !== 'admitted') throw new Error('Run not admitted');
+    const id = disposition.runId;
+    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+    const deadline = Date.now() + 15_000;
+    let run = await store.getWorkflowRun(id);
+    while (run?.status !== 'paused' && Date.now() < deadline) {
+      expect(run?.status, JSON.stringify(run)).not.toBeOneOf(['failed', 'cancelled']);
+      await Bun.sleep(25);
+      run = await store.getWorkflowRun(id);
+    }
+    expect(run?.status).toBe('paused');
+    const attention = run && runAttention(run);
+    if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
+    const args = (occurrence: string): string[] => [
+      'workflow',
+      action,
+      id,
+      ...(action === 'answer' ? ['--choose', 'approve'] : action === 'respond' ? ['retry'] : []),
+      '--occurrence',
+      occurrence,
+    ];
+    for (const flags of [
+      [],
+      ['--json'],
+      ...(action === 'answer' ? [] : [['--detach'], ['--detach', '--json']]),
+    ]) {
+      const refused = await cli(f, [...args('stale'), ...flags]);
+      expect(refused, refused.output + refused.error).toMatchObject({ code: 1 });
+      if (flags.includes('--json')) expect(JSON.parse(refused.output)).toMatchObject({ ok: false });
+      expect(refused.output + refused.error).toContain(
+        `awaiting occurrence '${attention.occurrence}'`
+      );
+    }
+    const blocker = randomUUID();
+    expect(
+      await store.admitResourceStart({
+        resource: 'answer-test',
+        capacity: 1,
+        hostId: 'answer-test',
+        overlap: 'queue',
+        launch: {
+          version: 2,
+          run: {
+            id: blocker,
+            workflow_name: 'holder',
+            codebase_id: 'holder',
+            user_message: '',
+            metadata: {},
+          },
+          execution: {
+            cwd: join(f.root, 'holder'),
+            conversationId: blocker,
+            isolation: { kind: 'in-place' },
+          },
+        },
+      })
+    ).toMatchObject({ status: 'admitted' });
+    await store.claimPendingWorkflowRun(blocker);
+    const answered = await cli(f, args(attention.occurrence));
+    expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
+    expect(answered.output).toContain('answer was recorded');
+    expect(answered.output).toContain('waiting for capacity');
+    expect(answered.output).toContain(blocker);
+    expect(answered.output).toContain('continues when a slot frees');
+    expect(answered.output + answered.error).not.toContain('failed to resume');
+    expect(answered.output + answered.error).not.toContain('workflow resume');
+    expect(answered.output + answered.error).not.toContain('resume_failed');
+    expect(answered.output + answered.error).not.toContain('"level":50');
+    const waiting = await store.getWorkflowRun(id);
+    expect(waiting?.status).toBe('paused');
+    expect(waiting?.metadata.capacity_wait).toMatchObject({ since: expect.any(String) });
+    expect(waiting && answeredPauseContinuation(waiting)).toBeDefined();
+    await store.completeWorkflowRun(blocker, { duration_ms: 1 });
+    const woken = await cli(f, ['workflow', 'wake', '--json']);
+    expect(woken, woken.output + woken.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(woken.output)).toMatchObject({
+      outcomes: [{ runId: id, kind: 'accepted', status: 'completed' }],
+    });
+    expect(readFileSync(join(f.project, 'result.txt'), 'utf8')).toBe('finished\n');
+    expect(
+      (await store.listWorkflowEvents(id)).filter(event => event.event_type === 'wait_answered')
+    ).toHaveLength(1);
+  }, 30_000);
+}

@@ -1,3 +1,4 @@
+import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -518,3 +519,23 @@ test('approve still fails when the run was cancelled before its inline resume', 
     log.mockRestore();
   }
 }, 30_000);
+
+test.each(['paused', 'failed'] as const)(
+  'approve still fails on a %s resource refusal',
+  async refusal => {
+    const { host, runId, log } = await approveAfter(async (store, id) => {
+      store.resumeWorkflowRun = async () => {
+        throw new WorkflowResourceBusyError(id, { kind: 'run', id: 'holder' }, refusal);
+      };
+    });
+    try {
+      const { workflowApproveCommand } = await import('./workflow');
+      await expect(workflowApproveCommand(host, runId)).rejects.toThrow(
+        "Approved but failed to resume workflow 'raced'"
+      );
+      expect(log.mock.calls.flat().join('\n')).not.toContain('The answer was recorded.');
+    } finally {
+      log.mockRestore();
+    }
+  }
+);

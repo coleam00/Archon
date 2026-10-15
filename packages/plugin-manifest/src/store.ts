@@ -51,8 +51,8 @@ export async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]>
 
 /**
  * Every receipt, sorted by path, with the broken ones returned beside the valid
- * ones. For the plugin commands, which decide per command what a broken receipt
- * blocks; everything else reads through `readReceipts`.
+ * ones. Runtime loaders report and skip broken receipts; plugin commands decide
+ * per command what a broken receipt blocks. File ownership checks use `readReceipts`.
  */
 export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
   const root = join(pluginsDir, 'installed');

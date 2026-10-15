@@ -54,6 +54,7 @@ export {
   countCommitsMissingFromRemotes,
   checkout,
   hasUncommittedChanges,
+  hasUncommittedChangesStrict,
   commitAllChanges,
   isBranchMerged,
   isPatchEquivalent,

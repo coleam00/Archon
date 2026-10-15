@@ -29,17 +29,31 @@ ones the node names, while preserving unrelated native configuration and guidanc
 `backgroundWork: 'reported'` requires observable task lifecycles; `none` means verified
 absence, and `unobserved` means work may exist without lifecycle visibility.
 
+A provider that loads named skills only from its own directories declares them in the
+descriptor's optional `skillDiscovery`: `project` roots relative to the working
+directory, `user` roots relative to the user directory, and an optional
+`userDirectory: { env, home }` naming the environment variable that overrides it and
+its home-relative fallback. Such a provider must refuse a named skill whose directory
+exists but is not loadable from its enabled roots, and workflow validation reports that
+case as an error. With the `settingSources` capability, the `project` and `user` setting
+sources gate those roots. A provider without `skillDiscovery` is validated against
+Archon's shared skill roots, and a missing skill is only a warning.
+
+A request's `systemPrompt` uses the provider's native system-instruction behavior (Copilot appends to its foundation prompt). Its
+`appendSystemPrompt` adds instructions to that prompt; a provider that cannot extend
+its prompt uses them as its system prompt, and a `systemPrompt` takes precedence.
+
 ## Serve it over stdio
 
 Wrap the implementation with the contract's plugin entrypoint:
 
 ```ts
-import { serveProvider, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { serveProvider, PROVIDER_PLUGIN_PROTOCOL, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { ExampleProvider } from './provider';
 import { capabilities } from './capabilities';
 
 const descriptor: ProviderPluginDescriptor = {
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'example',
   displayName: 'Example provider',
   version: '1.0.0',
@@ -56,15 +70,23 @@ await serveProvider({ descriptor, create: () => new ExampleProvider() });
 ```
 
 `capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
-`configSchema` validates all configuration scopes for existing v1 plugins. A provider can
+`configSchema` is the fallback for all configuration scopes within protocol 2. Protocol-1
+plugins and hosts must update to protocol 2 before they can initialize together.
+Runtime discovery reports and skips incompatible or unusable installed receipts,
+including providers with mismatched executable identities or missing executable ownership,
+leaving other plugins available. Use `archon plugin update <id>` or `archon plugin remove <id>` to
+repair the install. A provider can
 add `config: { install, run, snapshot, stripUnknownKeys? }` to use separate JSON
 Schemas for install defaults, per-run settings, and persisted snapshots. Newer hosts
 prefer `config`. Generate these schemas from the same schemas used by the in-process
 parser, using `z.toJSONSchema(schema, { io: 'input' })` for Zod schemas. Set
-`stripUnknownKeys: true` to strip undeclared fields recursively at object schemas that
-omit `additionalProperties`. Explicit `additionalProperties: false` still rejects
+`stripUnknownKeys: true` to strip undeclared fields recursively where object member
+rules omit `additionalProperties`. Unconstrained schemas such as `{}` preserve object
+contents. Explicit `additionalProperties: false` still rejects
 unknown fields; `true` or a schema preserves allowed fields, including record keys.
-Snapshot projection derives its retained root fields from `snapshot.properties`.
+Snapshot projection retains fields declared by the snapshot schema, including
+referenced schemas, all `allOf` conjuncts, the selected `anyOf` or `oneOf` alternative,
+and matching `patternProperties`.
 An explicit `additionalProperties: false` also rejects unknown snapshot fields.
 For snapshots that validate install settings before excluding them, use
 `snapshotConfigSchema(portableFields, localFields)` from `@archon/provider-contract`.
@@ -76,20 +98,23 @@ JSON Schema does not encode Zod string transforms. Use
 `normalizedConfigString(stringSchema, 'slash-separated')` to trim the two sides of
 the first slash in a structured reference. These helpers generate the
 `x-archon-normalize` annotation and the matching in-process transform from one
-owner. Scoped process registration applies normalization after validation.
+owner. Scoped process registration applies normalization after validation. Credential lookup has only a model: alternative run branches must agree on its normalization, or lookup returns no vendor.
 
 
-Keep `configSchema` as a compatibility superset of every configuration accepted in
-any scope by older hosts, which use that one schema for install, run, and snapshot.
-Older hosts cannot apply scoped snapshot exclusion, recursive stripping, or these normalization annotations. Providers
-that require those semantics must raise their minimum compatible Archon version to
-one supporting scoped configuration; retaining `configSchema` alone does not provide
-that compatibility.
+Keep `configSchema` as the fallback schema for install, run, and snapshot when
+`config` is omitted. This fallback is part of protocol 2; it does not provide
+compatibility with protocol-1 peers. Providers that need scoped snapshot exclusion,
+recursive stripping, or normalization annotations must declare scoped `config`
+schemas and require a host version that supports those semantics.
 
 Credentials are a static
 list of vendor specs; declare only vendors the provider consumes. API-key vendors must
-have an existing Archon delivery rule. With one vendor, all models use it; with several,
-the model's `vendor/` prefix selects a declared vendor after credential alias normalization. An empty list uses native auth.
+have an existing Archon delivery rule. With one vendor, all models use it. With several,
+model-only lookup uses the `model` field rule from the descriptor's run schema
+(`config.run`, else `configSchema`), following root references and composition. It validates
+and normalizes that field without validating unrelated run fields or root constraints.
+The text before the first `/` selects a declared vendor after credential alias
+normalization; a model rejected by its field rule selects none. An empty list uses native auth.
 `checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
 its environment and abort signal from Archon. Return `not_checked` when the runtime
 cannot check without spending on a session.

@@ -65,6 +65,36 @@ function checkIds(nodes: BuilderNode[]): Issue[] {
   return issues;
 }
 
+// Cross-package conformance is enforced by scripts/node-ref-parity.test.ts;
+// the web bundle cannot import the engine's dagNodeSchema.
+function checkUntilField(field: string, schema: Record<string, unknown> | undefined): string[] {
+  if (schema === undefined) {
+    return ['loop.until_field requires output_format; author the schema in YAML'];
+  }
+  const properties = schema.properties;
+  if (
+    properties === null ||
+    typeof properties !== 'object' ||
+    Array.isArray(properties) ||
+    !Object.keys(properties).includes(field)
+  ) {
+    return [`loop.until_field '${field}' must be declared in output_format.properties`];
+  }
+  const issues: string[] = [];
+  if (!Array.isArray(schema.required) || !schema.required.includes(field)) {
+    issues.push(`loop.until_field '${field}' must be listed in output_format.required`);
+  }
+  const property: unknown = Reflect.get(properties, field);
+  const type =
+    property !== null && typeof property === 'object' && 'type' in property
+      ? property.type
+      : undefined;
+  if (typeof type === 'string' && type !== 'boolean') {
+    issues.push(`loop.until_field '${field}' must have type 'boolean', not '${type}'`);
+  }
+  return issues;
+}
+
 /** Per-variant required-field checks (mirrors the engine's mode-field rules). */
 function checkRequiredFields(node: BuilderNode): Issue[] {
   const issues: Issue[] = [];
@@ -134,6 +164,14 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
         missing('loop.until_bash', "loop requires a non-blank 'until_bash' check");
       if (node.data.until_field?.trim().length === 0)
         missing('loop.until_field', "loop requires a non-blank 'until_field' name");
+      if (node.data.until_field !== undefined) {
+        for (const message of checkUntilField(
+          node.data.until_field.trim(),
+          node.base.output_format
+        )) {
+          invalid('loop.until_field', message);
+        }
+      }
       // 2. At least one channel must be declared at all.
       if (
         node.data.until === undefined &&

@@ -1,0 +1,412 @@
+{
+  "bench": "review-lenses",
+  "cases": [
+    {
+      "id": "pi-extension-errors",
+      "source": "coleam00/Archon#3592",
+      "title": "Fail Pi nodes when extension callbacks escape",
+      "branch": "fix/pi-extension-errors",
+      "base_branch": "dev",
+      "base": "13e586c513a18a090a46c15e6e45e1260eebd8b0",
+      "clean": "cf8ff8d55f68a8349b8244443e8c2a7cfacf04f8",
+      "date": "2026-10-03T12:22:39Z",
+      "work_order": "work-orders/pi-extension-errors.md",
+      "known_defects": [
+        {
+          "id": "K1",
+          "claim": "Every Pi turn whose resource loader discovers any extension takes the process-wide Semaphore(1) gate in beginPiExtensionTurn, and because extensions are on by default that is every Pi turn once the operator has any Pi extension installed, so all Pi nodes in a process run one at a time."
+        }
+      ],
+      "variants": [
+        {
+          "id": "natural",
+          "tree": "24cae1f6d3e6a98eb810d1858b2d1ceee48690f1",
+          "defects": [
+            {
+              "id": "D1",
+              "class": "reimplemented_primitive",
+              "owner": "simplify",
+              "claim": "TurnGate re-implements the counting Semaphore already defined in pi/provider.ts (lines 56-81 of that tree) as a capacity-one gate instead of reusing it as new Semaphore(1).",
+              "location": "packages/providers/src/community/pi/extension-error-broker.ts:10-27"
+            },
+            {
+              "id": "D2",
+              "class": "weak_test",
+              "owner": "tests",
+              "claim": "The serialization test awaits only one Promise.resolve() before asserting the second turn has not started, so it still passes when the gate's acquire() resolves immediately for every caller (no serialization at all).",
+              "location": "packages/providers/src/community/pi/extension-error-broker.test.ts:86-100"
+            }
+          ]
+        },
+        {
+          "id": "v2",
+          "patch": "patches/pi-extension-errors/v2.patch",
+          "defects": [
+            {
+              "id": "D3",
+              "class": "doubly_owned",
+              "owner": "seams",
+              "claim": "The broker re-declares Pi's ExtensionError shape locally instead of importing the SDK type that provider.ts imports and passes into reportStructured, so the two only agree by structural coincidence.",
+              "location": "packages/providers/src/community/pi/extension-error-broker.ts:11-17"
+            }
+          ]
+        },
+        {
+          "id": "v3",
+          "patch": "patches/pi-extension-errors/v3.patch",
+          "defects": [
+            {
+              "id": "D4",
+              "class": "wrong_behaviour",
+              "owner": "code",
+              "claim": "claimPiExtensionProcessError matches the error stack against every extension path any earlier turn ever loaded (the module-level loadedExtensionPaths set) instead of the active turn's own paths, so a detached failure from an extension a previous node loaded is attributed to and fails the current node rather than taking the fatal fallback.",
+              "location": "packages/providers/src/community/pi/extension-error-broker.ts:105-111"
+            }
+          ]
+        },
+        {
+          "id": "v4",
+          "patch": "patches/pi-extension-errors/v4.patch",
+          "defects": [
+            {
+              "id": "D5",
+              "class": "swallowed_error",
+              "owner": "errors",
+              "claim": "When an attributed extension error arrives after Pi queued the result chunk but before the bridge yields it, the result branch catches throwIfFailed() and only logs a warning, so the node reports success and the extension error never becomes its failure.",
+              "location": "packages/providers/src/community/pi/event-bridge.ts:597-604"
+            }
+          ]
+        },
+        {
+          "id": "v5",
+          "patch": "patches/pi-extension-errors/v5.patch",
+          "defects": [
+            {
+              "id": "D6",
+              "class": "false_claim",
+              "owner": "docs",
+              "claim": "The docs say Pi nodes that discover extension code keep their normal concurrency and are attributed per running node, but beginPiExtensionTurn serializes every such turn process-wide on a Semaphore(1) and attributes only to the single active turn.",
+              "location": "packages/docs-web/src/content/docs/getting-started/ai-assistants.md:426"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin-receipts",
+      "source": "coleam00/Archon#4094",
+      "title": "fix(cli): one unreadable plugin receipt no longer blocks every plugin command",
+      "branch": "fix/malformed-receipt-repair",
+      "base_branch": "dev",
+      "base": "a0bd7fd26a3d8c2e1dc5a4d4e92daefad1113968",
+      "clean": "1553bf149b746e57612ebc9cd6acf24b5bb16c99",
+      "date": "2026-10-14T13:20:13Z",
+      "work_order": "work-orders/plugin-receipts.md",
+      "known_defects": [],
+      "variants": [
+        {
+          "id": "v1",
+          "patch": "patches/plugin-receipts/v1.patch",
+          "defects": [
+            {
+              "id": "D1",
+              "class": "reimplemented_primitive",
+              "owner": "simplify",
+              "claim": "isOccupied is a line-for-line copy of the existing pathExists helper in the same file (lstat, false on ENOENT, rethrow otherwise), and the unclaimed-target check in installBinaryPlugin now calls the copy instead of pathExists.",
+              "location": "packages/cli/src/commands/plugin.ts:154-163"
+            }
+          ]
+        },
+        {
+          "id": "v2",
+          "patch": "patches/plugin-receipts/v2.patch",
+          "defects": [
+            {
+              "id": "D2",
+              "class": "wrong_behaviour",
+              "owner": "code",
+              "claim": "The fresh-install refusal in installPlugin now gates on mode === 'install' instead of !previous, so a replace-mode install (archon provider install via replacePlugin) of a plugin with no receipt proceeds while other receipts are unreadable, claiming files those receipts may own.",
+              "location": "packages/cli/src/commands/plugin.ts:768-773"
+            }
+          ]
+        },
+        {
+          "id": "v3",
+          "patch": "patches/plugin-receipts/v3.patch",
+          "defects": [
+            {
+              "id": "D3",
+              "class": "swallowed_error",
+              "owner": "errors",
+              "claim": "removePlugin catches and discards every error from deleting the unreadable receipt (including EACCES/EPERM), then still prints 'Removed the unreadable receipt' and exits 0 while the receipt remains and keeps blocking installs.",
+              "location": "packages/cli/src/commands/plugin.ts:805-814"
+            }
+          ]
+        },
+        {
+          "id": "v4",
+          "patch": "patches/plugin-receipts/v4.patch",
+          "defects": [
+            {
+              "id": "D4",
+              "class": "weak_test",
+              "owner": "tests",
+              "claim": "The 'remove deletes the broken receipt and leaves every file it might name' test asserts only the exit code and printed lines, so it passes if remove leaves the receipt on disk or deletes the other plugin's files.",
+              "location": "packages/cli/src/commands/plugin.test.ts:394-402"
+            }
+          ]
+        },
+        {
+          "id": "v5",
+          "patch": "patches/plugin-receipts/v5.patch",
+          "defects": [
+            {
+              "id": "D5",
+              "class": "false_claim",
+              "owner": "docs",
+              "claim": "The CLI reference says remove <id> on an unreadable receipt deletes the executable or pack tree it named, but removePlugin deletes only the receipt file and leaves every file in place because they cannot be identified.",
+              "location": "packages/docs-web/src/content/docs/reference/cli.md:175"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "when-conditions",
+      "source": "coleam00/Archon#3968",
+      "title": "Reject unsupported workflow conditions at load time",
+      "branch": "fix/when-grouping-load-error",
+      "base_branch": "dev",
+      "base": "b960fe79834d44ab5a38750ecaee90312c5c827c",
+      "clean": "2c7d6740ec6131377e50416c14fc133c46e75d43",
+      "date": "2026-10-13T06:13:40Z",
+      "work_order": "work-orders/when-conditions.md",
+      "known_defects": [],
+      "variants": [
+        {
+          "id": "v1",
+          "patch": "patches/when-conditions/v1.patch",
+          "defects": [
+            {
+              "id": "D1",
+              "class": "doubly_owned",
+              "owner": "seams",
+              "claim": "loader.ts declares its own NUMERIC_WHEN_OPERATORS list ('<=', '>=', '<', '>') for the load-error hint instead of deriving it from when-atom.ts's WHEN_OPERATORS / isComparableLiteral, so the hint's idea of a numeric operator can drift from the grammar that actually enforces the numeric-RHS rule.",
+              "location": "packages/workflows/src/loader.ts:829-847"
+            }
+          ]
+        },
+        {
+          "id": "v2",
+          "patch": "patches/when-conditions/v2.patch",
+          "defects": [
+            {
+              "id": "D2",
+              "class": "reimplemented_primitive",
+              "owner": "simplify",
+              "claim": "The $LOOP_PREV branch of parseWhenAtomInternal inlines `operator === '==' || operator === '!=' || Number.isFinite(parseFloat(expected))`, a hand-written copy of the isComparableLiteral helper defined in the same file and used by the ordinary-atom branch.",
+              "location": "packages/workflows/src/when-atom.ts:222-228"
+            }
+          ]
+        },
+        {
+          "id": "v3",
+          "patch": "patches/when-conditions/v3.patch",
+          "defects": [
+            {
+              "id": "D3",
+              "class": "wrong_behaviour",
+              "owner": "code",
+              "claim": "The $LOOP_PREV branch of parseWhenAtomInternal no longer applies isComparableLiteral, so a loop-body condition such as `$LOOP_PREV.work.output > ''` (or `> 'high'`) passes load-time validation but can never compare true, so the node is skipped on every iteration: silently when the prior output is numeric, and as a run-time parse-error skip on the first iteration or when the prior output is not numeric.",
+              "location": "packages/workflows/src/when-atom.ts:222-227"
+            }
+          ]
+        },
+        {
+          "id": "v4",
+          "patch": "patches/when-conditions/v4.patch",
+          "defects": [
+            {
+              "id": "D4",
+              "class": "weak_test",
+              "owner": "tests",
+              "claim": "The 'rejects unsupported syntax on an include node' test asserts only that the workflow is null and some error exists, so it still passes if the loader rejects the include node for another reason or names the wrong node or field (verified: reporting field 'depends_on' instead of 'when' passes it).",
+              "location": "packages/workflows/src/loader.test.ts:9781-9797"
+            }
+          ]
+        },
+        {
+          "id": "v5",
+          "patch": "patches/when-conditions/v5.patch",
+          "defects": [
+            {
+              "id": "D5",
+              "class": "false_claim",
+              "owner": "code",
+              "claim": "The when-atom.ts header says a numeric operator rejects a quoted literal such as '80', but isComparableLiteral uses parseFloat on the unquoted value, so `$n.output > '80'` parses and loads.",
+              "location": "packages/workflows/src/when-atom.ts:21-22"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pack-labels",
+      "source": "coleam00/Archon#4112",
+      "title": "refactor(sdlc): pack labels get one owner and one delta write",
+      "branch": "feat/pack-labels-one-owner",
+      "base_branch": "dev",
+      "base": "10a43c74ab9827331bd74407b03e44d266e01434",
+      "clean": "f693a5d7e6f47035c09b926d0c298eb3db678857",
+      "date": "2026-10-14T11:55:54Z",
+      "work_order": "work-orders/pack-labels.md",
+      "known_defects": [],
+      "variants": [
+        {
+          "id": "v1",
+          "patch": "patches/pack-labels/v1.patch",
+          "defects": [
+            {
+              "id": "D1",
+              "class": "doubly_owned",
+              "owner": "seams",
+              "claim": "verdict.ts decides whether to add a size label by comparing the state label against the literal 'archon-close' instead of reading STATE_LABEL.NO_ACTION (or the contract), a second hand-kept copy of which label means close that drifts silently if labels.ts maps NO_ACTION to another pack label.",
+              "location": ".archon/workflows/sdlc/triage/scripts/verdict.ts:122"
+            }
+          ]
+        },
+        {
+          "id": "v2",
+          "patch": "patches/pack-labels/v2.patch",
+          "defects": [
+            {
+              "id": "D2",
+              "class": "reimplemented_primitive",
+              "owner": "simplify",
+              "claim": "The area-label guard hand-writes a membership scan over PACK_LABEL_NAMES instead of calling the isPackLabel helper that labels.ts exports for exactly that check.",
+              "location": ".archon/workflows/sdlc/triage/scripts/verdict.ts:110"
+            }
+          ]
+        },
+        {
+          "id": "v3",
+          "patch": "patches/pack-labels/v3.patch",
+          "defects": [
+            {
+              "id": "D3",
+              "class": "swallowed_error",
+              "owner": "errors",
+              "claim": "On the gh path, writeLabels logs a read-back disagreement (labels missing or still present after the edit) to stderr and returns the intended labels anyway, so triage reports published labels that are not on the issue and the next stage routes on a state the tracker does not carry.",
+              "location": ".archon/workflows/sdlc/.shared/labels.ts:165-170"
+            }
+          ]
+        },
+        {
+          "id": "v4",
+          "patch": "patches/pack-labels/v4.patch",
+          "defects": [
+            {
+              "id": "D4",
+              "class": "weak_test",
+              "owner": "tests",
+              "claim": "The delta-write test asserts only that one `issue edit` call was made, not which labels it adds and removes, so it passes for a write that also removes the unrelated 'operator' label or names pack labels the item does not carry.",
+              "location": ".archon/scripts/__tests__/workitem-writes.test.ts:127-141"
+            }
+          ]
+        },
+        {
+          "id": "v5",
+          "patch": "patches/pack-labels/v5.patch",
+          "defects": [
+            {
+              "id": "D5",
+              "class": "false_claim",
+              "owner": "docs",
+              "claim": "The pack README says writeLabels clears any label another writer added since the stage read the item, but the gh delta write only removes the pack labels it is told to remove, so labels another writer adds survive.",
+              "location": ".archon/workflows/sdlc/README.md:96-98"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gitea-webhook",
+      "source": "coleam00/Archon#4075",
+      "title": "fix(gitea): verify webhook signatures over the received bytes",
+      "branch": "fix/gitea-raw-bytes",
+      "base_branch": "dev",
+      "base": "cf53af564d5530b0f33bd5313162f1d20ad1b4b0",
+      "clean": "23adab66364dcafdd02e98fed97f502d8f0db00c",
+      "date": "2026-10-14T08:10:34Z",
+      "work_order": "work-orders/gitea-webhook.md",
+      "known_defects": [],
+      "variants": [
+        {
+          "id": "v1",
+          "patch": "patches/gitea-webhook/v1.patch",
+          "defects": [
+            {
+              "id": "D1",
+              "class": "doubly_owned",
+              "owner": "seams",
+              "claim": "webhooks.ts declares its own GITEA_SIGNATURE_HEADER = 'x-gitea-signature' instead of importing the identical constant the Gitea adapter package now exports, so the header the route reads and the header the adapter documents are two hand-synced literals.",
+              "location": "packages/server/src/routes/webhooks.ts:136"
+            }
+          ]
+        },
+        {
+          "id": "v2",
+          "patch": "patches/gitea-webhook/v2.patch",
+          "defects": [
+            {
+              "id": "D2",
+              "class": "reimplemented_primitive",
+              "owner": "simplify",
+              "claim": "verifySignature replaces crypto.timingSafeEqual with a hand-written XOR-fold loop that reimplements the library's constant-time buffer comparison.",
+              "location": "packages/adapters/src/community/forge/gitea/adapter.ts:292-297"
+            }
+          ]
+        },
+        {
+          "id": "v3",
+          "patch": "patches/gitea-webhook/v3.patch",
+          "defects": [
+            {
+              "id": "D3",
+              "class": "wrong_behaviour",
+              "owner": "code",
+              "claim": "readBoundedBody rejects a declared Content-Length equal to MAX_WEBHOOK_BODY_BYTES (>= instead of >), so a webhook of exactly 32 MiB gets 413 when it declares its length but is accepted when chunked, contradicting the documented inclusive limit.",
+              "location": "packages/server/src/routes/webhooks.ts:52"
+            }
+          ]
+        },
+        {
+          "id": "v4",
+          "patch": "patches/gitea-webhook/v4.patch",
+          "defects": [
+            {
+              "id": "D4",
+              "class": "swallowed_error",
+              "owner": "errors",
+              "claim": "registerGiteaWebhookRoute answers 200 OK when the body stream fails to read (read_failed), so the delivery is dropped unprocessed while Gitea records it as delivered and never retries.",
+              "location": "packages/server/src/routes/webhooks.ts:150-153"
+            }
+          ]
+        },
+        {
+          "id": "v5",
+          "patch": "patches/gitea-webhook/v5.patch",
+          "defects": [
+            {
+              "id": "D5",
+              "class": "weak_test",
+              "owner": "tests",
+              "claim": "The Gitea route test 'hands the adapter the exact signed bytes, BOM included' asserts only the 200 status and one handler call, so it still passes when the route strips the BOM or otherwise alters the bytes before calling handleWebhook.",
+              "location": "packages/server/src/routes/webhooks.test.ts:636-646"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

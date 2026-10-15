@@ -92,6 +92,21 @@ export function resolveIncludeOutputAliases(node: object, body: string): string 
   );
 }
 
+// A composed node keeps the directory of its declaring home YAML, not its includer's.
+const HOME_MCP_DIRECTORY = Symbol('archon.home-mcp-directory');
+
+interface NodeWithHomeMcpDirectory {
+  [HOME_MCP_DIRECTORY]?: string;
+}
+
+export function readHomeMcpDirectory(node: object): string | undefined {
+  return (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY];
+}
+
+export function attachHomeMcpDirectory(node: object, directory: string): void {
+  (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY] = directory;
+}
+
 /** @see ComposedNodeMeta */
 export const COMPOSED_NODE = Symbol('archon.composed-node');
 
@@ -180,6 +195,8 @@ function preserveEngineMetadata(
   target: DagNode | IncludeDirective
 ): void {
   if (isIncludeDirective(source) || isIncludeDirective(target)) return;
+  const homeMcpDirectory = readHomeMcpDirectory(source);
+  if (homeMcpDirectory !== undefined) attachHomeMcpDirectory(target, homeMcpDirectory);
   const meta = readComposedMeta(source);
   if (meta !== undefined) {
     (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
