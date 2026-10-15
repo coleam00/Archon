@@ -40,6 +40,7 @@ import {
   assertWorkflowSourceIntegrity,
   assertCapturedFilesPresent,
   installedWorkflowName,
+  isSourceReadFailure,
   listInstalledPacks,
   liveSourceRoots,
   packagedWorkflowDirectory,
@@ -1095,6 +1096,13 @@ export async function discoverWorkflows(
       workflows.push(entry);
     }
     workflows.push(...installed.workflows);
+    if (roots.kind === 'captured') {
+      const failure = allErrors.find(
+        error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)
+      );
+      if (failure) throw failure.cause;
+    }
+    await assertCapturedFilesPresent(verifiedFiles);
     getLog().info(
       {
         count: workflows.length,
@@ -1103,7 +1111,6 @@ export async function discoverWorkflows(
       },
       'workflows_discovery_completed'
     );
-    await assertCapturedFilesPresent(verifiedFiles);
     return { workflows, support: installed.support, errors: allErrors };
   };
 

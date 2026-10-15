@@ -10,7 +10,7 @@ import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { chmod, cp, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
@@ -26,8 +26,10 @@ import {
   captureWorkflowSource,
   capturedSourceRoots,
   resolveChildInstalledPacks,
+  isSourceReadFailure,
   type WorkflowSourceCapture,
 } from './workflow-source';
+import { formatPackagedResourceReference } from './packaged-workflow';
 import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
 import { isAgentNode, type ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
@@ -528,3 +530,116 @@ function runWith(
     },
   };
 }
+
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'captured installed pack read ownership',
+  () => {
+    for (const fault of ['manifest', 'missing-key'] as const) {
+      test(`a child capture rejects a parent's ${fault} read failure`, async () => {
+        await install(reviewKit());
+        const parent = await captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot: join(home, 'runs/parent'),
+        });
+        const installedFrom = await resolveChildInstalledPacks(runWith(parent, REVIEW).metadata);
+        if (!installedFrom) throw new Error('Parent must own captured packs');
+        const pack = join(parent.anchor.root, 'installed/acme.review-kit');
+        const manifest = join(pack, 'archon-plugin.json');
+        const childRoot = join(home, 'runs/child');
+        if (fault === 'manifest') await chmod(manifest, 0o000);
+        else await rename(pack, join(parent.anchor.root, 'held-pack'));
+        try {
+          const outcome = await captureWorkflowSource({
+            sourceRoot: project,
+            captureRoot: childRoot,
+            installedFrom,
+          }).then(
+            capture => ({ kind: 'capture' as const, capture }),
+            (error: unknown) => ({ kind: 'error' as const, error })
+          );
+          expect(outcome.kind).toBe('error');
+          if (outcome.kind === 'error') expect(isSourceReadFailure(outcome.error)).toBe(true);
+        } finally {
+          if (fault === 'manifest') await chmod(manifest, 0o644);
+          else await rename(join(parent.anchor.root, 'held-pack'), pack);
+        }
+        const child = await captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot: childRoot,
+          installedFrom,
+        });
+        expect(child.manifest).toMatchObject({
+          version: 2,
+          installed_plugins: [{ key: 'acme.review-kit', commit: COMMIT_A }],
+        });
+        const catalog = await discoverWorkflowsWithConfig(
+          project,
+          loadConfig,
+          providerRegistry,
+          capturedSourceRoots(child.anchor)
+        );
+        expect(names(catalog.workflows)).toContain(REVIEW);
+      });
+    }
+
+    test('selected scripts ignore another captured pack read failure', async () => {
+      await install(reviewKit());
+      await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
+      await mkdir(join(project, '.archon/scripts'), { recursive: true });
+      await writeFile(join(project, '.archon/scripts/healthy.ts'), 'console.log("ok");');
+      await mkdir(join(home, 'scripts'), { recursive: true });
+      await writeFile(join(home, 'scripts/global-healthy.ts'), 'console.log("ok");');
+      const tree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+      for (const dir of [
+        join(project, '.archon/workflows/review-kit'),
+        join(home, 'workflows/review-kit'),
+      ]) {
+        await mkdir(dirname(dir), { recursive: true });
+        await cp(tree, dir, { recursive: true });
+      }
+      const capture = await captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(home, 'runs/scripts'),
+      });
+      const roots = capturedSourceRoots(capture.anchor);
+      const broken = join(capture.anchor.root, 'installed/other.broken/archon-plugin.json');
+      const healthy = formatPackagedResourceReference(
+        { source: 'installed', pack: 'acme.review-kit', workflow: 'review' },
+        'check'
+      );
+      const selectedBroken = formatPackagedResourceReference(
+        { source: 'installed', pack: 'other.broken', workflow: 'review' },
+        'check'
+      );
+      await chmod(broken, 0o000);
+      try {
+        for (const name of ['healthy', 'global-healthy']) {
+          expect((await discoverScriptsForCwd(project, roots, new Set([name]))).has(name)).toBe(
+            true
+          );
+        }
+        for (const source of ['project', 'global', 'bundled'] as const) {
+          const name = formatPackagedResourceReference(
+            { source, pack: 'review-kit', workflow: 'review' },
+            'check'
+          );
+          const sourceRoots =
+            source === 'bundled' ? { ...roots, bundledWorkflows: roots.globalWorkflows } : roots;
+          expect(
+            (await discoverScriptsForCwd(project, sourceRoots, new Set([name]))).has(name)
+          ).toBe(true);
+        }
+        expect((await discoverScriptsForCwd(project, roots, new Set([healthy]))).has(healthy)).toBe(
+          true
+        );
+        await expect(
+          discoverScriptsForCwd(project, roots, new Set([selectedBroken]))
+        ).rejects.toMatchObject({
+          cause: expect.objectContaining({ code: 'EACCES' }),
+        });
+      } finally {
+        await chmod(broken, 0o644);
+      }
+    });
+  }
+);

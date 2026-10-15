@@ -1041,10 +1041,8 @@ export async function captureWorkflowSource(opts: {
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
   }
 
-  // Each installed pack at the one commit its receipt names (or its parent froze). A
-  // pack that cannot be listed is not in the catalog either, so no run can select it.
   const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
-  const { packs } = await listInstalledPacks(installedFrom);
+  const { packs, errors } = await listInstalledPacks(installedFrom);
   for (const pack of packs) {
     jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
   }
@@ -1052,10 +1050,18 @@ export async function captureWorkflowSource(opts: {
   if (installedFrom.kind === 'receipts') {
     installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
   } else {
+    if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
     const parent = await readManifest(installedFrom.captureRoot);
     const keys = new Set(packs.map(pack => pack.key));
-    installedRecords =
-      parent.version === 2 ? parent.installed_plugins.filter(record => keys.has(record.key)) : [];
+    installedRecords = parent.version === 2 ? parent.installed_plugins : [];
+    for (const record of installedRecords) {
+      if (!keys.has(record.key)) {
+        throw new WorkflowSourceUnavailableError(
+          join(installedFrom.captureRoot, INSTALLED_SCOPE_DIR, record.key),
+          new Error('Installed pack recorded by the parent capture could not be listed')
+        );
+      }
+    }
   }
 
   const staging = `${captureRoot}.partial`;
