@@ -45,7 +45,7 @@ Background work: `reported` waits for runtime-reported task endings; `none` mean
 backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
 Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
 through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
-not evidence that this work has ended. See [Streaming event mapping](/reference/architecture/#streaming-event-mapping)
+not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
 for the background-start admission and observation cutoff rules.
 
 ## Providers
