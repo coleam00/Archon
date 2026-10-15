@@ -23,6 +23,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writ
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  ArchonRefused,
   SAMPLES_FILE,
   TIERS,
   type ResolvedVersion,
@@ -557,7 +558,7 @@ function holdCheckout(hold: string, checkout: string): void {
     if (!(isObject(error) && error.code === 'EEXIST')) throw error;
     const owner = readFileSync(hold, 'utf8').trim();
     throw new Error(
-      `${checkout} is held by ${owner === '' ? 'a bench that has not launched its run' : `run ${owner}`}; ` +
+      `${checkout} is held by ${owner === '' ? 'a run whose id is unknown (still launching, or its launch did not report one)' : `run ${owner}`}; ` +
         `once that is finished (archon workflow get ${owner || '<run-id>'}), delete ${hold} and run again`
     );
   }
@@ -578,12 +579,18 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
       .map(line => (typeof line.sample === 'number' ? line.sample : 0));
     const first = Math.max(0, ...taken) + 1;
     for (let sample = first; sample < first + options.samples; sample++) {
+      const name = `${version.label} ${bench.id}/${variant} #${sample}`;
       holdCheckout(hold, checkout);
       let runId: string;
       try {
         cloneSample(prepared, bench, variant, origin, checkout);
         const sealed = sealedBefore(checkout, origin, expected);
         if (sealed.length > 0) throw new Error(`${version.label} ${bench.id}/${variant}: not sealed: ${sealed.join('; ')}`);
+      } catch (error) {
+        rmSync(hold, { force: true });
+        throw error;
+      }
+      try {
         runId = await launch({
           workflow: version.workflow,
           cwd: checkout,
@@ -593,12 +600,16 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
           message: reviewMessage(bench),
         });
       } catch (error) {
-        // The launch was refused, so no run holds the checkout.
-        rmSync(hold, { force: true });
-        throw error;
+        // Only a refusal proves no run holds the checkout. A launch that answered
+        // anything else may have started one, so the hold stays for the operator.
+        if (error instanceof ArchonRefused) {
+          rmSync(hold, { force: true });
+          throw error;
+        }
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`${name}: the launch may have started a run in ${checkout}, so ${hold} stays: ${reason}`);
       }
       writeFileSync(hold, runId);
-      const name = `${version.label} ${bench.id}/${variant} #${sample}`;
       console.log(`${name}: run ${runId}`);
       const identity = { case: bench.id, variant, sample, run_id: runId, version };
       const fail = (error: unknown, run?: RunDetail): string => {

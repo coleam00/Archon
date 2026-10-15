@@ -180,6 +180,9 @@ export function snapshotSource(repoRoot: string, sha: string, outDir: string): s
   return target;
 }
 
+/** An `archon ... --json` call that answered `ok: false`: it refused, and no run it started is left working. */
+export class ArchonRefused extends Error {}
+
 /** One `archon ... --json` call: its parsed document, or a throw carrying what it said. */
 async function archonJson(args: readonly string[]): Promise<Record<string, unknown>> {
   const child = Bun.spawn(['archon', ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -194,7 +197,11 @@ async function archonJson(args: readonly string[]): Promise<Record<string, unkno
   } catch {
     throw new Error(`archon ${args.slice(0, 2).join(' ')} exited ${code} without JSON: ${(stdout || stderr).trim()}`);
   }
-  if (code !== 0 || !isObject(document) || document.ok === false) {
+  if (isObject(document) && document.ok === false) {
+    const reason = typeof document.error === 'string' ? document.error : stdout.trim();
+    throw new ArchonRefused(`archon ${args.slice(0, 2).join(' ')} refused: ${reason}`);
+  }
+  if (code !== 0 || !isObject(document)) {
     const reason = isObject(document) && typeof document.error === 'string' ? document.error : stdout.trim();
     throw new Error(`archon ${args.slice(0, 2).join(' ')} exited ${code}: ${reason}`);
   }
@@ -361,6 +368,16 @@ export interface RunDetail {
   readonly nodes: readonly RunNode[];
 }
 
+/**
+ * Whether an event row's spend is its node's own, as the engine's `nodeCostScope` reads
+ * it: a roll-up row restates spend its scope's own rows already carry, and a row written
+ * before `accounting` existed marks a roll-up only with `aggregate: true`.
+ */
+export function reportsOwnSpend(data: Readonly<Record<string, unknown>>): boolean {
+  if (typeof data.accounting === 'string') return data.accounting === 'node';
+  return data.aggregate !== true;
+}
+
 const EXECUTION_ROWS = new Set(['node_started', 'node_completed', 'node_failed', 'node_skipped']);
 const ATTEMPT_ROWS = new Set(['node_completed', 'node_failed']);
 
@@ -404,9 +421,7 @@ export async function getRun(runId: string): Promise<RunDetail> {
     executions.set(event.step_name, execution);
     execution.kind = textOrNone(data.node.kind);
     execution.binding = data.binding;
-    // A roll-up row restates spend its scope's own rows already carry.
-    const ownSpend = data.accounting === undefined || data.accounting === 'node';
-    if (ATTEMPT_ROWS.has(String(event.event_type)) && ownSpend) {
+    if (ATTEMPT_ROWS.has(String(event.event_type)) && reportsOwnSpend(data)) {
       const spend = isObject(data.spend) ? data.spend : {};
       execution.attempts.push({ costUsd: spend.costUsd as CostObservation | undefined, tokens: spend.tokens as Observation<TokenUsage> | undefined });
     }

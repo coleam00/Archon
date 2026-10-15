@@ -12,8 +12,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { nodeCostScope } from '../../../packages/workflows/src/node-record-serialization';
 import { EFFORT_LEVELS } from '../../../packages/workflows/src/schemas/effort';
 import { type ModelAliasPreset, TIER_NAMES, modelAliasPresetSchema } from '../../../packages/workflows/src/schemas/model-binding';
+import {
+  executionBindingSchema,
+  executionSpendSchema,
+  nodeExecutionMetadataSchema,
+  unavailableMeasurementSchema,
+} from '../../../packages/workflows/src/schemas/node-execution';
 import {
   type ResolvedVersion,
   type RunDetail,
@@ -21,11 +28,14 @@ import {
   EFFORTS,
   TIERS,
   type TierBinding,
+  agentBinding,
   appendLine,
   artifactsOf,
   latestLines,
   readLines,
+  reportsOwnSpend,
   resolveVersion,
+  spendOf,
 } from '../../workflows/sdlc/.shared/bench';
 import {
   cloneSample,
@@ -209,6 +219,51 @@ describe("a version's tiers are the engine's", () => {
     expect(modelAliasPresetSchema.parse(binding)).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
     const fromEngine = (preset: ModelAliasPreset): TierBinding => preset;
     expect(fromEngine({ provider: 'codex', model: 'gpt' })).toEqual({ provider: 'codex', model: 'gpt' });
+  });
+});
+
+describe("a run's spend and binding are read on the engine's terms", () => {
+  const unmeasured = { source: 'unavailable', reason: 'not_reported' } as const;
+  const spend = (fields: object) => executionSpendSchema.parse({ stopReason: unmeasured, numTurns: unmeasured, ...fields });
+
+  it('counts a row as own spend exactly when the engine does, legacy roll-ups included', () => {
+    const rows = [
+      ...nodeExecutionMetadataSchema.shape.accounting.options.map(accounting => ({ accounting })),
+      {},
+      { aggregate: true },
+      { aggregate: false },
+    ];
+    expect(rows.map(reportsOwnSpend)).toEqual(rows.map(row => nodeCostScope(row) === 'own'));
+  });
+
+  it('reads every unavailable reason, a floor cost and a resolved model as the engine writes them', () => {
+    for (const reason of unavailableMeasurementSchema.shape.reason.options) {
+      const none = { source: 'unavailable', reason };
+      const known = reason === 'not_applicable';
+      expect(spendOf([spend({ tokens: none, costUsd: none })])).toEqual({
+        cost_usd: known ? 0 : null,
+        cost_partial: false,
+        tokens: known ? { input: 0, output: 0 } : null,
+      });
+    }
+    const floor = spend({
+      tokens: { source: 'provider', value: { input: 3, output: 1, cacheRead: 2 } },
+      costUsd: { source: 'provider', value: 1.5, partial: true },
+    });
+    expect(spendOf([floor])).toEqual({ cost_usd: 1.5, cost_partial: true, tokens: { input: 3, output: 1 } });
+
+    const binding = executionBindingSchema.parse({
+      provider: 'claude',
+      tier: 'large',
+      effort: 'high',
+      model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } },
+    });
+    expect(agentBinding({ nodeId: 'review__code', state: 'completed', kind: 'agent', binding, attempts: [] })).toEqual({
+      provider: 'claude',
+      tier: 'large',
+      requested: 'opus',
+      resolved: 'claude-opus',
+    });
   });
 });
 
@@ -477,10 +532,10 @@ describe('bench run', () => {
     const binding = { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } } };
     const spend = (costUsd: number) => ({ costUsd: { source: 'provider', value: costUsd }, tokens: { source: 'provider', value: { input: 10, output: 1 } } });
     // One attempt row per finished attempt; SQLite hands a row's data back as JSON text.
-    const row = (nodeId: string, eventType: string, costUsd: number) => ({
+    const row = (nodeId: string, eventType: string, costUsd: number, scope: object = { accounting: 'node' }) => ({
       step_name: nodeId,
       event_type: eventType,
-      data: JSON.stringify({ node: { id: nodeId, kind: 'agent' }, binding, spend: spend(costUsd), accounting: 'node' }),
+      data: JSON.stringify({ node: { id: nodeId, kind: 'agent' }, binding, spend: spend(costUsd), ...scope }),
     });
     const { out, run, argv, packSha } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
       const artifacts = getRunArtifactsDirForRoot(root, 'run-1');
@@ -506,6 +561,9 @@ describe('bench run', () => {
         events: [
           row('review__code', 'node_failed', 0.5),
           row('review__code', 'node_completed', 1),
+          // Roll-ups restating that spend, as current and older engines write them.
+          row('review__code', 'node_completed', 1.5, { accounting: 'aggregate' }),
+          row('review__code', 'node_completed', 1.5, { aggregate: true }),
           row('simplify__simplify', 'node_completed', 0.25),
         ],
       };
@@ -575,6 +633,28 @@ describe('bench run', () => {
     expect(again.stderr).toContain(`${checkout} is held by run run-1`);
     expect(existsSync(join(checkout, 'work-in-progress'))).toBe(true);
     expect(existsSync(join(cli, 'argv-2.json'))).toBe(false);
+  });
+
+  it('releases the checkout after a refused launch, and keeps it held after one that may have started a run', () => {
+    const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
+    const checkout = join(out, 'checkouts', 'eval-v', 'counting');
+    const hold = `${checkout}.run`;
+    writeFileSync(join(cli, 'launch.txt'), JSON.stringify({ ok: false, error: 'workflow not found' }));
+    const refused = run('--variant', 'v1');
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain('refused: workflow not found');
+    expect(existsSync(hold)).toBe(false);
+
+    writeFileSync(join(cli, 'launch.txt'), 'Started in the background.');
+    const unclear = run('--variant', 'v1');
+    expect(unclear.status).toBe(1);
+    expect(unclear.stderr).toContain(`the launch may have started a run in ${checkout}, so ${hold} stays`);
+    expect(existsSync(hold)).toBe(true);
+
+    const again = run('--variant', 'v1');
+    expect(again.stderr).toContain(`${checkout} is held by a run whose id is unknown`);
+    expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
+    expect(again.lines).toEqual([]);
   });
 
   it('refuses to launch a checkout that can reach another remote', () => {

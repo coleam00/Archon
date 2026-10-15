@@ -8,6 +8,7 @@
  *
  * Its state is a directory, because one test runs the bench more than once: `count`
  * numbers launches across processes, each launch's arguments land in `argv-<n>.json`,
+ * `launch.txt`, when present, is every launch's answer in place of a numbered run id,
  * `wait.json` is every `workflow wait` answer, and `detail.json`, when present, is every
  * `workflow get` answer; without it `get` returns only the run's id and status.
  */
@@ -21,7 +22,8 @@ function answer(dir: string, args: readonly string[]): string {
       const n = (existsSync(count) ? Number(readFileSync(count, 'utf8')) : 0) + 1;
       writeFileSync(count, String(n));
       writeFileSync(join(dir, `argv-${n}.json`), JSON.stringify(args));
-      return JSON.stringify({ runId: `run-${n}` });
+      const launch = join(dir, 'launch.txt');
+      return existsSync(launch) ? readFileSync(launch, 'utf8') : JSON.stringify({ runId: `run-${n}` });
     }
     case 'wait':
       return readFileSync(join(dir, 'wait.json'), 'utf8');
