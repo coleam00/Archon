@@ -11459,14 +11459,15 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  // `paused` is undefined only when an external stop ended the run first; the notice still goes out.
+  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
   await sendPauseNotice(
     deps,
     platform,
     conversationId,
     runId,
     WRITEBACK_GATE_NODE_ID,
-    paused ? gateOccurrence(paused) : '',
+    gateOccurrence(paused),
     'container',
     message
   );
