@@ -1,0 +1,53 @@
+diff --git a/packages/adapters/src/community/forge/gitea/adapter.ts b/packages/adapters/src/community/forge/gitea/adapter.ts
+index d16923069..3ef05e68a 100644
+--- a/packages/adapters/src/community/forge/gitea/adapter.ts
++++ b/packages/adapters/src/community/forge/gitea/adapter.ts
+@@ -48,6 +48,9 @@ function getLog(): ReturnType<typeof createLogger> {
+ 
+ const MAX_LENGTH = 65000; // Gitea comment limit (similar to GitHub)
+ 
++/** Header carrying the raw hex HMAC of the webhook body (no sha256= prefix) */
++export const GITEA_SIGNATURE_HEADER = 'x-gitea-signature';
++
+ /** Hidden marker added to bot comments to prevent self-triggering loops */
+ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
+ 
+@@ -271,7 +274,7 @@ export class GiteaAdapter implements IPlatformAdapter {
+ 
+   /**
+    * Verify webhook signature using HMAC SHA-256
+-   * Gitea uses X-Gitea-Signature header with raw hex (no sha256= prefix)
++   * Gitea sends it in GITEA_SIGNATURE_HEADER as raw hex (no sha256= prefix)
+    */
+   private verifySignature(payload: Uint8Array, signature: string): boolean {
+     try {
+diff --git a/packages/adapters/src/community/forge/gitea/index.ts b/packages/adapters/src/community/forge/gitea/index.ts
+index 31f8707bc..834ceec2e 100644
+--- a/packages/adapters/src/community/forge/gitea/index.ts
++++ b/packages/adapters/src/community/forge/gitea/index.ts
+@@ -1 +1 @@
+-export { GiteaAdapter } from './adapter';
++export { GiteaAdapter, GITEA_SIGNATURE_HEADER } from './adapter';
+diff --git a/packages/server/src/routes/webhooks.ts b/packages/server/src/routes/webhooks.ts
+index 843e85691..47ffe3438 100644
+--- a/packages/server/src/routes/webhooks.ts
++++ b/packages/server/src/routes/webhooks.ts
+@@ -132,6 +132,9 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
+   });
+ }
+ 
++/** Gitea signs the raw body and sends the hex digest in this header. */
++const GITEA_SIGNATURE_HEADER = 'x-gitea-signature';
++
+ /** The slice of GiteaAdapter the webhook route depends on. */
+ export type GiteaWebhookTarget = Pick<GiteaAdapter, 'handleWebhook'>;
+ 
+@@ -140,7 +143,7 @@ export function registerGiteaWebhookRoute(app: OpenAPIHono, gitea: GiteaWebhookT
+     const eventType = c.req.header('x-gitea-event');
+ 
+     try {
+-      const signature = c.req.header('x-gitea-signature');
++      const signature = c.req.header(GITEA_SIGNATURE_HEADER);
+       if (!signature) {
+         return c.json({ error: 'Missing signature header' }, 400);
+       }

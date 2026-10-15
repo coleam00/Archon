@@ -1,0 +1,17 @@
+diff --git a/packages/cli/src/commands/plugin.ts b/packages/cli/src/commands/plugin.ts
+index 0e42d9766..e91d13b93 100644
+--- a/packages/cli/src/commands/plugin.ts
++++ b/packages/cli/src/commands/plugin.ts
+@@ -803,7 +803,11 @@ async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<voi
+   const { receipts, broken } = await scanReceipts(env.pluginsDir);
+   const brokenSelf = broken.find(entry => entry.id === ref.id);
+   if (brokenSelf) {
+-    await rm(brokenSelf.file);
++    try {
++      await rm(brokenSelf.file);
++    } catch {
++      // A concurrent remove may already have deleted it, which is the outcome asked for.
++    }
+     console.log(
+       `Removed the unreadable receipt of ${ref.id}: ${brokenSelf.file}. The files it named could not be identified and were left in place; look for its executable in ${env.pluginsDir} or its workflow pack under ${join(env.pluginsDir, 'packs', ...ref.id.split('/'))}.`
+     );

@@ -29,7 +29,7 @@ const store = {
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
 };
-const { wakeDueWorkflowContinuations } = await import('@archon/core/workflows/continuation-host');
+const { wakeDueWorkflowContinuations } = await import('@archon/core/workflows/continuation-resume');
 
 async function scanDueWorkflowContinuations(
   now: Date,
@@ -374,7 +374,7 @@ test('bounds structural source failures locally and warns once', async () => {
       process.execPath,
       '--eval',
       `
-    import { wakeDueWorkflowContinuations } from ${JSON.stringify(new URL('./continuation-host.ts', import.meta.url).href)};
+    import { wakeDueWorkflowContinuations } from ${JSON.stringify(new URL('./continuation-resume.ts', import.meta.url).href)};
     const run = ${JSON.stringify(candidate)};
     let resumed = false;
     const outcomes = await wakeDueWorkflowContinuations({
