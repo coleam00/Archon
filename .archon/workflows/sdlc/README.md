@@ -265,12 +265,14 @@ request, never the state.
   rest. A claim whose run is pending, running, paused or unknown is never released,
   and there is no age timeout.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
-  another item or a merged change already delivered it, and the triage policy lets
-  it close without a person. The outcome writes the work item and labels, then
+  another open issue or a merged change already delivered it, and the triage policy
+  lets it close without a person. The outcome writes the work item and labels, then
   comments on the issue with a link to the original or the change and closes it as
   `duplicate` or `completed`. A duplicate's original gets a comment linking back.
   Each comment is one marked comment, so a repeated run edits it rather than adding
-  another. A demoted item, an eval run and every other verdict close nothing.
+  another. The outcome refuses, before any comment, an item someone already closed
+  and a declared original that is not an open issue at the declared URL. A demoted
+  item, an eval run and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer

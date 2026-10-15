@@ -104,13 +104,14 @@ nodes:
               additionalProperties: false
               properties:
                 contract: { type: string, enum: [NO_ACTION] }
-                # What made the item closable: the open item it duplicates, or the
+                # What made the item closable: the open issue it duplicates, or the
                 # merged change that delivered it. The URL is one the agent opened,
                 # never a guess; a duplicate also names the original as an item, so
                 # the close can link back to it.
                 closure:
                   anyOf:
-                    - type: object
+                    - &duplicate_closure
+                      type: object
                       additionalProperties: false
                       properties:
                         kind: { type: string, enum: [duplicate] }
@@ -129,7 +130,8 @@ nodes:
                             number: { type: integer, minimum: 1 }
                           required: [repo, number]
                       required: [kind, url, original]
-                    - type: object
+                    - &delivered_closure
+                      type: object
                       additionalProperties: false
                       properties:
                         kind: { type: string, enum: [delivered] }
@@ -274,12 +276,10 @@ nodes:
             type: string
         # What made a NO_ACTION item closable; null on every other verdict.
         closure:
-          type: [object, 'null']
-          properties:
-            kind: { type: string, enum: [duplicate, delivered] }
-            url: { type: string }
-            original: *item_ref
-          required: [kind, url]
+          anyOf:
+            - type: 'null'
+            - *duplicate_closure
+            - *delivered_closure
         summary:
           type: string
         # The same pointer, so a composing caller resolves to a verdict that still

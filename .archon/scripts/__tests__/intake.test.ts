@@ -42,6 +42,7 @@ import {
   forgeOperation,
   gitCheckout,
   type GhApiIssue,
+  type GhCommentRow,
   type GhIssue,
   PACK,
   packScriptRunner,
@@ -466,6 +467,8 @@ interface Event {
   readonly writeLost?: boolean;
   /** Other issues on the tracker, such as the original a duplicate links to. */
   readonly others?: readonly GhIssue[];
+  /** Comments already on the tracker's issues. */
+  readonly comments?: readonly GhCommentRow[];
 }
 
 function run(
@@ -488,6 +491,7 @@ function run(
       repositoryLabels: [],
       writeLost: event.writeLost,
       issues: event.others,
+      comments: event.comments,
     },
     inputs: {
       ...at.env,
@@ -513,8 +517,8 @@ function facts(at: Install, event: Event): { run: ScriptRun; output: Record<stri
 }
 
 const READY_VERDICT = {
-  INPUTS_CONTRACT: '"READY"',
-  INPUTS_ROUTE: '"deliver"',
+  INPUTS_CONTRACT: 'READY',
+  INPUTS_ROUTE: 'deliver',
   INPUTS_PULL_REQUEST: 'null',
   INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
   INPUTS_SIZE: '{"value":"s","reason":"one script"}',
@@ -522,7 +526,8 @@ const READY_VERDICT = {
   INPUTS_IMPORTANCE: '{"value":"high","reason":"on direction"}',
   INPUTS_URGENCY: '{"value":"soon","reason":"next release"}',
   INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
-  INPUTS_SUMMARY: '"Ready to deliver"',
+  INPUTS_SUMMARY: 'Ready to deliver',
+  INPUTS_CLOSURE: 'null',
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
@@ -535,8 +540,8 @@ const MERGED_URL = 'https://ghe.example.com/example/repo/pull/5';
 function closeVerdict(closure: Closure): Record<string, string> {
   return {
     ...READY_VERDICT,
-    INPUTS_CONTRACT: '"NO_ACTION"',
-    INPUTS_ROUTE: '"no_action"',
+    INPUTS_CONTRACT: 'NO_ACTION',
+    INPUTS_ROUTE: 'no_action',
     INPUTS_LABELS: '["archon-close","archon-type-feature"]',
     INPUTS_CLOSURE: JSON.stringify(closure),
   };
@@ -1001,6 +1006,68 @@ describe('the intake scripts', () => {
     expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
   }, 60_000);
 
+  test('a close repeated after it stopped short writes no second comment and finishes', () => {
+    const event = { runId: 'run-1', others: [ORIGINAL] };
+    const first = install();
+    const written = outcome(first, event, facts(first, event).output, DUPLICATE_VERDICT).comments;
+    expect(written).toHaveLength(2);
+
+    // The tracker as a run that stopped after its comments left it.
+    const comments = written.map((row, index) => ({ id: 500 + index, ...row }));
+    const at = install();
+    const repeated = outcome(at, { ...event, comments }, facts(at, event).output, DUPLICATE_VERDICT);
+    expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(repeated.comments).toEqual([]);
+    expect(repeated.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'duplicate' }]);
+  }, 60_000);
+
+  test('an item someone closed while triage ran is refused before any comment', () => {
+    const at = install();
+    const event = { runId: 'run-1', others: [ORIGINAL] };
+    const decided = facts(at, event).output;
+    const applied = outcome(at, { ...event, state: 'closed' }, decided, DUPLICATE_VERDICT);
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain(`${ISSUE_URL} is already closed`);
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
+  }, 60_000);
+
+  test('a duplicate of a closed issue closes nothing; the policy leaves it to a maintainer', () => {
+    const at = install();
+    const event = { runId: 'run-1', others: [{ ...ORIGINAL, state: 'CLOSED' as const }] };
+    const applied = outcome(at, event, facts(at, event).output, DUPLICATE_VERDICT);
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain(`${ORIGINAL_URL} is closed`);
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
+  }, 60_000);
+
+  test('a duplicate of a pull request closes nothing; an open pull request is continued', () => {
+    const at = install();
+    const pull: GhIssue = { number: 5, title: 'A change', body: '', state: 'OPEN', pull: true };
+    const event = { runId: 'run-1', others: [pull] };
+    const applied = outcome(
+      at,
+      event,
+      facts(at, event).output,
+      closeVerdict({ kind: 'duplicate', url: MERGED_URL, original: { repo: PR.repo, number: 5 } })
+    );
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('does not answer as that issue');
+    expect([...applied.closes, ...applied.comments]).toEqual([]);
+  }, 60_000);
+
+  test('a NO_ACTION verdict that arrives without its closure is refused', () => {
+    const at = install();
+    const applied = outcome(
+      at,
+      { runId: 'run-1' },
+      facts(at, { runId: 'run-1' }).output,
+      { ...DUPLICATE_VERDICT, INPUTS_CLOSURE: 'null' }
+    );
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('only that one, carries a closure');
+    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
+  }, 60_000);
+
   test('a delivered item is closed as completed, linked to the merged change', () => {
     const at = install();
     const applied = outcome(
@@ -1040,8 +1107,8 @@ describe('the intake scripts', () => {
       facts(at, { runId: 'run-1' }).output,
       {
         ...READY_VERDICT,
-        INPUTS_CONTRACT: '"BLOCKED"',
-        INPUTS_ROUTE: '"no_action"',
+        INPUTS_CONTRACT: 'BLOCKED',
+        INPUTS_ROUTE: 'no_action',
         INPUTS_LABELS: '["archon-blocked","archon-size-s","archon-type-feature"]',
         INPUTS_CLOSURE: 'null',
       }
@@ -1147,7 +1214,7 @@ function evalOutcome(
       INPUTS_SEEN: JSON.stringify(decided.seen),
       INPUTS_TRUST: trust,
       INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
-      INPUTS_BLOCKED_REASON: '""',
+      INPUTS_BLOCKED_REASON: '',
       INPUTS_BLOCKED_BY: '[]',
       ...verdict,
     }

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
+import type { Closure } from '../../workflows/sdlc/.shared/close';
 import {
   forgeFailure,
   forgeOperation,
@@ -96,7 +97,7 @@ test('the verdict passes all five triage fields through unchanged', () => {
   });
 });
 
-const DELIVERED = { kind: 'delivered', url: 'https://ghe.example.com/example/repo/pull/5' };
+const DELIVERED: Closure = { kind: 'delivered', url: 'https://ghe.example.com/example/repo/pull/5' };
 
 test('a close verdict keeps the type label, drops the size label, and carries its closure', () => {
   const run = runPackScript('triage/scripts/verdict', {
@@ -112,6 +113,21 @@ test('a close verdict keeps the type label, drops the size label, and carries it
   expect(output.labels).toEqual(['archon-close', 'archon-type-feature', 'area', 'nonexistent']);
   expect(output.closure).toEqual(DELIVERED);
   expect(validateStructuredOutput(output, outputFormat('verdict'))).toEqual({ valid: true });
+});
+
+test('the verdict output admits exactly the closures the triage decision does', () => {
+  const closure = (outputFormat('verdict').properties as Record<string, Record<string, unknown>>)
+    .closure;
+  const url = 'https://ghe.example.com/example/repo/issues/3';
+  const admitted: (Closure | null)[] = [
+    null,
+    DELIVERED,
+    { kind: 'duplicate', url, original: { repo: PR.repo, number: 3 } },
+  ];
+  for (const value of admitted) expect(validateStructuredOutput(value, closure).valid).toBe(true);
+  for (const value of [{ kind: 'duplicate', url }, { kind: 'delivered' }, { url }]) {
+    expect(validateStructuredOutput(value, closure).valid).toBe(false);
+  }
 });
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {

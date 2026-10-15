@@ -1,12 +1,13 @@
 /**
  * Close an item triage found already resolved, linking it to what resolved it.
  *
- * Triage judges whether the item is a duplicate of an open item or delivered by a
+ * Triage judges whether the item is a duplicate of an open issue or delivered by a
  * merged change, and whether the project's policy lets it close without a person;
  * this only performs that close. The closed item gets a comment linking the original
  * or the change, and a duplicate's original gets one linking back, so either side
  * leads to the other. Both comments are written before the close, each as one marked
- * comment, so a run that stops part way can be repeated without a second copy.
+ * comment, so a run that stops part way can be repeated without a second copy. An
+ * item someone closed meanwhile is theirs: it is refused before anything is written.
  */
 
 import { forgeSource, samePr, type QualifiedPr } from './forge.ts';
@@ -17,7 +18,7 @@ import { upsertComment } from './pr.ts';
 export type Closure =
   | {
       readonly kind: 'duplicate';
-      /** The open item this one duplicates, and its URL. */
+      /** The open issue this one duplicates, and its URL. */
       readonly url: string;
       readonly original: QualifiedPr;
     }
@@ -36,6 +37,7 @@ function issueKey(item: QualifiedPr): string {
 export function closeResolved(item: QualifiedPr, closure: Closure): void {
   const source = forgeSource();
   const closed = viewIssue(item);
+  if (closed.state !== 'open') throw new Error(`${closed.url} is already closed`);
   if (closure.kind === 'duplicate') {
     if (samePr(item, closure.original)) {
       throw new Error(`${issueKey(item)} cannot be closed as a duplicate of itself`);
@@ -47,6 +49,9 @@ export function closeResolved(item: QualifiedPr, closure: Closure): void {
       throw new Error(
         `the duplicate's original ${issueKey(closure.original)} is ${original.url}, not ${closure.url}`
       );
+    }
+    if (original.state !== 'open') {
+      throw new Error(`the duplicate's original ${original.url} is closed; a maintainer decides`);
     }
     upsertComment(
       { kind: 'issue', ref: item },
