@@ -11,10 +11,8 @@ import {
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
 } from '@archon/workflows/executor';
-import {
-  resumeWorkflowContinuation,
-  wakeDueWorkflowContinuations,
-} from '@archon/core/workflows/continuation-host';
+import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
+import { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-resume';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
