@@ -13,10 +13,10 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     also carries dispatch fields (ignored here). `conversationId` is the
  *     platform id used by every other conversation route.
  *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
- *     (JSON array). Where conversations are private (web auth, or a proxy
- *     setting ARCHON_WEB_AUTH_HEADER) the server already scopes the list to the
- *     signed-in user. Elsewhere `mine=true` narrows to the caller when an
- *     identity resolves; with no identity (solo installs) nothing narrows.
+ *     (JSON array). `mine=true` narrows every platform to the caller's own
+ *     conversations when an identity resolves, which it always does where
+ *     conversations are private (web auth, or a proxy setting
+ *     ARCHON_WEB_AUTH_HEADER); with no identity (solo installs) nothing narrows.
  *   - sendMessage:        POST /api/conversations/:id/message. JSON, or
  *     multipart when files are attached (mirrors startRun's multipart path).
  */

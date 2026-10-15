@@ -19,10 +19,9 @@ export const conversationSchema = conversationRowSchema
 export const listConversationsQuerySchema = z.object({
   platform: z.string().optional(),
   codebaseId: z.string().optional(),
-  // Where conversations are private the list is always the caller's own and
-  // `mine` changes nothing. Elsewhere 'true' narrows to the caller when an
-  // identity resolves. Enum makes the boolean contract explicit (the handler
-  // treats only 'true' as on).
+  // 'true' narrows every platform to the caller's own conversations when an
+  // identity resolves (always, where conversations are private). Enum makes the
+  // boolean contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
 });
 

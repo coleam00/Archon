@@ -80,6 +80,22 @@ describe('listConversations visibility', () => {
   });
 });
 
+describe('listConversations userId filter', () => {
+  test("narrows every platform to the user's own rows", async () => {
+    expect(ids(await conversations.listConversations({ kind: 'all' }, { userId: 'bob' }))).toEqual([
+      'bob-web',
+    ]);
+  });
+
+  test('composes with owner visibility', async () => {
+    const listed = await conversations.listConversations(
+      { kind: 'owner', userId: 'alice' },
+      { userId: 'alice' }
+    );
+    expect(ids(listed)).toEqual(['alice-cli', 'alice-web']);
+  });
+});
+
 describe('isRunTranscriptConversation', () => {
   test("a hidden worker and a CLI run's conversation are transcripts", async () => {
     expect(await workflows.isRunTranscriptConversation('alice-worker')).toBe(true);

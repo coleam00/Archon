@@ -86,7 +86,7 @@ curl http://localhost:3090/api/conversations
 Query parameters:
 - `codebaseId` (optional) -- Filter by codebase
 - `platform` (optional) -- Filter by platform type
-- `mine` (optional) -- `true` narrows to the caller's conversations when an identity resolves. Where conversations are private it changes nothing: the list is always the caller's own.
+- `mine` (optional) -- `true` narrows to the caller's own conversations on every platform when an identity resolves. Where conversations are private the list already holds only the caller's own web and CLI conversations, and `mine=true` also drops chat and forge conversations attributed to anyone else.
 
 Where web auth is enabled or `ARCHON_WEB_AUTH_HEADER` is set, web and CLI conversations are private to their owner; see [Security](/reference/security/#adapter-authorization) for the rules and status codes.
 

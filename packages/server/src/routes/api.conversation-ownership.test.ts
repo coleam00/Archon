@@ -566,10 +566,30 @@ describe('conversation list', () => {
     expect(mockListConversations.mock.calls[0]?.[0]).toEqual({ kind: 'all' });
   });
 
-  test('off enforcement, `mine=true` still narrows to a resolved identity', async () => {
+  // `mine` is the caller's own rows on every platform, not the privacy rule,
+  // which leaves chat and forge conversations visible to everyone.
+  test('off enforcement, `mine=true` narrows every platform to a resolved identity', async () => {
+    expect((await list('alice', '?mine=true')).status).toBe(200);
+    expect(mockListConversations.mock.calls[0]?.[0]).toEqual({ kind: 'all' });
+    expect(mockListConversations.mock.calls[0]?.[1]).toEqual({
+      platformType: undefined,
+      codebaseId: undefined,
+      excludeEmpty: true,
+      userId: 'user-alice',
+    });
+  });
+
+  test('on an enforced install, `mine=true` also narrows chat and forge rows to the caller', async () => {
+    ownershipEnforced = true;
     expect((await list('alice', '?mine=true')).status).toBe(200);
     expect(mockListConversations.mock.calls[0]?.[0]).toEqual({
       kind: 'owner',
+      userId: 'user-alice',
+    });
+    expect(mockListConversations.mock.calls[0]?.[1]).toEqual({
+      platformType: undefined,
+      codebaseId: undefined,
+      excludeEmpty: true,
       userId: 'user-alice',
     });
   });

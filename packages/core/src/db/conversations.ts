@@ -187,6 +187,8 @@ export async function updateConversation(
 
 /**
  * List the conversations `visibility` lets the caller reach, ordered by recent activity.
+ * `userId` is a narrowing filter on every platform, unlike `visibility`, which
+ * leaves chat and forge rows reachable by everyone.
  */
 export async function listConversations(
   visibility: ConversationVisibility,
@@ -195,9 +197,10 @@ export async function listConversations(
     platformType?: string;
     codebaseId?: string;
     excludeEmpty?: boolean;
+    userId?: string;
   } = {}
 ): Promise<readonly Conversation[]> {
-  const { limit = 50, platformType, codebaseId, excludeEmpty = false } = filter;
+  const { limit = 50, platformType, codebaseId, excludeEmpty = false, userId } = filter;
   const params: unknown[] = [];
   let sql =
     'SELECT * FROM remote_agent_conversations WHERE deleted_at IS NULL AND (hidden IS NULL OR hidden = false)';
@@ -215,6 +218,11 @@ export async function listConversations(
   if (codebaseId) {
     params.push(codebaseId);
     sql += ` AND codebase_id = $${String(params.length)}`;
+  }
+
+  if (userId) {
+    params.push(userId);
+    sql += ` AND user_id = $${String(params.length)}`;
   }
 
   sql += visibilityWhere(visibility, params);

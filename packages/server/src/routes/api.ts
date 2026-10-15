@@ -3001,18 +3001,19 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
-      let visibility = await requireConversationVisibility(c);
+      const visibility = await requireConversationVisibility(c);
       if ('error' in visibility) return visibility.error;
-      // Off enforcement, `mine=true` keeps its best-effort narrowing: it applies
-      // only when an identity happens to resolve.
-      if (visibility.kind === 'all' && c.req.query('mine') === 'true') {
-        const userId = await resolveWebUserId(c);
-        if (userId) visibility = { kind: 'owner', userId };
+      // `mine=true` narrows every platform to the caller. Off enforcement it is
+      // best-effort: it applies only when an identity happens to resolve.
+      let userId: string | undefined;
+      if (c.req.query('mine') === 'true') {
+        userId = visibility.kind === 'owner' ? visibility.userId : await resolveWebUserId(c);
       }
       const conversations = await conversationDb.listConversations(visibility, {
         platformType,
         codebaseId,
         excludeEmpty: true,
+        userId,
       });
       return c.json(conversations.map(toApiConversation));
     } catch (error) {
