@@ -2393,7 +2393,7 @@ describe('abandonWorkflow', () => {
     );
 
     await expect(abandonWorkflow('run-1', operator)).rejects.toThrow(
-      'Could not stop the live owner of run run-1 (pid 42): Detached workflow process group 42 is still running. The run was not changed.'
+      'Could not stop the live owner of run run-1 (pid 42): Detached workflow process group 42 is still running. The command did not mark the run cancelled.'
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });

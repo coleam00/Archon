@@ -1077,9 +1077,9 @@ who owns the run:
   contacts that process, asks it to end its recorded host node trees, then terminates
   the owner tree and confirms termination before recording `cancelled`. If node cleanup
   fails or cannot be proved, cancellation fails instead of reporting a successful stop.
-- **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
-  unchanged. When no owner answers, it prints what the run recorded (host, pid, last
-  activity) and points you at `abandon`. A foreground `archon workflow run` or a run
+- **No owner answers, or the owner cannot be stopped:** cancel fails without marking the run
+  `cancelled`. A node cleanup failure can independently fail the run. When no owner
+  answers, it prints what the run recorded (host, pid, last activity) and points you at `abandon`. A foreground `archon workflow run` or a run
   executing in another Archon server answers but cannot be stopped from here; interrupt
   the foreground command, or cancel the run on the server that executes it.
 
@@ -1131,9 +1131,9 @@ this host:
   host is not this one, or the owner ran as another user on this host, it says so:
   abandon can only reach owners on its own host running as its own user. Nothing
   decides the run is dead from its age or pid.
-- **An owner answers but cannot be stopped:** abandon fails with the reason and leaves
-  the run unchanged. This includes a foreground `archon workflow run` (interrupt it in
-  its terminal) and a run executing inside a live Archon server. Cancel a server-executed run
+- **An owner answers but cannot be stopped:** abandon fails with the reason without
+  marking the run `cancelled`. A node cleanup failure can independently fail the run.
+  This includes a foreground `archon workflow run` (interrupt it in its terminal) and a run executing inside a live Archon server. Cancel a server-executed run
   from that server (its Web UI Cancel action, `POST /api/workflows/runs/{runId}/cancel`,
   or `/workflow cancel <run-id>` in its chat): the server executes the run, so it
   cancels it at the executor's next status check.

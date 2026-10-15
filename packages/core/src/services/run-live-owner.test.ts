@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { testTimeout } from '@archon/paths/test-utils';
 import {
   chmodSync,
@@ -224,6 +224,41 @@ describe('run live owner', () => {
       await owner.close();
     }
   });
+
+  test.each([false, true])(
+    'reports rejected cleanup with bounded redacted evidence (long=%s)',
+    async long => {
+      const log = spyOn(console, 'error').mockImplementation(() => {});
+      const runId = `prepare-failed-${crypto.randomUUID()}`;
+      const previousSecret = process.env.ARCHON_TEST_TERMINATION_TOKEN;
+      process.env.ARCHON_TEST_TERMINATION_TOKEN = 'private-termination-credential';
+      const owner = await startRunLiveOwner(runId, {
+        detachedProcessPid: process.pid,
+        beforeTerminate: async () => {
+          throw new Error(
+            'taskkill denied private-termination-credential; unproved ancestry' +
+              (long ? '\u0001'.repeat(10_000) : '')
+          );
+        },
+      });
+      const lease = await requestRunLiveOwnerStop(runId);
+      try {
+        const error = await lease.commit().catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(Error);
+        if (!(error instanceof Error)) throw new Error('Expected preparation to fail');
+        expect(error.message).toContain('taskkill denied [REDACTED]; unproved ancestry');
+        expect(error.message).not.toContain('private-termination-credential');
+        expect(Buffer.byteLength(error.message)).toBeLessThan(8192);
+        expect(log.mock.calls.flat().join(' ')).not.toContain('private-termination-credential');
+      } finally {
+        lease.release();
+        await owner.close();
+        log.mockRestore();
+        if (previousSecret === undefined) delete process.env.ARCHON_TEST_TERMINATION_TOKEN;
+        else process.env.ARCHON_TEST_TERMINATION_TOKEN = previousSecret;
+      }
+    }
+  );
 
   test('detached stop commit announces the controller handoff before close', async () => {
     const runId = `detached-${crypto.randomUUID()}`;

@@ -1,3 +1,8 @@
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
+import { z } from 'zod';
 import { DETACHED_RUN_PREPARE_MAX_MS } from './run-stop-bounds';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
@@ -15,6 +20,13 @@ const CONTROL_HANDOFF = 'control_handoff\n';
 const STOP_REQUEST = 'stop\n';
 const TERMINATE_REQUEST = 'terminate\n';
 const TERMINATE_READY = 'ready\n';
+const MAX_PREPARATION_MESSAGE_CHARS = 1024;
+// JSON can encode each message character as six bytes, plus the frame's keys.
+const MAX_PREPARATION_FRAME_BYTES = MAX_PREPARATION_MESSAGE_CHARS * 6 + 128;
+const preparationFailureSchema = z.object({
+  kind: z.literal('preparation_failed'),
+  message: z.string().max(MAX_PREPARATION_MESSAGE_CHARS),
+});
 /**
  * How long `close` waits for a controller holding a stop lease to release it before
  * dropping the lease. A committed lease has no lifetime of its own: it lasts while both
@@ -348,8 +360,16 @@ export async function startRunLiveOwner(
             await terminationPreparation;
             socket.write(TERMINATE_READY);
           })().catch((error: unknown) => {
-            console.error('Could not prepare detached owner termination:', error);
-            socket.destroy();
+            const message = redactCredentialValues(
+              error instanceof Error ? error.message : String(error),
+              collectCredentialValues(process.env)
+            ).slice(0, MAX_PREPARATION_MESSAGE_CHARS);
+            console.error('Could not prepare detached owner termination:', message);
+            const failure: z.infer<typeof preparationFailureSchema> = {
+              kind: 'preparation_failed',
+              message,
+            };
+            void writeFinalFrame(socket, `${JSON.stringify(failure)}\n`);
           });
         } else {
           socket.destroy();
@@ -651,14 +671,25 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
               };
               const onData = (data: string): void => {
                 acknowledgement += data;
-                if (Buffer.byteLength(acknowledgement) > MAX_MESSAGE_BYTES) {
+                if (Buffer.byteLength(acknowledgement) > MAX_PREPARATION_FRAME_BYTES) {
                   failReady(new Error('Run owner acknowledgement exceeded its size limit'));
                   return;
                 }
                 const readyNewline = acknowledgement.indexOf('\n');
                 if (readyNewline === -1) return;
                 if (acknowledgement.slice(0, readyNewline + 1) !== TERMINATE_READY) {
-                  failReady(new Error('Run owner returned an invalid acknowledgement'));
+                  let failure: z.infer<typeof preparationFailureSchema>;
+                  try {
+                    failure = preparationFailureSchema.parse(
+                      JSON.parse(acknowledgement.slice(0, readyNewline))
+                    );
+                  } catch {
+                    failReady(new Error('Run owner returned an invalid acknowledgement'));
+                    return;
+                  }
+                  failReady(
+                    new Error(`Run owner could not prepare termination: ${failure.message}`)
+                  );
                   return;
                 }
                 cleanup();

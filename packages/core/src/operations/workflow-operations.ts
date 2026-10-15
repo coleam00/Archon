@@ -1448,8 +1448,8 @@ export function createWorkflowOperations({
   /**
    * Stop the run's live owner through the shared stop path, or report that none answered.
    * `not_stopped` means an owner answered but could not be stopped, or the endpoint could
-   * not be asked; nothing about the run has changed. Cancel and abandon each translate it
-   * into their own error.
+   * not be asked. Cancel and abandon do not record `cancelled`; the owner may still fail
+   * the run after a node cleanup failure.
    */
   async function stopLiveOwner(
     run: WorkflowRun
@@ -1478,7 +1478,7 @@ export function createWorkflowOperations({
         kind: 'not_stopped',
         message:
           `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
-          `${(error as Error).message}. The run was not changed.`,
+          `${(error as Error).message}. The command did not mark the run cancelled.`,
       };
     }
     return { kind: 'stopped', pid: target.pid };
