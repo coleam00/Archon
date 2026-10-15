@@ -82,6 +82,11 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
+The switch does not cover standalone `archon-review`: given a pull-request number,
+URL or branch, or run on a branch with an open pull request, it reads that pull
+request with `gh pr view` and `gh pr diff`. Inside delivery it reviews the recorded
+pull request and reads nothing from the forge.
+
 The source is never picked from what happens to be installed. When the selected
 source cannot answer (no host command, no plugin for the host, no credential, a
 failed operation), the node refuses; neither source falls back to the other. Any
