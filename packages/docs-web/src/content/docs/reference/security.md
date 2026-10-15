@@ -156,7 +156,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 **Per-user provider credentials:**
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
-- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) carry no secrets and work without an identity on solo installs. They follow the general API authentication gate when it is enabled. Credential routes require identity even when that gate is off.
 
 ### Target repo `.env` isolation
 
