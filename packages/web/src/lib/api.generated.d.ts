@@ -2110,7 +2110,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Signal the exact external event awaited by a paused workflow run */
+    /** Signal an external event awaited by a paused workflow run; use occurrence for an exact match */
     post: {
       parameters: {
         query?: never;

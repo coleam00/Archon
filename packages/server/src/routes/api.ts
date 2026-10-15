@@ -1188,7 +1188,8 @@ const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
   tags: ['Workflows'],
-  summary: 'Signal the exact external event awaited by a paused workflow run',
+  summary:
+    'Signal an external event awaited by a paused workflow run; use occurrence for an exact match',
   request: {
     params: z.object({ runId: z.string() }),
     body: {

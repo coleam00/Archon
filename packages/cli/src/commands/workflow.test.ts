@@ -9558,6 +9558,121 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
   });
 });
 
+describe('workflowRunCommand — durable wait occurrence ownership', () => {
+  for (const replaced of [true, false]) {
+    it(
+      replaced
+        ? 'stops when an equal-deadline occurrence replaces its wait'
+        : 'passes its occurrence to the resume claim',
+      async () => {
+        const discovery = await import('@archon/workflows/workflow-discovery');
+        const discover = spyOn(discovery, 'discoverWorkflowsWithConfig').mockResolvedValue({
+          workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
+          errors: [],
+        });
+        const host = createTestWorkflowHost();
+        const codebases = await import('@archon/core/db/codebases');
+        const findCodebase = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+          id: 'cb-wait',
+          ai_assistant_type: null,
+          commands: {},
+          name: 'wait',
+          repository_url: '',
+          default_cwd: testHome,
+          kind: 'folder',
+          default_branch: 'main',
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        const wait = {
+          owner: 'node',
+          kind: 'event',
+          nodeId: 'checks',
+          event: 'checks.complete',
+          pauseId: 'occurrence-a',
+          waitingSince: new Date().toISOString(),
+          resumeAt: '',
+        };
+        const run: WorkflowRun = {
+          id: 'run-wait',
+          workflow_name: 'plan',
+          status: 'paused',
+          working_path: testHome,
+          metadata: { wait },
+          origin: null,
+          conversation_id: null,
+          parent_conversation_id: null,
+          codebase_id: null,
+          outcome: null,
+          user_message: 'go',
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          user_id: null,
+          parent_run_id: null,
+          adopted_from_run_id: null,
+          output_root: null,
+          checkout_baseline: null,
+        };
+        let reads = 0;
+        host.deps.store.getWorkflowRun = mock(async () => {
+          reads += 1;
+          if (reads === 1) {
+            wait.resumeAt = new Date(Date.now() + 20).toISOString();
+            return run;
+          }
+          return {
+            ...run,
+            metadata: {
+              wait: {
+                ...wait,
+                pauseId: replaced ? 'occurrence-b' : 'occurrence-a',
+                signaledAt: new Date().toISOString(),
+              },
+            },
+          };
+        });
+        const submit = spyOn(host.engine, 'submit').mockResolvedValue({
+          success: true,
+          workflowRunId: run.id,
+          paused: true,
+        });
+        const resume = spyOn(host.engine, 'resume').mockResolvedValue({
+          accepted: true,
+          runId: run.id,
+          settled: Promise.resolve({ success: true, workflowRunId: run.id }),
+        });
+        const output = spyOn(console, 'log').mockImplementation(() => {});
+        const clock = spyOn(Date, 'now').mockReturnValue(Date.now());
+        try {
+          await workflowRunCommand(host, testHome, 'plan', 'go', { noWorktree: true, quiet: true });
+          expect(submit).toHaveBeenCalledTimes(1);
+          expect(reads).toBe(2);
+          if (replaced) expect(resume).not.toHaveBeenCalled();
+          else
+            expect(resume).toHaveBeenCalledWith(
+              expect.objectContaining({
+                cursor: {
+                  kind: 'wait',
+                  nodeId: 'checks',
+                  resumeAt: wait.resumeAt,
+                  pauseId: 'occurrence-a',
+                },
+              })
+            );
+        } finally {
+          submit.mockRestore();
+          resume.mockRestore();
+          output.mockRestore();
+          discover.mockRestore();
+          findCodebase.mockRestore();
+          clock.mockRestore();
+        }
+      }
+    );
+  }
+});
+
 describe('pendingDurableWait — which pauses this process owns', () => {
   const run = (status: WorkflowRunStatus, metadata: Record<string, unknown>): WorkflowRun =>
     ({ id: 'run-wait', status, metadata }) as unknown as WorkflowRun;
@@ -9569,6 +9684,7 @@ describe('pendingDurableWait — which pauses this process owns', () => {
           wait: {
             owner: 'node',
             kind: 'time',
+            pauseId: 'time-occurrence',
             nodeId: 'cooldown',
             waitingSince: '2026-01-01T00:00:00.000Z',
             resumeAt: '2026-01-01T00:01:00.000Z',
@@ -9577,7 +9693,12 @@ describe('pendingDurableWait — which pauses this process owns', () => {
       )
     ).toEqual({
       stepName: 'cooldown',
-      resumeAt: '2026-01-01T00:01:00.000Z',
+      cursor: {
+        kind: 'wait',
+        nodeId: 'cooldown',
+        resumeAt: '2026-01-01T00:01:00.000Z',
+        pauseId: 'time-occurrence',
+      },
       signaled: false,
     });
   });
@@ -9603,7 +9724,7 @@ describe('pendingDurableWait — which pauses this process owns', () => {
       )
     ).toEqual({
       stepName: 'poll.checks',
-      resumeAt: '2026-01-01T00:05:00.000Z',
+      cursor: { kind: 'wait', nodeId: 'poll', resumeAt: '2026-01-01T00:05:00.000Z' },
       signaled: true,
     });
   });

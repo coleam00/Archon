@@ -55,6 +55,9 @@ import {
   WorkflowResourceBusyError,
   PROVIDER_EVENT_ROW_TYPES,
   workflowEventCursor,
+  deadlineWaitCursor,
+  resumeCursorMatches,
+  type WorkflowResumeCursor,
 } from '@archon/workflows/store';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { Codebase } from '@archon/core/schemas/codebase';
@@ -393,6 +396,7 @@ export interface WorkflowRunOptions {
    * means live discovery.
    */
   continuationRun?: WorkflowRun;
+  continuationCursor?: WorkflowResumeCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -3459,6 +3463,7 @@ async function runWorkflowWithOwnedSource(
             legacyWorkflow: workflow,
             userMessage,
             run: resumable,
+            cursor: options.continuationCursor,
             options: commonOptions,
           });
         } catch (error) {
@@ -3712,7 +3717,7 @@ async function runWorkflowWithOwnedSource(
       const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
       if (pausedRun !== null && wait !== undefined) {
         console.log(
-          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
             'this process resumes the run at its deadline.'
         );
         return { run: pausedRun, wait, destination };
@@ -3765,7 +3770,7 @@ async function runWorkflowWithOwnedSource(
  */
 export interface DurableWaitCursor {
   stepName: string;
-  resumeAt: string;
+  cursor: ReturnType<typeof deadlineWaitCursor>;
   signaled: boolean;
 }
 
@@ -3793,7 +3798,7 @@ export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefi
   if (!wait) return undefined;
   return {
     stepName: workflowWaitStepName(wait),
-    resumeAt: wait.resumeAt,
+    cursor: deadlineWaitCursor(wait),
     signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
   };
 }
@@ -3818,14 +3823,19 @@ async function awaitDurableWaitDeadline(
   let cursor = wait;
   for (;;) {
     if (cursor.signaled) return 'resume';
-    const remainingMs = Date.parse(cursor.resumeAt) - Date.now();
+    const remainingMs = Date.parse(cursor.cursor.resumeAt) - Date.now();
     if (remainingMs <= 0) return 'resume';
     await new Promise<void>(resolve =>
       setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
     );
     const latest = await host.deps.store.getWorkflowRun(runId);
     const next = latest === null ? undefined : pendingDurableWait(latest);
-    if (next?.stepName !== cursor.stepName || next.resumeAt !== cursor.resumeAt) {
+    if (
+      !latest ||
+      !next ||
+      next.stepName !== cursor.stepName ||
+      !resumeCursorMatches(latest, cursor.cursor)
+    ) {
       return 'stop';
     }
     cursor = next;
@@ -3844,7 +3854,8 @@ interface WaitResumeAttempt {
 async function buildWaitResumeAttempt(
   host: WorkflowHost,
   run: WorkflowRun,
-  destination: RunDestination
+  destination: RunDestination,
+  wait: DurableWaitCursor
 ): Promise<WaitResumeAttempt> {
   if (!run.working_path) {
     throw new Error(
@@ -3861,6 +3872,7 @@ async function buildWaitResumeAttempt(
     userMessage: run.user_message ?? '',
     options: {
       continuationRun: run,
+      continuationCursor: wait.cursor,
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
       ...(destination.kind === 'conversation'
@@ -3965,7 +3977,7 @@ export async function workflowRunCommand(
     }
     if (pending === undefined) return;
     if ((await awaitDurableWaitDeadline(host, pending.run.id, pending.wait)) === 'stop') return;
-    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination);
+    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination, pending.wait);
   }
 }
 
