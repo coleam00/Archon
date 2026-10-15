@@ -89,6 +89,7 @@ const workflowWaitEventFields = {
  * clears it, and the nodes run again; a repeat limit pauses on a new wait.
  */
 const workflowWaitQuotaFields = {
+  pauseId: z.string().min(1),
   kind: z.literal('quota'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),

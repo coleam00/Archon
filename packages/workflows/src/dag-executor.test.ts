@@ -17335,6 +17335,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         owner: 'node',
         nodeId: 'investigate',
         kind: 'quota',
+        pauseId: expect.any(String),
         waitingSince: expect.any(String),
         resumeAt: resetAt,
       },

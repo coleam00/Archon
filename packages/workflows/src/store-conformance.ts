@@ -14,6 +14,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   continuablePauseCursor,
+  deadlineWaitCursor,
   type PauseCursor,
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -756,6 +757,33 @@ export function describeWorkflowStoreConformance(
         }
       }
     }
+    test('a delayed release cannot remove a later usage-limit wait with the same reset', async () => {
+      const intent = start();
+      expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+      const id = intent.launch.run.id;
+      await store.claimPendingWorkflowRun(id);
+      const limit: Extract<WorkflowWaitContext, { kind: 'quota' }> = {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'first-limit',
+        waitingSince: wait.waitingSince,
+        resumeAt: wait.resumeAt,
+      };
+      const cursor = deadlineWaitCursor(limit);
+      await store.pauseWorkflowRunForWait(id, limit, { kind: 'started', stepName: limit.nodeId });
+      expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: true });
+      await store.resumeWorkflowRun(id, cursor);
+      const again = { ...limit, pauseId: 'second-limit' };
+      await store.pauseWorkflowRunForWait(id, again, { kind: 'started', stepName: again.nodeId });
+      expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: false });
+      expect(await rejection(store.resumeWorkflowRun(id, cursor))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(await store.releasePausedRunSlot(id, deadlineWaitCursor(again))).toEqual({
+        released: true,
+      });
+    });
     test('release refuses another pause and a run that holds no slot', async () => {
       const id = await admitPaused(start());
       for (const cursor of [
@@ -1621,6 +1649,7 @@ export function describeWorkflowStoreConformance(
         owner: 'node',
         nodeId: 'implement',
         kind: 'quota',
+        pauseId: 'limit-1',
         waitingSince: wait.waitingSince,
         resumeAt: wait.resumeAt,
       };
@@ -1631,20 +1660,12 @@ export function describeWorkflowStoreConformance(
       });
       const paused = await store.getWorkflowRun(run.id);
       expect(paused?.status).toBe('paused');
-      expect(paused && continuablePauseCursor(paused)).toEqual({
-        kind: 'wait',
-        nodeId: limit.nodeId,
-        resumeAt: limit.resumeAt,
-      });
+      expect(paused && continuablePauseCursor(paused)).toEqual(deadlineWaitCursor(limit));
       const due = async (now: Date): Promise<string[]> =>
         (await store.listDueWorkflowContinuations(now, 10)).map(row => row.id);
       expect(await due(new Date(Date.parse(limit.resumeAt) - 1000))).not.toContain(run.id);
       expect(await due(new Date(Date.parse(limit.resumeAt) + 1000))).toContain(run.id);
-      const resumed = await store.resumeWorkflowRun(run.id, {
-        kind: 'wait',
-        nodeId: limit.nodeId,
-        resumeAt: limit.resumeAt,
-      });
+      const resumed = await store.resumeWorkflowRun(run.id, deadlineWaitCursor(limit));
       expect(resumed.status).toBe('running');
       expect(resumed.metadata.wait).toBeUndefined();
       expect((await store.getWorkflowRun(run.id))?.metadata.wait).toBeUndefined();

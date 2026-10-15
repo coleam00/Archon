@@ -98,6 +98,7 @@ describe('a usage-limit wait', () => {
           owner: 'node',
           nodeId: 'implement',
           kind: 'quota',
+          pauseId: 'limit-1',
           waitingSince: '2026-10-15T09:00:00.000Z',
           resumeAt: '2026-10-15T14:00:00.000Z',
         },

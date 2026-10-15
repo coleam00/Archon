@@ -1980,6 +1980,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
         owner: 'node',
         nodeId: 'implement',
         kind: 'quota',
+        pauseId: 'limit-1',
         waitingSince: '2026-08-28T10:00:00.000Z',
         resumeAt: '2026-08-28T15:00:00.000Z',
       },

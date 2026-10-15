@@ -11931,6 +11931,7 @@ export async function executeDagWorkflow(
       owner: 'node',
       nodeId: latest.nodeId,
       kind: 'quota',
+      pauseId: randomUUID(),
       waitingSince: new Date(now).toISOString(),
       resumeAt: new Date(latest.resetAt).toISOString(),
     };

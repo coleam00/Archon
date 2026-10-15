@@ -5796,6 +5796,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId: string;
           /** @enum {string} */
           kind: 'quota';
           /** Format: date-time */

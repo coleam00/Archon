@@ -429,8 +429,21 @@ describe('toRun — durable wait', () => {
     },
     {
       name: 'node usage limit',
-      wait: { owner: 'node', nodeId: 'implement', kind: 'quota', waitingSince, resumeAt },
-      expected: { nodeId: 'implement', kind: 'quota', waitingSince, resumeAt },
+      wait: {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince,
+        resumeAt,
+      },
+      expected: {
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince,
+        resumeAt,
+      },
       label: 'Waiting for usage limit reset',
     },
     {
