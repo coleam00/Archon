@@ -2793,11 +2793,9 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        if (lane.envId) {
-          const env = await host.records.isolation.getById(lane.envId);
-          if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
-          await recordWorktreeAdoption(host.records.isolation, env, codebase.default_cwd);
-        }
+        const env = await host.records.isolation.getById(lane.envId);
+        if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
+        await recordWorktreeAdoption(host.records.isolation, env, codebase.default_cwd);
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;
         adoptLaneRunsIsolatedCheckout = true;

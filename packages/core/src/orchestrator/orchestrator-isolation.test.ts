@@ -1,4 +1,9 @@
 // @archon-test-isolated
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
@@ -19,8 +24,10 @@ import type {
   ResolvedIsolation,
 } from '@archon/isolation';
 import { toBranchName, toRepoPath } from '@archon/git';
+const realVerifyWorktreeOwnership = (await import('@archon/git')).verifyWorktreeOwnership;
+const mockVerifyWorktreeOwnership = mock<typeof realVerifyWorktreeOwnership>(async () => {});
 mock.module('@archon/git', () => ({
-  verifyWorktreeOwnership: mock(async () => {}),
+  verifyWorktreeOwnership: mockVerifyWorktreeOwnership,
 }));
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
 // (or the workflow engine) before the mock.module() calls below take effect.
@@ -102,7 +109,7 @@ mock.module('../db/codebases', () => ({
 }));
 
 const mockAdoptionMetadata = mock(async (_id: string, _metadata: Record<string, unknown>) => {});
-const mockAdoptedEnv = mock(async () => makeEnvRow());
+const mockAdoptedEnv = mock(async (): Promise<IsolationEnvironmentRow | null> => makeEnvRow());
 const mockUpdateIsolationStatus = mock(() => Promise.resolve());
 mock.module('../db/isolation-environments', () => ({
   getById: mockAdoptedEnv,
@@ -549,6 +556,7 @@ describe('validateAndResolveIsolation', () => {
 });
 
 describe('dispatchBackgroundWorkflow', () => {
+  const track = trackTempRoots();
   let platform: MockPlatformAdapter;
 
   function makeWorkflow(overrides?: Partial<WorkflowDefinition>): ResolvedWorkflow {
@@ -1044,6 +1052,92 @@ describe('dispatchBackgroundWorkflow', () => {
       mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
     ).toHaveLength(1);
     expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe(env.working_path);
+  });
+
+  test('surviving-worktree adoption refuses a missing environment before submission', async () => {
+    mockAdoptedEnv.mockResolvedValueOnce(null);
+    mockAdoptionMetadata.mockClear();
+    await expect(
+      dispatchBackgroundWorkflow(
+        makeRoutingCtx({
+          adoptionLane: { kind: 'reuse-worktree', workingPath: '/missing', envId: 'missing' },
+        }),
+        makeWorkflow()
+      )
+    ).rejects.toThrow('Isolation environment missing not found');
+    expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockUpdateConversation.mock.calls).not.toContainEqual([
+      'worker-conv-1',
+      expect.objectContaining({ isolation_env_id: expect.any(String) }),
+    ]);
+  });
+
+  test('background adoption refuses a worktree from another clone of the same codebase', async () => {
+    const root = track(
+      await realpath(await mkdtemp(join(tmpdir(), 'archon-background-adoption-')))
+    );
+    const repo = join(root, 'repo');
+    const foreignClone = join(root, 'foreign-clone');
+    const worktree = join(root, 'foreign-worktree');
+    function git(...args: string[]): void {
+      execFileSync('git', args, {
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: join(root, 'gitconfig'),
+          GIT_CONFIG_NOSYSTEM: '1',
+        },
+        stdio: 'pipe',
+      });
+    }
+    git('init', '-q', '-b', 'main', repo);
+    git(
+      '-C',
+      repo,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.test',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'seed'
+    );
+    git('clone', '-q', repo, foreignClone);
+    git('-C', foreignClone, 'worktree', 'add', '-qb', 'adopted', worktree);
+    const codebase = makeCodebase({ default_cwd: repo });
+    const env = makeEnvRow({
+      codebase_id: codebase.id,
+      working_path: worktree,
+      branch_name: 'adopted',
+      metadata: { adopted: false, worktree_creation_id: 'original-proof' },
+    });
+    const original = structuredClone(env);
+    mockGetCodebase.mockResolvedValueOnce(codebase);
+    mockAdoptedEnv.mockResolvedValueOnce(env);
+    mockVerifyWorktreeOwnership.mockImplementationOnce(realVerifyWorktreeOwnership);
+    mockAdoptionMetadata.mockClear();
+    mockLogger.warn.mockClear();
+    await expect(
+      dispatchBackgroundWorkflow(
+        makeRoutingCtx({
+          adoptionLane: { kind: 'reuse-worktree', workingPath: worktree, envId: env.id },
+        }),
+        makeWorkflow()
+      )
+    ).rejects.toThrow('belongs to a different clone');
+    expect(env).toEqual(original);
+    expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockUpdateConversation.mock.calls).not.toContainEqual([
+      'worker-conv-1',
+      expect.objectContaining({ isolation_env_id: expect.any(String) }),
+    ]);
+    expect(
+      mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+    ).toHaveLength(0);
   });
 
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {

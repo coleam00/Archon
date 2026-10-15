@@ -1231,11 +1231,9 @@ async function dispatchOrchestratorWorkflowOwned(
       if (env?.status === 'active')
         await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
     } else if (adoptionLane?.kind === 'reuse-worktree') {
-      if (adoptionLane.envId) {
-        const env = await sqlIsolation.getById(adoptionLane.envId);
-        if (!env) throw new Error(`Isolation environment ${adoptionLane.envId} not found`);
-        await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
-      }
+      const env = await sqlIsolation.getById(adoptionLane.envId);
+      if (!env) throw new Error(`Isolation environment ${adoptionLane.envId} not found`);
+      await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
       // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
       // instead of cutting a fresh one (same shape as the background dispatch in
       // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
@@ -1244,7 +1242,7 @@ async function dispatchOrchestratorWorkflowOwned(
       await db
         .updateConversation(conversation.id, {
           cwd,
-          ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
+          isolation_env_id: adoptionLane.envId,
         })
         .catch((e: unknown) => {
           getLog().warn(

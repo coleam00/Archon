@@ -1,3 +1,5 @@
+import type { AdoptionLane } from '@archon/core/operations/workflow-adoption';
+import { toBranchName } from '@archon/git';
 import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
 import { PROVIDER_EVENT_ROW_TYPES, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
@@ -8673,7 +8675,7 @@ describe('workflowRunCommand — detach', () => {
     ]);
     (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/test/worktree' },
-      lane: { kind: 'reuse-worktree', workingPath: '/test/worktree' },
+      lane: { kind: 'reuse-worktree', workingPath: '/test/worktree', envId: 'env-detached' },
     });
 
     const child = createDetachedChildFixture();
@@ -13895,13 +13897,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   });
 
   function setupAdoptMocks(
-    lane:
-      | {
-          kind: 'reuse-worktree';
-          workingPath: string;
-          envId?: string;
-        }
-      | { kind: 'checkout-branch'; taskBranch: { kind: 'existing'; branch: string } } = {
+    lane: Exclude<AdoptionLane, { kind: 'in-place' }> = {
       kind: 'reuse-worktree',
       workingPath: '/wt/adopted',
       envId: 'env-9',
@@ -13944,7 +13940,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       kind: 'repo',
     });
 
-    if (lane.kind === 'reuse-worktree' && lane.envId) {
+    if (lane.kind === 'reuse-worktree') {
       (
         require('@archon/core/db/isolation-environments').getById as ReturnType<typeof mock>
       ).mockResolvedValueOnce({
@@ -14114,7 +14110,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   it('checks out the exact adopted branch when the prior worktree is gone', async () => {
     setupAdoptMocks({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+      taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
     });
     const isolation = await import('@archon/isolation');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -14141,7 +14137,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowType: 'task',
-        taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+        taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
       }),
       expect.any(Function)
     );
@@ -14154,7 +14150,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   it('preserves an explicit source when adoption recreates the prior branch checkout', async () => {
     setupAdoptMocks({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+      taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
     });
     const isolation = await import('@archon/isolation');
     const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');

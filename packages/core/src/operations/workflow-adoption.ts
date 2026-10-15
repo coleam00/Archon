@@ -42,7 +42,7 @@ export type AdoptionLane =
   | {
       kind: 'reuse-worktree';
       workingPath: string;
-      envId?: string;
+      envId: string;
     }
   | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };

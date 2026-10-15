@@ -556,11 +556,9 @@ async function dispatchBackgroundWorkflowOwned(
         );
         workerCwd = ctx.cwd;
       } else if (ctx.adoptionLane?.kind === 'reuse-worktree') {
-        if (ctx.adoptionLane.envId) {
-          const env = await sqlIsolation.getById(ctx.adoptionLane.envId);
-          if (!env) throw new Error(`Isolation environment ${ctx.adoptionLane.envId} not found`);
-          await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
-        }
+        const env = await sqlIsolation.getById(ctx.adoptionLane.envId);
+        if (!env) throw new Error(`Isolation environment ${ctx.adoptionLane.envId} not found`);
+        await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
         // Adoption lane 2: the adopted run's worktree survives — inherit it dirty-as-is
         // instead of cutting a fresh one from base. Linking the env keeps standard
         // isolation hygiene (list/cleanup/complete) pointed at this checkout.
@@ -568,7 +566,7 @@ async function dispatchBackgroundWorkflowOwned(
         await db
           .updateConversation(workerConv.id, {
             cwd: workerCwd,
-            ...(ctx.adoptionLane.envId ? { isolation_env_id: ctx.adoptionLane.envId } : {}),
+            isolation_env_id: ctx.adoptionLane.envId,
           })
           .catch((e: unknown) => {
             getLog().warn(

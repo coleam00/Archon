@@ -2853,6 +2853,7 @@ describe('workflow dispatch routing', () => {
         lane: {
           kind: 'reuse-worktree',
           workingPath: '/wt/adopted',
+          envId: 'env-1',
         },
       })
     );
@@ -2884,6 +2885,7 @@ describe('workflow dispatch routing', () => {
         lane: {
           kind: 'reuse-worktree',
           workingPath: '/wt/adopted',
+          envId: 'env-1',
         },
       })
     );
