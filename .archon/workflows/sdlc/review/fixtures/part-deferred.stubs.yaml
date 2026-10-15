@@ -4,11 +4,12 @@
 # filed for it.
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
 head-check:
-  base: null
-  # A standalone review of the working diff: no pull request to publish to.
-  pr: null
-  head: fixturehead
-  merge_base: null
+  target:
+    base: null
+    # A standalone review of the working diff: no pull request to publish to.
+    pr: null
+    head: fixturehead
+    merge_base: null
 scope:
   target:
     base: null

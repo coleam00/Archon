@@ -539,10 +539,13 @@ describe('bundled-defaults', () => {
           scope: '$INPUTS.scope',
           selector: '$scope.output.selector',
           target: { from: '$scope.output.target' },
+          prior_report: '$INPUTS.prior_report',
         },
       });
-      if (headCheck?.kind !== 'exec') throw new Error('head-check is not an exec node');
-      expect(scopeSchema.properties).toMatchObject({ target: headCheck.output_format });
+      if (headCheck?.kind !== 'exec' || headCheck.output_format === undefined) {
+        throw new Error('head-check has no target schema');
+      }
+      expect(scopeSchema.properties).toMatchObject(headCheck.output_format.properties);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
@@ -879,7 +882,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'publish-review',
-        with: { target: { from: '$head-check.output' } },
+        with: { target: { from: '$head-check.output.target' } },
       });
       // The verdict the composing loop terminates on passes through unchanged.
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');

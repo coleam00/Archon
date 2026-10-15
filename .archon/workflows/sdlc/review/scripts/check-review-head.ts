@@ -1,11 +1,15 @@
 /** Refuse before lenses unless the scoped PR identity, head and effective diff still match. */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { forgeSource, samePr, sameRepo, type PrRecord } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { findRemote } from '../../.shared/remote.ts';
 import {
   parseReviewTarget,
+  REVIEWED_TARGET,
+  type ReviewTarget,
   resolveReviewPr,
   retainedReviewRef,
   reviewHead,
@@ -51,6 +55,30 @@ try {
   }
   const target = parseReviewTarget(text(process.env.INPUTS_TARGET));
   if (target.head !== head) throw new Error("scope did not review this round's head");
+  const prior = text(process.env.INPUTS_PRIOR_REPORT).trim();
+  if (prior !== '') {
+    const fullReview =
+      `Start a full review without prior_report or light: archon workflow run archon-review ` +
+      `--from ${quote(head)}` +
+      (target.pr === null ? '' : ` --input ${quote(`scope=${JSON.stringify(target.pr)}`)}`);
+    let previous: ReviewTarget;
+    try {
+      previous = parseReviewTarget(readFileSync(join(dirname(prior), REVIEWED_TARGET), 'utf8'));
+    } catch (error) {
+      throw new Error(
+        `cannot read the previous review target: ${error instanceof Error ? error.message : String(error)}. ${fullReview}`,
+        { cause: error }
+      );
+    }
+    if (
+      previous.merge_base !== target.merge_base ||
+      (previous.pr === null
+        ? target.pr !== null
+        : target.pr === null || !samePr(previous.pr, target.pr))
+    ) {
+      throw new Error(`the previous review target has a different PR identity or effective diff. ${fullReview}`);
+    }
+  }
   const pr = resolveReviewPr(
     text(process.env.INPUTS_SCOPE).trim() || text(process.env.INPUTS_SELECTOR).trim(),
     forgeSource()
@@ -58,7 +86,7 @@ try {
   if (!pr) {
     if (target.pr !== null) throw new Error('scoped PR does not match the resolved working diff');
     note('check-review-head: no open PR; reviewing the working diff.');
-    emit(target);
+    emit({ target });
   } else {
     const remoteHead = reviewHead(pr);
     if (remoteHead !== head) {
@@ -77,7 +105,7 @@ try {
       );
     }
     note('check-review-head: the scoped PR head and effective diff match.');
-    emit(target);
+    emit({ target });
   }
 } catch (error) {
   refuse(`check-review-head: ${error instanceof Error ? error.message : String(error)}`);

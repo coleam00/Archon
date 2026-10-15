@@ -43,4 +43,4 @@ Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`) and
 the diff, select every lens and say so in `reason`; never answer that no lens runs
 because a command failed.
 
-The certified reviewed target is `$head-check.output`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.
+The certified reviewed target is `$head-check.output.target`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.

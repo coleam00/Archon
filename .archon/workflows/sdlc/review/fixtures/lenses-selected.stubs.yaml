@@ -4,11 +4,12 @@
 mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
 head-check:
-  base: null
-  # A standalone review of the working diff: no pull request to publish to.
-  pr: null
-  head: fixturehead
-  merge_base: null
+  target:
+    base: null
+    # A standalone review of the working diff: no pull request to publish to.
+    pr: null
+    head: fixturehead
+    merge_base: null
 scope:
   target:
     base: null

@@ -58,7 +58,7 @@ An explicit narrowing in the operator's trigger is an accepted boundary. The par
 
 ## Light mode (a prior report exists)
 
-When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
+When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. Head-check requires the prior report’s certified PR identity and effective merge-base to match this scope before any lens runs; otherwise start a full review without `prior_report` or `light`. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
 
 ## Write the scope file
 

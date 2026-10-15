@@ -139,23 +139,31 @@ nodes:
         # from it.
         selector: { type: string }
         target: &review_target
-          type: object
-          properties:
-            pr:
-              type: [object, 'null']
+          anyOf:
+            - type: object
               properties:
-                repo:
+                pr: { type: 'null' }
+                base: { type: 'null' }
+                head: { type: string, pattern: '\S' }
+                merge_base: { type: 'null' }
+              required: [pr, base, head, merge_base]
+            - type: object
+              properties:
+                pr:
                   type: object
                   properties:
-                    host: { type: string, pattern: '\S' }
-                    path: { type: string, pattern: '\S' }
-                  required: [host, path]
-                number: { type: integer, minimum: 1 }
-              required: [repo, number]
-            base: { type: [string, 'null'], pattern: '\S' }
-            head: { type: string, minLength: 1 }
-            merge_base: { type: [string, 'null'], pattern: '^(?:[a-f0-9]{40}|[a-f0-9]{64})$' }
-          required: [pr, base, head, merge_base]
+                    repo:
+                      type: object
+                      properties:
+                        host: { type: string, pattern: '\S' }
+                        path: { type: string, pattern: '\S' }
+                      required: [host, path]
+                    number: { type: integer, minimum: 1 }
+                  required: [repo, number]
+                base: { type: string, pattern: '\S' }
+                head: { type: string, pattern: '\S' }
+                merge_base: { type: string, pattern: '^(?:[a-f0-9]{40}|[a-f0-9]{64})$' }
+              required: [pr, base, head, merge_base]
 
         # The engine refuses this node when scope.md is missing or empty, so no
         # verdict is ever judged without its scope.
@@ -177,8 +185,13 @@ nodes:
       scope: "$INPUTS.scope"
       selector: "$scope.output.selector"
       target: { from: "$scope.output.target" }
+      prior_report: "$INPUTS.prior_report"
       head: "$mode.output.head"
-    output_format: *review_target
+    output_format:
+      type: object
+      properties:
+        target: *review_target
+      required: [target]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. Every round
@@ -336,7 +349,7 @@ nodes:
     runtime: bun
     depends_on: [synthesize]
     with:
-      target: { from: "$head-check.output" }
+      target: { from: "$head-check.output.target" }
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
       ready: "$synthesize.output.ready"

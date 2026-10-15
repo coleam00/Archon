@@ -5,11 +5,12 @@
 mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: false, code: true, tests: true, errors: false, docs: false, reason: "stub: the delta changes behavior and its tests" }
 head-check:
-  base: null
-  # A standalone review of the working diff: no pull request to publish to.
-  pr: null
-  head: fixturehead
-  merge_base: null
+  target:
+    base: null
+    # A standalone review of the working diff: no pull request to publish to.
+    pr: null
+    head: fixturehead
+    merge_base: null
 scope:
   target:
     base: null

@@ -56,7 +56,7 @@ describe('review head boundary', () => {
       const cwd = gitCheckout({}, track);
       const run = check({ cwd, source, forge: view() });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
+      expect(JSON.parse(run.stdout).target).toMatchObject(PR_TARGET);
     });
     it(`refuses a different live head through ${source} before lenses, with retry commands`, () => {
       const cwd = gitCheckout({}, track);
@@ -160,7 +160,7 @@ describe('review head boundary', () => {
         },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({
+      expect(JSON.parse(run.stdout).target).toEqual({
         pr: null,
         base: null,
         head: HEAD,
@@ -183,7 +183,7 @@ describe('review head boundary', () => {
         },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({
+      expect(JSON.parse(run.stdout).target).toEqual({
         pr: null,
         base: null,
         head: HEAD,
@@ -217,7 +217,7 @@ describe('review head boundary', () => {
       },
     });
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
+    expect(JSON.parse(run.stdout).target).toMatchObject(PR_TARGET);
     expect(run.stderr).toContain('Open-PR discovery could not query');
   });
 
@@ -272,7 +272,7 @@ describe('review head boundary', () => {
       },
     });
     expect(run.code, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual(reviewFixture(cwd).target);
+    expect(JSON.parse(run.stdout).target).toEqual(reviewFixture(cwd).target);
   });
 
   it('requires an explicit selector when empty-scope discovery finds several PRs', () => {
@@ -382,7 +382,7 @@ describe('review head boundary', () => {
             inputs: { INPUTS_SCOPE: scope, INPUTS_SELECTOR: scope },
           });
           expect(run.code).toBe(matching ? 0 : 1);
-          if (matching) expect(JSON.parse(run.stdout)).toMatchObject(PR_TARGET);
+          if (matching) expect(JSON.parse(run.stdout).target).toMatchObject(PR_TARGET);
           else {
             expect(run.stderr).toContain(`the checkout is at ${HEAD}, but`);
             expect(run.stderr).toContain(
@@ -423,7 +423,7 @@ describe('review head boundary', () => {
         },
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({
+      expect(JSON.parse(run.stdout).target).toEqual({
         pr: null,
         base: null,
         head: HEAD,
@@ -845,6 +845,17 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
         );
         delete stubs.fixture;
         delete stubs['rereview__head-check'];
+        delete stubs['review__publish'];
+        const rounds = workflow.nodes.find(node => node.kind === 'loop_group');
+        const publisher = rounds?.kind === 'loop_group'
+          ? rounds.loop_group.nodes.find(node => node.id === 'review__publish')
+          : undefined;
+        if (publisher?.kind !== 'exec') throw new Error('missing initial review publisher');
+        publisher.runtime = 'sh';
+        publisher.script = `mkdir -p "$ARTIFACTS_DIR/review"
+printf '%s' '${JSON.stringify(reviewFixture(cwd, head).target)}' > "$ARTIFACTS_DIR/review/reviewed-target.json"
+printf '%s' '${JSON.stringify(stubs['review__synthesize'])}'`;
+
         stubs['pr__publish'] = forgePrRecord({ head_revision: 'before-reshape' });
         stubs['rereview__mode'] = {
           continuation: true,

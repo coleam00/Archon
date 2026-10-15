@@ -29,7 +29,7 @@ import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import { forgeSource, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import { parseReviewTarget, reviewHead, reviewMergeBase } from '../../.shared/review-target.ts';
+import { parseReviewTarget, REVIEWED_TARGET, reviewHead, reviewMergeBase } from '../../.shared/review-target.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
@@ -89,7 +89,8 @@ try {
     );
     note(`publish-review: canonical review comment at ${comment.url}`);
   }
-  // review-round reads these as the next round's cursor and lens set.
+  // Continuations carry coverage forward only for this certified target.
+  writeFileSync(join(dirname(reportPath), REVIEWED_TARGET), JSON.stringify(target));
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
   writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);

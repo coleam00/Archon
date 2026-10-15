@@ -454,7 +454,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       });
       expect(preflight.code).toBe(0);
       const result = publishReview({
-        inputs: { ...report, INPUTS_TARGET: preflight.stdout },
+        inputs: { ...report, INPUTS_TARGET: JSON.stringify(JSON.parse(preflight.stdout).target) },
         gh: {
           pr: moved === 'head' ? { headRefOid: 'pushed-after-preflight' } : { baseRefName: 'main' },
         },
@@ -487,7 +487,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(
       spawnSync('git', ['push', '-q', 'upstream', `${unrelated}:refs/heads/dev`], { cwd }).status
     ).toBe(0);
-    const result = publishReview({ inputs: { ...report, INPUTS_TARGET: preflight.stdout }, cwd });
+    const result = publishReview({ inputs: { ...report, INPUTS_TARGET: JSON.stringify(JSON.parse(preflight.stdout).target) }, cwd });
     expect(result.code).toBe(0);
     expect(result.gh.some(call => call.includes('--method POST'))).toBe(true);
   });

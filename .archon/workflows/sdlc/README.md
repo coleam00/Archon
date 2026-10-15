@@ -39,6 +39,10 @@ repository. If that lookup fails or the ref is absent, it stops with the missing
 prerequisite and no retry command. A resolved mismatch stops with a retained-ref
 fetch and pinned `--from` retry, including for forks and closed or merged PRs. An
 open same-repository PR with a forge-provided revision also gets a branch retry.
+Publication records the certified target beside the report. Both normal and light
+continuations require the same qualified PR and effective merge-base before any
+lens runs; a missing or changed prior target requires a full review without
+`prior_report` or `light`. A base-name change preserving the merge-base is allowed.
 The check never changes the checkout. Keep other non-default review inputs when retrying.
 Publication writes only to the PR `head-check` output and checks again before its
 write, using the same retained-ref lookup for an absent forge revision, because

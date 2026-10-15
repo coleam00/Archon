@@ -45,4 +45,4 @@ A defect that touches the change — on the path it changed, made reachable or v
 
 Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/errors.md` and the findings count.
 
-The certified reviewed target is `$head-check.output`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.
+The certified reviewed target is `$head-check.output.target`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.

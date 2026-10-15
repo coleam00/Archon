@@ -182,6 +182,8 @@ export function reviewHead(pr: PrRecord): string {
   }
 }
 
+export const REVIEWED_TARGET = 'reviewed-target.json';
+
 export type ReviewTarget =
   | { pr: QualifiedPr; base: string; head: string; merge_base: string }
   | { pr: null; base: null; head: string; merge_base: null };
