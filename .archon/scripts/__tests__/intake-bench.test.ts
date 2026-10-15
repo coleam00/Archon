@@ -617,6 +617,12 @@ describe('leaks', () => {
       call('a', 'Bash', { command: 'gh issue view 41' }),
       call('b', 'Bash', { command: 'gh issue view 4 --repo o/r' }),
       call('c', 'WebFetch', { url: 'https://github.com/o/r/issues/4#issuecomment-1' }),
+      // The issue number may follow the command's flags, and may be quoted.
+      call('f', 'Bash', { command: 'gh issue view --repo o/r 4 --comments' }),
+      call('g', 'Bash', { command: 'gh issue view -R o/r --comments "#4"' }),
+      // Another command in the same line naming the number looks nothing up.
+      call('h', 'Bash', { command: 'gh issue view 41 --repo o/r && echo 4' }),
+      call('i', 'Bash', { command: 'gh issue view 41\nls 4' }),
       exec('started'),
       exec('completed'),
       // Writing the report that cites the issue is no lookup.
@@ -627,6 +633,8 @@ describe('leaks', () => {
     expect(findLeaks(transcript, issueTokens(REPO, 4))).toEqual([
       'triage: gh issue view 4 --repo o/r',
       'triage: https://github.com/o/r/issues/4#issuecomment-1',
+      'triage: gh issue view --repo o/r 4 --comments',
+      'triage: gh issue view -R o/r --comments "#4"',
       "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'",
     ]);
   });
