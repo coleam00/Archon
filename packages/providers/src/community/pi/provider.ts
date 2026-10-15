@@ -35,7 +35,6 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import {
   createRequestModelRuntime,
-  overlayPiCredentials,
   getUserModelsStorePath,
   type RequestModelRuntime,
 } from './request-auth';
@@ -489,10 +488,9 @@ function piNotConnectedMessage(providerId: string): string {
  * `!command` key, not only the selected provider's. Pi caches a stored command's output for
  * the life of the process. A models.json key command is not run here.
  *
- * Archon delivers credentials Pi consumes as a per-run auth.json
+ * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
- * and overlays its entries on Pi's native store, preserving other vendors and native
- * OAuth refresh persistence. The user's models.json / settings.json remain untouched. The path rides
+ * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
  * the per-call env (the executor's per-user injection never writes to process.env), which
  * `piAuthEnv` layers over process.env for a shell-level override.
  *
@@ -509,29 +507,9 @@ async function createPiModelRuntime(
   authEnv: PiAuthEnv,
   signal?: AbortSignal
 ): Promise<RequestModelRuntime> {
-  const authPath = authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined;
-  // Pi accepts a CredentialStore but does not export its file-backed implementation.
-  // Keep this import lazy like the SDK, and literal so binary builds bundle it.
-  const AuthStorage = authPath
-    ? (
-        await import('../../../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js')
-      ).AuthStorage
-    : undefined;
   return createRequestModelRuntime(
-    async options =>
-      piCodingAgent.ModelRuntime.create({
-        ...options,
-        ...(AuthStorage
-          ? {
-              credentials: await overlayPiCredentials(
-                AuthStorage.create(),
-                AuthStorage.create(options.authPath)
-              ),
-            }
-          : {}),
-        ...(signal ? { signal } : {}),
-      }),
-    authPath,
+    options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
+    authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined,
     PI_PROVIDER_ENV_VARS[provider]
       ? undefined
       : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }

@@ -249,27 +249,25 @@ describe('run credential preflight', () => {
     expect(prepared.connectedVendors.has('anthropic')).toBe(false);
   });
 
-  test('a Pi node with its own native Anthropic login runs beside a stored Claude subscription and delivered OpenRouter key', async () => {
+  test('a Pi node with its own native Anthropic login runs beside a stored Claude subscription', async () => {
     const workflow = makeTestResolvedWorkflow({
       name: 'mixed',
       nodes: [
         { id: 'a', prompt: 'a', provider: 'claude' },
         { id: 'b', prompt: 'b', provider: 'pi' },
-        { id: 'c', prompt: 'c', provider: 'pi', model: 'openrouter/anthropic/claude-sonnet-4-6' },
       ],
     });
     const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
-    deps.getUserProviderCredentialStatus.mockImplementation(async (_user, vendor) => ({
-      kind: vendor === 'anthropic' ? 'oauth' : 'api_key',
+    deps.getUserProviderCredentialStatus.mockResolvedValue({
+      kind: 'oauth',
       status: { state: 'usable', source: 'archon' },
-    }));
+    });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
     await assertRunCredentials(deps, prepared);
     // The Claude node consumes the stored subscription; only the Pi node checks natively.
     expect(prepared.connectedVendors.has('anthropic')).toBe(true);
     expect(checkCredential.mock.calls.map(([r]) => r.model)).toEqual(['anthropic/sonnet']);
-    expect(prepared.connectedVendors.has('openrouter')).toBe(true);
-    expect(deps.getUserProviderCredentialStatus).toHaveBeenCalledTimes(2);
+    expect(deps.getUserProviderCredentialStatus).toHaveBeenCalledTimes(1);
   });
 
   test('native checks receive each model, assistant settings and effective env', async () => {

@@ -38,8 +38,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import type { CredentialStore } from '@earendil-works/pi-ai';
-
 import { expandTilde } from '@archon/paths';
 // Type-only: erased at compile time, so Pi's config.js never loads here.
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent';
@@ -323,32 +321,6 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
     throw err;
   }
   return filePath;
-}
-
-/** Route refreshes back to the store that owns the credential; never copy native grants. */
-export async function overlayPiCredentials(
-  native: CredentialStore,
-  delivered: CredentialStore
-): Promise<CredentialStore> {
-  // Pin ownership for this runtime: removal must not switch a delivered vendor to native auth.
-  const deliveredIds = new Set((await delivered.list()).map(entry => entry.providerId));
-  const owner = (provider: string): CredentialStore =>
-    deliveredIds.has(provider) ? delivered : native;
-  return {
-    read: (provider, options) => owner(provider).read(provider, options),
-    modify: (provider, fn, options) => owner(provider).modify(provider, fn, options),
-    delete: (provider, options) => owner(provider).delete(provider, options),
-    async list(options) {
-      const [nativeEntries, deliveredEntries] = await Promise.all([
-        native.list(options),
-        delivered.list(options),
-      ]);
-      return [
-        ...nativeEntries.filter(entry => !deliveredIds.has(entry.providerId)),
-        ...deliveredEntries,
-      ];
-    },
-  };
 }
 
 export interface RequestModelRuntime {

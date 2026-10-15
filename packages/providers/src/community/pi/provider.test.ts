@@ -13,7 +13,6 @@ import type {
   ExtensionError,
   ModelRegistry,
 } from '@earendil-works/pi-coding-agent';
-import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import type { Api, Model } from '@earendil-works/pi-ai';
 
 // Typed against the real registration shape (config: ProviderConfig) so the
@@ -307,13 +306,6 @@ const mockDefineTool = mock(
     name: string;
     execute: (id: string, args: Record<string, unknown>) => Promise<unknown>;
   }) => def
-);
-
-mock.module(
-  '../../../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js',
-  () => ({
-    AuthStorage: { create: () => new InMemoryCredentialStore() },
-  })
 );
 
 mock.module('@earendil-works/pi-coding-agent', () => ({
@@ -1077,6 +1069,13 @@ describe('PiProvider', () => {
   });
 
   test('ModelRuntime.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {
+    // The executor delivers per-user credentials — including the per-run
+    // auth.json PATH — on the per-call requestOptions.env channel, which it
+    // deliberately keeps OUT of process.env (subprocess-isolation). Pi runs
+    // in-process, so it must read the path from requestOptions.env or per-user
+    // subscription delivery silently no-ops (the auth.json is written but never
+    // loaded). Regression for the VPS smoke finding where a claude→anthropic
+    // subscription failed with "no credentials for provider 'anthropic'".
     fileCreds.anthropic = { type: 'oauth' };
     resetScript(scriptedAgentEnd());
     const perRunAuthPath = '/run/abc123/pi-home/auth.json';
@@ -1088,9 +1087,7 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockModelRuntimeCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ authPath: perRunAuthPath, credentials: expect.any(Object) })
-    );
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: perRunAuthPath });
   });
 
   test('ModelRuntime.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
@@ -1106,12 +1103,7 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockModelRuntimeCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authPath: '/shell/override/auth.json',
-        credentials: expect.any(Object),
-      })
-    );
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: '/shell/override/auth.json' });
   });
 
   test('ModelRuntime.create() throwing surfaces a contextualized error', async () => {

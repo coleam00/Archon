@@ -5,12 +5,7 @@ import { join } from 'node:path';
 
 import { trackTempRoots } from '@archon/paths/test-utils';
 
-import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
-import {
-  buildCustomProviderModelsPath,
-  getUserModelsPath,
-  overlayPiCredentials,
-} from './request-auth';
+import { buildCustomProviderModelsPath, getUserModelsPath } from './request-auth';
 
 // pi 0.84.0+ ships `ModelRuntime.create({ modelsPath })` as the documented
 // seam for changing the `models.json` location. The test exercises the
@@ -495,31 +490,4 @@ describe('buildCustomProviderModelsPath', () => {
     });
     expect(result).toBeUndefined();
   });
-});
-
-test('credential overlays preserve vendor ownership through reads, refreshes and deletion', async () => {
-  const native = new InMemoryCredentialStore();
-  const delivered = new InMemoryCredentialStore();
-  const grant = { type: 'oauth' as const, access: 'native', refresh: 'refresh', expires: 1 };
-  await native.modify('anthropic', async () => grant);
-  await native.modify('openrouter', async () => ({ type: 'api_key', key: 'native-router' }));
-  await delivered.modify('openrouter', async () => ({ type: 'api_key', key: 'delivered-router' }));
-  const store = await overlayPiCredentials(native, delivered);
-  expect(await store.read('anthropic')).toEqual(grant);
-  expect(await store.read('openrouter')).toEqual({ type: 'api_key', key: 'delivered-router' });
-  expect(await store.list()).toEqual([
-    { providerId: 'anthropic', type: 'oauth' },
-    { providerId: 'openrouter', type: 'api_key' },
-  ]);
-  await store.modify('anthropic', async current =>
-    current?.type === 'oauth' ? { ...current, access: 'refreshed' } : undefined
-  );
-  expect(await native.read('anthropic')).toEqual({ ...grant, access: 'refreshed' });
-  expect(await delivered.read('anthropic')).toBeUndefined();
-  await store.modify('openrouter', async () => ({ type: 'api_key', key: 'updated-router' }));
-  expect(await delivered.read('openrouter')).toEqual({ type: 'api_key', key: 'updated-router' });
-  expect(await native.read('openrouter')).toEqual({ type: 'api_key', key: 'native-router' });
-  await store.delete('openrouter');
-  expect(await store.read('openrouter')).toBeUndefined();
-  expect(await store.list()).toEqual([{ providerId: 'anthropic', type: 'oauth' }]);
 });
