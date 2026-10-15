@@ -217,8 +217,8 @@ describe('credentials/catalog', () => {
       });
       withCredentialEnv({ ANTHROPIC_OAUTH_TOKEN: 'test-token' }, () => {
         const pi = anthropicRow(buildAgentCredentialMatrix([]), 'pi');
-        expect(pi.row.installEnv).toBe(true);
-        expect(pi.ready).toBe(true);
+        expect(pi.row.installEnv).toBe(false);
+        expect(pi.ready).toBe(false);
       });
     });
 
