@@ -650,6 +650,31 @@ describe('cloneRepository', () => {
       }
     );
 
+    test('uses SSH authentication for SSH-scheme App clone and inspection', async () => {
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
+      const url = 'ssh://git@github.com/owner/repo.git';
+      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+        status: 'available',
+        defaultBranch: gitUtils.toBranchName('main'),
+        branches: [gitUtils.toBranchName('main')],
+      });
+      appRequest.mockClear();
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
+      try {
+        await cloneRepository(url);
+        expect(getGitCloneCall()?.[0]).toBe(url);
+        expect(getGitCloneCall()?.[2]).toBeUndefined();
+        await inspectProjectBaseBranch({ url });
+        expect(inspection).toHaveBeenCalledWith({ kind: 'url', url, credentials: undefined });
+        expect(appRequest).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+        inspection.mockRestore();
+      }
+    });
+
     test('passes GITHUB_TOKEN as request-scoped clone credentials', async () => {
       process.env.GITHUB_TOKEN = 'ghp_github_token_456';
       delete process.env.GH_TOKEN;

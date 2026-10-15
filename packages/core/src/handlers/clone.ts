@@ -95,22 +95,18 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
 
 /** Resolve forge-specific credentials without adding them to the repository URL. */
 export async function resolveForgeAuth(url: string): Promise<CloneCredentials | undefined> {
-  // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
-  let hostname: string;
-  const parsed = safeParseUrl(url);
-  if (parsed) {
-    hostname = parsed.hostname.toLowerCase();
-  } else {
-    // Bare host/path form: take everything before the first slash
-    hostname = url.split('/')[0].toLowerCase();
-  }
-  const authority = parsed?.host.toLowerCase() ?? hostname;
+  const validated = validateCloneUrl(url);
+  if (!validated.ok) throw new ProjectRegistrationError(validated.error);
+  if (!validated.httpUrl) return undefined;
+  const parsed = validated.httpUrl;
+  const hostname = parsed.hostname.toLowerCase();
+  const authority = parsed.host.toLowerCase();
 
   if (hostname === 'github.com') {
     const config = loadGitHubAppConfig();
     let token: string | undefined;
     if (config) {
-      const path = parsed?.pathname ?? url.slice(hostname.length);
+      const path = parsed.pathname;
       const repository = parseOwnerRepo(
         path
           .replace(/^\//, '')
