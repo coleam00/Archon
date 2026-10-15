@@ -2,11 +2,6 @@
  * GitHub bootstrap helpers, testable without starting the server.
  */
 
-export {
-  selectGitHubAuthMode,
-  type GitHubAuthModeDecision,
-} from '@archon/core/utils/github-auth-mode';
-
 /**
  * Parse a credential-helper `path` field into (owner, repo). Used by the
  * /internal/git-credential endpoint to resolve which installation to issue
