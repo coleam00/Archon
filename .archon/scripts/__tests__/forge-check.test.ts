@@ -29,11 +29,11 @@ function refusal(kind: string, message: string): string {
   return JSON.stringify({ operationId: 'op-labels', ok: false, error: { kind, message } });
 }
 
-function check(options: ScriptOptions & { mirror?: boolean } = {}) {
-  const { mirror, ...rest } = options;
+function check(options: ScriptOptions & { mirror?: boolean; capabilities?: readonly string[] } = {}) {
+  const { mirror, capabilities = REQUIRED_FORGE_OPERATIONS, ...rest } = options;
   if (rest.forge?.kind === 'fake' && rest.forge.response) {
     const reads = typeof rest.forge.response === 'string' ? [rest.forge.response] : rest.forge.response;
-    rest.forge = {...rest.forge, response: reads.flatMap(read => [forgeOperation('metadata', {capabilities: REQUIRED_FORGE_OPERATIONS}), read])};
+    rest.forge = {...rest.forge, response: reads.flatMap(read => [forgeOperation('metadata', {capabilities}), read])};
   }
   const cwd = gitCheckout({}, trackTempRoot);
   if (mirror === true) {
@@ -82,6 +82,18 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect({code: run.code, stderr: run.stderr}).toMatchObject({code: 0});
     expect(JSON.parse(run.stdout)).toEqual({source: 'forge'});
     expect(run.stderr).toContain('Read access is verified; write access is not');
+    expect(run.gh).toEqual([]);
+  });
+
+  it('refuses a plugin missing checks.state before the authenticated read', () => {
+    const run = check({
+      forge: { kind: 'fake', response: ANSWERED },
+      capabilities: REQUIRED_FORGE_OPERATIONS.filter(op => op !== 'checks.state'),
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('missing: checks.state');
+    expect(run.forge).toHaveLength(1);
+    expect(run.forge[0]).toContain('forge metadata');
     expect(run.gh).toEqual([]);
   });
 

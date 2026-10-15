@@ -2,6 +2,7 @@ import { providerRegistry } from '@archon/providers';
 import { expect, test } from 'bun:test';
 import {
   forgeErrorSchema,
+  forgeRequestSchema,
   type ForgeRequest,
   type ForgeResponse,
   type ForgeMutationFailure,
@@ -287,4 +288,35 @@ test('operator guidance describes the gh default and forge host login source', (
   const docker = readFileSync(join(root, 'packages/docs-web/src/content/docs/deployment/docker.md'), 'utf8');
   expect(changelog.includes('forge path does not read your `gh` login')).toBe(false);
   expect(docker.includes('read this login only when')).toBe(false);
+});
+
+test('both onboarding guides explain the default and compatible forge opt-in', () => {
+  for (const guide of ['getting-started/quick-start.md', 'book/first-five-minutes.md']) {
+    const text = readFileSync(
+      join(import.meta.dir, '../../../packages/docs-web/src/content/docs', guide),
+      'utf8'
+    );
+    expect(text).toContain('GitHub CLI (`gh`) by default');
+    expect(text).toContain('`ARCHON_SDLC_FORGE=forge`');
+    expect(text).toContain('compatible plugin');
+  }
+});
+
+test('preflight capabilities cover concrete pack calls and agent command instructions', async () => {
+  const { REQUIRED_FORGE_OPERATIONS } = await import('../../workflows/sdlc/.shared/forge-check');
+  const root = join(import.meta.dir, '../../workflows/sdlc');
+  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
+    .filter(file => file !== '.shared/forge-check.ts')
+    .map(file => readFileSync(join(root, file), 'utf8'));
+  const used = forgeRequestSchema.options
+    .map(schema => schema.shape.op.value)
+    .filter(op =>
+      sources.some(text =>
+        ["'" + op + "'", '"' + op + '"', '`' + op + '`', 'forge ' + op + ' '].some(
+          token => text.includes(token)
+        )
+      )
+    );
+  expect(used).toContain('checks.state');
+  expect([...REQUIRED_FORGE_OPERATIONS].sort()).toEqual(used.sort());
 });
