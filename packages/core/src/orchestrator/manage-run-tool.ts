@@ -515,8 +515,7 @@ async function handleWrite(
         : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop runs another iteration with it.${continues}`;
     }
     case 'reject': {
-      const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor, origin);
+      const result = await ctx.operations.rejectWorkflow(id, message, ctx.actor, origin);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -529,15 +528,10 @@ async function handleWrite(
       // respondToWorkflow validates `decision` itself and throws a clear error
       // naming the gate's actual options on a mismatch — caught by the tool's
       // outer try/catch and returned as text, never a silent no-op.
-      // Mirrors the chat/HTTP respond surfaces' default: an empty message on
-      // decision='reject' becomes 'Rejected' rather than reaching a new-mode
-      // gate's structured output as ''.
-      const respondText =
-        message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
       const result = await ctx.operations.respondToWorkflow(
         id,
         decision,
-        respondText,
+        message,
         ctx.actor,
         origin
       );
