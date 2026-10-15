@@ -221,7 +221,7 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
 
 /** Mark only the observed worktree resource destroyed, never a replacement registration. */
 export async function markWorktreeDestroyed(
-  env: Pick<IsolationEnvironmentRow, 'id' | 'metadata'>
+  env: Pick<IsolationEnvironmentRow, 'id' | 'working_path' | 'branch_name' | 'metadata'>
 ): Promise<void> {
   const registrationId = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
   const result = await pool.query(
