@@ -1,3 +1,4 @@
+import { ActiveContainerEnvironmentsError } from '@archon/core/db/codebase-delete-error';
 import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -791,6 +792,9 @@ describe('DELETE /api/codebases/:id', () => {
       { ...MOCK_ENV, id: 'container-one', provider: 'container' },
       { ...MOCK_ENV, id: 'container-two', provider: 'container' },
     ]);
+    mockDeleteCodebase.mockRejectedValueOnce(
+      new ActiveContainerEnvironmentsError(['container-one', 'container-two'])
+    );
     const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
       method: 'DELETE',
     });
@@ -801,10 +805,10 @@ describe('DELETE /api/codebases/:id', () => {
     expect(body.error).toContain('archon isolation cleanup 0');
     expect(mockRemoveWorktree).not.toHaveBeenCalled();
     expect(mockUpdateStatus).not.toHaveBeenCalled();
-    expect(mockDeleteCodebase).not.toHaveBeenCalled();
+    expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1');
   });
 
-  test('removes worktrees before deleting codebase', async () => {
+  test('removes worktrees after guarded database deletion', async () => {
     mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
     mockListByCodebase.mockImplementationOnce(async () => [MOCK_ENV]);
     mockRemoveWorktree.mockImplementationOnce(async () => {});
@@ -815,9 +819,8 @@ describe('DELETE /api/codebases/:id', () => {
     const response = await app.request('/api/codebases/codebase-uuid-1', { method: 'DELETE' });
     expect(response.status).toBe(200);
 
-    // Worktree removal and status update should have been called
     expect(mockRemoveWorktree).toHaveBeenCalled();
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-uuid-1', 'destroyed');
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
 
   test('continues deletion even if worktree removal fails', async () => {

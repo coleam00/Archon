@@ -1,3 +1,4 @@
+import { ActiveContainerEnvironmentsError } from '@archon/core/db/codebase-delete-error';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
@@ -3522,18 +3523,8 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Codebase not found');
       }
 
-      // Clean up isolation environments (worktrees)
       const environments = await isolationEnvDb.listByCodebase(id);
-      const containers = environments.filter(env => env.provider === 'container');
-      if (containers.length > 0) {
-        return apiError(
-          c,
-          409,
-          `Active container environments remain: ${containers.map(env => env.id).join(', ')}. ` +
-            'Run `archon isolation cleanup 0` to clean eligible containers, then retry deletion. ' +
-            'Containers owned by resumable runs must be released before cleanup.'
-        );
-      }
+      await codebaseDb.deleteCodebase(id);
       for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
           await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
@@ -3542,11 +3533,7 @@ export function registerApiRoutes(
           // Worktree may already be gone — log but continue
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
         }
-        await isolationEnvDb.updateStatus(env.id, 'destroyed');
       }
-
-      // Delete from database (unlinks conversations and sessions)
-      await codebaseDb.deleteCodebase(id);
 
       // Remove workspace directory from disk — only for Archon-managed repos
       const normalizedCwd = normalize(codebase.default_cwd);
@@ -3564,6 +3551,9 @@ export function registerApiRoutes(
 
       return c.json({ success: true });
     } catch (error) {
+      if (error instanceof ActiveContainerEnvironmentsError) {
+        return apiError(c, 409, error.message);
+      }
       getLog().error({ err: error }, 'delete_codebase_failed');
       return apiError(c, 500, 'Failed to delete codebase');
     }

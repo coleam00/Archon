@@ -2,6 +2,7 @@
  * Database operations for codebases
  */
 import { resolve } from 'node:path';
+import { ActiveContainerEnvironmentsError } from './codebase-delete-error';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
@@ -324,16 +325,28 @@ export async function listCodebases(): Promise<readonly Codebase[]> {
 
 export async function deleteCodebase(id: string): Promise<void> {
   getLog().debug({ codebaseId: id }, 'db.codebase_delete_cascade_started');
-  // First, unlink any sessions referencing this codebase (FK has no cascade)
-  await pool.query('UPDATE remote_agent_sessions SET codebase_id = NULL WHERE codebase_id = $1', [
-    id,
-  ]);
-  // Second, unlink any conversations referencing this codebase (FK has no cascade)
-  await pool.query(
-    'UPDATE remote_agent_conversations SET codebase_id = NULL WHERE codebase_id = $1',
-    [id]
-  );
-  // Then delete the codebase
-  await pool.query('DELETE FROM remote_agent_codebases WHERE id = $1', [id]);
+  await getDatabase().withTransaction(async query => {
+    // PostgreSQL FK inserts take a key-share lock on the parent. FOR UPDATE
+    // serializes registration with deletion; SQLite retries stale write snapshots.
+    await query(
+      'SELECT id FROM remote_agent_codebases WHERE id = $1' +
+        (getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''),
+      [id]
+    );
+    const containers = await query<{ id: string }>(
+      `SELECT id FROM remote_agent_isolation_environments
+       WHERE codebase_id = $1 AND provider = 'container' AND status = 'active'
+       ORDER BY id`,
+      [id]
+    );
+    if (containers.rows.length > 0) {
+      throw new ActiveContainerEnvironmentsError(containers.rows.map(env => env.id));
+    }
+    await query('UPDATE remote_agent_sessions SET codebase_id = NULL WHERE codebase_id = $1', [id]);
+    await query('UPDATE remote_agent_conversations SET codebase_id = NULL WHERE codebase_id = $1', [
+      id,
+    ]);
+    await query('DELETE FROM remote_agent_codebases WHERE id = $1', [id]);
+  });
   getLog().info({ codebaseId: id }, 'db.codebase_delete_completed');
 }

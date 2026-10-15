@@ -266,34 +266,25 @@ can fail before either write.
 
 ## `isolation cleanup` Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation cleanup [days]                                 │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:62-99  isolationCleanupCommand(daysStale)          │
-│                     default: 7 days                             │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.findStaleEnvironments(days)            │
-│ - WHERE last_activity_at < now - days                           │
-│ - Excludes telegram platform                                    │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ For each stale environment:                                     │
-│ 1. provider.destroy(path, options)                              │
-│ 2. Update DB status → 'destroyed'                               │
-│ 3. Log result                                                   │
-└─────────────────────────────────────────────────────────────────┘
+```text
+archon isolation cleanup [days] (default: 7)
+  │
+  ├─ Reconcile missing worktrees (preserve container rows)
+  │
+  ├─ findStaleEnvironments(days)
+  │    └─ Filter provider = 'worktree'
+  │         └─ For each stale worktree:
+  │              ├─ Skip environments owned by resumable runs
+  │              └─ provider.destroy(path, options)
+  │                   └─ Mark destroyed only after complete removal
+  │
+  └─ cleanupContainerEnvironments(days), even when no worktrees are stale
+       ├─ Skip containers owned by resumable runs
+       └─ Container backend removes container and volume
+            └─ Mark destroyed only after successful removal
 ```
 
-**Code:** `packages/cli/src/commands/isolation.ts:62-99`
+**Code:** `isolationCleanupCommand` in `packages/cli/src/commands/isolation.ts`
 
 ---
 
