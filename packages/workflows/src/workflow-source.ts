@@ -315,10 +315,10 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
  */
 export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
   packs: InstalledPack[];
-  errors: { path: string; message: string; cause?: unknown }[];
+  errors: { path: string; message: string; cause?: unknown; packKey?: string }[];
 }> {
   const packs: InstalledPack[] = [];
-  const errors: { path: string; message: string; cause?: unknown }[] = [];
+  const errors: Awaited<ReturnType<typeof listInstalledPacks>>['errors'] = [];
   if (root.kind === 'receipts') {
     let scan: Awaited<ReturnType<typeof scanReceipts>>;
     try {
@@ -379,7 +379,7 @@ export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
       }
       packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
     } catch (error) {
-      errors.push({ path: dir, message: (error as Error).message, cause: error });
+      errors.push({ path: dir, message: (error as Error).message, cause: error, packKey: key });
     }
   }
   return { packs, errors };

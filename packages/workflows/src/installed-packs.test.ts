@@ -9,7 +9,7 @@
 import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test';
 import { chmod, cp, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -29,6 +29,7 @@ import {
   isSourceReadFailure,
   type WorkflowSourceCapture,
 } from './workflow-source';
+import * as sourceIntegrity from './workflow-source';
 import { formatPackagedResourceReference } from './packaged-workflow';
 import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
 import { isAgentNode, type ResolvedWorkflow } from './schemas';
@@ -461,6 +462,7 @@ describe('installed pack boundaries', () => {
     expect(errors.filter(error => error.filename.startsWith('acme/review-kit/'))).toEqual([
       {
         filename: 'acme/review-kit/crowded',
+        installedPackKey: 'acme.review-kit',
         error:
           "Packaged workflow 'acme/review-kit/crowded' must contain exactly one .yaml or .yml file (found 2).",
         errorType: 'validation_error',
@@ -579,6 +581,88 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
           capturedSourceRoots(child.anchor)
         );
         expect(names(catalog.workflows)).toContain(REVIEW);
+      });
+    }
+
+    for (const fault of [
+      'manifest',
+      'workflow-file',
+      'workflow-directory',
+      'missing-pack',
+    ] as const) {
+      test(`selected workflows ignore an unrelated captured pack ${fault} read failure`, async () => {
+        await install(reviewKit());
+        await install({ ...reviewKit(), id: 'other/repo', name: 'broken' });
+        await mkdir(join(project, '.archon/workflows'), { recursive: true });
+        await writeFile(
+          join(project, '.archon/workflows/healthy.yaml'),
+          'name: healthy\ndescription: healthy\nnodes:\n  - id: done\n    prompt: done\n'
+        );
+        await writeFile(
+          join(project, '.archon/workflows/spoof.yaml'),
+          'name: other/broken:review\ndescription: spoof\nnodes:\n  - id: spoof\n    prompt: wrong source\n'
+        );
+        const capture = await captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot: join(home, 'runs/workflows'),
+        });
+        const roots = capturedSourceRoots(capture.anchor);
+        const broken = join(
+          capture.anchor.root,
+          'installed/other.broken',
+          fault === 'manifest'
+            ? 'archon-plugin.json'
+            : fault === 'workflow-file'
+              ? 'review/code-review.yaml'
+              : fault === 'workflow-directory'
+                ? 'review'
+                : ''
+        );
+        const mode = fault === 'workflow-directory' ? 0o755 : 0o644;
+        let moved = false;
+        const heldPack = join(capture.anchor.root, 'held-pack');
+        const restore = async (): Promise<void> => {
+          if (fault === 'missing-pack') {
+            if (moved) await rename(heldPack, broken);
+            moved = false;
+          } else await chmod(broken, mode);
+        };
+        const breakSource = async (): Promise<void> => {
+          if (fault === 'missing-pack') {
+            await rename(broken, heldPack);
+            moved = true;
+          } else await chmod(broken, 0o000);
+        };
+        const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+        const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
+          async sourceRoots => {
+            await restore();
+            const files = await verify(sourceRoots);
+            await breakSource();
+            return files;
+          }
+        );
+        try {
+          for (const name of ['healthy', REVIEW]) {
+            await restore();
+            expect(
+              (await resolveContinuationWorkflow(deps, runWith(capture, name), project))?.workflow
+                .name
+            ).toBe(name);
+            const composed = await resolveFanOutChildDefinition(deps, project, name, roots);
+            expect('definition' in composed && composed.definition.name).toBe(name);
+          }
+          await expect(
+            resolveFanOutChildDefinition(deps, project, 'other/broken:review', roots)
+          ).rejects.toBeInstanceOf(sourceIntegrity.WorkflowSourceUnavailableError);
+          await restore();
+          await expect(
+            resolveContinuationWorkflow(deps, runWith(capture, 'other/broken:review'), project)
+          ).rejects.toBeInstanceOf(sourceIntegrity.WorkflowSourceUnavailableError);
+        } finally {
+          verifier.mockRestore();
+          await restore();
+        }
       });
     }
 

@@ -462,6 +462,7 @@ export interface WorkflowWithSource {
  * Error encountered while loading a workflow file
  */
 export interface WorkflowLoadError {
+  readonly installedPackKey?: string;
   readonly filename: string;
   readonly workflowName?: string;
   readonly error: string;

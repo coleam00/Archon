@@ -78,6 +78,7 @@ import {
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
+  isSourceReadFailure,
   captureWorkflowSource,
   capturedSourceRoots,
   recordSelectedWorkflow,
@@ -100,7 +101,7 @@ import {
   type WorkflowResumeCursor,
 } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
-import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { assertSelectedWorkflowReadable, discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
 import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
 import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
@@ -979,9 +980,12 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
+  assertSelectedWorkflowReadable(errors, run.workflow_name);
   const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
-    const readErrors = errors.filter(error => error.errorType === 'read_error');
+    const readErrors = errors.filter(
+      error => error.installedPackKey === undefined && error.errorType === 'read_error'
+    );
     // Incomplete discovery cannot prove that the verified capture lacks the workflow.
     if (readErrors.length > 0) {
       throw new Error(
@@ -1350,6 +1354,7 @@ async function runChildWorkflow(
       });
       owner.hold(childSource);
     } catch (err) {
+      if (isSourceReadFailure(err)) throw err;
       return failOutcome(
         `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
@@ -1369,19 +1374,20 @@ async function runChildWorkflow(
       // table (.archon/workflow-language-constitution.md) and locked by
       // `describe('workflow: late resolution is a deliberate affordance')` in
       // subrun.test.ts.
-      const { workflows } = await discoverWorkflowsWithConfig(
+      const { workflows, errors } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
         deps.providers,
         childSource.roots
       );
+      assertSelectedWorkflowReadable(errors, childWorkflowName);
       childWorkflow = resolveWorkflowName(
         childWorkflowName,
         workflows.map(w => w.workflow)
       );
       if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
     } catch (err) {
-      // resolveWorkflowName throws only on ambiguity.
+      if (isSourceReadFailure(err)) throw err;
       return failOutcome(
         `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
       );

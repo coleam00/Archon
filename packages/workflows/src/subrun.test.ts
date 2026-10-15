@@ -22,8 +22,8 @@ import { settlingProvider } from './test-settling-provider';
  * which does (mock.module is process-global and irreversible).
  */
 import { readBundleIndex } from './defaults/bundle-inventory';
-import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
-import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, afterAll, mock, spyOn } from 'bun:test';
+import { mkdir, writeFile, rm, cp, readdir, readFile, chmod } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
 import { dirname, join, sep } from 'path';
@@ -189,11 +189,14 @@ registerBuiltinProviders();
 import { executeWorkflow, hydrateResumableRun } from './executor';
 import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
+import * as sourceIntegrity from './workflow-source';
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import {
+  sourceReleaseMetadata,
+  sourceReleasedEvent,
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
@@ -802,6 +805,123 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'child source recovery',
+    () => {
+      for (const fault of ['capture', 'discovery'] as const) {
+        for (const fanOut of [false, true]) {
+          it(`releases an admitted parent after child ${fault} fails (${fanOut ? 'fan-out' : 'single'})`, async () => {
+            await writeWorkflow(
+              'read-child',
+              'name: read-child\ndescription: child\nnodes:\n  - id: done\n    prompt: done\n'
+            );
+            await writeWorkflow(
+              'read-parent',
+              `name: read-parent
+description: parent
+nodes:
+  - id: before
+    prompt: before
+  - id: child
+    workflow: read-child
+    depends_on: [before]
+${fanOut ? `    fan_out: { items: '["one"]', as: item, max_parallel: 1, join: all_success }` : ''}
+`
+            );
+            const store = new InMemoryStore();
+            store.releaseRunForUnreadableSource = async (id, release) => {
+              const run = store.runs.get(id);
+              if (!run || run.status !== 'running') return { released: false };
+              run.status = 'paused';
+              run.metadata = {
+                ...run.metadata,
+                ...sourceReleaseMetadata(release, new Date().toISOString()),
+              };
+              await store.persistWorkflowEvent(sourceReleasedEvent(id, release));
+              return { released: true };
+            };
+            const fail = spyOn(store, 'failWorkflowRun');
+            const deps = makeDeps(store);
+            const workflow = await discover('read-parent');
+            const workflowsDir = join(cwd, '.archon/workflows');
+            let lockedFile: string | undefined;
+            const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+            const verifier = spyOn(
+              sourceIntegrity,
+              'assertWorkflowSourceIntegrity'
+            ).mockImplementation(async roots => {
+              const files = await verify(roots);
+              if (
+                fault === 'discovery' &&
+                roots.kind === 'captured' &&
+                roots.anchor.root.includes(stagedSourcePathSep)
+              ) {
+                lockedFile = join(roots.anchor.root, 'project/.archon/workflows/read-child.yaml');
+                await chmod(lockedFile, 0o000);
+              }
+              return files;
+            });
+            const provider = deps.getAgentProvider('claude');
+            const send = provider.sendQuery.bind(provider);
+            let first = true;
+            provider.sendQuery = async function* (...args) {
+              if (first && fault === 'capture') await chmod(workflowsDir, 0o000);
+              first = false;
+              yield* send(...args);
+            };
+            deps.getAgentProvider = () => provider;
+            try {
+              await executeWorkflow(deps, makePlatform(), 'read-test', cwd, workflow, 'goal');
+            } finally {
+              verifier.mockRestore();
+              await chmod(workflowsDir, 0o755);
+              if (lockedFile && existsSync(lockedFile)) await chmod(lockedFile, 0o644);
+            }
+            expect(fail).not.toHaveBeenCalled();
+            const parent = [...store.runs.values()].find(
+              run => run.workflow_name === 'read-parent'
+            );
+            expect(parent?.status).toBe('paused');
+            expect(
+              store.events.filter(
+                event =>
+                  event.workflow_run_id === parent?.id && event.event_type === 'source_released'
+              )
+            ).toHaveLength(1);
+            if (!parent) throw new Error('Expected parent');
+            const resumed = await hydrateResumableRun(deps, parent);
+            if (!resumed) throw new Error('Expected continuation');
+            await executeWorkflow(
+              deps,
+              makePlatform(),
+              'read-test',
+              cwd,
+              workflow,
+              'goal',
+              undefined,
+              resumed
+            );
+            expect(parent.status).toBe('completed');
+            expect(fail).not.toHaveBeenCalled();
+            expect(
+              store.events.filter(
+                event =>
+                  event.event_type === 'node_completed' &&
+                  event.workflow_run_id === parent.id &&
+                  event.step_name === 'before'
+              )
+            ).toHaveLength(1);
+            expect(
+              (await readdir(join(cwd, 'home/staged-source'))).filter(
+                name => !name.endsWith('.partial')
+              )
+            ).toEqual([]);
+          });
+        }
+      }
+    }
+  );
 
   it('a resumed parent gives a newly reached child its frozen AI base', async () => {
     await writeWorkflow(
