@@ -472,11 +472,13 @@ describe('Codex native credential check', () => {
       expect(spawner).not.toHaveBeenCalled();
     });
   });
-  test('CODEX_API_KEY is usable without starting a process', async () => {
+  test('an Archon-supplied login is usable without starting a process; half a token pair is not', async () => {
     const { CodexProvider } = await import('./provider');
     const spawner = mock(() => {
       throw new Error('must not spawn');
     });
+    const check = (env: Record<string, string>) => () =>
+      new CodexProvider(spawner).checkCredential({ env, signal: new AbortController().signal });
     const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
     expect(
       await checkCredentialStatuses([
@@ -484,11 +486,22 @@ describe('Codex native credential check', () => {
           name: 'Codex API key',
           expected: 'usable',
           secret: 'planted-key',
-          check: () =>
-            new CodexProvider(spawner).checkCredential({
-              env: { CODEX_API_KEY: 'planted-key' },
-              signal: new AbortController().signal,
-            }),
+          check: check({ CODEX_API_KEY: 'planted-key' }),
+        },
+        {
+          name: 'managed ChatGPT tokens',
+          expected: 'usable',
+          secret: 'planted-token',
+          check: check({
+            ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token',
+            ARCHON_CODEX_CHATGPT_ACCOUNT_ID: 'acct-1',
+          }),
+        },
+        {
+          name: 'half a managed ChatGPT token pair',
+          expected: 'check_failed',
+          secret: 'planted-token',
+          check: check({ ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token' }),
         },
       ])
     ).toEqual([]);

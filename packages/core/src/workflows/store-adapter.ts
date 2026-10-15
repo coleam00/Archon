@@ -330,9 +330,7 @@ export function createWorkflowDeps(
             const files: { path: string; contents: string }[] = [];
             const protectedValues = new Set<string>();
             for (const { provider, cred } of creds) {
-              const result = deliverCredential(provider, cred, { artifactsDir });
-              Object.assign(env, result.env);
-              if (result.files) files.push(...result.files);
+              Object.assign(env, deliverCredential(provider, cred).env);
               if (cred.kind === 'api_key') {
                 protectedValues.add(cred.apiKey);
               } else {

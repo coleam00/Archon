@@ -1,0 +1,19 @@
+diff --git a/packages/providers/src/community/pi/event-bridge.ts b/packages/providers/src/community/pi/event-bridge.ts
+index d89014e70..2787ab52f 100644
+--- a/packages/providers/src/community/pi/event-bridge.ts
++++ b/packages/providers/src/community/pi/event-bridge.ts
+@@ -595,7 +595,13 @@ export async function* bridgeSession(
+       // it unconditionally and let the caller decide whether resume is
+       // meaningful (capability-gated at the registry level).
+       if (item.chunk.type === 'result') {
+-        extensionTurn?.throwIfFailed();
++        try {
++          extensionTurn?.throwIfFailed();
++        } catch (err) {
++          // Pi already finished this turn; a callback failing after the answer
++          // is complete must not discard it.
++          getLog().warn({ err }, 'pi.event-bridge.extension_failed_after_result');
++        }
+         extensionTurn?.stopAccepting();
+         // The chunk was built for this turn by buildResultChunk; annotate it in place.
+         const terminal = item.chunk;

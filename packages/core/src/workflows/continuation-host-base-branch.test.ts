@@ -27,7 +27,6 @@ const run: WorkflowRun = {
   output_root: null,
   checkout_baseline: null,
 };
-let storedBranch: string | null = null;
 const providerCreate = mock<IIsolationProvider['create']>(async () => ({
   id: '/child',
   provider: 'worktree',
@@ -57,61 +56,89 @@ mock.module('./resolve-run-workflow', () => ({
 }));
 const { resumeWorkflowContinuation } = await import('./continuation-host');
 
+const isolationCreate = mock(async (_input: unknown) => ({ id: 'child-env' }));
+
+/** Resume `run` through the host and resolve one child, returning the engine's resume input. */
+async function resumeAndResolveChild(
+  storedBranch: string | null,
+  resumedRun: WorkflowRun,
+  actorUserId?: string
+): Promise<WorkflowResumeInput | undefined> {
+  let captured: WorkflowResumeInput | undefined;
+  const engine: IWorkflowEngine = {
+    async submit() {
+      throw new Error('not invoked');
+    },
+    async resume(input) {
+      captured = input;
+      return { accepted: false, reason: 'nothing-to-resume' };
+    },
+    async subscribe() {
+      throw new Error('not invoked');
+    },
+    async watchAttention() {
+      throw new Error('not invoked');
+    },
+  };
+  await resumeWorkflowContinuation(
+    {
+      engine,
+      deps: { store: { getWorkflowRun: async () => resumedRun } },
+      records: {
+        codebases: {
+          getCodebase: async () => ({
+            id: 'cb',
+            name: 'project',
+            kind: 'repo',
+            default_cwd: '/repo',
+            default_branch: storedBranch,
+          }),
+        },
+        isolation: { create: isolationCreate },
+      },
+    } as unknown as import('./host-store').WorkflowHost,
+    resumedRun.id,
+    async () => ({
+      kind: 'ready',
+      platform: new HeadlessPlatform(),
+      conversationId: 'conv',
+    }),
+    undefined,
+    actorUserId
+  );
+  const resolver = captured?.options?.resolveChildIsolation;
+  if (!resolver) throw new Error('Child resolver missing');
+  await resolver.resolve({
+    setupEnvironment: {},
+    parentRun: resumedRun,
+    nodeId: 'child',
+    codebaseId: 'cb',
+  });
+  return captured;
+}
+
 for (const choice of [null, '', ' release ']) {
   test(`continuation forwards ${String(choice)} to resume and child isolation`, async () => {
-    storedBranch = choice;
-    let captured: WorkflowResumeInput | undefined;
-    const engine: IWorkflowEngine = {
-      async submit() {
-        throw new Error('not invoked');
-      },
-      async resume(input) {
-        captured = input;
-        return { accepted: false, reason: 'nothing-to-resume' };
-      },
-      async subscribe() {
-        throw new Error('not invoked');
-      },
-      async watchAttention() {
-        throw new Error('not invoked');
-      },
-    };
-    await resumeWorkflowContinuation(
-      {
-        engine,
-        deps: { store: { getWorkflowRun: async () => run } },
-        records: {
-          codebases: {
-            getCodebase: async () => ({
-              id: 'cb',
-              name: 'project',
-              kind: 'repo',
-              default_cwd: '/repo',
-              default_branch: storedBranch,
-            }),
-          },
-          isolation: { create: async () => ({ id: 'child-env' }) },
-        },
-      } as unknown as import('./host-store').WorkflowHost,
-      run.id,
-      async () => ({
-        kind: 'ready',
-        platform: new HeadlessPlatform(),
-        conversationId: 'conv',
-      })
-    );
+    const captured = await resumeAndResolveChild(choice, run);
     expect(captured?.options?.baseBranch).toBe(choice?.trim() || undefined);
-    const resolver = captured?.options?.resolveChildIsolation;
-    if (!resolver) throw new Error('Child resolver missing');
-    await resolver.resolve({
-      setupEnvironment: {},
-      parentRun: run,
-      nodeId: 'child',
-      codebaseId: 'cb',
-    });
     expect(providerCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({ baseBranch: choice?.trim() || undefined }),
       expect.any(Function)
+    );
+  });
+}
+
+for (const [label, actorUserId, expectedUser] of [
+  ['the resuming actor', 'actor-1', 'actor-1'],
+  ['the run owner when no actor resumes', undefined, 'owner-1'],
+] as const) {
+  test(`child worktree is attributed to ${label}`, async () => {
+    await resumeAndResolveChild(null, { ...run, user_id: 'owner-1' }, actorUserId);
+    expect(isolationCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        created_by_user_id: expectedUser,
+        created_by_platform: new HeadlessPlatform().getPlatformType(),
+      })
     );
   });
 }
