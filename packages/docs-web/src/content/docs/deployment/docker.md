@@ -585,7 +585,7 @@ instead.
 docker compose exec app gh auth login
 ```
 
-With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.
+With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` with no `GITHUB_TOKEN` set rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.
 
 Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
 

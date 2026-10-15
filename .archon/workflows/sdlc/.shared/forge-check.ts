@@ -19,13 +19,14 @@ export function checkForgeAccess(): { readonly source: ForgeSource } {
 }
 
 function checkGh(): void {
-  // Per-user GitHub mode hands an unconnected user's run an empty `GH_TOKEN`. gh reads
-  // an empty token as unset and falls back to the host's stored login, so without
-  // this refusal the run would push and write as the host's identity. An empty
-  // `GH_TOKEN=` line in an env file looks the same, so the refusal names both causes.
-  if (process.env.GH_TOKEN === '') {
+  // Per-user GitHub mode hands an unconnected user's run empty `GH_TOKEN` and
+  // `GITHUB_TOKEN`. gh reads an empty token as unset and falls back to `GITHUB_TOKEN`,
+  // then to the host's stored login, so without this refusal the run would push and
+  // write as the host's identity. An empty `GH_TOKEN=` line in an env file looks the
+  // same when no `GITHUB_TOKEN` is set, so the refusal names both causes.
+  if (process.env.GH_TOKEN === '' && !process.env.GITHUB_TOKEN) {
     throw new Error(
-      'ARCHON_SDLC_FORGE=gh selects the GitHub CLI, but GH_TOKEN is set and empty, so gh would act as ' +
+      'ARCHON_SDLC_FORGE=gh selects the GitHub CLI, but GH_TOKEN is set and empty and GITHUB_TOKEN is unset, so gh would act as ' +
         "the host's stored login. If an env file has an empty `GH_TOKEN=` line (the Docker `.env` starts " +
         'with one), remove it to use the `gh auth login` login. If per-user GitHub is enabled, the user ' +
         'who started this run has not connected their identity: connect it with `archon auth github`, ' +

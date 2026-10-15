@@ -100,7 +100,7 @@ the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
 can act before any agent spends: on `forge`, one authenticated repository read for
 the repositories the checkout's remotes name, at least one of which must answer; on
 `gh`, `gh auth status --active --hostname` for each host a remote names, one of which must
-pass, after refusing a run whose `GH_TOKEN` is empty (gh would
+pass, after refusing a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
 otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
 has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
 `source` is what the `ci` and `update-pr-body` agents act through.

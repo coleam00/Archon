@@ -109,13 +109,19 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com', 'auth status --active --hostname mirror.example.com']);
   });
 
-  it('refuses gh when GH_TOKEN is empty, rather than using the host login', () => {
-    const run = check({ source: 'gh', inputs: { GH_TOKEN: '' } });
+  it('refuses gh when GH_TOKEN and GITHUB_TOKEN are empty, rather than using the host login', () => {
+    const run = check({ source: 'gh', inputs: { GH_TOKEN: '', GITHUB_TOKEN: '' } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('`GH_TOKEN=` line');
     expect(run.stderr).toContain('archon auth github');
     expect(run.gh).toEqual([]);
     expect(run.forge).toEqual([]);
+  });
+
+  it('passes gh when GH_TOKEN is empty but GITHUB_TOKEN authenticates it', () => {
+    const run = check({ source: 'gh', inputs: { GH_TOKEN: '', GITHUB_TOKEN: 'ghp_example' } });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com']);
   });
 
   it('refuses an unknown source, naming both values', () => {
