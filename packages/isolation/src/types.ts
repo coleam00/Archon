@@ -340,6 +340,9 @@ export type IsolationBlockReason = 'creation_failed';
 
 // --- Database Types ---
 
+// An upsert can preserve the checkout and row id while replacing the registration.
+export const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
+
 export interface IsolationEnvironmentRow {
   id: string;
   codebase_id: string;

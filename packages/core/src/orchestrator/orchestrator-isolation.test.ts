@@ -108,7 +108,9 @@ mock.module('../db/codebases', () => ({
   createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
 }));
 
-const mockAdoptionMetadata = mock(async (_id: string, _metadata: Record<string, unknown>) => {});
+const mockAdoptionMetadata = mock<typeof import('../db/isolation-environments').updateMetadata>(
+  async () => {}
+);
 const mockAdoptedEnv = mock(async (): Promise<IsolationEnvironmentRow | null> => makeEnvRow());
 const mockUpdateIsolationStatus = mock(() => Promise.resolve());
 mock.module('../db/isolation-environments', () => ({
@@ -1047,7 +1049,7 @@ describe('dispatchBackgroundWorkflow', () => {
       }),
       makeWorkflow()
     );
-    expect(mockAdoptionMetadata.mock.calls).toEqual([[env.id, { adopted: true }]]);
+    expect(mockAdoptionMetadata.mock.calls).toEqual([[env.id, { adopted: true }, env]]);
     expect(
       mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
     ).toHaveLength(1);

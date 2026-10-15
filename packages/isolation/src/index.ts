@@ -45,6 +45,7 @@ export {
   isPRIsolationRequest,
   CONTAINER_LABELS,
   worktreeRegistrationMetadata,
+  WORKTREE_REGISTRATION_ID,
   readWorktreeCreationId,
   readWorktreeBranchCreated,
 } from './types';

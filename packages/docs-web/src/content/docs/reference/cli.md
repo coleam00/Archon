@@ -1375,9 +1375,9 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 To explicitly discard a resumable run and remove the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
-of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
-an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
-how to retry.
+of this section. Abandon removes a checkout only when the run holds its matching creation
+proof, even if the checkout has since been adopted. It deletes uncommitted work there and
+keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,

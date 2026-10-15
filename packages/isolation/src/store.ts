@@ -14,7 +14,12 @@ export interface IIsolationStore {
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
-  updateMetadata(id: string, metadata: Record<string, unknown>): Promise<void>;
+  /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
+  updateMetadata(
+    id: string,
+    metadata: Record<string, unknown>,
+    observed?: IsolationEnvironmentRow
+  ): Promise<void>;
   updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }
@@ -27,7 +32,7 @@ export async function recordWorktreeAdoption(
 ): Promise<IsolationEnvironmentRow> {
   if (env.provider !== 'worktree') return env;
   await verifyWorktreeOwnership(toWorktreePath(env.working_path), toRepoPath(repoPath));
-  await store.updateMetadata(env.id, { adopted: true });
+  await store.updateMetadata(env.id, { adopted: true }, env);
   createLogger('isolation.store').warn(
     {
       envId: env.id,

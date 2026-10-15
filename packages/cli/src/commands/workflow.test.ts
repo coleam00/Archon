@@ -4193,7 +4193,11 @@ describe('workflowRunCommand', () => {
         branchName: 'my-feature',
       });
       expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
-      expect(isolationDb.updateMetadata).toHaveBeenCalledWith('env-1', { adopted: true });
+      expect(isolationDb.updateMetadata).toHaveBeenCalledWith(
+        'env-1',
+        { adopted: true },
+        expect.objectContaining({ id: 'env-1' })
+      );
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ envId: 'env-1' }),
         'worktree_adopted'
@@ -14276,7 +14280,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect((executed[4] as { description: string }).description).toBe('Branch vintage');
     expect(executed[3]).toBe('/wt/adopted');
     expect((isolationDb.updateMetadata as ReturnType<typeof mock>).mock.calls).toEqual([
-      ['env-9', { adopted: true }],
+      ['env-9', { adopted: true }, expect.objectContaining({ id: 'env-9' })],
     ]);
   });
 

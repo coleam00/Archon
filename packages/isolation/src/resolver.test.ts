@@ -100,7 +100,7 @@ function makeMockProvider() {
 const defaultCodebase = { id: 'cb-1', defaultCwd: '/repos/myrepo', name: 'my-repo' };
 
 describe('IsolationResolver', () => {
-  test('non-worktree records do not receive worktree adoption metadata or warnings', async () => {
+  test('refuses non-worktree records without adoption metadata or warnings', async () => {
     const exists = spyOn(git, 'worktreeExists').mockResolvedValue(true);
     const updateMetadata = mock(async () => {});
     const env = makeEnvRow({ provider: 'container' });
@@ -111,12 +111,13 @@ describe('IsolationResolver', () => {
       }),
     });
     try {
-      const result = await resolver.resolve({
-        existingEnvId: env.id,
-        codebase: defaultCodebase,
-        platformType: 'cli',
-      });
-      expect(result.status).toBe('resolved');
+      await expect(
+        resolver.resolve({
+          existingEnvId: env.id,
+          codebase: defaultCodebase,
+          platformType: 'cli',
+        })
+      ).rejects.toThrow('is not a worktree');
       expect(updateMetadata).not.toHaveBeenCalled();
       expect(mockWarn.mock.calls.filter(([, event]) => event === 'worktree_adopted')).toHaveLength(
         0

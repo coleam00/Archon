@@ -7,6 +7,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
+import { WORKTREE_REGISTRATION_ID } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -17,9 +18,6 @@ import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
-
-// Adopted worktrees have no creation proof, so identical upserts need a fresh store-owned identity.
-const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -238,16 +236,30 @@ export async function markWorktreeDestroyed(
 /**
  * Update environment metadata (merge with existing)
  */
-export async function updateMetadata(id: string, metadata: Record<string, unknown>): Promise<void> {
+export async function updateMetadata(
+  id: string,
+  metadata: Record<string, unknown>,
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
      SET metadata = ${dialect.jsonMerge('metadata', 1)}
-     WHERE id = $2`,
-    [JSON.stringify(metadata), id]
+     WHERE id = $2${
+       observed
+         ? ` AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3`
+         : ''
+     }`,
+    [
+      JSON.stringify(metadata),
+      id,
+      ...(observed ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? ''] : []),
+    ]
   );
 
   if (result.rowCount === 0) {
+    if (observed) throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
     throw new Error(
       `Failed to update isolation environment metadata: no environment found with id '${id}'`
     );

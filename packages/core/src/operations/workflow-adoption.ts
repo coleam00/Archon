@@ -51,10 +51,9 @@ export type AdoptionLane =
   | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };
 
-export async function adoptRegisteredWorktree(
-  store: Pick<IIsolationStore, 'getById' | 'updateMetadata'>,
-  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>,
-  repoPath: string
+export async function resolveRegisteredWorktree(
+  store: Pick<IIsolationStore, 'getById'>,
+  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>
 ) {
   const env = await store.getById(lane.envId);
   if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
@@ -63,6 +62,15 @@ export async function adoptRegisteredWorktree(
       `Cannot adopt: worktree path '${lane.workingPath}' does not match isolation environment ${env.id} at '${env.working_path}'.`
     );
   }
+  return env;
+}
+
+export async function adoptRegisteredWorktree(
+  store: Pick<IIsolationStore, 'getById' | 'updateMetadata'>,
+  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>,
+  repoPath: string
+) {
+  const env = await resolveRegisteredWorktree(store, lane);
   return recordWorktreeAdoption(store, env, repoPath);
 }
 

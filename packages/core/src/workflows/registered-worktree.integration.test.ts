@@ -6,7 +6,12 @@ import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
-import { configureIsolation, getIsolationProvider, IsolationResolver } from '@archon/isolation';
+import {
+  configureIsolation,
+  getIsolationProvider,
+  IsolationResolver,
+  recordWorktreeAdoption,
+} from '@archon/isolation';
 import { getLogLevel, setLogLevel, setLogSink } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -256,5 +261,38 @@ for (const reuse of ['existing', 'workflow', 'linked'] as const) {
     ).rejects.toThrow('belongs to a different clone');
     expect(await isolation.getById(first.env.id)).toEqual(original);
     expect(events.filter(e => e.msg === 'worktree_adopted')).toHaveLength(0);
+  });
+}
+
+for (const replacementPath of ['same', 'different'] as const) {
+  test(`adoption refuses a ${replacementPath}-path replacement between verification and write`, async () => {
+    git('worktree', 'add', '-qb', 'race', join(root, 'race'));
+    const input = {
+      codebase_id: codebaseId,
+      workflow_type: 'task' as const,
+      workflow_id: 'race',
+      working_path: join(root, 'race'),
+      branch_name: toBranchName('race'),
+    };
+    const observed = await isolation.create(input);
+    const store = isolation.createIsolationStore();
+    let replacement = observed;
+    const racingStore = {
+      updateMetadata: async (...args: Parameters<typeof store.updateMetadata>) => {
+        replacement = await isolation.create({
+          ...input,
+          working_path: replacementPath === 'same' ? input.working_path : join(root, 'replacement'),
+        });
+        await store.updateMetadata(...args);
+      },
+    };
+    events.length = 0;
+    await expect(recordWorktreeAdoption(racingStore, observed, repo)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await isolation.getById(observed.id)).toEqual(replacement);
+    expect(events.filter(event => event.msg === 'worktree_adopted')).toHaveLength(0);
+    await store.updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await store.getById(replacement.id))?.metadata.adopted).toBe(true);
   });
 }

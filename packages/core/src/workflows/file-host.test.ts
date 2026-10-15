@@ -137,3 +137,29 @@ test('file host records persist across hosts and released worktrees fence pendin
     status: 'running',
   });
 });
+
+test('file adoption metadata refuses a replaced registration, including the same path', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-adoption-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const store = host.records.isolation;
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  };
+  for (const path of [home, join(home, 'other')]) {
+    const observed = await store.create(input);
+    const replacement = await store.create({ ...input, working_path: path });
+    await expect(store.updateMetadata(observed.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await store.getById(observed.id)).toEqual(replacement);
+    await store.updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await store.getById(replacement.id))?.metadata.adopted).toBe(true);
+  }
+});

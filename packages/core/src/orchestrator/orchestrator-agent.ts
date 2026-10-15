@@ -65,7 +65,14 @@ import {
 } from './chat-tools';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
-import { getDefaultRemote, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
+import {
+  getDefaultRemote,
+  syncWorkspace,
+  toBranchName,
+  toRepoPath,
+  toWorktreePath,
+  verifyWorktreeOwnership,
+} from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -113,7 +120,7 @@ import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
 import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
 import {
-  adoptRegisteredWorktree,
+  resolveRegisteredWorktree,
   resolveWorkflowAdoption,
   WorkflowAdoptionError,
 } from '../operations/workflow-adoption';
@@ -949,8 +956,18 @@ async function dispatchOrchestratorWorkflowOwned(
   // A checkout-branch lane captures a read-only snapshot before isolation exists.
   const adoptedEnvironment =
     adoptionLane?.kind === 'reuse-worktree'
-      ? await adoptRegisteredWorktree(sqlIsolation, adoptionLane, codebase.default_cwd)
+      ? await resolveRegisteredWorktree(sqlIsolation, adoptionLane)
       : undefined;
+  if (adoptedEnvironment) {
+    if (platform.capabilities.defaultWorkflowDispatch === 'background') {
+      await verifyWorktreeOwnership(
+        toWorktreePath(adoptedEnvironment.working_path),
+        toRepoPath(codebase.default_cwd)
+      );
+    } else {
+      await recordWorktreeAdoption(sqlIsolation, adoptedEnvironment, codebase.default_cwd);
+    }
+  }
   const captureCwd = adoptedEnvironment?.working_path ?? runCwd;
   let branchPrepared: Awaited<ReturnType<typeof prepareRunAiConfiguration>> | undefined;
   if (!willContinueExistingRun && adoptionLane?.kind !== 'checkout-branch') {
