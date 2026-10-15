@@ -44,7 +44,6 @@ import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '..
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 import { Semaphore } from './semaphore';
 import { PI_AUTH_PATH_ENV } from './auth-path-env';
-import { normalizeCredentialVendor } from '../../credential-catalog';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -485,19 +484,16 @@ function piNotConnectedMessage(providerId: string): string {
  *
  * Pi reads exactly one store, and the per-run file holds only Archon's deliveries, so
  * using it for every provider would hide the user's `pi /login` for the others. Core
- * keys the file by vendor (`azure`), which can differ from Pi's provider id
- * (`azure-openai-responses`); either key counts as delivered, so a delivered credential
- * never silently gives way to another login.
+ * keys the file by Pi provider id (vendor ids are Pi provider ids), the same key Pi
+ * reads, so an exact lookup is the whole test.
  */
-export function deliveredAuthPathFor(
+function deliveredAuthPathFor(
   provider: string,
   deliveredAuthPath: string | undefined,
   readStoredCredential: (providerId: string, authPath: string) => unknown
 ): string | undefined {
-  if (deliveredAuthPath === undefined) return undefined;
-  return [provider, normalizeCredentialVendor(provider)].some(
-    id => readStoredCredential(id, deliveredAuthPath) !== undefined
-  )
+  return deliveredAuthPath !== undefined &&
+    readStoredCredential(provider, deliveredAuthPath) !== undefined
     ? deliveredAuthPath
     : undefined;
 }

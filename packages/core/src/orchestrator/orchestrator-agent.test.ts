@@ -434,19 +434,24 @@ const providerRegistry: ProviderRegistry = {
 
 // The vendor a chat turn's provider needs; per-test overrides pick another.
 const mockChatVendor = mock((_model?: string): string | undefined => 'anthropic');
+const mockIsRegisteredProvider = mock((_provider: string): boolean => true);
 mock.module('@archon/providers', () => ({
   providerRegistry,
-  getRegistration: () => ({
-    parseConfig: (raw: Record<string, unknown>) => raw,
-    credentials: { vendorFor: (model?: string) => mockChatVendor(model) },
-  }),
+  getRegistration: (provider: string) => {
+    // The real registry throws for an unknown id.
+    if (!mockIsRegisteredProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+    return {
+      parseConfig: (raw: Record<string, unknown>) => raw,
+      credentials: { vendorFor: (model?: string) => mockChatVendor(model) },
+    };
+  },
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
   getProviderCapabilities: mockGetProviderCapabilities,
-  isRegisteredProvider: mock(() => true),
+  isRegisteredProvider: (provider: string) => mockIsRegisteredProvider(provider),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (the chat inject tests deliver through it).
@@ -5858,6 +5863,8 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     mockChatVendor.mockReset();
     mockListUserProviderKeys.mockClear();
     mockChatVendor.mockImplementation(() => 'anthropic');
+    mockIsRegisteredProvider.mockReset();
+    mockIsRegisteredProvider.mockImplementation(() => true);
     mockIsPerUserProviderKeysEnabled.mockReset();
     mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
     mockGenerateAndSetTitle.mockReset();
@@ -6034,18 +6041,24 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
-  test('no failed credential means no registry lookup, so title generation keeps its own fallback', async () => {
-    // A `small` tier naming an unregistered provider used to fall back to a truncated
-    // title inside title generation; the credential check must not throw first.
-    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+  test('a title tier on an unregistered provider keeps its fallback when a credential failed', async () => {
+    // Title generation falls back to a truncated title for an unknown provider; the
+    // credential check must not throw first and fail the user's turn.
+    mockIsRegisteredProvider.mockImplementation(provider => provider !== 'ghost');
     mockGetOrCreateConversation.mockImplementation(() =>
       Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
     );
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({ tiers: { small: { provider: 'ghost', model: 'ghost-model' } } })
+    );
+    mockStoredProviderCredentials.mockResolvedValue([
+      { provider: 'openai', status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' } },
+    ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
-    expect(mockChatVendor).not.toHaveBeenCalled();
-    expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
     expect(mockSendQuery).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle.mock.calls[0]?.[2]).toBe('ghost');
   });
 
   test('runs on the host login when the user connected nothing for the turn vendor', async () => {
