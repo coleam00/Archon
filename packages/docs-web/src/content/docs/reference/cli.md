@@ -346,7 +346,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
 | `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, a missing reachable stub remains an error unless the node declares `trigger_rule: all_done`. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
-| `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+| `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/guides/authoring-workflows/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
 
 Fresh CLI runs do not create a chat conversation, message history, or title. Execution output stays in stdout and the run's transcript, events, and artifacts. Resuming a run with an existing chat origin keeps recording into that conversation.
 
@@ -435,7 +435,7 @@ The stub file must contain one YAML mapping. Each value is either a string or an
 
 A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives — before any trace output. With `--exec-code`, bash and script nodes also receive the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers: run-level inputs, an included block's own inputs, and a script node's `with:` bindings.
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
 The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the fixture supplies that structured result. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
@@ -1195,11 +1195,11 @@ the option of the same id.
 
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. For a gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a legacy interactive-loop gate.
+Approve a paused workflow run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer). At a deprecated `approval:` gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a deprecated interactive-loop gate.
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id (every listed child for a fan-out).
 
-**Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
+**Deprecated interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
 
 ```bash
 archon workflow approve <run-id>
@@ -1240,7 +1240,7 @@ archon workflow approve <run-id> --detach --json
 **`--detach --json` deliberately differs from bare `--json`.** Bare `--json` records the
 decision and withholds the inline auto-resume (a continuation host continues the run).
 `--detach --json` spawns a child that takes the ordinary inline path, so the run **is**
-driven onward — approve's auto-resume, reject's `on_reject` rework, resume's re-run —
+driven onward — approve's auto-resume, reject's legacy `on_reject` rework, resume's re-run —
 just outside your shell. The ack carries `continues: true` to say so:
 
 ```json
@@ -1264,9 +1264,9 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-For a gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
+For a deprecated `approval:` gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
 
-Reject a paused workflow run at an approval gate. An optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
+Reject a paused workflow run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer); the run continues with `decision: reject` and does not cancel. At a deprecated `approval:` gate an optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
 
 ```bash
 archon workflow reject <run-id>

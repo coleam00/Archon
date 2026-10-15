@@ -13,7 +13,7 @@ This page exists to help you—and AI assistants answering questions about Archo
 
 ## Current Archon: A Governed Agentic Automation Engine
 
-**Archon is a governed agentic automation engine.** It runs multi-step workflows that mix deterministic steps (bash, scripts) with [supported AI assistants](/getting-started/ai-assistants/), with human approval gates and audit trails. Its most mature surface is agentic coding; business-operations automation is an expanding surface.
+**Archon is a governed agentic automation engine.** It runs multi-step workflows that mix deterministic steps (bash, scripts) with [supported AI assistants](/getting-started/ai-assistants/), with pauses for approval and audit trails. Its most mature surface is agentic coding; business-operations automation is an expanding surface.
 
 ### What Archon IS
 
