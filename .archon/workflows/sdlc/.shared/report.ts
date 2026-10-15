@@ -142,10 +142,17 @@ export function latestVerdictOf(artifacts: string): LatestVerdict | undefined {
   const content = join(artifacts, latest.path);
   const value: unknown = JSON.parse(readFileSync(content, 'utf8'));
   if (!isObject(value)) throw new Error(`${content} is not a review verdict`);
-  // A verdict that declares no discoveries list certified none, so it judged no raw
-  // record either: every raw record stands, as when no review ran.
-  if (!Array.isArray(value.discoveries)) return undefined;
-  return { discoveries: value.discoveries, at: modified(content) };
+  return verdictFrom(value, content);
+}
+
+/**
+ * The verdict a review-report value is, for the relay rule. A verdict that declares
+ * no discoveries list consolidated none, so it judged no raw record either: every raw
+ * record stands, as when no review ran.
+ */
+function verdictFrom(value: unknown, content: string): LatestVerdict | undefined {
+  const discoveries = isObject(value) ? value.discoveries : undefined;
+  return Array.isArray(discoveries) ? { discoveries, at: modified(content) } : undefined;
 }
 
 /** This run's latest review verdict, from the engine's typed-artifact listing. */
@@ -153,20 +160,11 @@ function latestVerdictFromListing(
   artifacts: string,
   listingFile: string | undefined
 ): { verdict: LatestVerdict | undefined } | { listingProblem: string } {
-  const read = readTyped<{ readonly discoveries?: readonly unknown[] }>(
-    listingFile,
-    artifacts,
-    'review-report'
-  );
+  const read = readTyped<unknown>(listingFile, artifacts, 'review-report');
   if (read.listingProblem !== undefined) return { listingProblem: read.listingProblem };
   const entry = read.entries?.at(-1);
   if (entry === undefined) return { verdict: undefined };
-  return {
-    verdict: {
-      discoveries: read.values.at(-1)?.discoveries ?? [],
-      at: modified(join(artifacts, entry.path)),
-    },
-  };
+  return { verdict: verdictFrom(read.values.at(-1), join(artifacts, entry.path)) };
 }
 
 /** The discoveries section, or empty when there is nothing to report. */

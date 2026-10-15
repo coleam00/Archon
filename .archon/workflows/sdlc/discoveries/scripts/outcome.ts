@@ -4,10 +4,11 @@
  * Every check runs before the first write: each queued ref is decided exactly once, a
  * key that already has an issue is never filed again, and an issue a discovery is
  * tracked by reads back open in the repository. Then every decision record is
- * written, and only after that the public writes: each evidence comment, and each
- * filing whose issue does not exist yet, including one an earlier pass stopped in the
- * middle of. A filing creates or recovers its issue by the marker on the body's first
- * line, so a pass that stops anywhere never files twice. Last, each run's claim is
+ * written, and only after that every public write a record still owes: an evidence
+ * comment not yet posted, and a filing whose issue does not exist yet, including ones
+ * an earlier pass stopped in the middle of. An idle live pass does only that. A filing
+ * creates or recovers its issue, and a comment is upserted, by the key's marker, so a
+ * pass that stops anywhere never files or comments twice. Last, each run's claim is
  * released, except on a run with an asked record: it stays claimed by this run until
  * the question is answered and the run ends.
  *
@@ -41,6 +42,8 @@ import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { stateGet, stateList, statePatch, statePut } from '../../.shared/state.ts';
+
+const IDLE = 'No finished run has undecided discoveries.';
 
 interface Stored {
   readonly revision: number;
@@ -77,12 +80,12 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 function decided(decision: AgentDecision, sha: string): { decision: Decision; reason: string } {
   switch (decision.outcome) {
     case 'file':
+      return { decision: { kind: 'filed', issue: null, body: issueBody(decision, sha) }, reason: decision.reason };
+    case 'track':
       return {
-        decision: { kind: 'filed', issue: null, title: decision.title, body: issueBody(decision, sha) },
+        decision: { kind: 'tracked', issue: decision.issue, comment: decision.comment?.trim() ?? null },
         reason: decision.reason,
       };
-    case 'track':
-      return { decision: { kind: 'tracked', issue: decision.issue }, reason: decision.reason };
     case 'drop':
       return { decision: { kind: 'dropped' }, reason: decision.reason };
     case 'ask':
@@ -92,25 +95,19 @@ function decided(decision: AgentDecision, sha: string): { decision: Decision; re
 
 function main(): void {
   const mode = parseDrainMode(trimmed(process.env.INPUTS_MODE));
-  if (trimmed(process.env.INPUTS_PATH) === 'idle') {
-    emit({
-      mode,
-      summary: 'No finished run has undecided discoveries.',
-      written: [],
-      dropped: [],
-      asked: [],
-      question: '',
-      evaluation: null,
-    });
+  const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
+  if (idle && mode === 'eval') {
+    emit({ mode, summary: IDLE, written: [], dropped: [], asked: [], question: '', evaluation: null });
     return;
   }
   const repo = {
     host: trimmed(process.env.INPUTS_REPO_HOST),
     path: trimmed(process.env.INPUTS_REPO_PATH),
   };
+  // An idle live pass still finishes what an earlier pass's records owe.
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
-  const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[];
-  const summary = text(process.env.INPUTS_SUMMARY);
+  const decisions = idle ? [] : ((nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[]);
+  const summary = idle ? IDLE : text(process.env.INPUTS_SUMMARY);
   const stored = readStored();
 
   const problems = checkDecisions(
@@ -178,23 +175,28 @@ function main(): void {
     stored.set(decision.key, { revision: (before?.revision ?? 0) + 1, record });
   }
 
+  // Then every public write a record still owes, this pass's and any an earlier pass
+  // stopped before finishing. Each is found again by its marker, so none repeats.
   const written: { key: string; outcome: 'file' | 'track'; url: string }[] = [];
   const source = forgeSource();
-  for (const decision of decisions) {
-    if (decision.outcome !== 'track') continue;
-    let url = issueUrl(decision.issue);
-    if (decision.comment !== null) {
-      // One marked comment per key: later evidence replaces it in place.
-      const marker = discoveryMarker(decision.key);
-      url = upsertComment({ kind: 'issue', ref: decision.issue }, marker, `${marker}\n${decision.comment.trim()}`, source).url;
-    }
-    written.push({ key: decision.key, outcome: 'track', url });
-  }
   for (const { record } of stored.values()) {
-    if (record.decision.kind !== 'filed' || record.decision.issue !== null) continue;
-    const created = createIssue(repo, record.decision.title, record.decision.body, discoveryMarker(record.key));
-    statePatch(decisionName(record.key), [{ op: 'set', path: '/decision/issue', value: created.issue }]);
-    written.push({ key: record.key, outcome: 'file', url: created.url });
+    const owed = record.decision;
+    const marker = discoveryMarker(record.key);
+    if (owed.kind === 'filed' && owed.issue === null) {
+      const created = createIssue(repo, record.title, owed.body, marker);
+      statePatch(decisionName(record.key), [{ op: 'set', path: '/decision/issue', value: created.issue }]);
+      written.push({ key: record.key, outcome: 'file', url: created.url });
+    } else if (owed.kind === 'tracked' && owed.comment !== null) {
+      // One marked comment per key: later evidence replaces it in place.
+      const comment = upsertComment({ kind: 'issue', ref: owed.issue }, marker, `${marker}\n${owed.comment}`, source);
+      statePatch(decisionName(record.key), [{ op: 'set', path: '/decision/comment', value: null }]);
+      written.push({ key: record.key, outcome: 'track', url: comment.url });
+    }
+  }
+  for (const decision of decisions) {
+    if (decision.outcome === 'track' && decision.comment === null) {
+      written.push({ key: decision.key, outcome: 'track', url: issueUrl(decision.issue) });
+    }
   }
 
   // A run with an asked record keeps this run's claim, so no other pass asks again

@@ -25,15 +25,30 @@ const KEY = /^[a-z0-9][a-z0-9-]{2,80}$/;
 export type IssueRef = QualifiedPr;
 
 /**
- * What became of a discovery. A `filed` decision keeps the issue's title and body;
- * its issue is null until the create reads back, so a pass that stopped between the
- * two finishes the same issue by its marker rather than filing a second one.
+ * What became of a discovery. A decision record is written before its public write,
+ * and holds what that write still owes: a `filed` decision keeps the issue's body and
+ * has a null issue until the create reads back, and a `tracked` decision keeps its
+ * evidence comment until the comment is posted. The next live pass finishes either by
+ * its marker, so a pass that stopped between the two never files or comments twice.
  */
 export type Decision =
-  | { readonly kind: 'filed'; readonly issue: IssueRef | null; readonly title: string; readonly body: string }
-  | { readonly kind: 'tracked'; readonly issue: IssueRef }
+  | { readonly kind: 'filed'; readonly issue: IssueRef | null; readonly body: string }
+  | {
+      readonly kind: 'tracked';
+      readonly issue: IssueRef;
+      /** Evidence still to post; null once it is posted, or when there is none. */
+      readonly comment: string | null;
+    }
   | { readonly kind: 'dropped' }
   | { readonly kind: 'asked' };
+
+/** Whether the decision still owes a public write. */
+export function unfinished(decision: Decision): boolean {
+  return (
+    (decision.kind === 'filed' && decision.issue === null) ||
+    (decision.kind === 'tracked' && decision.comment !== null)
+  );
+}
 
 export interface Question {
   readonly text: string;
@@ -74,11 +89,14 @@ export function runName(runId: string): string {
   return `${RUNS_PREFIX}${runId}`;
 }
 
+function isQualifiedRef(ref: unknown): ref is string {
+  return typeof ref === 'string' && ref.indexOf(':') > 0;
+}
+
 /** The run a qualified ref belongs to. */
 export function refRun(ref: string): string {
-  const colon = ref.indexOf(':');
-  if (colon <= 0) throw new Error(`"${ref}" is not a qualified discovery ref`);
-  return ref.slice(0, colon);
+  if (!isQualifiedRef(ref)) throw new Error(`"${ref}" is not a qualified discovery ref`);
+  return ref.slice(0, ref.indexOf(':'));
 }
 
 /** The refs some decision already settled: every ref a record that is not `asked` lists. */
@@ -109,12 +127,13 @@ function decision(value: unknown): Decision | undefined {
   switch (value.kind) {
     case 'filed': {
       const issue = value.issue === null ? null : issueRef(value.issue);
-      if (issue === undefined || !text(value.title) || !text(value.body)) return undefined;
-      return { kind: 'filed', issue, title: value.title, body: value.body };
+      if (issue === undefined || !text(value.body)) return undefined;
+      return { kind: 'filed', issue, body: value.body };
     }
     case 'tracked': {
       const issue = issueRef(value.issue);
-      return issue === undefined ? undefined : { kind: 'tracked', issue };
+      if (issue === undefined || !(value.comment === null || text(value.comment))) return undefined;
+      return { kind: 'tracked', issue, comment: value.comment };
     }
     case 'dropped':
     case 'asked':
@@ -158,11 +177,11 @@ export function parseDecisionRecord(name: string, value: unknown): DecisionRecor
     !text(value.reason) ||
     !text(value.verified_at) ||
     !text(value.at) ||
-    !Array.isArray(value.refs) ||
-    !value.refs.every(text)
+    !Array.isArray(value.refs)
   ) {
     return fail('a title, reason, verified_at, at or refs field is missing');
   }
+  if (!value.refs.every(isQualifiedRef)) return fail('a ref is not of the form <run-id>:<ref>');
   return {
     version: 1,
     key: value.key,
@@ -318,8 +337,12 @@ export function checkDecisions(
     if (decision.outcome === 'file' && issued) {
       problems.push(`key ${decision.key} already has an issue; it is never filed again`);
     }
+    // A decision that replaced an unfinished write would lose it.
     if (decision.outcome !== 'file' && prior?.kind === 'filed' && prior.issue === null) {
       problems.push(`key ${decision.key} has an unfinished filing; it can only be filed`);
+    }
+    if (decision.outcome !== 'track' && prior?.kind === 'tracked' && prior.comment !== null) {
+      problems.push(`key ${decision.key} has an unposted evidence comment; it can only be tracked`);
     }
   }
   for (const ref of queued) if (!seen.has(ref)) problems.push(`${ref} has no decision`);

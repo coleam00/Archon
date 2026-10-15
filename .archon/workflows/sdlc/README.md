@@ -441,10 +441,12 @@ terminal report lists.
 - **Writes.** The `outcome` script checks before any write that every queued record is
   decided exactly once and that a key which already has an issue is not filed again,
   and that a tracking issue is open. It writes every decision record before any public
-  write; a filed record keeps the issue's title and body until the issue reads back.
-  A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the create
-  looks for that marker across every issue first, so the next pass finishes a filing
-  an earlier one stopped in the middle of without filing a second issue. Filed issues carry no
+  write. A filed record keeps the issue's body until the issue reads back, and a
+  tracked record keeps its evidence comment until it is posted. A filed issue's body
+  begins with `<!-- archon-discovery <key> -->`, and the create looks for that marker
+  across every issue first; the evidence comment carries the same marker and is
+  replaced in place. So the next live pass, idle or not, finishes any write an earlier
+  pass stopped before, without a second issue or comment. Filed issues carry no
   labels: intake triages them like any other issue, which it does only when the
   install's forge identity is on `maintainers.json`.
 - **Questions.** Every `ask` in a pass becomes one attention item labelled

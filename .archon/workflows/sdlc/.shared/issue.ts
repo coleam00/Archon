@@ -137,8 +137,6 @@ function forgeView(item: QualifiedPr): IssueView {
 export interface CreatedIssue {
   readonly issue: QualifiedPr;
   readonly url: string;
-  /** False when an issue already carried the marker and was reused as it is. */
-  readonly created: boolean;
 }
 
 function firstLine(body: string): string {
@@ -165,14 +163,13 @@ export function createIssue(
     const ref = parseQualifiedPr(JSON.stringify(item?.ref));
     if (
       value?.outcome !== 'applied' ||
-      typeof value.changed !== 'boolean' ||
       item?.kind !== 'issue' ||
       !samePr({ repo, number: ref.number }, ref) ||
       typeof item.url !== 'string'
     ) {
       throw new Error('forge returned no verified created issue');
     }
-    return { issue: ref, url: item.url, created: value.changed };
+    return { issue: ref, url: item.url };
   }
   const listed = Bun.spawnSync(
     [
@@ -208,7 +205,7 @@ export function createIssue(
   if (found !== undefined) {
     if (typeof found.number !== 'number') throw new Error('gh api listed an issue with no number');
     const issue = { repo, number: found.number };
-    return { issue, url: ghIssue(issue).html_url, created: false };
+    return { issue, url: ghIssue(issue).html_url };
   }
   const directory = mkdtempSync(join(tmpdir(), 'archon-issue-'));
   let created: { exitCode: number; stdout: Buffer; stderr: Buffer };
@@ -245,7 +242,7 @@ export function createIssue(
   if (observed.title !== title || observed.body !== body || observed.state !== 'open') {
     throw new Error(`${observed.html_url} does not read back as created`);
   }
-  return { issue, url: observed.html_url, created: true };
+  return { issue, url: observed.html_url };
 }
 
 /** Why the pack closes an issue: the subset of the forge contract's reasons it uses. */
