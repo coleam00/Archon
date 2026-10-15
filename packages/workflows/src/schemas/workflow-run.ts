@@ -6,7 +6,7 @@ import {
   outputPathsFromRootFields,
   type DeclaredOutputPaths,
 } from '../output-ref';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   APPROVAL_ATTENTION_OPTIONS,
   approvalDecisionConfigSchema,

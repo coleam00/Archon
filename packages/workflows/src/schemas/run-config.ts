@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { runAliasesConfigSchema, runTiersConfigSchema } from './model-binding';
 

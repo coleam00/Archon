@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import * as paths from '@archon/paths';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,8 @@ import {
 } from '@archon/providers';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { ProcessAgentProvider } from './process-provider';
+
+const sendQuery = spyOn(ProcessAgentProvider.prototype, 'sendQuery');
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
 const { registerHostProviders } = await import('./register-host-providers');
 const { clearConfigCache, loadConfig } = await import('../config/config-loader');
@@ -23,6 +25,7 @@ const roots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
 const previousAssistant = process.env.DEFAULT_AI_ASSISTANT;
 afterEach(() => {
+  sendQuery.mockRestore();
   clearRegistry();
   clearConfigCache();
   clearPlatformPolicies();
@@ -67,8 +70,15 @@ test('release hosts register maintained providers only from install receipts', a
   const claude = getRegisteredProviders().find(provider => provider.id === 'claude');
   expect(claude?.builtIn).toBe(true);
   const runtime = claude?.factory();
-  expect(runtime).toBeInstanceOf(ProcessAgentProvider);
-  expect(runtime).toMatchObject({ argv: [join(pluginsDir, 'archon-provider-claude')] });
+  if (!runtime) throw new Error('Missing registered Claude provider');
+  sendQuery.mockImplementation(async function* (this: ProcessAgentProvider) {
+    expect(this).toBeInstanceOf(ProcessAgentProvider);
+    expect(this).toMatchObject({ argv: [join(pluginsDir, 'archon-provider-claude')] });
+    yield { type: 'result', sessionId: 'installed-claude' };
+  });
+  expect(await Array.fromAsync(runtime.sendQuery('prompt', '/tmp'))).toEqual([
+    { type: 'result', sessionId: 'installed-claude' },
+  ]);
   expect(() => requireProvider(providerRegistry, 'codex')).toThrow(
     "Provider 'codex' is not installed. Add it with: archon provider add codex"
   );

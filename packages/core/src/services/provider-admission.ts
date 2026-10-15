@@ -159,7 +159,7 @@ export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentPr
   const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
   const diagnose = provider.diagnose?.bind(provider);
   const listModels = provider.listModels?.bind(provider);
-  return {
+  const adapter = {
     checkCredential: request => provider.checkCredential(request),
     ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
     ...(diagnose ? { diagnose } : {}),
@@ -168,5 +168,6 @@ export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentPr
     getCapabilities: () => provider.getCapabilities(),
     sendQuery: (prompt, cwd, resumeSessionId, options) =>
       admittedQuery(id, provider, pollMs, prompt, cwd, resumeSessionId, options),
-  };
+  } satisfies IAgentProvider;
+  return adapter satisfies Record<Exclude<keyof IAgentProvider, keyof typeof adapter>, never>;
 }

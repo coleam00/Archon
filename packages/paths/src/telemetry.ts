@@ -664,6 +664,8 @@ export type WorkflowExitReason =
   // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
   // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
   | 'evidence_missing'
+  // The run budget refused new work, or its spend could not be measured (#2814).
+  | 'budget_refused'
   | 'source_unavailable'
   | 'not_finalized'
   | 'process_terminated'
