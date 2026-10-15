@@ -1,7 +1,9 @@
 // @archon-test-isolated
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import {
   parseWindowsProcessListing,
+  terminateWindowsProcessTree,
+  windowsProcessCommands,
   WindowsProcessTree,
   type WindowsProcessListing,
   type WindowsProcessRow,
@@ -61,9 +63,9 @@ describe('WindowsProcessTree', () => {
     // 11 exits and is seen gone at 200. PID 11 is reused at 250 by an unrelated process,
     // whose child 30 appears at 260: created after 11 was seen gone, so not ours.
     expect(tree.observe(listing(200, [row(10, 1, 10)]))).toEqual([10]);
-    expect(tree.observe(listing(300, [row(10, 1, 10), row(11, 1, 250), row(30, 11, 260)]))).toEqual(
-      [10]
-    );
+    expect(
+      tree.observe(listing(300, [row(1, 0, 1), row(10, 1, 10), row(11, 1, 250), row(30, 11, 260)]))
+    ).toEqual([10]);
   });
 
   it('does not adopt a process older than the parent PID it names', () => {
@@ -72,9 +74,28 @@ describe('WindowsProcessTree', () => {
     expect(tree.observe(listing(200, [row(10, 1, 50), row(20, 10, 40)]))).toEqual([10]);
   });
 
+  it('rejects an orphan already present when the root is first listed', () => {
+    expect(() => treeFrom(10, listing(100, [row(10, 1, 10), row(12, 11, 50)]))).toThrow(
+      'unproved ancestry'
+    );
+  });
+
+  it('ignores orphans born outside the owned lifetime', () => {
+    const tree = treeFrom(10, listing(100, [row(10, 1, 10), row(20, 19, 5)]));
+    expect(tree.observe(listing(200, []))).toEqual([]);
+    expect(tree.observe(listing(300, [row(30, 29, 250)]))).toEqual([]);
+  });
+
+  it('rejects a missing parent hidden by a younger PID reuser', () => {
+    const tree = treeFrom(10, listing(100, [row(10, 1, 10)]));
+    expect(() => tree.observe(listing(200, [row(12, 11, 150), row(11, 1, 160)]))).toThrow(
+      'unproved ancestry'
+    );
+  });
+
   it('treats a reused root PID as the root being gone', () => {
     const tree = treeFrom(10, listing(100, [row(10, 1, 10)]));
-    expect(tree.observe(listing(200, [row(10, 1, 150)]))).toEqual([]);
+    expect(tree.observe(listing(200, [row(1, 0, 1), row(10, 1, 150)]))).toEqual([]);
   });
 });
 
@@ -101,4 +122,54 @@ describe('parseWindowsProcessListing', () => {
   ])('rejects %s', (_label, json) => {
     expect(() => parseWindowsProcessListing(json)).toThrow('unexpected shape');
   });
+});
+
+describe('Windows cleanup with unobserved ancestry', () => {
+  it.each([false, true])(
+    'rejects a surviving grandchild (root absent initially=%s)',
+    async absent => {
+      let listings = 0;
+      const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(
+        async command => {
+          if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+          listings++;
+          return {
+            stdout: JSON.stringify({
+              takenAt: String(listings * 100),
+              rows:
+                !absent && listings === 1
+                  ? [{ pid: 10, parentPid: 1, created: '10' }]
+                  : [{ pid: 12, parentPid: 11, created: '150' }],
+            }),
+            stderr: '',
+          };
+        }
+      );
+      const kill = spyOn(process, 'kill').mockReturnValue(true);
+      try {
+        await expect(terminateWindowsProcessTree(10, () => {})).rejects.toThrow(
+          'Could not confirm process tree 10 exited'
+        );
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        commands.mockRestore();
+        kill.mockRestore();
+      }
+    }
+  );
+});
+
+it('cannot confirm an absent root even when the listing is empty', async () => {
+  const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({
+    stdout: '{"takenAt":"100","rows":[]}',
+    stderr: '',
+  });
+  try {
+    await expect(terminateWindowsProcessTree(10, () => {})).rejects.toThrow(
+      'its root was already gone'
+    );
+    expect(commands).toHaveBeenCalledTimes(1);
+  } finally {
+    commands.mockRestore();
+  }
 });

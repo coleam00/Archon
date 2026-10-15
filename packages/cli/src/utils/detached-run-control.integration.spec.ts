@@ -1,10 +1,11 @@
-import { beforeAll, describe, expect, it } from 'bun:test';
+import { beforeAll, describe, expect, it, spyOn } from 'bun:test';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
+import { windowsProcessCommands } from '@archon/paths/windows-process-tree';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from './workflow-exit-code';
@@ -185,6 +186,45 @@ describe('detached run control integration', () => {
     if (process.platform === 'win32') await windowsProcessesNaming(crypto.randomUUID());
   }, WMI_WARM_UP_TIMEOUT_MS);
 
+  it('rejects detached-owner cleanup when an intermediate parent was never listed', async () => {
+    const runId = `unseen-parent-${crypto.randomUUID()}`;
+    const path = runLiveOwnerPath(runId);
+    const root = 123456;
+    const server = stubOwner(root);
+    await listen(server, path);
+    const platform = process.platform;
+    let killed = false;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') {
+        killed = true;
+        return { stdout: 'SUCCESS', stderr: '' };
+      }
+      return {
+        stdout: JSON.stringify({
+          takenAt: killed ? '200' : '100',
+          rows: killed
+            ? [{ pid: root + 2, parentPid: root + 1, created: '150' }]
+            : [{ pid: root, parentPid: 1, created: '10' }],
+        }),
+        stderr: '',
+      };
+    });
+    const kill = spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      const target = await requestDetachedRunStop(runId);
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const error = await rejectedError(() => target.stop());
+      expect(error.message).toContain('unproved ancestry');
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      commands.mockRestore();
+      kill.mockRestore();
+      await close(server);
+      if (platform !== 'win32') rmSync(path, { force: true });
+    }
+  });
+
   for (const closedLauncher of [false, true]) {
     it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {
       const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-receipt-')));
@@ -316,13 +356,10 @@ describe('detached run control integration', () => {
   );
 
   it(
-    'treats an already-gone target as a stopped tree, not a failed stop',
+    'requires ancestry evidence for an already-gone Windows target',
     async () => {
-      // #2946: `taskkill /T` walks the tree PID by PID and exits non-zero when one of
-      // them is already gone. Reading that exit code as failure made `archon workflow
-      // cancel` report a failure on Windows for a run whose tree had in fact stopped,
-      // and left the run row saying `running`. POSIX has always tolerated the same
-      // condition as ESRCH; the contract is one tree-is-gone outcome on both branches.
+      // Unlike POSIX process groups, an absent Windows root cannot prove that
+      // descendants of an unobserved intermediate parent have exited.
       const runId = `already-gone-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const doomed = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
@@ -336,10 +373,12 @@ describe('detached run control integration', () => {
       await listen(server, path);
       try {
         const target = await requestDetachedRunStop(runId);
-        // Resolving IS the assertion, and letting a rejection through reports the real
-        // reason rather than a matcher's. The old Windows branch rejected here, carrying
-        // taskkill's "There is no running instance of the task" as a stop failure.
-        await target.stop();
+        if (process.platform === 'win32') {
+          const error = await rejectedError(() => target.stop());
+          expect(error.message).toContain('its root was already gone');
+        } else {
+          await target.stop();
+        }
       } finally {
         await close(server);
         if (process.platform !== 'win32') rmSync(path, { force: true });

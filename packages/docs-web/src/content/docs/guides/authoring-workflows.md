@@ -223,6 +223,8 @@ nodes:
 
 Host `bash:` and `script:` timeouts wait for process-tree cleanup. If termination fails or the tree cannot be shown to be gone, the node fails with the termination error even with `on_timeout: skip`. Cleanup failures are not retried, since the previous process tree may still be running. Downstream scheduling follows the authored `trigger_rule`, including failure-tolerant joins. This cleanup behavior does not apply to containers or `until_bash` predicates.
 
+On Windows, cleanup also fails if the root has already disappeared before its identity can be recorded, or a process born during the owned tree's lifetime has missing ancestry. Process listings cannot distinguish an unrelated orphan from a descendant whose intermediate parent started and exited between listings; Archon reports that ambiguity and does not kill the unowned process.
+
 On POSIX, host termination sends SIGTERM to the process group and allows up to five seconds for cleanup before SIGKILL, provided the group leader has not exited. If the leader exits while descendants remain, cleanup fails rather than signalling a potentially reused group ID. Cleanup requires a live run owner; an abrupt owner death such as SIGKILL can leave host node processes running.
 
 **Common fields** — apply to all node types:

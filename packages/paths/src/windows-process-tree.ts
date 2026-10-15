@@ -16,7 +16,7 @@ export const windowsProcessCommands = {
  * Windows has no process group to signal, so `taskkill /T` kills the tree it can see
  * when it starts. A descendant spawned while that walk runs survives it. The proof here
  * is the process table itself, read through `Get-CimInstance Win32_Process` as JSON:
- * the stop returns only when no member of the root's tree is listed any more.
+ * the stop also rejects orphaned processes whose missing ancestry could hide a member.
  */
 
 /** Upper bound on one `taskkill` or process listing. The first CIM query on a machine can take seconds. */
@@ -72,7 +72,7 @@ interface TreeMember {
 export class WindowsProcessTree {
   private readonly members: TreeMember[];
 
-  private constructor(root: WindowsProcessRow) {
+  private constructor(private readonly root: WindowsProcessRow) {
     this.members = [{ pid: root.pid, created: root.created, goneBy: undefined }];
   }
 
@@ -85,7 +85,7 @@ export class WindowsProcessTree {
     return tree;
   }
 
-  /** Record `listing` and return the PIDs of members it still shows running. */
+  /** Return listed member PIDs; throw if missing ancestry could hide another member. */
   observe(listing: WindowsProcessListing): number[] {
     for (const member of this.members) {
       if (member.goneBy !== undefined) continue;
@@ -105,7 +105,29 @@ export class WindowsProcessTree {
       }
     }
 
+    this.assertAncestryProved(listing);
     return this.members.filter(member => member.goneBy === undefined).map(member => member.pid);
+  }
+
+  /** Missing parents can hide descendants of an intermediate process no listing saw. */
+  private assertAncestryProved(listing: WindowsProcessListing): void {
+    const ownedUntil = this.members.reduce((latest, member) => {
+      const end = member.goneBy ?? listing.takenAt;
+      return end > latest ? end : latest;
+    }, this.root.created);
+    const ambiguous = listing.rows.filter(row => {
+      if (row.created < this.root.created || row.created > ownedUntil) return false;
+      if (this.members.some(member => this.isMember(row, member))) return false;
+      return !listing.rows.some(
+        parent => parent.pid === row.parentPid && parent.created <= row.created
+      );
+    });
+    if (ambiguous.length > 0) {
+      throw new Error(
+        `Could not confirm process tree ${String(this.root.pid)} exited: ` +
+          `processes ${ambiguous.map(row => row.pid).join(', ')} have unproved ancestry`
+      );
+    }
   }
 
   private isMember(row: WindowsProcessRow, member: TreeMember): boolean {
@@ -170,7 +192,7 @@ async function listWindowsProcesses(): Promise<WindowsProcessListing> {
 }
 
 /**
- * Kill `pid`'s process tree and return only once a listing shows no member of it.
+ * Kill `pid`'s process tree and return only when no members or ambiguous orphans remain.
  * Throws when that cannot be shown.
  *
  * `assertRootOwned` must throw if the root exited during the initial listing.
@@ -183,18 +205,10 @@ export async function terminateWindowsProcessTree(
   const tree = WindowsProcessTree.fromRoot(pid, before);
 
   if (!tree) {
-    // The root was already gone before the stop, so its identity is unknown and a
-    // process naming its PID as parent may belong to an unrelated earlier holder of
-    // that PID. Killing on that guess is not allowed; report instead. Neither is
-    // `taskkill` on the root PID itself, which may already name another process.
-    const claimants = before.rows.filter(row => row.parentPid === pid).map(row => row.pid);
-    if (claimants.length > 0) {
-      throw new Error(
-        `Could not confirm process tree ${String(pid)} exited: its root ` +
-          `was already gone, and processes ${claimants.join(', ')} name it as their parent`
-      );
-    }
-    return;
+    throw new Error(
+      `Could not confirm process tree ${String(pid)} exited: its root was already gone, ` +
+        'so descendant ancestry cannot be proved'
+    );
   }
 
   // The initial listing can take seconds. The caller's live child handle or owner
@@ -203,8 +217,8 @@ export async function terminateWindowsProcessTree(
 
   // `taskkill /T` does most of the work in one call. Its exit code is not the proof:
   // it is non-zero whenever a member exited during the walk, and zero even when a
-  // member spawned during the walk survived it. The listings below are the proof,
-  // and a failure is kept only as evidence for the error they may end in.
+  // member spawned during the walk survived it. Listings check membership and
+  // ambiguous ancestry; a kill failure is retained as evidence if confirmation fails.
   let killFailure: string | undefined;
   try {
     await windowsProcessCommands.execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
