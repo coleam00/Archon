@@ -1,5 +1,4 @@
-export const RUN_MODEL_TIERS = ['small', 'medium', 'large'] as const;
-export type RunModelTier = (typeof RUN_MODEL_TIERS)[number];
+import { TIER_ORDER, type TierName } from './tiers';
 
 export interface RunModelOverrideRow {
   id: number;
@@ -8,14 +7,14 @@ export interface RunModelOverrideRow {
 }
 
 export interface CollectedRunModelOverrides {
-  tiers?: Partial<Record<RunModelTier, string>>;
+  tiers?: Partial<Record<TierName, string>>;
   aliases?: Record<string, string>;
 }
 
 export function collectRunModelOverrides(
   rows: readonly RunModelOverrideRow[]
 ): { ok: true; overrides: CollectedRunModelOverrides } | { ok: false; error: string } {
-  const tiers: Partial<Record<RunModelTier, string>> = {};
+  const tiers: Partial<Record<TierName, string>> = {};
   const aliases: Record<string, string> = {};
   const seen = new Set<string>();
 
@@ -29,14 +28,15 @@ export function collectRunModelOverrides(
     if (seen.has(name)) return { ok: false, error: `Model binding '${name}' is duplicated.` };
     seen.add(name);
 
-    if ((RUN_MODEL_TIERS as readonly string[]).includes(name)) {
-      tiers[name as RunModelTier] = spec;
+    const tier = TIER_ORDER.find(t => t === name);
+    if (tier !== undefined) {
+      tiers[tier] = spec;
     } else if (name.startsWith('@') && name.length > 1) {
       aliases[name] = spec;
     } else {
       return {
         ok: false,
-        error: `Model binding '${name}' must be small, medium, large, or start with '@'.`,
+        error: `Model binding '${name}' must be ${TIER_ORDER.join(', ')}, or start with '@'.`,
       };
     }
   }

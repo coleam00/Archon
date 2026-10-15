@@ -407,7 +407,10 @@ export function parseAttentionLabelPairs(pairs: readonly string[]): AttentionLab
   for (const pair of pairs) {
     const separator = pair.indexOf('=');
     const key = attentionLabelKeySchema.safeParse(separator < 0 ? '' : pair.slice(0, separator));
-    if (!key.success) throw new Error(`Expected a label as key=value, got '${pair}'`);
+    if (!key.success) {
+      const reason = key.error.issues[0]?.message ?? 'invalid key';
+      throw new Error(`Expected a label as key=value, got '${pair}' (${reason})`);
+    }
     if (Object.hasOwn(labels, key.data)) throw new Error(`Label '${key.data}' is given twice`);
     labels[key.data] = pair.slice(separator + 1);
   }

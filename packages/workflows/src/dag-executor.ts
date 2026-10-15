@@ -739,7 +739,7 @@ interface WorkflowLevelOptions {
   webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
-  workflowTier?: 'small' | 'medium' | 'large';
+  workflowTier?: TierName;
 }
 
 /**

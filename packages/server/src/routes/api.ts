@@ -371,6 +371,9 @@ import {
   isApiGateEnabled,
   isConversationOwnershipEnforced,
 } from '../auth';
+// Imported from the pure config module rather than the barrel: route tests mock
+// '../auth', and the header name must stay the real implementation under them.
+import { DEFAULT_WEB_AUTH_HEADER, webAuthHeaderName } from '../auth/config';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -542,6 +545,11 @@ function jsonError(description: string): {
 } {
   return { content: { 'application/json': { schema: errorSchema } }, description };
 }
+
+/** The identity routes' 401, named after the default trusted header. */
+const WEB_AUTH_REQUIRED = jsonError(
+  `Web auth required (${DEFAULT_WEB_AUTH_HEADER} header missing)`
+);
 
 /**
  * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
@@ -1597,7 +1605,7 @@ const githubDeviceStartRoute = createRoute({
       content: { 'application/json': { schema: deviceStartResponseSchema } },
       description: 'Device + user codes',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     500: jsonError('Device flow not configured or failed'),
   },
 });
@@ -1615,7 +1623,7 @@ const githubDevicePollRoute = createRoute({
       content: { 'application/json': { schema: devicePollResponseSchema } },
       description: 'Poll status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     500: jsonError('Device flow not configured or failed'),
   },
 });
@@ -1630,7 +1638,7 @@ const githubConnectionStatusRoute = createRoute({
       content: { 'application/json': { schema: githubConnectionStatusSchema } },
       description: 'Connection status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1644,7 +1652,7 @@ const githubDisconnectRoute = createRoute({
       content: { 'application/json': { schema: githubDisconnectResponseSchema } },
       description: 'Disconnected',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1659,7 +1667,7 @@ const providerKeyListRoute = createRoute({
       content: { 'application/json': { schema: providerKeyListResponseSchema } },
       description: 'Connections (metadata only) + connectable provider catalog',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1678,7 +1686,7 @@ const providerKeySetRoute = createRoute({
       description: 'Key stored (encrypted); response carries no secret value',
     },
     400: jsonError('Unknown provider or empty key'),
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1694,7 +1702,7 @@ const providerKeyDeleteRoute = createRoute({
       content: { 'application/json': { schema: providerKeyDeleteResponseSchema } },
       description: 'Disconnected (idempotent)',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1711,7 +1719,7 @@ const providerOAuthStartRoute = createRoute({
       description: 'Login session started (mode + URL/user-code)',
     },
     400: jsonError('Provider does not support subscription login'),
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1730,7 +1738,7 @@ const providerOAuthPollRoute = createRoute({
       content: { 'application/json': { schema: providerOAuthPollResponseSchema } },
       description: 'Poll status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1879,6 +1887,22 @@ const deleteWebPushRoute = createRoute({
   },
 });
 
+/**
+ * Conversation concurrency as `GET /api/health` reports it: the lock manager's
+ * stats, with `active` widened to include background workflow conversations.
+ * `satisfies` ties the declared fields to `getStats()`, so a rename there fails
+ * the type-check instead of reaching the console as a missing field.
+ */
+const healthConcurrencySchema = z.object({
+  active: z.number(),
+  queuedTotal: z.number(),
+  queuedByConversation: z.array(
+    z.object({ conversationId: z.string(), queuedMessages: z.number() })
+  ),
+  maxConcurrent: z.number(),
+  activeConversationIds: z.array(z.string()),
+}) satisfies z.ZodType<ReturnType<ConversationLockManager['getStats']>>;
+
 const getHealthRoute = createRoute({
   method: 'get',
   path: '/api/health',
@@ -1892,7 +1916,7 @@ const getHealthRoute = createRoute({
             .object({
               status: z.string(),
               adapter: z.string(),
-              concurrency: z.record(z.string(), z.unknown()),
+              concurrency: healthConcurrencySchema,
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
@@ -1977,7 +2001,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
     }
   }
 
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const headerVal = c.req.header(headerName)?.trim();
   if (!headerVal) return undefined;
   try {
@@ -1996,7 +2020,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
 export async function resolveRunActor(c: Context): Promise<RunActor> {
   const identity = await resolveAuthContext(c);
   if (identity) return { kind: 'user', userId: identity.userId };
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const suppliedIdentity = Boolean(c.req.header(headerName)?.trim());
   return { kind: isWebAuthEnabled() || suppliedIdentity ? 'unidentified' : 'operator' };
 }
@@ -2038,7 +2062,7 @@ export async function requireWebUser(
     }
   }
 
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const headerVal = c.req.header(headerName)?.trim();
   if (!headerVal) return { error: apiError(c, 401, failMessage) };
   try {
@@ -2287,7 +2311,7 @@ export function registerApiRoutes(
   // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
   //
   // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
-  // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
+  // (`webAuthHeaderName()`) as an identity. That header
   // is only safe to trust when the app is reachable solely through a proxy that
   // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
   // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
@@ -5786,14 +5810,15 @@ export function registerApiRoutes(
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
 
+    const concurrency: z.infer<typeof healthConcurrencySchema> = {
+      ...stats,
+      active: allActiveIds.length,
+      activeConversationIds: allActiveIds,
+    };
     return c.json({
       status: 'ok',
       adapter: 'web',
-      concurrency: {
-        ...stats,
-        active: allActiveIds.length,
-        activeConversationIds: allActiveIds,
-      },
+      concurrency,
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
       is_docker: isDocker(),
