@@ -36,6 +36,7 @@ const connection: ConnectedChat = {
   send: async () => {},
   resultFooter: async () => {},
   runEvent: async () => {},
+  attentionNotice: async () => ({}),
   onInbound: handler => {
     inbound = handler;
   },
@@ -177,7 +178,10 @@ test('approve and declared response preserve gate occurrence and resume with hos
       response: { nodeId: 'gate', pauseId: 'wrong' },
       sender: { platformUserId: 'starter' },
     })
-  ).toMatchObject({ status: 'refused' });
+  ).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("It is now awaiting occurrence 'pause-1'"),
+  });
   expect(resume).not.toHaveBeenCalled();
   expect(
     await action({
@@ -213,6 +217,83 @@ test('approve and declared response preserve gate occurrence and resume with hos
   });
 });
 
+async function waiting(wait: Record<string, unknown>) {
+  const started = await run();
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+    [
+      JSON.stringify({
+        wait: {
+          kind: 'attention',
+          owner: 'node',
+          nodeId: 'hold',
+          waitingSince: '2026-10-13T01:00:00.000Z',
+          message: 'Pick a base',
+          ...wait,
+        },
+      }),
+      started.id,
+    ]
+  );
+  return started.id;
+}
+const select = {
+  pauseId: 'w1',
+  form: 'select',
+  options: [{ id: 'use-main' }, { id: 'use-dev' }],
+};
+const waitOf = async (runId: string) => (await getWorkflowRun(runId))?.metadata.wait;
+
+test('a typed answer is authorized, names its occurrence, records the surface and resumes', async () => {
+  const runId = await waiting(select);
+  const answer = (platformUserId: string, pauseId: string, choose: string[]) =>
+    action({
+      runId,
+      action: 'answer',
+      response: { nodeId: 'hold', pauseId, choose },
+      sender: { platformUserId },
+    });
+  expect(await answer('other', 'w1', ['use-main'])).toMatchObject({ status: 'forbidden' });
+  expect(await answer('starter', 'w0', ['use-main'])).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("It is now awaiting occurrence 'w1'"),
+  });
+  expect(await answer('starter', 'w1', ['use-elsewhere'])).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("does not declare option 'use-elsewhere'"),
+  });
+  expect(await waitOf(runId)).not.toHaveProperty('answer');
+  expect(resume).not.toHaveBeenCalled();
+  expect(await answer('starter', 'w1', ['use-dev'])).toEqual({
+    status: 'done',
+    result: { kind: 'answered', resumed: true },
+  });
+  expect(await waitOf(runId)).toMatchObject({
+    answer: { decision: 'use-dev' },
+    answeredVia: descriptor.id,
+  });
+  expect(resume.mock.calls[0]?.[2]).toBe(userId);
+});
+
+test('resume continues a wait paused before answers, and refuses an unanswered form', async () => {
+  const legacy = await waiting({});
+  expect(
+    await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'other' } })
+  ).toMatchObject({ status: 'forbidden' });
+  expect(
+    await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'starter' } })
+  ).toEqual({ status: 'done', result: { kind: 'resumed', resumed: true } });
+  expect(resume.mock.calls[0]?.[2]).toBe(userId);
+  const unanswered = await waiting(select);
+  expect(
+    await action({ runId: unanswered, action: 'resume', sender: { platformUserId: 'starter' } })
+  ).toEqual({
+    status: 'refused',
+    message: expect.stringContaining("waiting for an answer to its 'select' attention wait"),
+  });
+  expect(resume).toHaveBeenCalledTimes(1);
+});
+
 test('a failed resume reports the recorded approval as not resumed, not refused', async () => {
   const paused = await run(true);
   resume.mockImplementationOnce(async () => {
@@ -245,8 +326,9 @@ test('message failures send an error reply despite the lock swallowing handler f
   const failedPlatform = new ChatPluginPlatform(
     descriptor,
     {
-      request: async () => {
+      request: async operation => {
         await send();
+        return operation(connection);
       },
     },
     {}

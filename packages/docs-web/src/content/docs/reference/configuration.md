@@ -110,6 +110,13 @@ streaming:
   slack: batch
   github: batch
 
+# Chat routes for attention notices (global config only). The platform must be an
+# installed chat plugin that declares the attentionNotices capability; destination is
+# passed to the plugin unchanged. Route ids (platform:destination) appear in /api/health.
+# attentionNotices:
+#   - platform: slack
+#     destination: C0123456789
+
 # Custom paths (usually not needed)
 paths:
   workspaces: ~/.archon/workspaces
