@@ -25,8 +25,10 @@ mock.module('../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { registerFolder, registerRepository } = await import('./sql-registration');
-const { createCodebase, getCodebase, listCodebases } = await import('../db/codebases');
+const { registerFolder, registerRepository, ProjectRegistrationError } =
+  await import('./sql-registration');
+const { createCodebase, createManagedCodebase, getCodebase, listCodebases } =
+  await import('../db/codebases');
 const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 
 const trackTempRoot = trackTempRoots();
@@ -58,6 +60,89 @@ async function storageRoot(codebaseId: string): Promise<string> {
 }
 
 describe('project storage collisions', () => {
+  test('forge registrations allocate distinct names, source paths and storage atomically', async () => {
+    const root = await makeHome();
+    const projects = await Promise.all([
+      createManagedCodebase({
+        name: 'acme/api',
+        default_cwd: join(root, 'source'),
+        repository_url: 'https://github.com/acme/api',
+      }),
+      createManagedCodebase({
+        name: 'acme/api',
+        default_cwd: join(root, 'source'),
+        repository_url: 'https://gitlab.example/acme/api',
+      }),
+      createManagedCodebase({
+        name: 'acme/api',
+        default_cwd: join(root, 'source'),
+        repository_url: 'https://gitea.example/acme/api',
+      }),
+    ]);
+    expect(projects.map(project => project.name)).toEqual(['acme/api', 'acme/api-2', 'acme/api-3']);
+    expect(new Set(projects.map(project => project.default_cwd)).size).toBe(3);
+    expect(new Set(await Promise.all(projects.map(project => storageRoot(project.id)))).size).toBe(
+      3
+    );
+  });
+
+  test('concurrent folder claims cannot insert two owners of one storage root', async () => {
+    const root = await makeHome();
+    await mkdir(join(root, 'a'));
+    await mkdir(join(root, 'b'));
+    const results = await Promise.allSettled([
+      registerFolder(join(root, 'a'), 'My App'),
+      registerFolder(join(root, 'b'), 'my-app'),
+    ]);
+    const projects = await listCodebases();
+    const roots = await Promise.all(projects.map(project => storageRoot(project.id)));
+    expect(new Set(roots.map(root => root.toLowerCase())).size).toBe(projects.length);
+    expect(results.some(result => result.status === 'fulfilled')).toBe(true);
+    for (const result of results) {
+      if (result.status === 'rejected') expect(String(result.reason)).toContain('storage');
+    }
+  });
+
+  test('a sole upstream remote still belongs to its registered checkout', async () => {
+    const root = await makeHome();
+    const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
+    const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
+    for (const path of [first, second]) {
+      execFileSync('git', ['-C', path, 'remote', 'rename', 'origin', 'upstream']);
+    }
+    await createCodebase({ name: 'Legacy API', default_cwd: first });
+    await expect(registerRepository(second)).rejects.toThrow(`already registered at ${first}`);
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
+  test('legacy URL rewriting is resolved by Git before comparing remotes', async () => {
+    const root = await makeHome();
+    const first = await gitCheckout(join(root, 'first'), 'shortcut:acme/api.git');
+    execFileSync('git', ['-C', first, 'config', 'url.https://github.com/.insteadOf', 'shortcut:']);
+    const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
+    await createCodebase({ name: 'Legacy API', default_cwd: first });
+    await expect(registerRepository(second)).rejects.toThrow(`already registered at ${first}`);
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
+  test('an unavailable legacy checkout cannot silently lose its remote ownership', async () => {
+    const root = await makeHome();
+    const missing = join(root, 'missing');
+    await createCodebase({ name: 'Legacy API', default_cwd: missing });
+    const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
+    const error = await registerRepository(second).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(ProjectRegistrationError);
+    if (!(error instanceof ProjectRegistrationError))
+      throw new Error('Expected registration refusal');
+    expect(error.message).toContain('Legacy API');
+    expect(error.message).toContain(missing);
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
   test('folder projects whose names slugify alike get separate storage', async () => {
     const root = await makeHome();
     const first = join(root, 'a');

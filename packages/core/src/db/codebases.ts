@@ -12,6 +12,11 @@ import {
   type UpdateCodebaseInput,
 } from '../schemas/codebase';
 import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import {
+  allocateProjectName,
+  assertProjectRegistrationAvailable,
+} from '../services/project-registration-identity';
+import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
@@ -39,18 +44,48 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export async function createCodebase(data: CreateCodebaseInput): Promise<Codebase> {
+  return insertCodebase(data, false);
+}
+
+/** Forge registrations own managed source paths, so allocation must move that path with the name. */
+export async function createManagedCodebase(data: CreateCodebaseInput): Promise<Codebase> {
+  return insertCodebase(data, true);
+}
+
+async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Promise<Codebase> {
   assertAbsoluteDefaultCwd(data.default_cwd, data.name);
-  const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [
-      data.name,
-      data.repository_url ?? null,
-      data.default_cwd,
-      data.default_branch ?? null,
-      data.ai_assistant_type ?? null,
-      data.kind ?? 'repo',
-    ]
-  );
+  const result = await getDatabase().withTransaction(async query => {
+    // Share the rename lock: a concurrent rename must not take the new registration's name.
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
+    }
+    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
+    let project = { ...data, kind: data.kind ?? 'repo' };
+    if (managed) {
+      const name = allocateProjectName(project, registered.rows);
+      const identity = parseOwnerRepo(name);
+      if (!identity) throw new Error(`Managed repository requires an owner/repo name: ${name}`);
+      project = {
+        ...project,
+        name,
+        default_cwd: getProjectSourcePath(identity.owner, identity.repo),
+      };
+    }
+    assertProjectRegistrationAvailable(project, registered.rows);
+    return query<Codebase>(
+      'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [
+        project.name,
+        project.repository_url ?? null,
+        project.default_cwd,
+        project.default_branch ?? null,
+        project.ai_assistant_type ?? null,
+        project.kind,
+      ]
+    );
+  });
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
   }
@@ -250,12 +285,8 @@ export class CodebaseStorageIdentityChangeError extends Error {
   }
 }
 
-/**
- * Names the transaction-scoped advisory lock that serializes codebase renames
- * on PostgreSQL. Hashed like the state-document locks, so no numeric key has to
- * be kept apart from the others by hand.
- */
-const CODEBASE_RENAME_LOCK = JSON.stringify(['codebase-rename']);
+// Retain the shipped rename lock key so registrations serialize with older binaries' renames too.
+const CODEBASE_IDENTITY_LOCK = JSON.stringify(['codebase-rename']);
 
 /**
  * Change a codebase's display name.
@@ -290,7 +321,9 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
 
   const result = await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'postgresql') {
-      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [CODEBASE_RENAME_LOCK]);
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
     }
     return query(
       `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +

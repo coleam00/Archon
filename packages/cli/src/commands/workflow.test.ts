@@ -3366,40 +3366,27 @@ describe('workflowRunCommand', () => {
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello')
-    ).rejects.toThrow('Cannot create worktree: database lookup failed');
+    ).rejects.toThrow('Cannot run workflow: database lookup failed');
   });
 
-  it('should continue when codebase lookup fails with --no-worktree', async () => {
+  it('refuses a failed project lookup with --no-worktree before execution', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-123',
-    });
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('ECONNREFUSED')
     );
-    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-123',
-    });
-
-    // With --no-worktree, DB failure is non-fatal — user explicitly opted out of isolation
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      noWorktree: true,
-    });
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: '/test/path' }),
-      'cli.codebase_lookup_failed'
-    );
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+        noWorktree: true,
+      })
+    ).rejects.toThrow('database lookup failed');
+    expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
   it('should throw error when workflow execution fails', async () => {
@@ -3880,7 +3867,7 @@ describe('workflowRunCommand', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain(
-      'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
+      'Inspect the source link at /home/test/.archon/workspaces/acme/widget/source and repair the registration'
     );
     expect(error.message).not.toContain('not in a git repository');
   });
@@ -3917,7 +3904,7 @@ describe('workflowRunCommand', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain(
-      'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
+      'Inspect the source link at /home/test/.archon/workspaces/acme/widget/source and repair the registration'
     );
     expect(error.message).not.toContain('Not in a git repository');
   });
@@ -3953,7 +3940,7 @@ describe('workflowRunCommand', () => {
     // on POSIX to `/`. Assert the hint prefix + the final segment separately.
     expect(error.message).toContain('Check your Archon workspace registration under');
     expect(error.message).toMatch(/workspaces\b/);
-    expect(error.message).not.toContain('Remove the stale workspace entry');
+    expect(error.message).not.toContain('Inspect the source link');
   });
 
   // -------------------------------------------------------------------------
@@ -9063,7 +9050,7 @@ describe('workflowRunCommand — detach', () => {
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
           detach: true,
         })
-      ).rejects.toThrow(/Cannot create worktree: database lookup failed/);
+      ).rejects.toThrow(/Cannot run workflow: database lookup failed/);
       expect(spawnSpy).not.toHaveBeenCalled();
     } finally {
       spawnSpy.mockRestore();
@@ -15114,7 +15101,7 @@ describe('run codebase resolution', () => {
     );
     expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain(
-      'Remove the stale workspace entry at /w/_local/child and retry.'
+      'Inspect the source link at /w/_local/child/source and repair the registration.'
     );
     expect(executor.executeWorkflow).not.toHaveBeenCalled();
   });

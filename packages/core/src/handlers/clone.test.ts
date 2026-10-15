@@ -1375,6 +1375,7 @@ describe('registerRepository', () => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref'))
         return Promise.resolve({ stdout: 'develop\n', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1399,6 +1400,7 @@ describe('registerRepository', () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref')) return Promise.resolve({ stdout: 'HEAD\n', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1479,6 +1481,7 @@ describe('registerRepository', () => {
   test('uses directory name as repo name when no remote URL exists', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: '', stderr: '' });
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
     });
@@ -1497,9 +1500,10 @@ describe('registerRepository', () => {
     expect(result).toBeDefined();
   });
 
-  test('does not warn for expected "No such remote" error', async () => {
+  test('registers a repository with no configured remote without warnings', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: '', stderr: '' });
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
     });
@@ -1512,9 +1516,10 @@ describe('registerRepository', () => {
     expect(mockLogger.warn.mock.calls.length).toBe(0);
   });
 
-  test('logs warn for unexpected git remote-url errors', async () => {
+  test('refuses unexpected git remote-url errors', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.reject(new Error('permission denied: remote access'));
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1522,14 +1527,16 @@ describe('registerRepository', () => {
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
-    await registerRepository('/home/user/myrepo');
-
-    expect(mockLogger.warn.mock.calls.length).toBe(1);
+    await expect(registerRepository('/home/user/myrepo')).rejects.toThrow(
+      'permission denied: remote access'
+    );
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
   });
 
   test('builds owner/repo name from HTTPS remote URL', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/acme/frontend', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1550,6 +1557,7 @@ describe('registerRepository', () => {
   test('builds owner/repo name from SSH remote URL', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'git@github.com:acme/backend.git', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1570,6 +1578,7 @@ describe('registerRepository', () => {
   test('auto-loads markdown commands found in .archon/commands', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1801,6 +1810,7 @@ describe('remote registration identity', () => {
     });
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1831,6 +1841,7 @@ describe('remote registration identity', () => {
     });
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1858,6 +1869,7 @@ describe('remote registration identity', () => {
     });
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.at(-1) === 'remote') return Promise.resolve({ stdout: 'origin', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });

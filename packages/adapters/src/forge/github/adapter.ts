@@ -942,16 +942,17 @@ export class GitHubAdapter implements IPlatformAdapter {
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    // Include owner in name to distinguish repos with same name from different owners
-    // resolve() converts relative paths to absolute (cross-platform)
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'github.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   /**

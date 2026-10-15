@@ -361,27 +361,11 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 - `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
 - `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
 
-**Cause:** Archon derives codebase identity from the remote URL (`owner/repo`), so two local clones of the same remote share one `codebase_id`. Worktrees are stored under a shared path (`~/.archon/workspaces/<owner>/<repo>/worktrees/`), which means a worktree created by clone A is visible on disk from clone B. The isolation system refuses to silently adopt across clones because it would operate on the wrong filesystem state.
+**Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. Removing a worktree or changing the branch name does not resolve a registration refusal.
 
-**Fix — pick one:**
+If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs.
 
-1. **Remove the other clone's worktree.** If you no longer need the other clone's in-progress work:
-
-   ```bash
-   # From the other clone's directory, find and remove the conflicting worktree
-   archon isolation list
-   archon complete <branch-name>          # graceful cleanup
-   # or, if no work to preserve:
-   git worktree remove <path> --force
-   ```
-
-2. **Use a different branch name** for this run so the two clones don't compete for the same worktree path:
-
-   ```bash
-   archon workflow run <name> --branch <different-name> "task"
-   ```
-
-3. **Work from a single clone.** If both local checkouts are for the same project, consolidate to one. Archon's codebase registration currently assumes one local path per remote; true multi-clone support is tracked in [#1192](https://github.com/coleam00/Archon/issues/1192).
+**Ownership errors:** Older registrations or manually changed worktrees can still produce the ownership errors above. Inspect `git worktree list` from the registered checkout and the checkout named in the error. Preserve in-progress work and use the registered checkout's worktree. Only remove an obsolete worktree from its owning checkout after confirming it is no longer needed. Archon refuses to adopt worktrees from another clone.
 
 **Other variants:**
 

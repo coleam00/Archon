@@ -789,7 +789,7 @@ function buildRegistrationFailureError(error: Error): Error {
   if (!(error instanceof ProjectRegistrationError)) {
     const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
     if (staleWorkspaceEntry) {
-      hint = `\nHint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry.`;
+      hint = `\nHint: Inspect the source link at ${join(staleWorkspaceEntry, 'source')} and repair the registration. Preserve the workspace state, artifacts and logs.`;
     } else {
       // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
       // the registration error we're wrapping is the load-bearing one — we'd
@@ -1610,9 +1610,10 @@ export async function workflowListCommand(
  * so the detached child's own call finds what the parent registered.
  *
  * Explicit folder selection fails on unknown or conflicting registration, and any
- * registration failure is fatal. A lookup failure is returned for the caller's
- * isolation, resume and adoption policy. First-time folder registration is returned
- * too, because detached JSON output cannot include a prose notice.
+ * registration failure is fatal. A fresh run also fails when lookup is unavailable;
+ * resumes retain the stored project identity for their resume and adoption policy.
+ * First-time folder registration is returned too, because detached JSON output
+ * cannot include a prose notice.
  */
 async function resolveRunCodebase(
   host: WorkflowHost,
@@ -1666,6 +1667,12 @@ async function resolveRunCodebase(
       );
       // Intentional: don't set lookupError — fall through to auto-registration
     }
+  }
+
+  if (lookupError && !options.codebaseId) {
+    throw new Error(`Cannot run workflow: database lookup failed.\nError: ${lookupError.message}`, {
+      cause: lookupError,
+    });
   }
 
   if (options.registrationBaseBranch !== undefined) {

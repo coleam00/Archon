@@ -108,7 +108,7 @@ const mockCreateCodebase = mock(async () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   updateCodebase: mock(async () => {}),
   getCodebaseCommands: mock(async () => ({})),
   updateCodebaseCommands: mock(async () => {}),

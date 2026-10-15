@@ -19,6 +19,7 @@ import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
+import { assertProjectRegistrationAvailable } from '../services/project-registration-identity';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
@@ -130,10 +131,14 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           created_at: new Date(),
           updated_at: new Date(),
         };
-        await commit(root, [], async () => ({
-          result: undefined,
-          changes: { documents: { 'host/codebases.json': [...(await codebases()), row] } },
-        }));
+        await commit(root, [], async () => {
+          const registered = await codebases();
+          assertProjectRegistrationAvailable(row, registered);
+          return {
+            result: undefined,
+            changes: { documents: { 'host/codebases.json': [...registered, row] } },
+          };
+        });
         captureCodebaseRegistered();
         return codebaseRowSchema.parse(row);
       },

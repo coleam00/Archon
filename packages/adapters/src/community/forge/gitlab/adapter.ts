@@ -574,14 +574,17 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'gitlab.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   private async cleanupWorktree(

@@ -134,3 +134,27 @@ test('file host records persist across hosts and released worktrees fence pendin
     status: 'running',
   });
 });
+
+test('two file hosts cannot register owners of the same project storage', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-host-storage-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const results = await Promise.allSettled([
+    first.records.codebases.createCodebase({
+      name: 'My App',
+      kind: 'folder',
+      default_cwd: '/first',
+    }),
+    second.records.codebases.createCodebase({
+      name: 'my-app',
+      kind: 'folder',
+      default_cwd: '/second',
+    }),
+  ]);
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+  expect(await first.records.codebases.listCodebases()).toHaveLength(1);
+});

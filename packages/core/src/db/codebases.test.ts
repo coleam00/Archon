@@ -97,9 +97,12 @@ describe('codebases', () => {
 
     test('absolute spelling is preserved on write and read', async () => {
       const path = resolve('project') + sep + '..' + sep + 'project' + sep;
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
       expect((await createCodebase({ name: 'project', default_cwd: path })).default_cwd).toBe(path);
-      expect(mockQuery.mock.calls[0]?.[1]).toContain(path);
+      expect(mockQuery.mock.calls.at(-1)?.[1]).toContain(path);
     });
 
     test('administrative metadata remains readable with an invalid stored path', async () => {
@@ -122,7 +125,10 @@ describe('codebases', () => {
 
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
       const result = await createCodebase({
         name: 'test-project',
@@ -152,7 +158,10 @@ describe('codebases', () => {
         repository_url: null,
         ai_assistant_type: null,
       };
-      mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
       const result = await createCodebase({
         name: 'test-project',
@@ -168,9 +177,10 @@ describe('codebases', () => {
 
     test('explicit ai_assistant_type takes priority over env var', async () => {
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }])
-      );
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }]));
 
       await createCodebase({
         name: 'test-project',

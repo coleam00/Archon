@@ -28,6 +28,11 @@ import {
   InvalidBaseBranchError,
 } from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import {
+  allocateProjectName,
+  remoteIdentity,
+  type ProjectIdentity,
+} from '../services/project-registration-identity';
 import { quoteCommandArg } from '../utils/command-args';
 import {
   expandTilde,
@@ -37,10 +42,8 @@ import {
   ensureFolderProjectStructure,
   getFolderProjectRoot,
   getProjectSourcePath,
-  getProjectStoragePaths,
   createProjectSourceSymlink,
   parseOwnerRepo,
-  resolveProjectStorageKey,
   resolveRepoProjectIdentity,
   slugifyFolderName,
 } from '@archon/paths';
@@ -221,8 +224,8 @@ async function setupAppRepository(path: string): Promise<void> {
 }
 
 export class ProjectRegistrationError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'ProjectRegistrationError';
   }
 }
@@ -234,57 +237,11 @@ function rejectExistingChoice(options: RegistrationOptions): void {
     );
 }
 
-type ProjectIdentity = Pick<Codebase, 'kind' | 'name' | 'default_cwd'>;
-
-function storageRoot(project: ProjectIdentity): string {
-  return getProjectStoragePaths(resolveProjectStorageKey(project, project.default_cwd)).root;
-}
-
-/**
- * The `n`th candidate name for a project. A repo's storage root comes from an
- * `owner/repo` name, or from its folder name when the name is bare, so a repo
- * suffix is written as a safe `owner/repo` pair (bare names under `_local`) for
- * the root to move with it.
- */
-function candidateName(kind: Codebase['kind'], derived: string, n: number): string {
-  if (n === 1) return derived;
-  if (kind === 'folder') return `${derived}-${n}`;
-  const { owner, repo } = parseOwnerRepo(derived) ?? { owner: '_local', repo: derived };
-  return `${owner}/${repo.replace(/[^a-zA-Z0-9._-]/g, '-')}-${n}`;
-}
-
-/**
- * The name a new project registers under: the derived name, or its first `-<n>`
- * variant whose name and storage root no other project holds. Storage holds
- * `$STATE_DIR`, memory every run of the project reads and overwrites, so two
- * folders must never resolve to one root (#1192).
- */
 async function claimProjectName(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   project: ProjectIdentity
 ): Promise<string> {
-  const registered = await codebases.listCodebases();
-  const names = new Set(registered.map(codebase => codebase.name));
-  // Workspace storage may live on a case-insensitive filesystem.
-  const roots = new Set(registered.map(project => storageRoot(project).toLowerCase()));
-  for (let n = 1; ; n++) {
-    const name = candidateName(project.kind, project.name, n);
-    if (!names.has(name) && !roots.has(storageRoot({ ...project, name }).toLowerCase()))
-      return name;
-  }
-}
-
-/** Compare transport spellings without conflating hosts, ports or case-sensitive repo paths. */
-function remoteIdentity(url: string): string {
-  const cleaned = url
-    .trim()
-    .replace(/\/+$/, '')
-    .replace(/\.git$/, '');
-  const scp = /^[^@/]+@([^:/]+):(.+)$/.exec(cleaned);
-  const parsed = safeParseUrl(cleaned);
-  const host = (scp?.[1] ?? parsed?.host ?? '').toLowerCase();
-  const path = scp?.[2] ?? parsed?.pathname.replace(/^\//, '') ?? cleaned;
-  return `${host}/${host === 'github.com' ? path.toLowerCase() : path}`;
+  return allocateProjectName(project, await codebases.listCodebases());
 }
 
 async function findRegisteredRemote(
@@ -298,29 +255,26 @@ async function findRegisteredRemote(
     // Older chat registrations omitted repository_url even for remote-backed repos.
     if (!registeredUrl) {
       try {
-        const { stdout } = await execFileAsync('git', [
-          '-C',
-          project.default_cwd,
-          'config',
-          '--local',
-          '--get',
-          'remote.origin.url',
-        ]);
-        registeredUrl = stdout.trim() || null;
+        registeredUrl = await effectiveRegistrationUrl(project.default_cwd);
       } catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 1) continue;
-        // An unavailable checkout cannot supply missing remote identity. Keep its
-        // stored name and storage reserved rather than guessing which remote it owns.
-        getLog().warn(
-          { projectId: project.id, err: error },
-          'registration.remote_identity_unavailable'
+        throw new ProjectRegistrationError(
+          `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
+            'Restore access to that checkout or repair it with /update-project before registering another repository. ' +
+            `Git error: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
         );
-        continue;
       }
     }
     if (registeredUrl && remoteIdentity(registeredUrl) === identity) return project;
   }
   return null;
+}
+
+async function effectiveRegistrationUrl(path: string): Promise<string | null> {
+  const remote = await registrationRemote(path);
+  if (!remote) return null;
+  const { stdout } = await execFileAsync('git', ['-C', path, 'remote', 'get-url', remote]);
+  return stdout.trim() || null;
 }
 
 async function registrationRemote(path: string): Promise<string | null> {
@@ -633,17 +587,7 @@ export async function registerRepository(
     };
   }
 
-  // Get remote URL (optional — local-only repos may not have one)
-  let remoteUrl: string | null = null;
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', localPath, 'remote', 'get-url', 'origin']);
-    remoteUrl = stdout.trim() || null;
-  } catch (error) {
-    const msg = (error as Error).message ?? '';
-    if (!msg.includes('No such remote')) {
-      getLog().warn({ path: localPath, err: error }, 'remote_url_fetch_unexpected_error');
-    }
-  }
+  const remoteUrl = await effectiveRegistrationUrl(localPath);
 
   // Extract repo name from directory name
   const repoName = basename(localPath);
