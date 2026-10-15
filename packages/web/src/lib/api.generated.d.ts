@@ -6586,7 +6586,6 @@ export interface components {
         maxConversations: number;
       };
       defaults: {
-        copyDefaults: boolean;
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };

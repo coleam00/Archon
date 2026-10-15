@@ -708,6 +708,15 @@ describe('isInlineScript', () => {
 });
 
 describe('detectCompletionSignal', () => {
+  it('treats signal metacharacters literally in XML detection and stripping', () => {
+    const signal = 'DONE.+[x](y)';
+    const output = `<done>${signal}</done>`;
+    const lookalike = '<done>DONEZxxy</done>';
+    expect(detectCompletionSignal(output, signal)).toBe(true);
+    expect(detectCompletionSignal(lookalike, signal)).toBe(false);
+    expect(stripCompletionTags(`Result ${output}`, signal)).toBe('Result');
+    expect(stripCompletionTags(lookalike, signal)).toBe(lookalike);
+  });
   it('detects <promise>SIGNAL</promise> format', () => {
     expect(detectCompletionSignal('<promise>COMPLETE</promise>', 'COMPLETE')).toBe(true);
   });

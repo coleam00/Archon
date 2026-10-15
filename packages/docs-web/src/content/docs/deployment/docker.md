@@ -491,7 +491,7 @@ The container runs as `appuser` with `$HOME=/home/appuser`. The base compose mou
 | `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, projects (conversation history), memory, OAuth state, keybindings, file-history |
 | `~/.codex/` | Codex auth (`auth.json` from interactive `codex login`; the env-var path via `setup-auth` overwrites this on every container start) |
 | `~/.pi/agent/` | Pi `auth.json` from interactive `pi /login`, plus `models.json`, global settings (`~/.pi/agent/settings.json`), and sessions (Archon's Pi adapter reads `auth.json` and `settings.json` on every request) |
-| `~/.gitconfig` | Author identity, signing config, custom aliases, plus the `safe.directory` entries baked into the image |
+| `~/.gitconfig` | Author identity, signing config, custom aliases, plus `safe.directory` entries from the image and runtime setup |
 | `~/.bash_history` | Shell history when you `docker compose exec app bash` |
 | `~/.config/gh/` | GitHub CLI auth from interactive `gh auth login` (the `GH_TOKEN` env-var path works without it) |
 
@@ -513,6 +513,8 @@ The entrypoint fixes ownership on every container start, touching only files who
 :::caution
 Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
 :::
+
+Runtime `safe.directory` grants also persist in this home volume across restarts and rebuilds. A grant remains if clone or worktree setup fails, adoption is rejected, or the checkout is removed; Git will still trust a later checkout at that path. Archon leaves removal to the operator because concurrent setup may rely on the same grant. See [Git directory trust](/reference/security/#git-directory-trust).
 
 If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
 

@@ -1,5 +1,4 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
 -- Layout (load-bearing, not cosmetic — see the final section for why):
@@ -8,29 +7,8 @@
 --     COMMENT ON COLUMN — goes in the final "Indexes and column comments"
 --     section, below every ADD COLUMN.
 --
--- 14 Tables (+ the remote_agent_auth_* Better Auth tables, listed inline below):
---   1. remote_agent_codebases
---   1b. remote_agent_codebase_env_vars
---   1c. remote_agent_users
---   1d. remote_agent_user_identities
---   2. remote_agent_conversations
---   3. remote_agent_sessions
---   4. remote_agent_isolation_environments
---   5. remote_agent_workflow_runs
---   6. remote_agent_workflow_events
---   6b. remote_agent_workflow_node_sessions
---   7. remote_agent_messages
---   8. remote_agent_user_github_tokens
---   9. remote_agent_user_provider_keys
---   10. remote_agent_user_ai_prefs
---
--- Dropped tables (via migrations):
---   - remote_agent_command_templates (017)
---
--- Dropped columns (via migrations):
---   - conversations.worktree_path (007)
---   - conversations.isolation_env_id_legacy (007)
---   - conversations.isolation_provider (007)
+-- Table sections below define the schema; additive ALTER sections upgrade older installs.
+-- See the final "Indexes and column comments" section after all column definitions.
 
 -- ============================================================================
 -- Table 1: Codebases

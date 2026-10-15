@@ -25,7 +25,6 @@ import {
   getCodebase,
   updateCodebaseCommands,
   getCodebaseCommands,
-  registerCommand,
   findCodebaseByRepoUrl,
   findCodebaseByDefaultCwd,
   findCodebaseByPathPrefix,
@@ -372,81 +371,6 @@ describe('codebases', () => {
 
       const result = await getCodebaseCommands('codebase-123');
       expect(result).toEqual(commands);
-    });
-  });
-
-  describe('registerCommand', () => {
-    test('adds new command', async () => {
-      // First call: getCodebaseCommands
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: {} }]));
-      // Second call: updateCodebaseCommands
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await registerCommand('codebase-123', 'plan', {
-        path: '.claude/commands/plan.md',
-        description: 'Plan feature',
-      });
-
-      expect(mockQuery).toHaveBeenCalledTimes(2);
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'UPDATE remote_agent_codebases SET commands = $1, updated_at = NOW() WHERE id = $2',
-        [
-          JSON.stringify({
-            plan: { path: '.claude/commands/plan.md', description: 'Plan feature' },
-          }),
-          'codebase-123',
-        ]
-      );
-    });
-
-    test('overwrites existing command', async () => {
-      const existingCommands = {
-        plan: { path: '.claude/commands/old-plan.md', description: 'Old plan' },
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: existingCommands }]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await registerCommand('codebase-123', 'plan', {
-        path: '.claude/commands/new-plan.md',
-        description: 'New plan',
-      });
-
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'UPDATE remote_agent_codebases SET commands = $1, updated_at = NOW() WHERE id = $2',
-        [
-          JSON.stringify({
-            plan: { path: '.claude/commands/new-plan.md', description: 'New plan' },
-          }),
-          'codebase-123',
-        ]
-      );
-    });
-
-    test('preserves other commands when adding new one', async () => {
-      const existingCommands = {
-        execute: { path: '.claude/commands/execute.md', description: 'Execute plan' },
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: existingCommands }]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await registerCommand('codebase-123', 'plan', {
-        path: '.claude/commands/plan.md',
-        description: 'Plan feature',
-      });
-
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'UPDATE remote_agent_codebases SET commands = $1, updated_at = NOW() WHERE id = $2',
-        [
-          JSON.stringify({
-            execute: { path: '.claude/commands/execute.md', description: 'Execute plan' },
-            plan: { path: '.claude/commands/plan.md', description: 'Plan feature' },
-          }),
-          'codebase-123',
-        ]
-      );
     });
   });
 

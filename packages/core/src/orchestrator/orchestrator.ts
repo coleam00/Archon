@@ -19,26 +19,6 @@ import {
  * Orchestrator - Main conversation handler
  * Routes slash commands and AI messages appropriately
  */
-import { readFile as fsReadFile, access as fsAccess } from 'fs/promises';
-
-// Wrapper function for reading files - allows mocking without polluting fs/promises globally
-export async function readCommandFile(path: string): Promise<string> {
-  return fsReadFile(path, 'utf-8');
-}
-export async function commandFileExists(path: string): Promise<boolean> {
-  try {
-    await fsAccess(path);
-    return true;
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      return false;
-    }
-    // Unexpected errors (permissions, I/O) should not be swallowed
-    getLog().error({ err, path, code: err.code }, 'command_file_access_error');
-    throw new Error(`Cannot access command file at ${path}: ${err.message}`);
-  }
-}
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -850,23 +830,4 @@ export async function dispatchBackgroundWorkflow(
   await withCapturedSource(owner =>
     dispatchBackgroundWorkflowOwned(owner, ctx, workflow, isolationContext)
   );
-}
-
-/**
- * Wraps command content with execution context to signal the AI should execute immediately.
- * @param commandName - The name of the command being invoked (e.g., 'create-pr')
- * @param content - The command template content after variable substitution
- * @returns The content wrapped with instructions that tell the AI to execute immediately
- *          without asking for confirmation (used for explicit user command invocations)
- */
-export function wrapCommandForExecution(commandName: string, content: string): string {
-  return `The user invoked the \`/${commandName}\` command. Execute the following instructions immediately without asking for confirmation:
-
----
-
-${content}
-
----
-
-Remember: The user already decided to run this command. Take action now.`;
 }

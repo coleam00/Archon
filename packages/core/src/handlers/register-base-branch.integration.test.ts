@@ -36,11 +36,15 @@ const { getCodebase, updateCodebase, listCodebases } = await import('../db/codeb
 // This test hosts a workflow run, so it registers providers the way CLI and server do.
 registerBuiltinProviders();
 const originalHome = process.env.ARCHON_HOME;
+const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+process.env.GIT_CONFIG_GLOBAL = join(root, '.gitconfig');
 afterEach(() => {
   if (originalHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalHome;
 });
 afterAll(async () => {
+  if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
   await db.close();
   await removeTempTree(root);
 });

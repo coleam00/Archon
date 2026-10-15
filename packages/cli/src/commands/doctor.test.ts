@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
+import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as git from '@archon/git';
@@ -65,6 +66,93 @@ describe('checkGhAuth', () => {
     execSpy.mockRestore();
   });
 
+  const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  it('validates App inline and file keys locally without gh or remote access', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doctor-app-'));
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected fetch'));
+    try {
+      const keyPath = join(root, 'app.pem');
+      writeFileSync(keyPath, privateKey);
+      for (const keyEnv of [
+        { GITHUB_APP_PRIVATE_KEY: privateKey.replaceAll('\n', '\\n') },
+        { GITHUB_APP_PRIVATE_KEY_PATH: keyPath },
+      ]) {
+        expect(await checkGhAuth({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
+          label: 'GitHub App',
+          status: 'pass',
+          message: 'App mode configured (local configuration valid; GitHub access not checked)',
+        });
+      }
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await removeTempTree(root);
+    }
+  });
+
+  it('reports incomplete, invalid and conflicting App configuration without exposing secrets', async () => {
+    for (const env of [
+      { GITHUB_APP_ID: '123' },
+      { GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: 'invalid', GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: 'bad-private-key-secret' },
+      {
+        GITHUB_APP_ID: '123',
+        GITHUB_APP_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----',
+      },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: '/missing/archon-key.pem' },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey, GITHUB_TOKEN: 'pat-secret' },
+    ]) {
+      const result = await checkGhAuth(env);
+      expect(result.label).toBe('GitHub App');
+      expect(result.status).toBe('fail');
+      expect(result.message).not.toContain(privateKey);
+      expect(result.message).not.toContain('pat-secret');
+      expect(result.message).not.toContain('bad-private-key-secret');
+    }
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not print a private key pasted into GITHUB_APP_PRIVATE_KEY_PATH', async () => {
+    const sentinel = 'sentinel-private-key-material';
+    const pastedKey = `-----BEGIN PRIVATE KEY-----\n${sentinel}\n-----END PRIVATE KEY-----`;
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+        ])
+      ).toBe(1);
+      const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
+      expect(printed).toContain('GITHUB_APP_PRIVATE_KEY_PATH');
+      expect(printed).not.toContain(sentinel);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('renders App results and returns the corresponding doctor exit status', async () => {
+    const output = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
+        ])
+      ).toBe(0);
+      expect(JSON.stringify(output.mock.calls)).toContain('GitHub App');
+      expect(await doctorCommand([() => checkGhAuth({ GITHUB_APP_ID: '123' })])).toBe(1);
+      expect(JSON.stringify(output.mock.calls)).not.toContain(privateKey);
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   it('returns skip when no GitHub token is set', async () => {
     const result = await checkGhAuth({});
     expect(result.status).toBe('skip');
@@ -101,11 +189,10 @@ describe('checkAssistantLogin', () => {
     assistants: { claude: {}, codex: {}, pi: { model: 'anthropic/claude-sonnet-4-6' } },
     streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
     attentionNotices: [],
-    paths: { workspaces: '/unused', worktrees: '/unused' },
     concurrency: { maxConversations: 1 },
     workflows: { autoResumeOnQuotaReset: false, quotaMaxAttempts: 1, quotaDeadlineMs: 1 },
     commands: { autoLoad: false },
-    defaults: { copyDefaults: false, loadDefaultCommands: false, loadDefaultWorkflows: false },
+    defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
   };
 
   const deps = (
