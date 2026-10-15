@@ -72,7 +72,7 @@ export interface FakeConfig {
   readonly lookupIssue?: number;
   /** After that lookup, the agent asks for the issue's state with literals only. */
   readonly lookupLiteral?: true;
-  readonly lookupFailFirst?: true;
+  readonly lookupFailure?: 'throw' | 'http' | 'graphql' | 'partial';
   readonly cleanupFails?: true;
   readonly batchIssueOverrides?: Record<string, unknown>;
   readonly batchErrors?: readonly { message: string }[];
@@ -161,7 +161,7 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
       variables: { owner, repo, number: config.lookupIssue },
     }),
   });
-  if (config.lookupFailFirst) await (await request()).text();
+  if (config.lookupFailure) await (await request()).text();
   const response = await request();
   writeFileSync(join(dir, `lookup-${runId}.json`), await response.text());
   if (config.lookupLiteral !== true) return;
@@ -177,8 +177,10 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
 /** The tracker as it is now, as the lookup server forwards to it. */
 function upstream(dir: string, url: string, body: string | undefined): Response | undefined {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
-  if (config.lookupFailFirst && !existsSync(join(dir, 'lookup-failed'))) {
+  if (config.lookupFailure && !existsSync(join(dir, 'lookup-failed'))) {
     writeFileSync(join(dir, 'lookup-failed'), 'yes');
+    if (config.lookupFailure === 'http') return Response.json({ message: 'forced lookup failure' }, { status: 503 });
+    if (config.lookupFailure !== 'throw') return Response.json({ data: config.lookupFailure === 'partial' ? { repository: null } : null, errors: [{ message: 'forced lookup failure' }] });
     throw new Error('forced lookup failure');
   }
   const now = (number: number) => {

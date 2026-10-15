@@ -568,14 +568,16 @@ describe('bench run', () => {
     expect(triaged?.leak).toEqual([]);
   });
 
-  it('records a failed snapshot request even when another lookup succeeds', () => {
-    const { run } = bench({ lookupIssue: 11, lookupFailFirst: true });
-    const { lines, checks } = run('base');
-    const row = lines.find(line => line.row === '11');
-    expect(row?.problems.join('; ')).toContain('forced lookup failure');
-    expect(row?.passed).toBe(false);
-    expect(checks).toHaveLength(1);
-  });
+  for (const lookupFailure of ['throw', 'http', 'graphql', 'partial'] as const) {
+    it(`records a failed snapshot request (${lookupFailure}) even when another lookup succeeds`, () => {
+      const { run } = bench({ lookupIssue: 11, lookupFailure });
+      const { lines, checks } = run('base');
+      const row = lines.find(line => line.row === '11');
+      expect(row?.problems.join('; ')).toContain(lookupFailure === 'throw' ? 'forced lookup failure' : lookupFailure === 'http' ? '503' : 'GraphQL');
+      expect(row?.passed).toBe(false);
+      expect(checks).toHaveLength(1);
+    });
+  }
 
   it('records lookup cleanup failures and still writes every row and batch checks', () => {
     const { run } = bench({ cleanupFails: true });

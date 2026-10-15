@@ -431,6 +431,7 @@ const DROPPED_RESPONSE_HEADERS = ['content-encoding', 'content-length', 'transfe
 
 export interface Answer {
   readonly response: Response;
+  readonly problem?: string;
   /** Batch issues the answer gave as they were at creation. */
   readonly answered: number[];
   /** Batch issues the request named that the answer gave as they are now. */
@@ -475,10 +476,12 @@ export async function answerLookup(
   } catch {
     return unchanged;
   }
-  const refused = isObject(parsed) && parsed.data == null && 'errors' in parsed;
+  const failed = isObject(parsed) && 'errors' in parsed && (!Array.isArray(parsed.errors) || parsed.errors.length > 0);
+  const refused = failed && isObject(parsed) && parsed.data == null;
+  const problem = failed ? 'lookup server: GraphQL request returned errors' : undefined;
   if (!sameHost) return unchanged;
   const rewritten = atCreation(parsed, views, graphql);
-  if (rewritten.answered.size === 0 && body === originalBody) return refused ? { ...unchanged, live: [] } : unchanged;
+  if (rewritten.answered.size === 0 && body === originalBody) return { ...unchanged, problem, ...(refused ? { live: [] } : {}) };
   const answered = [...rewritten.answered];
   // Enriched selections carry their own identity. An unmatched number can name a
   // sibling PR or an issue in another repository, not a live read of this batch.
@@ -487,7 +490,7 @@ export async function answerLookup(
     ...(body !== originalBody || refused ? [] : named),
     ...(refused ? [] : namedNodes),
   ])].filter(number => !answered.includes(number));
-  return { response: new Response(JSON.stringify(rewritten.value), init), answered, live };
+  return { response: new Response(JSON.stringify(rewritten.value), init), answered, live, problem };
 }
 
 /** The operator's gh configuration directory, in gh's own order of precedence. */
@@ -532,6 +535,7 @@ export function serveLookups(repo: Repo, views: ReadonlyMap<number, CreationView
       unix: socket,
       async fetch(request) {
         const answer = await answerLookup(request, repo, views, (url, init) => fetch(url, init));
+        if (answer.problem !== undefined) problems.push(answer.problem);
         if (!answer.response.ok) problems.push(`lookup server: ${request.method} ${new URL(request.url).pathname} returned ${String(answer.response.status)}`);
         for (const number of answer.answered) counts.set(number, (counts.get(number) ?? 0) + 1);
         for (const number of answer.live) live.set(number, [...(live.get(number) ?? []), `${request.method} ${new URL(request.url).pathname}`]);
