@@ -96,7 +96,9 @@ find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
           if [ -z "${GIT_CONFIG_GLOBAL+x}" ] && [ ! -e "$config" ]; then
             config=${XDG_CONFIG_HOME:-$HOME/.config}/git/config
           fi
-          config=$(readlink -f -- "$config")
+          # A sentinel keeps command substitution from stripping pathname newlines.
+          config=$(readlink -fn -- "$config" && printf ".")
+          config=${config%.}
           lock=$config.lock
           # Share the Git writer lock; never publish the intermediate unset.
           (set -o noclobber; : > "$lock")
