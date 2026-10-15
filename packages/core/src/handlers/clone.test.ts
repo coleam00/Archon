@@ -201,6 +201,7 @@ function restoreSpies(): void {
 function clearMocks(): void {
   // mockReset() clears both call history AND any queued mockResolvedValueOnce values,
   // preventing cross-test bleed when tests queue different return values.
+  mockListCodebases.mockReset().mockResolvedValue([]);
   mockCreateCodebase.mockReset();
   mockGetCodebaseCommands.mockReset();
   mockUpdateCodebaseCommands.mockReset();
@@ -1313,11 +1314,10 @@ describe('registerRepository', () => {
         await fsPromises.writeFile(join(commandRoot, 'group', 'sub', 'hidden.md'), 'hidden');
         await fsPromises.writeFile(join(commandRoot, 'build.md'), 'build');
         const codebase = makeCodebase({ default_cwd: cwd });
-        mockFindCodebaseByName.mockResolvedValue(alreadyExists ? codebase : null);
+        mockFindCodebaseByRepoUrl.mockResolvedValue(alreadyExists ? codebase : null);
         mockCreateCodebase.mockResolvedValue(codebase);
         mockFindCommandFiles.mockImplementation(discoverCommandFiles);
-        // A clone of an already-registered remote reloads the existing row's commands;
-        // its managed source has no `.git` yet, so the clone itself proceeds.
+        // Reusing a registered remote reloads its commands without creating another checkout.
         spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
           if (String(path).endsWith('.git'))
             throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -1781,7 +1781,7 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-describe('name-based deduplication', () => {
+describe('remote registration identity', () => {
   beforeEach(() => {
     clearMocks();
     restoreSpies();
@@ -1805,7 +1805,7 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
 
     const error = await registerRepository('/home/user/repo').then(
       () => undefined,
@@ -1835,7 +1835,7 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
     const lookalike = '/mnt/backup/.archon/workspaces/owner/repo/source';
 
     const error = await registerRepository(lookalike).then(
@@ -1849,18 +1849,20 @@ describe('name-based deduplication', () => {
   });
 
   test('escapes quotes in the project name and path of the /update-project suggestion', async () => {
-    // Without a remote the name falls back to the directory basename, which may hold a quote.
+    // Display names and local paths may contain quotes.
     const existingCodebase = makeCodebase({
       id: 'existing-id',
       name: 'we"ird',
+      repository_url: 'https://github.com/owner/repo',
       default_cwd: '/home/test/.archon/workspaces/_local/we"ird/source',
     });
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
-      if (args.includes('get-url')) return Promise.reject(new Error('No such remote'));
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
 
     const error = await registerRepository('/home/user/we"ird').then(
       () => undefined,
@@ -1880,9 +1882,8 @@ describe('name-based deduplication', () => {
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/home/user/repo',
     });
-    // Clone same repo — name-based lookup finds existing
-    // .git does NOT exist (proceed to clone), but name dedup catches it
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    // A matching remote reuses the registered checkout before cloning.
+    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
     const result = await cloneRepository('https://github.com/owner/repo');
@@ -1896,21 +1897,21 @@ describe('name-based deduplication', () => {
     }
   });
 
-  test('should fill in repository_url on existing codebase if missing', async () => {
-    // Existing codebase registered locally without remote URL
-    const existingCodebase = makeCodebase({
-      id: 'existing-id',
-      name: 'owner/repo',
-      repository_url: null,
-      default_cwd: '/home/user/repo',
-    });
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+  test('a matching name without a matching remote creates a separate project', async () => {
+    const existingCodebase = makeCodebase({ repository_url: null, default_cwd: '/home/user/repo' });
+    mockListCodebases.mockResolvedValue([existingCodebase]);
+    mockCreateCodebase.mockImplementation(async input =>
+      makeCodebase({ ...input, repository_url: input.repository_url ?? null })
+    );
 
-    await cloneRepository('https://github.com/owner/repo');
+    const result = await cloneRepository('https://github.com/owner/repo');
 
-    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0];
-    expect(updateArgs?.[1].repository_url).toBe('https://github.com/owner/repo');
+    expect(result.name).toBe('owner/repo-2');
+    expect(getGitCloneCall()?.[1]).toBe(
+      gitUtils.toRepoPath('/home/test/.archon/workspaces/owner/repo-2/source')
+    );
+    expect(result.alreadyExisted).toBe(false);
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
   });
 });
 

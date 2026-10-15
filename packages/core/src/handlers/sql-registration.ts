@@ -11,4 +11,3 @@ export type {
 export const cloneRepository = registration.cloneRepository.bind(undefined, codebases);
 export const registerRepository = registration.registerRepository.bind(undefined, codebases);
 export const registerFolder = registration.registerFolder.bind(undefined, codebases);
-export const claimProjectName = registration.claimProjectName.bind(undefined, codebases);

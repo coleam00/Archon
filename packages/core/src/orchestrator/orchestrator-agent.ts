@@ -1,4 +1,4 @@
-import { claimProjectName, registerFolder } from '../handlers/sql-registration';
+import { registerRepository, registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
   createRunWorktreeSetupExecutor,
@@ -3565,26 +3565,6 @@ async function registerProject({
   const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
-  if (folder && alreadyExists?.kind === 'repo') {
-    return `Project "${projectName}" is already registered as a repo; cannot register it as a folder project.`;
-  }
-
-  if (alreadyExists && isAbsolute(alreadyExists.stored_default_cwd)) {
-    return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
-  }
-
-  if (folder && !alreadyExists) {
-    try {
-      const result = await registerFolder(canonicalPath, projectName);
-      return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}
-Path: ${result.defaultCwd}
-ID: ${result.codebaseId}
-Kind: folder project (runs in place)`;
-    } catch (error) {
-      return `Could not register folder project: ${(error as Error).message}`;
-    }
-  }
-
   let kind: Codebase['kind'];
   try {
     kind = folder ? 'folder' : await detectProjectKind(canonicalPath);
@@ -3595,7 +3575,7 @@ Kind: folder project (runs in place)`;
     );
     return toError(err).message;
   }
-  if (alreadyExists) {
+  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
     try {
       await codebaseDb.repairCodebaseRegistration(alreadyExists.id, {
         default_cwd: canonicalPath,
@@ -3607,17 +3587,16 @@ Kind: folder project (runs in place)`;
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
-  const name = await claimProjectName({ kind, name: projectName, default_cwd: canonicalPath });
-  const codebase = await codebaseDb.createCodebase({
-    name,
-    default_cwd: canonicalPath,
-    default_branch: null,
-    kind,
-  });
-
-  getLog().info({ name, path: canonicalPath, id: codebase.id, kind }, 'project.register_completed');
-  const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
-  return `Project "${name}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
+  try {
+    const result =
+      kind === 'folder'
+        ? await registerFolder(canonicalPath, projectName)
+        : await registerRepository(canonicalPath, { name: projectName });
+    const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
+    return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}\nPath: ${result.defaultCwd}\nID: ${result.codebaseId}${kindNote}`;
+  } catch (error) {
+    return `Could not register ${kind === 'folder' ? 'folder project' : 'project'}: ${toError(error).message}`;
+  }
 }
 
 /**

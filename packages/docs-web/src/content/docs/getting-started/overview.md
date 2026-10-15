@@ -503,7 +503,7 @@ Error: Source symlink at ~/.archon/workspaces/<owner>/<repo>/source already poin
 Hint: Remove the stale workspace entry at ~/.archon/workspaces/<owner>/<repo> and retry.
 ```
 
-Follow the hint — delete the stale workspace folder and re-run. `--no-worktree` does not skip registration: a run never continues unregistered, because it would share `_cwd/<folder name>` storage and state with every checkout of the same folder name.
+Follow the hint — delete the stale workspace folder and re-run. `--no-worktree` does not bypass a registration failure: the command stops even without isolation, preventing a fallback to `_cwd/<folder name>` storage and state shared with other checkouts of the same folder name.
 
 > On Archon versions before this fix, the same root cause surfaced as the misleading "Cannot create worktree: not in a git repository" (even though the repo was valid). If you see that string, upgrade and you'll get the actionable message above.
 

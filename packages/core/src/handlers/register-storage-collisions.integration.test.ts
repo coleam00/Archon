@@ -10,7 +10,7 @@
  */
 import { describe, test, expect, mock, afterEach } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -26,7 +26,7 @@ mock.module('../db/connection', () => ({
 }));
 
 const { registerFolder, registerRepository } = await import('./sql-registration');
-const { getCodebase, listCodebases } = await import('../db/codebases');
+const { createCodebase, getCodebase, listCodebases } = await import('../db/codebases');
 const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 
 const trackTempRoot = trackTempRoots();
@@ -116,6 +116,96 @@ describe('project storage collisions', () => {
     expect(error?.message).toContain(first);
     expect(error?.message).toContain('worktree');
     expect((await listCodebases()).map(codebase => codebase.id)).toEqual([registered.codebaseId]);
+  });
+
+  test('a remote already registered under a suffix is still refused', async () => {
+    const root = await makeHome();
+    const github = await gitCheckout(join(root, 'github'), 'https://github.com/acme/api.git');
+    const gitlab = await gitCheckout(join(root, 'gitlab'), 'https://gitlab.example/acme/api.git');
+    const second = await gitCheckout(join(root, 'second'), 'git@gitlab.example:acme/api.git');
+    await registerRepository(github);
+    const registered = await registerRepository(gitlab);
+
+    await expect(registerRepository(second)).rejects.toThrow(
+      `Project "${registered.name}" is already registered at ${gitlab}`
+    );
+    expect(await listCodebases()).toHaveLength(2);
+  });
+
+  test('a legacy chat registration with no recorded URL still owns its remote', async () => {
+    const root = await makeHome();
+    const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
+    const second = await gitCheckout(join(root, 'second'), 'git@github.com:acme/api.git');
+    const existing = await createCodebase({ name: 'My API', default_cwd: first });
+    await expect(registerRepository(second)).rejects.toThrow(
+      `Project "My API" is already registered at ${first}`
+    );
+    expect((await getCodebase(existing.id))?.repository_url).toBeNull();
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
+  test('a managed remote refusal recommends worktrees and preserves the project', async () => {
+    const root = await makeHome();
+    const managed = await gitCheckout(
+      join(root, '.archon', 'workspaces', 'acme', 'api', 'source'),
+      'https://github.com/acme/api.git'
+    );
+    const local = await gitCheckout(join(root, 'local'), 'git@github.com:acme/api.git');
+    const registered = await registerRepository(managed);
+
+    await expect(registerRepository(local)).rejects.toThrow('worktrees');
+    expect((await getCodebase(registered.codebaseId))?.default_cwd).toBe(managed);
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
+  test('a no-remote repo can take a free suffix when a managed row owns its basename', async () => {
+    const root = await makeHome();
+    const managed = join(root, '.archon', 'workspaces', '_local', 'api', 'source');
+    const first = await createCodebase({ name: 'api', default_cwd: managed });
+    const local = await gitCheckout(join(root, 'local', 'api'));
+    const registered = await registerRepository(local);
+
+    expect(registered.name).toBe('_local/api-2');
+    expect(await storageRoot(registered.codebaseId)).not.toBe(await storageRoot(first.id));
+  });
+
+  test('suffix selection skips occupied names and storage and is stable on re-registration', async () => {
+    const root = await makeHome();
+    for (const name of ['a', 'b', 'c']) await mkdir(join(root, name));
+    const first = await registerFolder(join(root, 'a'), 'My App');
+    await registerFolder(join(root, 'b'), 'my-app-2');
+    const third = await registerFolder(join(root, 'c'), 'my-app');
+    expect(third.name).toBe('my-app-3');
+    expect((await registerFolder(join(root, 'c'), 'other')).codebaseId).toBe(third.codebaseId);
+    expect((await getCodebase(first.codebaseId))?.name).toBe('My App');
+  });
+
+  test('a custom repository name uses the same source and storage root and cannot bypass remote refusal', async () => {
+    const root = await makeHome();
+    const first = await gitCheckout(join(root, 'first', 'api'), 'https://github.com/acme/api.git');
+    const second = await gitCheckout(join(root, 'second', 'api'), 'git@github.com:acme/api.git');
+    const registered = await registerRepository(first, { name: 'My API' });
+    const storage = await storageRoot(registered.codebaseId);
+    expect(registered.name).toBe('My API');
+    expect(await realpath(join(storage, 'source'))).toBe(first);
+    await mkdir(join(storage, 'state'));
+    const state = join(storage, 'state', 'ledger.txt');
+    await writeFile(state, 'first project');
+    await expect(registerRepository(second, { name: 'Different name' })).rejects.toThrow(
+      `Project "My API" is already registered at ${first}`
+    );
+    expect(await readFile(state, 'utf8')).toBe('first project');
+  });
+
+  test.each([
+    ['https://forge.example:8443/acme/api.git', 'https://forge.example:9443/acme/api.git'],
+    ['https://forge.example/acme/API.git', 'https://forge.example/acme/api.git'],
+  ])('distinct remotes keep separate identities (%s, %s)', async (aUrl, bUrl) => {
+    const root = await makeHome();
+    const a = await registerRepository(await gitCheckout(join(root, 'a'), aUrl));
+    const b = await registerRepository(await gitCheckout(join(root, 'b'), bUrl));
+    expect(b.codebaseId).not.toBe(a.codebaseId);
+    expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
 
   test('a linked worktree of the registered clone still resolves to its project', async () => {
