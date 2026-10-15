@@ -57,7 +57,7 @@ Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non
 ## Quick Start
 
 ```bash
-# List available workflows (requires a git repo, a registered folder project, or --folder on first use)
+# List available workflows (requires a git repo or an already registered folder project)
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
