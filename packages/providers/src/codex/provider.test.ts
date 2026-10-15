@@ -275,6 +275,21 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('writes the persisted session format and resumes a fixed saved identifier', async () => {
+      const savedId =
+        'thread-1:archon-codex-tools:031e8dcbfe5ce9aaef61a80ebcf2a12939ba1ff54a02c68117bb2bb130eeabb8';
+      const options = { nativeTools: [tool(async () => 'Queued')] };
+      expect(resultOf(await run(providerWith().provider, options)).sessionId).toBe(savedId);
+
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const result = resultOf(await run(provider, { nativeTools: [tool(handler)] }, savedId));
+      expect(result.isError).not.toBe(true);
+      expect(result.sessionId).toBe(savedId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe('thread-1');
+      expect(handler.mock.calls).toEqual([[input]]);
+    });
+
     test('legacy threads fail visibly before a model turn instead of silently lacking tools', async () => {
       const { provider, server } = providerWith();
       const result = resultOf(

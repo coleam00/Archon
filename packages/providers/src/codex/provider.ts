@@ -81,6 +81,26 @@ const accountResponseSchema = z.object({
 
 type CodexConfig = Record<string, JsonValue>;
 
+const TOOL_SESSION_MARKER = 'archon-codex-tools';
+const codexSessionId = {
+  encode(threadId: string, catalogId: string | undefined): string {
+    return catalogId ? `${threadId}:${TOOL_SESSION_MARKER}:${catalogId}` : threadId;
+  },
+  decode(sessionId: string, catalogId: string | undefined): string {
+    const [threadId, marker, savedCatalog, ...rest] = sessionId.split(':');
+    const marked = marker === TOOL_SESSION_MARKER;
+    if (
+      (catalogId || marked) &&
+      (!marked || savedCatalog !== catalogId || !threadId || rest.length)
+    ) {
+      throw new Error(
+        'This Codex chat has an older or different tool catalog. Start a new chat to use the current Archon tools.'
+      );
+    }
+    return marked ? threadId : sessionId;
+  },
+};
+
 /**
  * How long the app-server gets to answer a cancel's interrupt, then to exit after stdin
  * closes, then again after SIGTERM.
@@ -1070,8 +1090,6 @@ export class CodexProvider implements IAgentProvider {
     const titleRequest = requestOptions?.purpose === 'title-generation';
     const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
     let catalogId: string | undefined;
-    const sessionIdOf = (id: string): string =>
-      catalogId ? `${id}:archon-codex-tools:${catalogId}` : id;
     let resumeThreadId = resumeSessionId;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
@@ -1088,17 +1106,7 @@ export class CodexProvider implements IAgentProvider {
           .digest('hex');
       }
       if (resumeSessionId) {
-        const [savedThread, marker, savedCatalog, ...rest] = resumeSessionId.split(':');
-        const marked = marker === 'archon-codex-tools';
-        if (
-          (catalogId || marked) &&
-          (!marked || savedCatalog !== catalogId || !savedThread || rest.length)
-        ) {
-          throw new Error(
-            'This Codex chat has an older or different tool catalog. Start a new chat to use the current Archon tools.'
-          );
-        }
-        if (marked) resumeThreadId = savedThread;
+        resumeThreadId = codexSessionId.decode(resumeSessionId, catalogId);
       }
       const providerWarnings: ProviderWarning[] = [];
       let mcpServers: CodexConfig | undefined;
@@ -1191,7 +1199,7 @@ export class CodexProvider implements IAgentProvider {
           // An interrupted turn completes before its process ends; a cancel is not a result.
           if (abortSignal?.aborted) throw new Error('Query aborted');
           resultReported = true;
-          if (chunk.sessionId) chunk.sessionId = sessionIdOf(chunk.sessionId);
+          if (chunk.sessionId) chunk.sessionId = codexSessionId.encode(chunk.sessionId, catalogId);
         }
         yield chunk;
       }
@@ -1215,7 +1223,7 @@ export class CodexProvider implements IAgentProvider {
             (error as Error).message
           )
         );
-        if (threadId) result.sessionId = sessionIdOf(threadId);
+        if (threadId) result.sessionId = codexSessionId.encode(threadId, catalogId);
         yield result;
       }
     } finally {
