@@ -53,6 +53,12 @@ Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI a
 Because `bypassPermissions` grants full file and shell access, only run Archon in environments where the AI agent is trusted with the repository contents. Do not expose Archon to untrusted users without adapter-level authorization (see below).
 :::
 
+## Git directory trust
+
+Archon adds clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Repeated setup keeps one exact entry per path; a required config-write failure stops setup.
+
+These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
+
 ## Tool Restrictions
 
 Workflow nodes support `allowed_tools` and `denied_tools` to restrict which tools the AI can use at each step. This is useful for creating sandboxed steps that can only read code (not modify it) or preventing specific tool usage.
