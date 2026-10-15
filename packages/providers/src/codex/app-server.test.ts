@@ -65,6 +65,32 @@ const BINARY = { path: '/bin/codex', pathDirs: ['/vendor/codex-path'] };
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 describe('AppServerConnection', () => {
+  test('drains accepted tool calls on closure and accepts no later calls', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const complete = Promise.withResolvers<void>();
+    const handler = mock(async () => {
+      await complete.promise;
+      return { success: true, contentItems: [] };
+    });
+    connection.handleToolCalls(handler);
+    fake.reply({ id: 'accepted', method: 'item/tool/call', params: {} });
+    await tick();
+    fake.child.emit('close', 1, null);
+    let drained = false;
+    const draining = connection.finishToolCalls().then(() => {
+      drained = true;
+    });
+    fake.reply({ id: 'too-late', method: 'item/tool/call', params: {} });
+    await tick();
+    expect(drained).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(1);
+    complete.resolve();
+    await draining;
+    expect(drained).toBe(true);
+    expect(fake.sent()).toEqual([]);
+  });
+
   test('starts app-server with the extra args and the helper dirs first on PATH', () => {
     const fake = rawChild();
     AppServerConnection.start(BINARY, ['-c', 'x=1'], { PATH: '/usr/bin' }, fake.spawner);

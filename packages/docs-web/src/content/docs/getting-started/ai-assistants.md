@@ -184,7 +184,7 @@ Archon does not bundle the Codex CLI. Install it, then authenticate.
 
 New Codex chats receive Archon's typed `invoke_workflow` and `register_project` tools; project-scoped chats also receive `manage_run`. Calls use the same validation and authorization handlers as Claude and Pi. Workflow launches start after the chat turn completes. Text resembling a slash command in a Codex reply does not launch a workflow or register a project.
 
-These tools use the Codex app-server's experimental dynamic-tool API, supported by the pinned Codex 0.160.0. Archon opts into it for turns with tools and preserves your native Codex configuration and guidance. Tool catalogs are saved when a thread starts: resuming a tool-enabled thread uses the current handlers, but a thread created before this feature does not gain tools on resume. Start a new chat to use the tools in that case.
+These tools use the Codex app-server's experimental dynamic-tool API, supported by the pinned Codex 0.160.0. Archon opts into it for turns with tools and preserves your native Codex configuration and guidance. Tool catalogs are saved when a thread starts: resuming a tool-enabled thread uses the current handlers. Archon records the catalog fingerprint in its session identifier. If a chat predates that record or its tools have changed, Archon stops before starting a model turn and asks you to start a new chat.
 
 ### Install the Codex CLI
 

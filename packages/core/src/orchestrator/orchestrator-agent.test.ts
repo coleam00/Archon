@@ -4377,6 +4377,31 @@ describe('workflow dispatch routing', () => {
       }
     );
 
+    test('a legacy Codex chat visibly asks for a new chat before invoking a model', async () => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeConversation({ ai_assistant_type: 'codex' })
+      );
+      mockTransitionSession.mockResolvedValueOnce(
+        makeSession({ assistant_session_id: 'legacy-thread' })
+      );
+      const server = createFakeAppServer();
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Start a new chat')
+      );
+      expect(server.processes).toHaveLength(0);
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    });
+
     test('Codex registration uses the shared primitive and manage_run preserves actor and project authorization', async () => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
@@ -4950,6 +4975,68 @@ describe('paused approval gate routing', () => {
       expect.stringContaining('Continuation requested')
     );
   });
+
+  test.each([
+    { action: 'approve', decision: undefined },
+    { action: 'reject', decision: undefined },
+    { action: 'respond', decision: 'reject' },
+    { action: 'respond', decision: 'approve' },
+  ])(
+    'Codex drains an in-flight gate decision after process exit: %j',
+    async ({ action, decision }) => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      arrangeGatedChat({
+        metadata: { approval: { nodeId: 'gate-1', message: 'Review', onRejectPrompt: 'Rework' } },
+      });
+      const entered = Promise.withResolvers<void>();
+      const commit = Promise.withResolvers<void>();
+      mockResolveApprovalGate.mockImplementationOnce(async () => {
+        entered.resolve();
+        await commit.promise;
+        return { resolved: true };
+      });
+      const server = createFakeAppServer(() => ({
+        toolCalls: [
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'gate',
+            namespace: null,
+            tool: 'manage_run',
+            arguments: { action, decision, runId: 'run-1', confirm: true, message: 'feedback' },
+          },
+        ],
+      }));
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      const platform = makePlatform();
+      let returned = false;
+      const handling = handleMessage(platform, 'conv-1', 'resolve the gate', {
+        actor: operator,
+      }).finally(() => {
+        returned = true;
+      });
+      await entered.promise;
+      server.processes[0].exit(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const returnedBeforeCommit = returned;
+      commit.resolve();
+      await handling;
+      expect(returnedBeforeCommit).toBe(false);
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Continuation requested')
+      );
+      expect(server.processes[0].toolResponses).toHaveLength(0);
+    }
+  );
 
   test('a container run is resolved but not resumed from chat', async () => {
     // Chat cannot rewire the container, so the executor would refuse the resume.

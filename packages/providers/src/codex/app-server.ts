@@ -132,10 +132,17 @@ function pathKey(env: Record<string, string>): string {
 }
 
 export class AppServerConnection {
+  private readonly toolCalls = new Set<Promise<void>>();
   private toolCallHandler: ((params: unknown) => Promise<DynamicToolCallResponse>) | undefined;
 
   handleToolCalls(handler: (params: unknown) => Promise<DynamicToolCallResponse>): void {
     this.toolCallHandler = handler;
+  }
+
+  /** Stop accepting calls and join operations that may already have committed effects. */
+  async finishToolCalls(): Promise<void> {
+    this.toolCallHandler = undefined;
+    await Promise.all(this.toolCalls);
   }
 
   private nextId = 1;
@@ -269,6 +276,7 @@ export class AppServerConnection {
   }
 
   private receive(line: string): void {
+    if (this.endedWith) return;
     let message: Record<string, unknown>;
     try {
       message = JSON.parse(line) as Record<string, unknown>;
@@ -300,7 +308,7 @@ export class AppServerConnection {
     if (id !== undefined) {
       if (method === TOOL_CALL_METHOD && this.toolCallHandler) {
         const handler = this.toolCallHandler;
-        void Promise.resolve()
+        const operation = Promise.resolve()
           .then(() => handler(message.params))
           .then(
             result => this.send({ id, result }),
@@ -312,6 +320,8 @@ export class AppServerConnection {
               });
             }
           );
+        this.toolCalls.add(operation);
+        void operation.then(() => this.toolCalls.delete(operation));
         return;
       }
       // A request from Codex: approval, user input, elicitation, token refresh. Archon

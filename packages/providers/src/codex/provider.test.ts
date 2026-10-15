@@ -264,14 +264,83 @@ describe('CodexProvider', () => {
       const { provider, server } = providerWith({ toolCalls: [call] });
       const oldHandler = mock(() => Promise.resolve('first'));
       const currentHandler = mock(() => Promise.resolve('resumed'));
-      await run(provider, { nativeTools: [tool(oldHandler)] });
-      await run(provider, { nativeTools: [tool(currentHandler)] }, THREAD_ID);
+      const first = resultOf(await run(provider, { nativeTools: [tool(oldHandler)] }));
+      await run(createProvider(server), { nativeTools: [tool(currentHandler)] }, first.sessionId);
       expect(oldHandler).toHaveBeenCalledTimes(1);
       expect(currentHandler).toHaveBeenCalledTimes(1);
       expect(paramsOf(server, 'thread/resume')).not.toHaveProperty('dynamicTools');
       expect(server.processes[1].toolResponses[0].result).toMatchObject({
         success: true,
         contentItems: [{ text: 'resumed' }],
+      });
+    });
+
+    test('legacy threads fail visibly before a model turn instead of silently lacking tools', async () => {
+      const { provider, server } = providerWith();
+      const result = resultOf(
+        await run(provider, { nativeTools: [tool(async () => 'unused')] }, THREAD_ID)
+      );
+      expect(result.isError).toBe(true);
+      expect(result.failure?.evidence).toContain('Start a new chat');
+      expect(server.processes).toHaveLength(0);
+    });
+
+    test.each(['name', 'schema', 'description', 'added', 'removed'] as const)(
+      'catalog changes require a new chat: %s',
+      async change => {
+        const { provider, server } = providerWith();
+        const original = tool(async () => 'unused');
+        const first = resultOf(await run(provider, { nativeTools: [original] }));
+        const changed = { ...original };
+        if (change === 'name') changed.name = 'manage_run';
+        if (change === 'description') changed.description = 'Changed meaning';
+        if (change === 'schema')
+          changed.inputSchema = { properties: { confirm: { kind: 'boolean' } }, required: [] };
+        const result = resultOf(
+          await run(
+            createProvider(server),
+            {
+              nativeTools:
+                change === 'removed'
+                  ? []
+                  : change === 'added'
+                    ? [original, { ...original, name: 'manage_run' }]
+                    : [changed],
+            },
+            first.sessionId
+          )
+        );
+        expect(result.isError).toBe(true);
+        expect(result.failure?.evidence).toContain('Start a new chat');
+        expect(server.processes).toHaveLength(1);
+      }
+    );
+
+    test.each([
+      { status: 'completed' as const, success: false },
+      { status: 'failed' as const, success: null },
+    ])('failed dynamic tool items reach the stream: %j', async failure => {
+      const chunks = await run(
+        providerWith({
+          notifications: [
+            itemCompleted({
+              type: 'dynamicToolCall',
+              id: 'failed-call',
+              tool: 'invoke_workflow',
+              namespace: null,
+              arguments: input,
+              ...failure,
+              contentItems: [{ type: 'inputText', text: 'dispatch unavailable' }],
+              durationMs: 1,
+            }),
+          ],
+        }).provider
+      );
+      expect(chunks).toContainEqual({
+        type: 'tool_call_update',
+        toolCallId: 'failed-call',
+        status: 'failed',
+        output: 'dispatch unavailable',
       });
     });
 

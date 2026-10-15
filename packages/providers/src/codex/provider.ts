@@ -3,6 +3,7 @@
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -532,7 +533,7 @@ function codexHomeOf(initializeResponse: unknown): string {
 }
 
 interface TurnRequest {
-  nativeTools?: SendQueryOptions['nativeTools'];
+  tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;
   apiKey: string | undefined;
   cwd: string;
@@ -563,12 +564,10 @@ interface TurnRequest {
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection, nodePlugins } = request;
-  const tools = buildCodexNativeTools(request.nativeTools ?? []);
+  const { tools } = request;
   const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
-    capabilities: request.nativeTools?.length
-      ? { experimentalApi: true, requestAttestation: false }
-      : null,
+    capabilities: tools.specs.length ? { experimentalApi: true, requestAttestation: false } : null,
   });
   connection.notify('initialized');
   if (request.apiKey) {
@@ -601,7 +600,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     : await connection.request('thread/start', {
         cwd: request.cwd,
         ...threadParams,
-        ...(request.nativeTools?.length ? { dynamicTools: tools.specs } : {}),
+        ...(tools.specs.length ? { dynamicTools: tools.specs } : {}),
       });
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
@@ -751,6 +750,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         const { turn, threadId: completedThreadId } = notification.params;
         if (completedThreadId !== threadId || turn.id !== turnId || parentCompleted) break;
         parentCompleted = true;
+        await connection.finishToolCalls();
         for (const chunk of completeTurn(turn.status, turn.error, request, {
           threadId,
           usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
@@ -1068,11 +1068,37 @@ export class CodexProvider implements IAgentProvider {
     const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
     const titleRequest = requestOptions?.purpose === 'title-generation';
+    const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
+    let catalogId: string | undefined;
+    const sessionIdOf = (id: string): string =>
+      catalogId ? `${id}:archon-codex-tools:${catalogId}` : id;
+    let resumeThreadId = resumeSessionId;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     try {
       if (abortSignal?.aborted) {
         throw new Error('Query aborted');
+      }
+      const tools = buildCodexNativeTools(nativeTools ?? []);
+      // Codex persists the catalog only at thread/start and cannot report or replace it on
+      // resume. Carry its fingerprint in Archon's opaque session id, across host restarts.
+      if (tools.specs.length) {
+        catalogId = createHash('sha256')
+          .update(JSON.stringify([...tools.specs].sort((a, b) => a.name.localeCompare(b.name))))
+          .digest('hex');
+      }
+      if (resumeSessionId) {
+        const [savedThread, marker, savedCatalog, ...rest] = resumeSessionId.split(':');
+        const marked = marker === 'archon-codex-tools';
+        if (
+          (catalogId || marked) &&
+          (!marked || savedCatalog !== catalogId || !savedThread || rest.length)
+        ) {
+          throw new Error(
+            'This Codex chat has an older or different tool catalog. Start a new chat to use the current Archon tools.'
+          );
+        }
+        if (marked) resumeThreadId = savedThread;
       }
       const providerWarnings: ProviderWarning[] = [];
       let mcpServers: CodexConfig | undefined;
@@ -1132,10 +1158,10 @@ export class CodexProvider implements IAgentProvider {
 
       const stream = streamTurn({
         connection,
-        nativeTools: titleRequest ? undefined : requestOptions?.nativeTools,
+        tools,
         apiKey,
         cwd,
-        resumeSessionId,
+        resumeSessionId: resumeThreadId,
         forkSession: requestOptions?.forkSession === true,
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',
@@ -1165,10 +1191,12 @@ export class CodexProvider implements IAgentProvider {
           // An interrupted turn completes before its process ends; a cancel is not a result.
           if (abortSignal?.aborted) throw new Error('Query aborted');
           resultReported = true;
+          if (chunk.sessionId) chunk.sessionId = sessionIdOf(chunk.sessionId);
         }
         yield chunk;
       }
     } catch (error) {
+      await connection?.finishToolCalls();
       if (abortSignal?.aborted === true) {
         throw new Error('Query aborted');
       }
@@ -1187,12 +1215,13 @@ export class CodexProvider implements IAgentProvider {
             (error as Error).message
           )
         );
-        if (threadId) result.sessionId = threadId;
+        if (threadId) result.sessionId = sessionIdOf(threadId);
         yield result;
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
       if (connection) {
+        await connection.finishToolCalls();
         const end = await connection.shutdown(this.shutdownGraceMs);
         if (end?.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
           observationLost = true;
