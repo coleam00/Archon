@@ -145,9 +145,10 @@ function resolveSystemMessage(requestOptions?: SendQueryOptions): SystemMessageC
     typeof requestOptions?.nodeConfig?.systemPrompt === 'string'
       ? requestOptions.nodeConfig.systemPrompt
       : undefined;
-  const content = requestPrompt ?? nodePrompt ?? requestOptions?.appendSystemPrompt;
+  const explicitPrompt = requestPrompt ?? nodePrompt;
+  const content = explicitPrompt ?? requestOptions?.appendSystemPrompt;
   if (typeof content === 'string' && content.length > 0) {
-    return { mode: 'append', content };
+    return { mode: explicitPrompt !== undefined ? 'replace' : 'append', content };
   }
   return undefined;
 }
