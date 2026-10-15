@@ -85,11 +85,11 @@ test('invalid receipts do not block valid chat policies or runtime loading', asy
       expect(await loadChatPlugins(dir)).toEqual([
         { descriptor: receipt.descriptor, argv: [join(dir, executable)] },
       ]);
-      const warnings = JSON.stringify(warning.mock.calls);
-      expect(warnings).toContain(file);
-      expect(warnings).toContain('archon plugin update owner/broken');
-      expect(warnings).toContain('archon plugin remove owner/broken');
-      expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
+      expect(warning.mock.calls).toContainEqual([
+        { receipt: file, reason: expect.any(String) },
+        'Plugin unavailable. Run archon plugin update owner/broken or archon plugin remove owner/broken',
+      ]);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('SECRET_TOKEN_AND_MESSAGE');
     }
   } finally {
     loggerFactory.mockRestore();
@@ -151,10 +151,10 @@ test('unowned executables own neither a process nor a policy while duplicate pla
     expect(await loadChatPlugins(dir)).toEqual([
       { descriptor: healthy.descriptor, argv: [join(dir, executable)] },
     ]);
-    const warnings = JSON.stringify(warning.mock.calls);
-    expect(warnings).toContain(file);
-    expect(warnings).toContain('archon plugin update owner/chat-fixture');
-    expect(warnings).toContain('archon plugin remove owner/chat-fixture');
+    expect(warning.mock.calls).toContainEqual([
+      { receipt: file, reason: 'receipt does not own its executable' },
+      'Plugin unavailable. Run archon plugin update owner/chat-fixture or archon plugin remove owner/chat-fixture',
+    ]);
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();

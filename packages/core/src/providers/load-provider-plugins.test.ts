@@ -111,12 +111,11 @@ test('unusable receipts warn without blocking a healthy provider', async () => {
       expect((await loadProviderPlugins(dir)).map(provider => provider.id)).toEqual([
         descriptor.id,
       ]);
-      const warnings = JSON.stringify(warning.mock.calls);
-      expect(warnings).toContain(reason);
-      expect(warnings).toContain(file);
-      expect(warnings).toContain('archon plugin update owner/broken');
-      expect(warnings).toContain('archon plugin remove owner/broken');
-      expect(warnings).not.toContain('SECRET_TOKEN_AND_MESSAGE');
+      expect(warning.mock.calls).toContainEqual([
+        { receipt: file, reason: expect.stringContaining(reason) },
+        'Plugin unavailable. Run archon plugin update owner/broken or archon plugin remove owner/broken',
+      ]);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('SECRET_TOKEN_AND_MESSAGE');
       expect(await readFile(file, 'utf8')).toBe(contents);
     }
   } finally {
