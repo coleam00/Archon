@@ -121,7 +121,7 @@ Turns decided intent, such as a feature request, an investigation report, or an 
 archon workflow run archon-plan "Add CSV export to the reports page"
 ```
 
-**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found.
+**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. The SDLC pack README's sidecar section describes the rulings document.
 
 ---
 
