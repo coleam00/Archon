@@ -15,6 +15,7 @@ function publish(failures: number, wrongReadBack = false) {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     cwd,
+    source: 'gh',
     gh: { noOpenPr: true, pr: { headRefOid: head } },
     inputs: {
       INPUTS_REPO: JSON.stringify(PR.repo),
