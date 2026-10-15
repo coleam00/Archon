@@ -1,3 +1,4 @@
+import * as git from '@archon/git';
 import * as pluginProcess from '@archon/paths/plugin-process';
 import { expect, test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
@@ -42,15 +43,15 @@ async function waitUntil(label: string, check: () => boolean): Promise<void> {
   }
 }
 
-posixOnly('host-only recording preserves legacy subprocess execution', async () => {
+test('host-only recording preserves legacy subprocess execution', async () => {
   const trees = recordNodeProcessTrees(false);
-  const spawnSpy = spyOn(childProcess, 'spawn');
+  const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'legacy\n', stderr: '' });
   try {
     expect(await runHostBash('echo legacy')).toMatchObject({ stdout: 'legacy\n' });
-    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(execSpy).toHaveBeenCalledTimes(1);
   } finally {
     trees.release();
-    spawnSpy.mockRestore();
+    execSpy.mockRestore();
   }
 });
 

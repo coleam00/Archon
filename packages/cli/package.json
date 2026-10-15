@@ -107,7 +107,8 @@
       "src/utils/detached-resume-receipt.test.ts"
     ],
     [
-      "src/utils/owned-run-termination.test.ts"
+      "src/utils/owned-run-termination.test.ts",
+      "src/utils/detached-host-node-stop.test.ts"
     ],
     [
       "src/telemetry-exit.integration.spec.ts"
