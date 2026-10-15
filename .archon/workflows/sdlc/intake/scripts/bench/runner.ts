@@ -657,13 +657,22 @@ function singleGhLookup(lookup: string): boolean {
   let command = lookup.slice(lookup.indexOf(': ') + 2);
   const wrapped = /^(?:\S*sh)\s+-[a-z]*c\s+(['"])([\s\S]*)\1$/.exec(command);
   if (wrapped !== null) {
-    if (wrapped[1] === '"') {
-      for (let i = 0; i < wrapped[2].length; i++) {
-        if (wrapped[2][i] === '\\') i++;
-        else if (wrapped[2][i] === '$' || wrapped[2][i] === '`') return false;
-      }
-    }
     command = wrapped[2];
+    if (wrapped[1] === '"') {
+      let unquoted = '';
+      for (let i = 0; i < command.length; i++) {
+        const char = command[i];
+        const next = command[i + 1];
+        if (char === '\\' && next !== undefined && '$`"\\\n'.includes(next)) {
+          if (next !== '\n') unquoted += next;
+          i++;
+        } else {
+          if (char === '$' || char === '`') return false;
+          unquoted += char;
+        }
+      }
+      command = unquoted;
+    }
   }
   if (!/^gh\s+(?:issue\s+view|api)\s+/.test(command)) return false;
   let quote: "'" | '"' | undefined;

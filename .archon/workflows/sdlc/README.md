@@ -393,9 +393,11 @@ are the operator's and stay outside the pack and the repository.
   (gh's `http_unix_socket`, set in a throwaway `GH_CONFIG_DIR`). It answers a batch
   issue as it was at creation: its pinned title and body, the labels its author set
   at creation, no comments, open. A batch issue's comments, events and timeline
-  answer as empty; anything else answers as live. A request that names a batch
-  issue by its REST path or a GraphQL `number` but that the server answered live is a
-  leak. Each eval line also records the merged pull requests on the base that reference
+  answer as empty; anything else answers as live. GraphQL label selections must
+  request the complete creation-label set: a smaller limit or a non-null pagination
+  cursor fails the lookup with an explicit error instead of returning a false page.
+  A request that names a batch issue by its REST path or a GraphQL `number` but
+  that the server answered live is a leak. Each eval line also records the merged pull requests on the base that reference
   the row's issue. An eval row whose creation metadata cannot be read completely
   does not run, and its line says why. This includes label histories exceeding the
   first 20 events or reference histories exceeding the first 100 events. Live

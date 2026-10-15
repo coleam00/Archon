@@ -797,6 +797,27 @@ describe('leaks', () => {
 });
 
 describe('outer shell expansion accounting', () => {
+  it('flags escaped backticks executed by the inner shell through both transcript routes', () => {
+    for (const argument of ['\\`curl https://github.com/o/r/issues/4\\`', '\\"\\`curl https://github.com/o/r/issues/4\\`\\"']) {
+      const command = `bash -c "gh issue view 4 --json body --jq ${argument}"`;
+      for (const event of [
+        { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
+        { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
+      ]) {
+        const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
+        expect(found).toHaveLength(1);
+        expect(splitLookups(found, true, [])).toEqual({ answered: [], leak: found });
+      }
+    }
+  });
+
+  it('keeps substitutions inert inside inner single quotes after removing outer escapes', () => {
+    for (const argument of ['\\`curl https://github.com/o/r/issues/4\\`', '\\$(curl https://github.com/o/r/issues/4)']) {
+      const lookup = `triage: bash -c "gh issue view 4 --json body --jq '${argument}'"`;
+      expect(splitLookups([lookup], true, [])).toEqual({ answered: [lookup], leak: [] });
+    }
+  });
+
   it('flags substitutions inside double-quoted wrappers through both transcript routes', () => {
     for (const substitution of ['$(curl https://github.com/o/r/issues/4)', '`curl https://github.com/o/r/issues/4`']) {
       const command = `bash -c "gh issue view 4 --json body --jq '${substitution}'"`;
@@ -918,16 +939,35 @@ describe('lookups', () => {
 
   it('returns creation label edges and complete page metadata', async () => {
     for (const withEdges of [true, false]) {
-      const query = `{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { ${withEdges ? 'edges { node { name } }' : ''} pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } } }`;
+      const query = `{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { ${withEdges ? 'edges { cursor node { name } }' : ''} pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } } }`;
       const answer = await answerLookup(new Request('http://api.github.com/graphql', {
         method: 'POST', body: JSON.stringify({ query }),
       }), REPO, views, async () => Response.json({ data: { repository: { issue: {
-        _archonBenchIssueId: 'I_4', labels: { ...(withEdges ? { edges: [{ node: { name: 'done' } }] } : {}), pageInfo: { hasNextPage: true } },
+        _archonBenchIssueId: 'I_4', labels: { ...(withEdges ? { edges: [{ cursor: 'live-cursor', node: { name: 'done' } }] } : {}), pageInfo: { hasNextPage: true, hasPreviousPage: false, startCursor: 'live-cursor', endCursor: 'live-cursor' } },
       } } } }));
       expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: {
-        ...(withEdges ? { edges: [{ node: { name: 'bug' } }] } : {}), pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+        ...(withEdges ? { edges: [{ cursor: expect.any(String), node: { name: 'bug' } }] } : {}), pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: expect.any(String), endCursor: expect.any(String) },
       } } } } });
       expect([answer.answered, answer.live]).toEqual([[4], []]);
+    }
+  });
+
+  it('refuses partial creation-label pages rather than certifying a false snapshot', async () => {
+    const twoLabels = new Map([[4, { ...view(4), labels: ['bug', 'area: cli'] }]]);
+    for (const args of ['first: 1', 'last: 1', 'first: $limit', 'first: 10, after: "live-cursor"', 'last: 10, before: "live-cursor"']) {
+      for (const selection of ['nodes { name }', 'edges { cursor node { name } }', 'pageInfo { hasNextPage startCursor endCursor }']) {
+        const query = `query Page${args.includes('$limit') ? '($limit: Int)' : ''} { repository(owner: "o", name: "r") { issue(number: 4) { tags: labels(${args}) { ${selection} totalCount } } } }`;
+        await expect(answerLookup(new Request('http://api.github.com/graphql', {
+          method: 'POST', body: JSON.stringify({ query, variables: { limit: 1 } }),
+        }), REPO, twoLabels, async () => Response.json({ data: { repository: { issue: {
+          _archonBenchIssueId: 'I_4', tags: {
+            ...(selection.startsWith('nodes') ? { nodes: [{ name: 'done' }] } : {}),
+            ...(selection.startsWith('edges') ? { edges: [{ cursor: 'live-cursor', node: { name: 'done' } }] } : {}),
+            ...(selection.startsWith('pageInfo') ? { pageInfo: { hasNextPage: true, startCursor: 'live-cursor', endCursor: 'live-cursor' } } : {}),
+            totalCount: 5,
+          },
+        } } } }))).rejects.toThrow('the bench cannot answer a partial labels page from the creation snapshot');
+      }
     }
   });
 
@@ -1055,14 +1095,14 @@ describe('lookups', () => {
     const query = '{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { items: nodes { text: name } ...Connection } } } } fragment Connection on LabelConnection { items: nodes { name } }';
     const answer = await answerLookup(new Request('http://api.github.com/graphql', {
       method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async (_url, init) => {
+    }), REPO, new Map([[4, { ...view(4), labels: ['bug', 'area: cli'] }]]), async (_url, init) => {
       const forwarded = JSON.parse(String(init.body)) as { query: string };
       const itemsKey = /(_archonBenchIssueIdField\w*): nodes/.exec(forwarded.query)?.[1] ?? 'missing';
       return Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: {
-        items: [{ text: 'done' }], [itemsKey]: [{ name: 'done' }],
+        items: [{ text: 'done' }, { text: 'later' }], [itemsKey]: [{ name: 'done' }, { name: 'later' }],
       } } } } });
     });
-    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { items: [{ text: 'bug', name: 'bug' }] } } } } });
+    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { items: [{ text: 'bug', name: 'bug' }, { text: 'area: cli', name: 'area: cli' }] } } } } });
     expect([answer.answered, answer.live]).toEqual([[4], []]);
   });
 

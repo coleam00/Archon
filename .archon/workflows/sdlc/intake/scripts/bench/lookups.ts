@@ -90,11 +90,25 @@ const EMPTY_CONNECTION = { nodes: [], edges: [], totalCount: 0, pageInfo: PAGE_I
 
 const isConnection = (value: unknown): boolean => isObject(value) && ('nodes' in value || 'edges' in value || 'totalCount' in value || 'pageInfo' in value);
 
+function labelConnection(labels: readonly string[], args: Readonly<Record<string, unknown>>) {
+  for (const [name, value] of Object.entries(args)) {
+    if ((name === 'after' || name === 'before') && value === null) continue;
+    if ((name !== 'first' && name !== 'last') || typeof value !== 'number' || !Number.isInteger(value) || value < labels.length) {
+      throw new Error('the bench cannot answer a partial labels page from the creation snapshot');
+    }
+  }
+  const edges = labels.map((name, index) => ({ node: { name }, cursor: Buffer.from(`bench-label:${String(index)}`).toString('base64') }));
+  return {
+    nodes: edges.map(edge => edge.node), edges, totalCount: labels.length,
+    pageInfo: { ...PAGE_INFO, startCursor: edges[0]?.cursor ?? null, endCursor: edges.at(-1)?.cursor ?? null },
+  };
+}
+
 /**
  * The creation view of one issue object, in the shape it arrived in. Only the keys
  * listed here survive, so a field the tracker adds later cannot carry the outcome.
  */
-function creationObject(original: Readonly<Record<string, unknown>>, view: CreationView): Record<string, unknown> {
+function creationObject(original: Readonly<Record<string, unknown>>, view: CreationView, labelArguments: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(original)) {
     if (KEPT.has(key)) result[key] = value;
@@ -106,7 +120,7 @@ function creationObject(original: Readonly<Record<string, unknown>>, view: Creat
     else if (key === 'updatedAt' || key === 'updated_at') result[key] = view.created_at;
     else if (key === 'labels' && Array.isArray(value)) result[key] = view.labels.map(name => ({ name }));
     else if (key === 'labels' && isConnection(value) && isObject(value)) {
-      const labels = { nodes: view.labels.map(name => ({ name })), edges: view.labels.map(name => ({ node: { name }, cursor: null })), totalCount: view.labels.length, pageInfo: PAGE_INFO };
+      const labels = labelConnection(view.labels, labelArguments);
       result[key] = Object.fromEntries(Object.entries(labels).filter(([name]) => name in value));
     } else if (key === 'comments' && typeof value === 'number') result[key] = 0;
     else if (isConnection(value)) result[key] = EMPTY_CONNECTION;
@@ -124,6 +138,7 @@ interface Selection {
   readonly wireKey: string;
   readonly children: Selections;
   readonly number?: number;
+  readonly labelArguments?: Readonly<Record<string, unknown>>;
 }
 type Selections = readonly (Selection | string)[];
 interface Graphql {
@@ -223,9 +238,18 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
           if (typeof number === 'number') issueNumber = number;
         }
       }
+      const labelArguments: Record<string, unknown> = {};
+      if (name === 'labels' && token() === '(') {
+        for (let j = i + 1; j < tokens.length && tokens[j][0] !== ')'; j++) {
+          if (tokens[j + 1]?.[0] !== ':') continue;
+          const value = tokens[j + 2]?.[0] ?? '';
+          labelArguments[tokens[j][0]] = value === '$' ? variables[tokens[j + 3]?.[0] ?? '']
+            : value === 'null' ? null : Number(value);
+        }
+      }
       skipGroup('(', ')');
       directives();
-      fields.push({ key, wireKey, name, number: issueNumber, children: selectionSet(issueField, inFragment) });
+      fields.push({ key, wireKey, name, number: issueNumber, labelArguments, children: selectionSet(issueField, inFragment) });
     }
     i++;
     return fields;
@@ -323,7 +347,7 @@ export function atCreation(
         const canonical = isObject(inner) ? Object.fromEntries(Object.entries(inner).map(([key, value]) => [
           selectedFields(field.children, graphql).find(child => child.wireKey === key)?.name ?? key, value,
         ])) : inner;
-        const rewritten = creationObject({ [field.name]: canonical }, view);
+        const rewritten = creationObject({ [field.name]: canonical }, view, field.labelArguments);
         if (!(field.name in rewritten)) return [];
         const value = KEPT.has(field.name) ? visit(original[field.wireKey], field.children) : projectSelection(rewritten[field.name], field.children, graphql);
         return [[field.key, value] as const];
