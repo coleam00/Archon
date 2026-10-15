@@ -146,3 +146,96 @@ test('checks a new workspace package against its own manifest', () => {
     },
   ]);
 });
+
+describe('plain-Zod engine boundary', () => {
+  for (const field of [
+    'dependencies',
+    'peerDependencies',
+    'devDependencies',
+    'optionalDependencies',
+  ]) {
+    test(`rejects the paired Hono import and ${field} regression`, () => {
+      const violations = findEdgeViolations({
+        packages: [
+          {
+            path: 'packages/workflows/package.json',
+            [field]: { '@hono/zod-openapi': '^1.0.0' },
+          },
+        ],
+        files: [
+          {
+            path: 'packages/workflows/src/schemas/dag-node.ts',
+            content: "import { z } from '@hono/zod-openapi';",
+          },
+        ],
+      });
+      expect(violations).toEqual([
+        {
+          file: 'packages/workflows/package.json',
+          message: `workflows must not declare @hono/zod-openapi in ${field}; engine schemas use plain zod`,
+        },
+        {
+          file: 'packages/workflows/src/schemas/dag-node.ts',
+          line: 1,
+          message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
+        },
+      ]);
+    });
+  }
+
+  for (const path of [
+    'packages/workflows/src/schemas/dag-node.ts',
+    'packages/workflows/src/schemas.test.ts',
+    'packages/core/src/schemas/user.ts',
+  ]) {
+    for (const source of [
+      "import { z } from '@hono/zod-openapi';",
+      "export { z } from '@hono/zod-openapi';",
+      "const wrapper = import('@hono/zod-openapi');",
+      "const wrapper = require('@hono/zod-openapi');",
+      "import type { ZodType } from '@hono/zod-openapi/internal';",
+    ]) {
+      test(`rejects ${source} in ${path}`, () => {
+        expect(
+          check(source, path, [
+            { path: 'packages/workflows/package.json' },
+            { path: 'packages/core/package.json' },
+          ])
+        ).toEqual([
+          {
+            file: path,
+            line: 1,
+            message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
+          },
+        ]);
+      });
+    }
+  }
+
+  test('allows plain Zod and server-owned Hono schemas', () => {
+    expect(
+      findEdgeViolations({
+        packages: [
+          { path: 'packages/workflows/package.json', dependencies: { zod: '^4' } },
+          { path: 'packages/core/package.json', dependencies: { '@hono/zod-openapi': '^1' } },
+          { path: 'packages/server/package.json', dependencies: { '@hono/zod-openapi': '^1' } },
+        ],
+        files: [
+          {
+            path: 'packages/workflows/src/schemas/dag-node.ts',
+            content: "import { z } from 'zod';",
+          },
+          { path: 'packages/core/src/schemas/user.ts', content: "import { z } from 'zod';" },
+          {
+            path: 'packages/core/src/schemas/other.ts',
+            content: "import { z } from '@hono/zod-openapi';",
+          },
+          {
+            path: 'packages/server/src/schemas.ts',
+            content: "import { z } from '@hono/zod-openapi';",
+          },
+        ],
+      })
+    ).toEqual([]);
+  });
+});

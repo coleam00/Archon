@@ -14,12 +14,11 @@
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
  */
-import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { credentialHelperScript } from './credential-helper-script';
+import { installManagedScript } from './managed-script';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -37,6 +36,18 @@ function getLog(): ReturnType<typeof createLogger> {
 export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
+
+/**
+ * Write the helper to `~/.archon/bin/git-credential-archon` when outdated and
+ * return its path. Throws when the script cannot be written.
+ */
+export function installCredentialHelperScript(): string {
+  const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
+  if (installManagedScript(helperPath, credentialHelperScript)) {
+    getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
+  }
+  return helperPath;
+}
 
 /**
  * Git takes `.git/config.lock` for each write and fails instead of waiting, so
@@ -61,22 +72,9 @@ export function installCredentialHelper(
 }
 
 async function install(repoPath: string): Promise<CredentialHelperInstallResult> {
-  const binDir = resolve(getArchonHome(), 'bin');
-  const helperPath = resolve(binDir, 'git-credential-archon');
-  const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
   try {
-    if (!isCurrentHelper(helperPath)) {
-      mkdirSync(binDir, { recursive: true });
-      const tempPath = resolve(binDir, `git-credential-archon.${randomUUID()}.tmp`);
-      try {
-        writeFileSync(tempPath, credentialHelperScript, { flag: 'wx' });
-        chmodSync(tempPath, 0o755);
-        renameSync(tempPath, helperPath);
-      } finally {
-        rmSync(tempPath, { force: true });
-      }
-      getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
-    }
+    const helperPath = installCredentialHelperScript();
+    const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
     await execFileAsync(
       'git',
       ['-C', repoPath, 'config', 'credential.https://github.com.helper', helperCommand],
@@ -94,19 +92,5 @@ async function install(repoPath: string): Promise<CredentialHelperInstallResult>
     return { kind: 'installed', helperPath };
   } catch (err) {
     return { kind: 'failed', error: err as Error };
-  }
-}
-
-/**
- * Windows cannot rename over a file another process holds open, and a running
- * helper keeps its script open. Rewriting only outdated copies keeps routine
- * setup from failing while another worktree's Git fetches credentials.
- */
-function isCurrentHelper(helperPath: string): boolean {
-  try {
-    return readFileSync(helperPath, 'utf8') === credentialHelperScript;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw err;
   }
 }

@@ -16,6 +16,7 @@ import {
 type TestConfig = {
   assistants?: { claude: { model: string } };
   worktree?: { baseBranch: string };
+  concurrency?: { maxConversations: number };
 };
 
 const mockLoadConfig = mock<(_repoPath?: string) => Promise<TestConfig>>(async () => ({
@@ -515,9 +516,10 @@ describe('GET /api/config', () => {
     mockGetDatabaseType.mockReset();
   });
 
-  test('returns config and database type', async () => {
+  test('returns the loaded conversation limit and database type', async () => {
     mockLoadConfig.mockImplementationOnce(async () => ({
       assistants: { claude: { model: 'sonnet' } },
+      concurrency: { maxConversations: 3 },
     }));
     mockGetDatabaseType.mockImplementationOnce(() => 'sqlite');
 
@@ -526,12 +528,16 @@ describe('GET /api/config', () => {
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as {
-      config: { assistants: { claude: { model: string } } };
+      config: {
+        assistants: { claude: { model: string } };
+        concurrency: { maxConversations: number };
+      };
       database: string;
     };
     expect(body.config).toBeDefined();
     expect(body.database).toBe('sqlite');
     expect(body.config.assistants.claude.model).toBe('sonnet');
+    expect(body.config.concurrency.maxConversations).toBe(3);
   });
 
   test('reflects postgres database type when configured', async () => {

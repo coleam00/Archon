@@ -180,6 +180,18 @@ Workflows that span >1h need a fresh token to push from the cloned worktree. In 
 
 The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If helper installation or registration fails, repository setup stops before URL registration, sync, or workflow dispatch; a later setup retries registration and repairs partial config.
 
+### Long-running workflow `gh`
+
+A run's `GH_TOKEN` and `GITHUB_TOKEN` hold the installation token resolved when the run, or a resumed segment, starts. That token can have as little as 5 minutes left. When the run's process has `ARCHON_PORT` (every run the server dispatches, and a CLI run that exports the server's port), Archon also puts `~/.archon/bin/gh-shim` first on the run's `PATH`. On each call the shim asks the same internal endpoint for a current token for the run's repository and runs the real `gh` with it in the environment. If it gets no token, it exits 1 with a `gh (archon shim):` error instead of running `gh` with a stale token. A `GH_TOKEN` that is not an installation token, such as one a step sets itself, passes through unchanged. A per-user token or scrubbed token from [per-user GitHub identity](#step-8-optional-enable-per-user-github-identity) turns the shim off for that run.
+
+`gh` keeps the start-time token, and fails once it expires, in these cases:
+
+- **A CLI run without `ARCHON_PORT`.** No endpoint is reachable, so Archon logs `workflow.gh_token_refresh_unavailable` each time it resolves the run's GitHub environment. That happens when the run starts, when it runs worktree setup commands, and when it resumes, so one run can log it several times. The CLI mints its token at start, so it lasts about an hour. Export `ARCHON_PORT` with an App-mode server's port to cover longer runs.
+- **`gh` called by a Codex agent.** Codex's shell snapshot restores a fixed `PATH`, so its shell never finds the shim. Archon does not change that Codex setting. Bash, script and loop nodes, and Claude and Pi agents, use the shim.
+- **Windows.** The shim is a POSIX shell script, so a run on Windows logs the same warning and keeps the start-time token.
+
+Run output redacts the start-time token only. A token the shim fetches later lives in the `gh` process's environment, so it is not redacted if a step prints it, for example with `gh auth token`.
+
 ### Internal endpoint security — REQUIRED
 
 The credential-helper backend is exposed at `POST /internal/git-credential` and hands out live installation access tokens. **It MUST NOT be reachable from outside the Archon host.**

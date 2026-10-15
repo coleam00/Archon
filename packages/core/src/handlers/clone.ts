@@ -99,21 +99,6 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   },
 ];
 
-/** Well-known self-hosted hostname label patterns → env var + clone credentials. */
-const SELF_HOSTED_FORGE: {
-  label: string;
-  envVar: string;
-  buildCredentials: BuildForgeCredentials;
-}[] = [
-  {
-    label: 'gitlab',
-    envVar: 'GITLAB_TOKEN',
-    buildCredentials: tokenAsOAuth2Password,
-  },
-  { label: 'gitea', envVar: 'GITEA_TOKEN', buildCredentials: tokenAsUsername },
-  { label: 'forgejo', envVar: 'GITEA_TOKEN', buildCredentials: tokenAsUsername },
-];
-
 /** Resolve forge-specific credentials without adding them to the repository URL. */
 export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
@@ -135,19 +120,9 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     }
   }
 
-  // 2. Self-hosted: check if any hostname label matches a known forge name
-  //    e.g. "gitlab.mycompany.com" has labels ["gitlab", "mycompany", "com"]
-  const labels = hostname.split('.');
-  for (const entry of SELF_HOSTED_FORGE) {
-    if (labels.includes(entry.label)) {
-      const token = process.env[entry.envVar];
-      return token ? entry.buildCredentials(token) : undefined;
-    }
-  }
-
-  // 3. Explicit URL match: compare clone authority against configured *_URL env vars.
-  //    Handles self-hosted instances where the hostname doesn't contain a forge name
-  //    (e.g. git.example.com with GITEA_URL=https://git.example.com).
+  // 2. Self-hosted: the clone authority must equal a configured *_URL authority.
+  //    A hostname that merely looks like a forge (gitlab.attacker.example) gets no
+  //    token, because anyone who can submit a clone URL controls that hostname.
   const URL_FORGE: {
     urlEnvVar: string;
     tokenEnvVar: string;

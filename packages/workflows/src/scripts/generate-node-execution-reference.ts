@@ -61,7 +61,13 @@ function walk(
   if (alternatives) {
     for (const [index, alternative] of alternatives.entries()) {
       const discriminants = Object.entries(alternative.properties ?? {})
-        .filter(([, value]) => typeof value !== 'boolean' && value.const !== undefined)
+        // An optional constant (`partial: true`) qualifies a branch; it does not select it.
+        .filter(
+          ([key, value]) =>
+            typeof value !== 'boolean' &&
+            value.const !== undefined &&
+            alternative.required?.includes(key) === true
+        )
         .map(([key, value]) => `${path}.${key} = ${fieldType(schemaObject(value))}`);
       const branch = discriminants.join(', ') || `${path} alternative ${String(index + 1)}`;
       walk(alternative, path, presence, [condition, branch].filter(Boolean).join('; '), rows);

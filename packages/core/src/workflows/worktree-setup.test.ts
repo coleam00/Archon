@@ -348,6 +348,7 @@ for (const scenario of [
       GITHUB_TOKEN: process.env.GITHUB_TOKEN,
       COPILOT_GITHUB_TOKEN: process.env.COPILOT_GITHUB_TOKEN,
       ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK,
+      ARCHON_PORT: process.env.ARCHON_PORT,
     };
     Object.assign(process.env, {
       GH_TOKEN: 'host-setup-credential',
@@ -355,6 +356,7 @@ for (const scenario of [
       COPILOT_GITHUB_TOKEN: 'host-copilot-credential',
       ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: String(scenario.fallback),
     });
+    delete process.env.ARCHON_PORT;
     try {
       const credentialsDeps = {
         store: {
@@ -367,7 +369,12 @@ for (const scenario of [
             kind: 'repo' as const,
           }),
         },
-        resolveBotGitHubToken: async () => 'bot-setup-credential',
+        githubApp: {
+          resolveInstallationToken: async () => 'bot-setup-credential',
+          installCliShim: () => {
+            throw new Error('ARCHON_PORT is unset in this test');
+          },
+        },
         isPerUserGitHubEnabled: () => scenario.perUser,
         getUserGithubToken: async () => scenario.token,
       };

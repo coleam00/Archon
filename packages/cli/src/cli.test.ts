@@ -10,10 +10,11 @@ import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
+import ts from 'typescript';
 import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
-import { canonicalizeProjectPath } from '@archon/paths';
+import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import {
@@ -29,6 +30,7 @@ import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
+  isContinueSubcommand,
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
@@ -412,17 +414,146 @@ describe('workflow model arguments', () => {
     ['workflow', 'approve', 'run-1'],
     ['workflow', 'reject', 'run-1'],
     ['workflow', 'respond', 'run-1', 'approve'],
+    ['workflow', 'answer', 'run-1', '--occurrence', 'x'],
   ]) {
     it(`rejects --model on ${args[0]} ${args[1]}`, () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup. A defined message is what makes
       // main() print to stderr and exit 1.
       const message = rejectModelOnContinue(args[1], 'large=opus');
+      expect(isContinueSubcommand(args[1])).toBe(true);
       expect(message).toBeDefined();
       expect(message).toContain('--model cannot be used when continuing an existing workflow run');
       expect(message).toContain('keeps the model bindings it started with');
     });
   }
+
+  it('does not classify fresh runs or queries as continuations', () => {
+    for (const subcommand of ['run', 'list', 'attention', undefined]) {
+      expect(isContinueSubcommand(subcommand)).toBe(false);
+      expect(rejectModelOnContinue(subcommand, 'large=foo')).toBeUndefined();
+    }
+  });
+});
+
+describe('workflow answer flag rejection and command discovery', () => {
+  let home: string;
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), 'archon-cli-answer-flags-'));
+  });
+  afterAll(async () => {
+    await removeTempTree(home);
+  });
+
+  const invoke = (args: string[]) =>
+    spawnSync(process.execPath, [CLI_ENTRY, 'workflow', ...args], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ARCHON_HOME: home,
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
+        GITHUB_APP_ID: '',
+        TOKEN_ENCRYPTION_KEY: '',
+      },
+    });
+
+  it('refuses --model on answer with the continuation error before run lookup', () => {
+    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--model', 'large=foo']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      '--model cannot be used when continuing an existing workflow run'
+    );
+    expect(result.stderr).toContain('keeps the model bindings it started with');
+  });
+
+  for (const json of [false, true]) {
+    it(`refuses --detach on answer before recording an answer (json=${json})`, () => {
+      const result = invoke([
+        'answer',
+        'missing-run',
+        '--occurrence',
+        'x',
+        '--detach',
+        ...(json ? ['--json'] : []),
+      ]);
+      expect(result.status).toBe(1);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: 'Error: --detach cannot be used with workflow answer.',
+        });
+      } else {
+        expect(result.stderr).toContain('Error: --detach cannot be used with workflow answer.');
+      }
+    });
+  }
+
+  it('returns nonzero when a JSON answer cannot find its run', () => {
+    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--json']);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('Workflow run not found'),
+    });
+    expect(result.status).toBe(1);
+  });
+
+  it('advertises every workflow dispatch route and no others', () => {
+    const result = invoke(['unknown-command']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unknown workflow subcommand: unknown-command');
+    const available = result.stderr.split('Available: ')[1]?.split('\n')[0]?.split(', ');
+    const source = ts.createSourceFile(
+      CLI_ENTRY,
+      readFileSync(CLI_ENTRY, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true
+    );
+    const routes = new Set<string>();
+    const comparisons = (node: ts.Node, identifier: string): string[] => {
+      const names: string[] = [];
+      const visit = (child: ts.Node): void => {
+        if (
+          ts.isBinaryExpression(child) &&
+          child.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+          ts.isIdentifier(child.left) &&
+          child.left.text === identifier &&
+          ts.isStringLiteral(child.right)
+        )
+          names.push(child.right.text);
+        ts.forEachChild(child, visit);
+      };
+      visit(node);
+      return names;
+    };
+    const visit = (node: ts.Node, workflow = false): void => {
+      if (ts.isIfStatement(node) && comparisons(node.expression, 'command').includes('workflow')) {
+        for (const name of comparisons(node.expression, 'subcommand')) routes.add(name);
+      }
+      const inWorkflow =
+        workflow ||
+        (ts.isCaseClause(node) &&
+          ts.isStringLiteral(node.expression) &&
+          node.expression.text === 'workflow');
+      if (
+        inWorkflow &&
+        ts.isSwitchStatement(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'subcommand'
+      ) {
+        for (const clause of node.caseBlock.clauses) {
+          if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) {
+            routes.add(clause.expression.text);
+          }
+        }
+      }
+      ts.forEachChild(node, child => visit(child, inWorkflow));
+    };
+    visit(source);
+    expect(routes.size).toBeGreaterThan(0);
+    expect(available?.sort()).toEqual([...routes].sort());
+  });
 });
 
 describe('workflow run config argument', () => {
@@ -1317,49 +1448,6 @@ describe('CLI env isolation', () => {
 });
 
 describe('CLI git repo check', () => {
-  /**
-   * These tests verify the command categorization logic used in cli.ts.
-   * The CLI uses: requiresGitRepo = !noGitCommands.includes(command ?? '')
-   * where noGitCommands = ['version', 'help']
-   */
-  describe('command categorization', () => {
-    // Mirror the actual noGitCommands array from cli.ts
-    const noGitCommands = ['version', 'help'];
-
-    // Helper that mirrors the CLI's logic
-    const requiresGitRepo = (command: string | undefined): boolean => {
-      return !noGitCommands.includes(command ?? '');
-    };
-
-    describe('commands that bypass git check', () => {
-      it('version command should not require git repo', () => {
-        expect(requiresGitRepo('version')).toBe(false);
-      });
-
-      it('help command should not require git repo', () => {
-        expect(requiresGitRepo('help')).toBe(false);
-      });
-    });
-
-    describe('commands that require git repo', () => {
-      it('workflow command should require git repo', () => {
-        expect(requiresGitRepo('workflow')).toBe(true);
-      });
-
-      it('isolation command should require git repo', () => {
-        expect(requiresGitRepo('isolation')).toBe(true);
-      });
-
-      it('undefined command should require git repo (fail with unknown command later)', () => {
-        expect(requiresGitRepo(undefined)).toBe(true);
-      });
-
-      it('unknown commands should require git repo', () => {
-        expect(requiresGitRepo('unknown')).toBe(true);
-      });
-    });
-  });
-
   describe('findRepoRoot behavior', () => {
     // Test the actual git.findRepoRoot function with real directories
     it('should find repo root from current test directory', async () => {
@@ -1703,6 +1791,30 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+  });
+
+  it('lets workflow attention past the git gate in every scope', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'archon-attention-outside-'));
+    try {
+      const project = projectKeyForCodebase(null, await canonicalizeProjectPath(outside));
+      for (const scope of [['--all'], ['--project', project], []]) {
+        const { status, envelope } = spawnJsonError([
+          'workflow',
+          'attention',
+          ...scope,
+          '--json',
+          '--cwd',
+          outside,
+        ]);
+
+        expect({ status, envelope: envelope() }).toMatchObject({
+          status: 0,
+          envelope: { ok: true, action: 'attention', items: [] },
+        });
+      }
+    } finally {
+      await removeTempTree(outside);
+    }
   });
 
   it('leaves the default home untouched when the gate opens the registry', async () => {

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { DagNode } from './schemas';
 import {
   bindingDirectiveSchema,
@@ -153,6 +153,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
     kind: 'literal',
     reason: 'Display text is not an execution template',
   },
+  'wait.labels.*': { kind: 'template', slots: ['wait.labels.*'] },
   cancel: { kind: 'template', slots: ['cancel.reason'] },
   include: { kind: 'literal', reason: 'Include target is a workflow resource identifier' },
   workflow: { kind: 'literal', reason: 'Child target is a workflow resource identifier' },
@@ -495,6 +496,7 @@ test('the slot catalogue rejects omitted fixed fields', () => {
     'wait.event': { surface: 'value' },
     'wait.attention': { surface: 'prompt' },
     'wait.options': { surface: 'value' },
+    'wait.labels.*': { surface: 'value' },
     'workflow.input': { surface: 'value' },
     'workflow.with.*': { surface: 'value' },
     'workflow.fan_out.items': { surface: 'value' },

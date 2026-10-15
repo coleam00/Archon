@@ -27,6 +27,9 @@
     ],
     [
       "src/architecture.test.ts"
+    ],
+    [
+      "src/api.test.ts"
     ]
   ]
 }
