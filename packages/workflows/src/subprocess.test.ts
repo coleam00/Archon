@@ -90,7 +90,8 @@ posixOnly('a node whose root exited stays endable while its job holds the output
 });
 
 for (const runtime of ['bash', 'bun'] as const) {
-  posixOnly(
+  const runtimeTest = runtime === 'bash' ? posixOnly : test;
+  runtimeTest(
     `owner interruption reports unproved cleanup after a ${runtime} root exits`,
     async () => {
       const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-owner-held-')));
@@ -126,9 +127,17 @@ for (const runtime of ['bash', 'bun'] as const) {
           'root exit',
           () => existsSync(rootFile) && !processExists(Number(readFileSync(rootFile, 'utf8')))
         );
-        await expect(trees.end()).rejects.toThrow('still running');
+        const cleanupMessage =
+          process.platform === 'win32'
+            ? 'exited before tree termination could be proved'
+            : 'still running';
+        await expect(trees.end()).rejects.toThrow(cleanupMessage);
         const error = await node;
-        expect(error).toHaveProperty('cleanupError');
+        expect(error).toMatchObject({
+          timedOut: false,
+          observedExit: { code: 0, signal: null },
+          cleanupError: { message: expect.stringContaining(cleanupMessage) },
+        });
         expect(processExists(Number(readFileSync(ready, 'utf8')))).toBe(true);
       } finally {
         trees.release();
