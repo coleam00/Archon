@@ -6,6 +6,7 @@ import {
   modelCountByBackend,
   providerOptionHint,
   splitPiCredentials,
+  unconsumedConnectionNote,
 } from './agent-status';
 import type { AgentCredentialStatus, AgentCredentials, PiModelInfo } from '../skills';
 
@@ -262,5 +263,27 @@ describe('connectionLabel', () => {
     expect(connectionLabel(connections, 'anthropic')).toBe('work');
     expect(connectionLabel(connections, 'groq')).toBeNull();
     expect(connectionLabel(connections, 'openai')).toBeNull();
+  });
+});
+
+describe('unconsumedConnectionNote', () => {
+  test('a stored connection the agent does not consume points at the env channel', () => {
+    const note = unconsumedConnectionNote(
+      cred({
+        vendor: 'anthropic',
+        displayName: 'Anthropic',
+        kinds: ['api_key'],
+        connected: 'oauth',
+        connectionConsumed: false,
+      })
+    );
+    expect(note).toBe(
+      'subscription used by another agent · to use Anthropic here, set its API key in the install or codebase env'
+    );
+  });
+
+  test('a consumed or absent connection has no note', () => {
+    expect(unconsumedConnectionNote(cred({ vendor: 'anthropic', connected: 'oauth' }))).toBeNull();
+    expect(unconsumedConnectionNote(cred({ vendor: 'anthropic' }))).toBeNull();
   });
 });

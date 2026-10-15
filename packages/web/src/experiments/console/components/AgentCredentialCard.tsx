@@ -13,6 +13,7 @@ import {
   connectionLabel,
   filterCredentials,
   splitPiCredentials,
+  unconsumedConnectionNote,
   type AgentReadinessState,
 } from '../lib/agent-status';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
@@ -246,6 +247,7 @@ function CredentialRow({
   // An unconsumed connection (a Claude subscription on Pi's Anthropic row) belongs to the
   // agent that uses it; disconnecting it here would remove that agent's credential.
   const canDisconnect = connectEnabled && cred.connectionConsumed;
+  const unconsumedNote = unconsumedConnectionNote(cred);
 
   return (
     <div className="flex flex-col gap-2">
@@ -253,17 +255,14 @@ function CredentialRow({
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="font-medium text-text-primary">{cred.displayName}</span>
           <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
-          {cred.connected === 'api_key' ? (
+          {unconsumedNote !== null ? (
+            <span className="font-mono text-[10.5px] text-text-tertiary">{unconsumedNote}</span>
+          ) : cred.connected === 'api_key' ? (
             <span className="font-mono text-[10.5px] text-success">
               API key connected{label ? ` · ${label}` : ''}
             </span>
-          ) : null}
-          {cred.connected === 'oauth' ? (
-            <span
-              className={`font-mono text-[10.5px] ${cred.connectionConsumed ? 'text-success' : 'text-text-tertiary'}`}
-            >
-              {cred.connectionConsumed ? 'subscription connected' : 'subscription not used here'}
-            </span>
+          ) : cred.connected === 'oauth' ? (
+            <span className="font-mono text-[10.5px] text-success">subscription connected</span>
           ) : null}
           {cred.installEnv ? (
             <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">

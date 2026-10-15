@@ -29,6 +29,19 @@ function usableCredentialDetail(c: AgentCredentialStatus): string {
 }
 
 /**
+ * Status text for a row whose stored connection this agent does not consume (a Claude
+ * subscription on Pi's Anthropic row). One credential is stored per vendor, so connecting a
+ * key on that row would replace the other agent's connection; the row instead points at the
+ * env channel, which the agent reads alongside the stored connection. Null when the
+ * connection is consumed or absent.
+ */
+export function unconsumedConnectionNote(c: AgentCredentialStatus): string | null {
+  if (c.connected === null || c.connectionConsumed) return null;
+  const stored = c.connected === 'oauth' ? 'subscription' : 'key';
+  return `${stored} used by another agent · to use ${c.displayName} here, set its API key in the install or codebase env`;
+}
+
+/**
  * Readiness summary for one agent card header. The ready/not-ready verdict is
  * the server's `ready` field (the source of truth — if its computation gains
  * a dimension, the UI follows automatically, I3); the helpers here only
