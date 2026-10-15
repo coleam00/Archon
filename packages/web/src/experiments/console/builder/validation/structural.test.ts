@@ -97,6 +97,48 @@ describe('validateStructural', () => {
     }
   });
 
+  describe('until_field actionable messages', () => {
+    const cases: Array<[string, Record<string, unknown> | undefined, string[]]> = [
+      ['missing schema', undefined, ['output_format', 'YAML']],
+      [
+        'undeclared property',
+        { properties: { other: { type: 'boolean' } }, required: ['done'] },
+        ['properties'],
+      ],
+      ['non-required property', { properties: { done: { type: 'boolean' } } }, ['required']],
+      [
+        'non-boolean type',
+        { properties: { done: { type: 'string' } }, required: ['done'] },
+        ['boolean'],
+      ],
+    ];
+
+    for (const [name, output_format, fragments] of cases) {
+      test(name, () => {
+        const issues = validateStructural(
+          wf([
+            {
+              id: 'l',
+              variant: 'loop',
+              base: { output_format },
+              data: {
+                prompt: 'iterate',
+                max_iterations: 5,
+                fresh_context: false,
+                until_field: 'done',
+              },
+            },
+          ])
+        );
+        const fieldIssues = issues.filter(issue => issue.path.field === 'loop.until_field');
+        expect(fieldIssues).toHaveLength(1);
+        for (const fragment of fragments) {
+          expect(fieldIssues[0]?.message).toContain(fragment);
+        }
+      });
+    }
+  });
+
   test('a blank channel is flagged even when its sibling is valid', () => {
     // The at-least-one rule only fires when NO channel is declared, so these two
     // shapes are caught by the per-channel checks. Both are broken at runtime:
