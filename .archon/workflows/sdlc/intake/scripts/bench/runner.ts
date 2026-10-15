@@ -35,6 +35,7 @@ import {
   relabelRefusal,
   returnedValue,
   snapshotSource,
+  spendOf,
   waitRun,
 } from '../../../.shared/bench.ts';
 import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
@@ -472,16 +473,9 @@ export function agentNodesRan(nodes: readonly RunNode[]): string[] {
     .map(node => node.nodeId);
 }
 
-/** Total cost of the latest attempt of each agent node that ran; null when any of them reported none. */
+/** Total cost of every attempt of each agent node that ran; null when any of them is unknown. */
 export function runCost(nodes: readonly RunNode[]): number | null {
-  let total = 0;
-  for (const node of nodes) {
-    if (node.kind !== 'agent' || node.state === 'skipped') continue;
-    const cost = node.attempts.at(-1)?.costUsd;
-    if (cost?.source !== 'provider') return null;
-    total += cost.value;
-  }
-  return total;
+  return spendOf(nodes.filter(node => node.kind === 'agent' && node.state !== 'skipped').flatMap(node => node.attempts)).cost_usd;
 }
 
 /**

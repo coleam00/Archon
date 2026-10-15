@@ -77,9 +77,14 @@ export function batchPassed(line: Line, checks: ReadonlyMap<string, BatchChecks>
   return checks.get(line.batch_run)?.passed === true;
 }
 
-/** A line the accuracy numbers read: its batch passed, its run passed, and it looked nothing up. */
+/** A line the bars count: its batch passed and it looked nothing up. A run that did not pass counts as not right. */
+function isScored(line: Line, checks: ReadonlyMap<string, BatchChecks>): boolean {
+  return batchPassed(line, checks) && line.leak.length === 0 && line.trust === 'auto';
+}
+
+/** A scored line whose run passed, so its verdict can be read and marked. */
 export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): boolean {
-  return batchPassed(line, checks) && line.passed && line.leak.length === 0 && line.trust === 'auto';
+  return isScored(line, checks) && line.passed;
 }
 
 /** Whether the triage policy lets this row close without a person, by its known outcome. */
@@ -100,6 +105,8 @@ export interface MarkedBar {
   readonly rows: number;
   readonly right: number;
   readonly partly: number;
+  /** Rows whose run did not pass: counted in `rows`, never right. */
+  readonly failed: number;
   readonly unmarked: number;
   /** Rows whose verdict proposes a close or recommends one to a maintainer. */
   readonly closing: number;
@@ -149,20 +156,23 @@ function scoreVersion(
     else for (const name of Object.keys(hard) as (keyof typeof hard)[]) if (!record.checks[name].ok) hard[name]++;
   }
   const outsideLines = lines.filter(line => line.trust === 'outside');
-  const judged = lines.filter(line => isJudged(line, checks) && rows.has(line.row));
+  const scored = lines.filter(line => isScored(line, checks) && rows.has(line.row));
+  const judged = scored.filter(line => line.passed);
   // A live verdict is read from the work item, which keeps no maintainer recommendation or links.
   const linksRecorded = lines.every(line => line.mode === 'eval');
   const markOf = (line: Line): MarkValue | undefined => (line.run_id === null ? undefined : marks.get(line.run_id)?.mark);
 
   const bar = (group: Group, atLeast: number): MarkedBar => {
+    const total = scored.filter(line => line.group === group).length;
     const inGroup = judged.filter(line => line.group === group);
     const right = inGroup.filter(line => markOf(line) === 'right').length;
     const unmarked = inGroup.filter(line => markOf(line) === undefined).length;
-    const status: BarStatus = inGroup.length === 0 ? 'no rows' : unmarked > 0 ? 'pending' : right / inGroup.length >= atLeast ? 'pass' : 'fail';
+    const status: BarStatus = total === 0 ? 'no rows' : unmarked > 0 ? 'pending' : right / total >= atLeast ? 'pass' : 'fail';
     return {
-      rows: inGroup.length,
+      rows: total,
       right,
       partly: inGroup.filter(line => markOf(line) === 'partly').length,
+      failed: total - inGroup.length,
       unmarked,
       closing: inGroup.filter(line => line.verdict?.contract === 'NO_ACTION' || line.verdict?.contract === 'BLOCKED').length,
       cites_canonical: linksRecorded
@@ -175,12 +185,12 @@ function scoreVersion(
     };
   };
 
-  const typed = judged.filter(line => rows.get(line.row)?.known.type !== undefined);
+  const typed = scored.filter(line => rows.get(line.row)?.known.type !== undefined);
   const matrix: Record<string, Record<string, number>> = {};
   let agree = 0;
   for (const line of typed) {
     const human = rows.get(line.row)?.known.type as WorkType;
-    const predicted = line.verdict?.type.value ?? 'none';
+    const predicted = line.passed ? (line.verdict?.type.value ?? 'none') : 'failed';
     if (predicted === human) agree++;
     matrix[human] = { ...matrix[human], [predicted]: (matrix[human]?.[predicted] ?? 0) + 1 };
   }
@@ -300,7 +310,7 @@ export function renderScore(result: Score): string {
           const value = version.bars[bar.group];
           const cites = value.cites_canonical === null ? 'links not recorded live' : `${String(value.cites_canonical)} cite the canonical`;
           const auto = `${String(value.closing)} propose close${bar.group === 'duplicate' ? `, ${cites}` : ''}`;
-          return `${pct(value.right, value.rows)} right, ${String(value.partly)} partly, ${String(value.unmarked)} unmarked: ${value.status} (auto: ${auto})`;
+          return `${pct(value.right, value.rows)} right, ${String(value.partly)} partly, ${String(value.failed)} failed, ${String(value.unmarked)} unmarked: ${value.status} (auto: ${auto})`;
         })
       )
     ),

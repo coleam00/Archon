@@ -16,7 +16,7 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { expandWorkflowIncludes } from '../../../packages/workflows/src/include-expander';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
-import { SAMPLES_FILE, appendLine, readLines } from '../../workflows/sdlc/.shared/bench';
+import { type RunDetail, SAMPLES_FILE, appendLine, readLines, returnedValue } from '../../workflows/sdlc/.shared/bench';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
@@ -28,6 +28,7 @@ import {
   issueTokens,
   type Line,
   postedComments,
+  runCost,
   type Snapshot,
   snapshotChanges,
   triageNodeId,
@@ -475,6 +476,46 @@ describe('hard checks', () => {
   });
 });
 
+describe('run cost', () => {
+  const provider = (value: number) => ({ costUsd: { source: 'provider' as const, value } });
+
+  it('sums every attempt of each agent node that ran', () => {
+    const nodes = [
+      { nodeId: 'triage', state: 'completed', kind: 'agent', attempts: [provider(0.25), provider(0.5)] },
+      { nodeId: 'judge', state: 'skipped', kind: 'agent', attempts: [] },
+      { nodeId: 'read', state: 'completed', kind: 'bash', attempts: [{}] },
+    ];
+    expect(runCost(nodes)).toBe(0.75);
+    expect(runCost([{ ...nodes[0], attempts: [provider(0.25), {}] }])).toBeNull();
+  });
+});
+
+describe('returned value', () => {
+  const detail = (returns: RunDetail['returns']): RunDetail => ({
+    id: 'r1',
+    status: 'completed',
+    output_root: '/tmp',
+    started_at: '',
+    completed_at: null,
+    base_branch: 'dev',
+    aliases: {},
+    transcript_path: null,
+    returns,
+    nodes: [],
+  });
+
+  it('reads a spilled value back from its file', () => {
+    const spill = join(track(mkdtempSync(join(tmpdir(), 'intake-bench-spill-'))), 'returns.json');
+    writeFileSync(spill, JSON.stringify({ verdict: 'big' }));
+    expect(returnedValue(detail({ availability: 'truncated', spill_path: spill }))).toEqual({ verdict: 'big' });
+  });
+
+  it('throws with the reason when there is no value', () => {
+    expect(() => returnedValue(detail({ availability: 'unavailable', reason: 'node_failed' }))).toThrow('run r1 returned no value: {"availability":"unavailable","reason":"node_failed"}');
+    expect(() => returnedValue(detail(null))).toThrow('the field `terminal_record.returns` is missing');
+  });
+});
+
 describe('engine names the bench copies', () => {
   it('the judge node id is the agent node of archon-triage, alone and as intake includes it', () => {
     registerBuiltinProviders();
@@ -625,6 +666,21 @@ describe('score', () => {
       ['6', [], []],
     ]);
     expect(renderScore(result)).toContain('| duplicates found with the right canonical link (at least 70%, by marks) | 1/1 (100%) right');
+  });
+
+  it('counts a run that did not pass against its bars as not right', () => {
+    const out = benchOut();
+    const failed = { status: 'failed' as const, passed: false, verdict: null };
+    appendLine(join(out, SAMPLES_FILE), line('a', dup, '1-x', failed));
+    appendLine(join(out, SAMPLES_FILE), line('a', typed, '1-x', failed));
+    appendLine(join(out, MARKS_FILE), { run_id: 'a-6-2-y', batch: 2, row: '6', label: 'a', mark: 'right', note: '' });
+    const crashed = row(9, { group: 'fixed' });
+    appendLine(join(out, SAMPLES_FILE), line('a', crashed, '2-y', failed));
+    const [a] = score({ ...set, rows: [...set.rows, crashed] }, out).versions;
+    expect(a.bars.duplicate).toMatchObject({ rows: 1, right: 0, failed: 1, unmarked: 0, status: 'fail' });
+    expect(a.bars.fixed).toMatchObject({ rows: 2, right: 1, failed: 1, status: 'fail' });
+    expect(a.type).toEqual({ rows: 2, agree: 0, matrix: { feature: { failed: 1 }, bug: { failed: 1 } } });
+    expect(a.unscored).toEqual(['2', '1', '9']);
   });
 
   it('labels which workflow judged each row', () => {

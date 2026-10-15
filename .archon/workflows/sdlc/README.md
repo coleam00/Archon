@@ -372,7 +372,7 @@ are the operator's and stay outside the pack and the repository.
   `trust: outside` row ran an agent node, if any comment was posted, or if a run did
   not finish; a failed batch is reported before anyone evaluates it. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
-  leak check ran, is recorded as failed and left out of the accuracy numbers.
+  leak check ran, is recorded as failed: it counts against the bars as not right.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
