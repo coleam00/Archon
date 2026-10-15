@@ -1868,12 +1868,13 @@ export async function listDueWorkflowContinuations(
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
-         AND ((status = 'paused' AND ${waitKind} IN ('time', 'event', 'quota')
+         AND ((status = 'paused' AND ${metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`)} IS NULL
+               AND ${waitKind} IN ('time', 'event', 'quota')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
           OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL)
           OR (${answeredGate})
           OR (${answeredAttention})
-          OR (status = 'paused' AND ${metadataText('source_release.nodeId')} IS NOT NULL
+          OR (status = 'paused' AND ${metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`)} IS NOT NULL
               AND COALESCE(${metadataText('isolation')}, '') <> 'container'))
        ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC
        LIMIT $2`,
@@ -1988,9 +1989,9 @@ export async function deferWorkflowContinuation(
   const gatePauseId = metadataText('approval.pauseId');
   const gateNodeId = metadataText('approval.nodeId');
   const waitPauseId = metadataText('wait.pauseId');
-  const releaseNodeId = metadataText('source_release.nodeId');
-  const releasedAt = metadataText('source_release.releasedAt');
-  const releaseId = metadataText('source_release.releaseId');
+  const releaseNodeId = metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`);
+  const releasedAt = metadataText(`${SOURCE_RELEASE_METADATA_KEY}.releasedAt`);
+  const releaseId = metadataText(`${SOURCE_RELEASE_METADATA_KEY}.releaseId`);
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs

@@ -21278,6 +21278,216 @@ describe('executeDagWorkflow -- script nodes', () => {
         expect(failed).toHaveLength(1);
       }
 
+      for (const sibling of ['none', 'paid', 'mixed'] as const) {
+        it(`source recovery stops the old owner after release (${sibling})`, async () => {
+          const deps = createMockDeps();
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          let writesAtRelease = 0;
+          if (sibling !== 'none')
+            mockSendQueryDag.mockImplementation(async function* () {
+              yield { type: 'agent_message_chunk', text: 'DONE' };
+              yield { type: 'result', sessionId: 'paid', cost: 0.25 };
+            });
+          deps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(deps.store), id)
+          );
+          deps.store.releaseRunForUnreadableSource.mockImplementation(async () => {
+            writesAtRelease = deps.store.updateWorkflowRun.mock.calls.length;
+            if (sibling !== 'none')
+              expect(
+                deps.store.updateWorkflowRun.mock.calls.some(
+                  ([, patch]) => patch.metadata?.total_cost_usd === 0.25
+                )
+              ).toBe(true);
+            deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+            return { released: true };
+          });
+          try {
+            await executeDagWorkflow(
+              dagOptions({
+                deps,
+                cwd: testDir,
+                workflowSourceRoots: capture.roots,
+                workflowRun: makeWorkflowRun('source-owner'),
+                workflow: {
+                  name: 'source-owner',
+                  nodes: [
+                    checkNode,
+                    ...(sibling === 'none'
+                      ? []
+                      : [dagNodeSchema.parse({ id: 'paid', prompt: 'Done.' })]),
+                    ...(sibling === 'mixed'
+                      ? [dagNodeSchema.parse({ id: 'bad', bash: 'exit 1' })]
+                      : []),
+                  ],
+                },
+              })
+            );
+          } finally {
+            await capture.restore();
+          }
+          expect(deps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+          expect(deps.store.updateWorkflowRun.mock.calls).toHaveLength(writesAtRelease);
+          expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
+        });
+      }
+
+      for (const kind of [
+        'script-directory',
+        'script-stat',
+        'project-command',
+        'global-command',
+        'legacy-command',
+        'mcp',
+      ] as const) {
+        it(`source recovery retains post-verification absence (${kind})`, async () => {
+          const deps = createMockDeps();
+          const commandFolder = join(testDir, '.archon/commands');
+          await mkdir(commandFolder, { recursive: true });
+          await writeFile(join(commandFolder, 'work.md'), 'DONE');
+          await writeFile(join(commandFolder, 'servers.json'), '{}');
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          await capture.restore();
+          const base = join(capture.captureRoot, 'project/.archon');
+          const commandRoot = join(base, 'commands');
+          const roots =
+            kind === 'global-command'
+              ? { ...capture.roots, project: null, globalCommands: commandRoot }
+              : kind === 'legacy-command'
+                ? { ...capture.roots, project: null, bundledCommands: commandRoot }
+                : capture.roots;
+          const target =
+            kind === 'script-directory'
+              ? join(base, 'scripts')
+              : kind === 'script-stat'
+                ? join(base, 'scripts/check.ts')
+                : kind === 'mcp'
+                  ? join(commandRoot, 'servers.json')
+                  : commandRoot;
+          const node = kind.startsWith('script')
+            ? checkNode
+            : dagNodeSchema.parse(
+                kind === 'mcp'
+                  ? {
+                      id: 'step',
+                      prompt: 'DONE',
+                      mcp: { path: join(commandRoot, 'servers.json'), optional: true },
+                    }
+                  : { id: 'step', command: 'work' }
+              );
+          if (kind === 'mcp') attachHomeMcpDirectory(node, commandRoot);
+          const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+          let lost = false;
+          let restoreStat = () => {};
+          const verifier = spyOn(
+            sourceIntegrity,
+            'assertWorkflowSourceIntegrity'
+          ).mockImplementation(async roots => {
+            const files = await verify(roots);
+            if (!lost) {
+              lost = true;
+              if (kind === 'script-stat') {
+                const spy = spyOn(sourceFiles, 'stat').mockRejectedValueOnce(
+                  Object.assign(new Error('lost source'), {
+                    code: 'ENOENT',
+                    syscall: 'stat',
+                    path: target,
+                  })
+                );
+                restoreStat = () => spy.mockRestore();
+              } else await sourceFiles.rename(target, `${target}.away`);
+            }
+            return files;
+          });
+          const options = dagOptions({
+            deps,
+            cwd: testDir,
+            workflowSourceRoots: roots,
+            workflowRun: makeWorkflowRun('lost-after-verify'),
+            workflow: { name: 'lost-after-verify', budget: { max_work_units: 1 }, nodes: [node] },
+          });
+          deps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(deps.store), id)
+          );
+          try {
+            await executeDagWorkflow(options);
+          } finally {
+            verifier.mockRestore();
+            restoreStat();
+            if (lost && kind !== 'script-stat') await sourceFiles.rename(`${target}.away`, target);
+          }
+          expectReleased(deps.store, node.id);
+          expect(mockSendQueryDag).not.toHaveBeenCalled();
+          expect(
+            (await deps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+          ).toBe(0);
+          deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'DONE' };
+            yield { type: 'result', sessionId: 'resumed', cost: 0.1 };
+          });
+          await executeDagWorkflow(options);
+          expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        });
+      }
+
+      for (const kind of ['agent', 'loop', 'compose', 'mcp'] as const) {
+        it(`source recovery fails an authored directory used as a file (${kind})`, async () => {
+          const deps = createMockDeps();
+          const folder = join(testDir, '.archon/workflows/team/block');
+          await mkdir(join(folder, 'commands/work.md'), { recursive: true });
+          await mkdir(join(folder, 'servers.json'), { recursive: true });
+          const command = formatPackagedResourceReference(
+            { source: 'project', pack: 'team', workflow: 'block' },
+            'work'
+          );
+          await writeFile(
+            join(testDir, '.archon/workflows/block.yaml'),
+            `name: block\ndescription: block\nnodes:\n  - id: work\n    command: ${command}\n`
+          );
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          await capture.restore();
+          const node =
+            kind === 'compose'
+              ? {
+                  id: 'fan',
+                  kind: 'compose_fan_out' as const,
+                  include: 'block',
+                  fan_out: {
+                    items: '["a"]',
+                    as: 'item',
+                    max_parallel: 1,
+                    join: 'all_success' as const,
+                  },
+                }
+              : dagNodeSchema.parse(
+                  kind === 'mcp'
+                    ? { id: 'step', prompt: 'DONE', mcp: 'servers.json' }
+                    : kind === 'loop'
+                      ? { id: 'step', loop: { command, until: 'DONE', max_iterations: 1 } }
+                      : { id: 'step', command }
+                );
+          if (kind === 'mcp')
+            attachHomeMcpDirectory(
+              node,
+              join(capture.captureRoot, 'project/.archon/workflows/team/block')
+            );
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              cwd: testDir,
+              workflowSourceRoots: capture.roots,
+              workflowRun: makeWorkflowRun('invalid-directory'),
+              workflow: { name: 'invalid-directory', nodes: [node] },
+            })
+          );
+          expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockSendQueryDag).not.toHaveBeenCalled();
+        });
+      }
+
       for (const scope of [
         'project',
         'global',
@@ -35809,6 +36019,41 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     });
     expect(backend.applyChanges).not.toHaveBeenCalled();
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised, not applied
+  });
+
+  it('a source recovery pause suspends the container and exits without writeback', async () => {
+    const backend = makeWritebackBackend();
+    const deps = createMockDeps();
+    const execSpy = stubMissingContainer();
+    const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockRejectedValue(
+      new sourceIntegrity.WorkflowSourceUnavailableError(
+        '/capture',
+        Object.assign(new Error('unreadable'), { code: 'EIO', syscall: 'read' })
+      )
+    );
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: wbTestDir,
+          workflowRun: makeWorkflowRun('container-source'),
+          workflow: {
+            name: 'container-source',
+            nodes: [{ id: 'work', kind: 'exec', runtime: 'bun', script: 'check' }],
+          },
+          execContext: CONTAINER_EXEC,
+          containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+        })
+      );
+    } finally {
+      verifier.mockRestore();
+      execSpy.mockRestore();
+    }
+    expect(deps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.finalize).not.toHaveBeenCalled();
+    expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('mid-DAG pause suspends the container instead of completing', async () => {

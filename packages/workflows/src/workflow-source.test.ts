@@ -1149,6 +1149,16 @@ describe('isSourceReadFailure', () => {
     expect(isSourceReadFailure(error)).toBe(expected);
   });
 
+  test('a directory read is recoverable only where verification found a file', () => {
+    const error = Object.assign(systemError('EISDIR', 'read'), { path: '/capture/work.md' });
+    expect(isSourceReadFailure(error)).toBe(false);
+    expect(isSourceReadFailure(error, new Set(['/capture/other.md']))).toBe(false);
+    expect(isSourceReadFailure(error, new Set(['/capture/work.md']))).toBe(true);
+    expect(
+      isSourceReadFailure(new Error('load failed', { cause: error }), new Set(['/capture/work.md']))
+    ).toBe(true);
+  });
+
   test('a capture missing from this host is a read failure, not changed source', async () => {
     const sourceRoot = await createTempRoot();
     const captureRoot = join(await createTempRoot(), 'capture');

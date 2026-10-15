@@ -13,6 +13,7 @@ import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from '.
 import * as archonPaths from '@archon/paths';
 import {
   liveSourceRoots,
+  capturedSourceReadGuard,
   packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
@@ -298,7 +299,8 @@ export async function loadCommandPrompt(
   cwd: string,
   commandName: string,
   configuredFolder?: string,
-  sourceRoots?: WorkflowSourceRoots
+  sourceRoots?: WorkflowSourceRoots,
+  verifiedFiles?: ReadonlySet<string>
 ): Promise<LoadCommandResult> {
   const roots = sourceRoots ?? liveSourceRoots(cwd);
   const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
@@ -431,7 +433,7 @@ export async function loadCommandPrompt(
   ];
 
   for (const dir of resolvedSearchPaths) {
-    const entries = await archonPaths.findCommandFiles(dir);
+    const entries = await archonPaths.findCommandFiles(dir, capturedSourceReadGuard(verifiedFiles));
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
 
@@ -477,7 +479,10 @@ export async function loadCommandPrompt(
   // with the basename walk, so it can resume across the upgrade.
   if (loadDefaultCommands && roots.kind === 'captured') {
     const appDefaultsPath = roots.bundledCommands;
-    const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+    const entries = await archonPaths.findCommandFiles(
+      appDefaultsPath,
+      capturedSourceReadGuard(verifiedFiles)
+    );
     const match = entries.find(e => e.commandName === commandName);
     if (match) {
       try {

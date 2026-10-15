@@ -81,7 +81,8 @@ async function scanScriptDir(
   dirPath: string,
   scripts: Map<string, ScriptDefinition>,
   depth = 0,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<void> {
   /** The runtime of a script this scan selects; undefined for any other entry. */
   const selectedRuntime = (entry: string): ScriptRuntime | undefined => {
@@ -101,6 +102,7 @@ async function scanScriptDir(
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') {
+      onMissing?.(dirPath, error);
       getLog().debug({ dirPath }, 'script_directory_not_found');
       return;
     }
@@ -117,7 +119,10 @@ async function scanScriptDir(
       entryStat = await stat(entryPath);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') continue;
+      if (err.code === 'ENOENT') {
+        onMissing?.(entryPath, error);
+        continue;
+      }
       // A failure on the selected script must surface: skipping it would report the
       // script as missing. Any other entry (an unrelated or looping link) is not this
       // lookup's concern and must not invalidate it.
@@ -133,7 +138,7 @@ async function scanScriptDir(
       // 1-depth cap: allow one level of grouping (e.g. `.archon/scripts/triage/foo.ts`)
       // but stop there. Matches the workflows/commands convention — no nested folders.
       if (depth >= MAX_SCRIPT_DISCOVERY_DEPTH) continue;
-      await scanScriptDir(entryPath, scripts, depth + 1, requestedNames);
+      await scanScriptDir(entryPath, scripts, depth + 1, requestedNames, onMissing);
       continue;
     }
 
@@ -165,10 +170,11 @@ async function scanScriptDir(
  */
 export async function discoverScripts(
   dir: string,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  await scanScriptDir(dir, scripts, 0, requestedNames);
+  await scanScriptDir(dir, scripts, 0, requestedNames, onMissing);
   getLog().info({ count: scripts.size, dir }, 'scripts_discovery_completed');
   return scripts;
 }
@@ -176,7 +182,8 @@ export async function discoverScripts(
 async function discoverPackagedScripts(
   workflowsRoot: string,
   source: WorkflowSource,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
   let packs: string[];
@@ -184,7 +191,10 @@ async function discoverPackagedScripts(
     packs = await readdir(workflowsRoot);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return scripts;
+    if (err.code === 'ENOENT') {
+      onMissing?.(workflowsRoot, error);
+      return scripts;
+    }
     throw error;
   }
 
@@ -204,12 +214,15 @@ async function discoverPackagedScripts(
       if (!(await stat(packPath)).isDirectory()) continue;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') continue;
+      if (err.code === 'ENOENT') {
+        onMissing?.(packPath, error);
+        continue;
+      }
       throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
         cause: err,
       });
     }
-    await discoverPackScripts(packPath, pack, source, scripts, requestedNames);
+    await discoverPackScripts(packPath, pack, source, scripts, requestedNames, onMissing);
   }
   return scripts;
 }
@@ -220,14 +233,18 @@ async function discoverPackScripts(
   pack: string,
   source: WorkflowSource,
   scripts: Map<string, ScriptDefinition>,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<void> {
   let workflowFolders: string[];
   try {
     workflowFolders = await readdir(packPath);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return;
+    if (err.code === 'ENOENT') {
+      onMissing?.(packPath, error);
+      return;
+    }
     throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
       cause: err,
     });
@@ -252,14 +269,21 @@ async function discoverPackScripts(
       if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') continue;
+      if (err.code === 'ENOENT') {
+        onMissing?.(join(packPath, workflow), error);
+        continue;
+      }
       throw new Error(
         `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
         { cause: err }
       );
     }
     const owner = { source, pack, workflow };
-    const localScripts = await discoverScripts(join(packPath, workflow, 'scripts'), localNames);
+    const localScripts = await discoverScripts(
+      join(packPath, workflow, 'scripts'),
+      localNames,
+      onMissing
+    );
     for (const [name, definition] of localScripts) {
       const qualifiedName = formatPackagedResourceReference(owner, name);
       scripts.set(qualifiedName, { ...definition, name: qualifiedName });
@@ -270,11 +294,12 @@ async function discoverPackScripts(
 /** Installed packs' scripts, from the same receipts or capture discovery reads. */
 async function discoverInstalledPackScripts(
   roots: WorkflowSourceRoots,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
   for (const pack of (await listInstalledPacks(roots.installed)).packs) {
-    await discoverPackScripts(pack.dir, pack.key, 'installed', scripts, requestedNames);
+    await discoverPackScripts(pack.dir, pack.key, 'installed', scripts, requestedNames, onMissing);
   }
   return scripts;
 }
@@ -343,12 +368,13 @@ async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition
 
 async function discoverBundledPackagedScripts(
   roots: WorkflowSourceRoots,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   // A captured run reads the bundled scripts IT froze — the capture materialized a
   // binary's embedded ones to files, so the filesystem path serves both builds.
   if (roots.kind === 'captured')
-    return discoverPackagedScripts(roots.bundledWorkflows, 'bundled', requestedNames);
+    return discoverPackagedScripts(roots.bundledWorkflows, 'bundled', requestedNames, onMissing);
   if (isBinaryBuild()) return materializeBundledScripts();
   const files = (await collectInstalledBundleSources(roots.bundledWorkflows)) ?? [];
   const scripts = new Map<string, ScriptDefinition>();
@@ -380,7 +406,8 @@ async function discoverBundledPackagedScripts(
 export async function discoverScriptsForCwd(
   cwd: string,
   sourceRoots?: WorkflowSourceRoots,
-  requestedNames?: ReadonlySet<string>
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   // Scripts are executable SOURCE, so they resolve under the roots the workflow was read
   // from, not the workspace it acts on. Omitting `sourceRoots` reads live off `cwd`,
@@ -392,13 +419,18 @@ export async function discoverScriptsForCwd(
   const sharedScripts = (dir: string) =>
     sharedNames?.size === 0
       ? Promise.resolve(new Map<string, ScriptDefinition>())
-      : discoverScripts(dir, sharedNames);
-  const bundledPackagedScripts = await discoverBundledPackagedScripts(roots, requestedNames);
+      : discoverScripts(dir, sharedNames, onMissing);
+  const bundledPackagedScripts = await discoverBundledPackagedScripts(
+    roots,
+    requestedNames,
+    onMissing
+  );
   const homeScripts = await sharedScripts(roots.globalScripts);
   const homePackagedScripts = await discoverPackagedScripts(
     roots.globalWorkflows,
     'global',
-    requestedNames
+    requestedNames,
+    onMissing
   );
   const repoScripts = roots.project
     ? await sharedScripts(join(roots.project, '.archon', 'scripts'))
@@ -407,7 +439,8 @@ export async function discoverScriptsForCwd(
     ? await discoverPackagedScripts(
         join(roots.project, '.archon', 'workflows'),
         'project',
-        requestedNames
+        requestedNames,
+        onMissing
       )
     : new Map<string, ScriptDefinition>();
 
@@ -423,7 +456,7 @@ export async function discoverScriptsForCwd(
     merged.set(name, def);
   }
   for (const [name, def] of repoPackagedScripts) merged.set(name, def);
-  for (const [name, def] of await discoverInstalledPackScripts(roots, requestedNames))
+  for (const [name, def] of await discoverInstalledPackScripts(roots, requestedNames, onMissing))
     merged.set(name, def);
   return merged;
 }

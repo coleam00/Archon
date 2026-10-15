@@ -56,6 +56,7 @@ import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
+  capturedSourceReadGuard,
   isSourceReadFailure,
   isSystemError,
   liveSourceRoots,
@@ -700,12 +701,18 @@ export async function resolveNodeMcp(
   mcp: NodeMcp | undefined,
   capabilities: ProviderCapabilities,
   cwd: string,
-  homeYamlDirectory?: string
+  homeYamlDirectory?: string,
+  verifiedFiles?: ReadonlySet<string>
 ): Promise<NodeMcpResolution> {
   const declaration = mcpDeclaration(mcp);
   if (declaration === undefined) return { kind: 'none' };
   const { path, optional } = declaration;
-  const selected = await resolveMcpPath(path, cwd, homeYamlDirectory);
+  const selected = await resolveMcpPath(
+    path,
+    cwd,
+    homeYamlDirectory,
+    capturedSourceReadGuard(verifiedFiles)
+  );
   const fullPath = selected.kind === 'missing' ? selected.attemptedPaths[0] : selected.path;
   const servers =
     selected.kind === 'found' ? parseMcpServerNames(selected.content, fullPath) : undefined;
@@ -2378,9 +2385,18 @@ async function executeNodeInternal(
   const commandPrompt =
     commandName === undefined ? undefined : await loadNodeCommandPrompt(ctx, commandName, stepName);
   const homeMcpDirectory = readHomeMcpDirectory(node);
-  if (homeMcpDirectory !== undefined) await assertNodeSourceReadable(workflowSourceRoots, stepName);
+  const verifiedMcpFiles =
+    homeMcpDirectory !== undefined
+      ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
+      : undefined;
   const capabilities = requireProvider(deps.providers, provider).capabilities;
-  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
+  const nodeMcp = await resolveNodeMcp(
+    node.mcp,
+    capabilities,
+    cwd,
+    homeMcpDirectory,
+    verifiedMcpFiles
+  );
   if (nodeMcp.kind === 'read_error') {
     const sourceRoot =
       workflowSourceRoots.kind === 'captured'
@@ -2389,7 +2405,7 @@ async function executeNodeInternal(
     if (
       homeMcpDirectory !== undefined &&
       isInsideAny(nodeMcp.path, [sourceRoot]) &&
-      isSourceReadFailure(nodeMcp.error)
+      isSourceReadFailure(nodeMcp.error, verifiedMcpFiles)
     ) {
       throw new RunSourceUnreadableError(stepName, nodeMcp.error);
     }
@@ -3391,9 +3407,10 @@ async function loadNodeCommandPrompt(
       ctx.cwd,
       command,
       ctx.configuredCommandFolder,
-      ctx.workflowSourceRoots
+      ctx.workflowSourceRoots,
+      verifiedFiles
     );
-    if (!result.success && isSourceReadFailure(result.cause)) {
+    if (!result.success && isSourceReadFailure(result.cause, verifiedFiles)) {
       // Packaged commands resolve by path, so ENOENT can also mean an authored command
       // never existed. Only a file in the verified capture was lost on this host.
       if (
@@ -3409,7 +3426,8 @@ async function loadNodeCommandPrompt(
     }
     return result;
   } catch (error) {
-    if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+    if (isSourceReadFailure(error, verifiedFiles))
+      throw new RunSourceUnreadableError(stepName, error);
     throw error;
   }
 }
@@ -3891,17 +3909,25 @@ async function executeScriptNode(
       references: nodeTemplateReferences(node.script, ctx, 'script'),
     }
   );
-  if (!isInlineScript(finalScript)) await assertNodeSourceReadable(workflowSourceRoots, stepName);
+  const verifiedScriptFiles = !isInlineScript(finalScript)
+    ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
+    : undefined;
   const namedScripts = isInlineScript(finalScript)
     ? undefined
-    : await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]))
+    : await discoverScriptsForCwd(
+        cwd,
+        workflowSourceRoots,
+        new Set([finalScript]),
+        capturedSourceReadGuard(verifiedScriptFiles)
+      )
         .then(async scripts => {
           const selected = scripts.get(finalScript);
           if (selected) await readFile(selected.path);
           return scripts;
         })
         .catch(error => {
-          if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+          if (isSourceReadFailure(error, verifiedScriptFiles))
+            throw new RunSourceUnreadableError(stepName, error);
           return error instanceof Error ? error : new Error(String(error));
         });
   await reserveBudget();
@@ -12225,7 +12251,7 @@ export async function executeDagWorkflow(
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight. A run-budget refusal also escapes the join; it
     // fails the run here instead of propagating. An unreadable source escapes it too; the
-    // run is released below and takes the normal tail, which leaves a paused run alone.
+    // run is released below after persisting the settled usage and outcome.
     if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
       // the in-memory totals miss it. The durable rows hold all of it.
@@ -12265,13 +12291,13 @@ export async function executeDagWorkflow(
   } finally {
     await runCtx.toolAttention.refresh();
   }
-  if (sourceUnreadable !== undefined) await releaseRunForUnreadableSource(sourceUnreadable);
 
   // Normal return has no primary error to preserve, so a verdict persistence failure
   // remains visible to the caller. These two small calls intentionally mirror the
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
+  if (sourceUnreadable !== undefined) await releaseRunForUnreadableSource(sourceUnreadable);
   // Pull the mutated accumulators back into local scope for the terminal tally below.
   const totalCostUsd = runCtx.totalCostUsd;
   const totalTokens = runCtx.totalTokens;
@@ -12297,6 +12323,8 @@ export async function executeDagWorkflow(
       return;
     }
   }
+
+  if (sourceUnreadable !== undefined) return;
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

@@ -1426,6 +1426,31 @@ export function describeWorkflowStoreConformance(
       );
       expect(await types(store, run.id)).toContain('source_released');
     });
+    for (const kind of ['time', 'event'] as const) {
+      test(`source recovery excludes a container with a historic ${kind} wait from due selection`, async () => {
+        const run = await running(store, { metadata: { isolation: 'container' } });
+        const resumeAt = '2020-01-01T00:00:00.000Z';
+        const wait = workflowWaitContextSchema.parse({
+          owner: 'node',
+          nodeId: 'check',
+          pauseId: 'wait',
+          waitingSince: resumeAt,
+          kind,
+          resumeAt,
+          ...(kind === 'event' ? { event: 'ready' } : {}),
+        });
+        await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'check' });
+        await store.resumeWorkflowRun(run.id);
+        await store.releaseRunForUnreadableSource(run.id, {
+          nodeId: 'check',
+          error: 'EIO',
+          retryAt: resumeAt,
+        });
+        expect(
+          (await store.listDueWorkflowContinuations(new Date(), 50)).map(row => row.id)
+        ).not.toContain(run.id);
+      });
+    }
     test('source cursors distinguish repeated releases in the same millisecond', async () => {
       const now = new Date('2026-10-15T10:00:00.000Z');
       setSystemTime(now);
