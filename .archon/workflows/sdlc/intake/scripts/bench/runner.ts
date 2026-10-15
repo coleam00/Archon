@@ -462,7 +462,9 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
     if (!isObject(pr) || pr.merged !== true || typeof pr.url !== 'string' || !isObject(pr.mergeCommit)) continue;
     const oid = pr.mergeCommit.oid;
     if (typeof oid !== 'string') continue;
-    // 1 is "not an ancestor"; anything else (an unfetched merge commit, a bad base) leaves the answer unknown.
+    // A merge commit this clone lacks (a fork's or another repository's) cannot be in the base, which resolves here.
+    if (git('-C', repoRoot, 'cat-file', '-e', `${oid}^{commit}`).code !== 0) continue;
+    // 1 is "not an ancestor"; anything else leaves the answer unknown.
     const ancestry = git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base);
     if (ancestry.code !== 0 && ancestry.code !== 1) throw new Error(`${where}: is ${pr.url} on the base? git merge-base failed: ${ancestry.stderr}`);
     if (ancestry.code === 0) merged.add(pr.url);

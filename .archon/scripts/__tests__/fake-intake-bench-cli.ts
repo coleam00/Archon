@@ -314,8 +314,8 @@ function ghAnswer(dir: string, args: readonly string[]): string {
             author: { login: issue.author ?? 'someone' },
             labelEvents: { nodes: (issue.labelEvents ?? []).map(event) },
             refs: {
-              pageInfo: { hasNextPage: false },
-              nodes: (issue.refs ?? []).map(ref => ({ source: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
+              pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
+              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ source: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
             },
           },
         },

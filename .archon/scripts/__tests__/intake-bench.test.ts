@@ -566,16 +566,27 @@ describe('bench run', () => {
     expect(lines.find(line => line.row === '12-outside')?.merged_on_base).toEqual([]);
   });
 
-  it('does not run a row whose merged base PRs git cannot place, and runs the rest', () => {
+  it('counts a merged PR whose merge commit this clone lacks, such as another repository\'s, as not on the base', () => {
     const { run, cli } = bench();
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    const refs = [{ url: 'https://github.com/o/r/pull/31', merged: true, oid: 'f'.repeat(40) }];
+    const refs = [{ url: 'https://github.com/fork/r/pull/7', merged: true, oid: 'f'.repeat(40) }];
+    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
+    const { status, stderr, lines } = run('base');
+    expect([status, stderr]).toEqual([0, '']);
+    const row = lines.find(line => line.row === '11');
+    expect([row?.status, row?.merged_on_base]).toEqual(['completed', []]);
+  });
+
+  it('does not run a row whose issue the bench cannot read in full, and runs the rest', () => {
+    const { run, cli } = bench();
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    const refs = Array.from({ length: 101 }, (_, i) => ({ url: `https://github.com/o/r/pull/${String(100 + i)}`, merged: false, oid: null }));
     writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
     const { status, lines, checks } = run('base');
     expect(status).toBe(1);
     const unread = lines.find(line => line.row === '11');
     expect([unread?.run_id, unread?.status, unread?.passed]).toEqual([null, 'not_started', false]);
-    expect(unread?.problems).toEqual([expect.stringContaining('github.com/o/r#11: is https://github.com/o/r/pull/31 on the base? git merge-base failed')]);
+    expect(unread?.problems).toEqual([expect.stringContaining('github.com/o/r#11 has more than 100 cross-references')]);
     expect(lines.find(line => line.row === '12-outside')?.status).toBe('completed');
     expect(checks[0].checks.finished.ok).toBe(false);
   });
