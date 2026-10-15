@@ -13,7 +13,7 @@
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
@@ -31,26 +31,6 @@ export function forgeSource(): ForgeSource {
   throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
 
-/**
- * The env file the host loads, resolved as its `getArchonHome` resolves the Archon home;
- * forge-contract.test.ts holds the two together.
- */
-export function archonEnvFile(env: NodeJS.ProcessEnv = process.env): string {
-  const docker =
-    env.WORKSPACE_PATH === '/workspace' ||
-    (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
-    env.ARCHON_DOCKER === 'true';
-  const configured = env.ARCHON_HOME;
-  const home = docker
-    ? '/.archon'
-    : configured
-      ? configured.startsWith('~')
-        ? join(homedir(), configured.slice(1).replace(/^[/\\]/, ''))
-        : configured
-      : join(homedir(), '.archon');
-  return join(home, '.env');
-}
-
 /** The GitHub forge plugin's install id; doctor.test.ts holds doctor's copy to it. */
 export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
 
@@ -60,7 +40,8 @@ const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 const SETUP =
   'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
   `\`archon plugin add ${GITHUB_FORGE_PLUGIN}\`, and set \`GH_TOKEN\` in ` +
-  `Archon's env file \`${archonEnvFile()}\`, set \`GITHUB_TOKEN\`, use \`gh auth login\`, or configure GitHub App mode. When per-user GitHub ` +
+  "Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when configured, or `/.archon/.env` in Docker), " +
+  'set `GITHUB_TOKEN`, use `gh auth login`, or configure GitHub App mode. When per-user GitHub ' +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
   '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
   USE_GH;

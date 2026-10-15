@@ -11,11 +11,9 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
-import { getArchonHome } from '../../../packages/paths/src/archon-paths';
 import {
   FORGE_SOURCES,
   record,
-  archonEnvFile,
   parseQualifiedPr,
   REMEDY,
   type PrRecord,
@@ -70,22 +68,6 @@ test("every refusal remedy is keyed by a kind the forge contract's errors carry"
   expect(forgeErrorSchema.shape.kind.options).toEqual(
     expect.arrayContaining(Object.keys(REMEDY))
   );
-});
-
-// A refusal names the env file to set GH_TOKEN in; naming any other file sends the
-// operator to edit a file the host never loads.
-test("the env file refusals name is the one in the host's Archon home", () => {
-  for (const env of [
-    {},
-    { ARCHON_HOME: '/srv/archon' },
-    { ARCHON_HOME: '~/elsewhere' },
-    { ARCHON_DOCKER: 'true', ARCHON_HOME: '/srv/archon' },
-    { WORKSPACE_PATH: '/workspace' },
-    { HOME: '/root', WORKSPACE_PATH: '/srv/work' },
-    { HOME: '/home/user', WORKSPACE_PATH: '/srv/work' },
-  ]) {
-    expect({ env, file: archonEnvFile(env) }).toEqual({ env, file: join(getArchonHome(env), '.env') });
-  }
 });
 
 // archon-review's scope node declares the pull request that publish-review then

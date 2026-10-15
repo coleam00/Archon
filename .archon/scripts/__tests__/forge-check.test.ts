@@ -20,7 +20,9 @@ const ARCHON_HOME = join(tmpdir(), 'archon-home-elsewhere');
 const SETUP = [
   'archon plugin add coleam00/Archon/plugins/forge-github',
   'GH_TOKEN',
-  join(ARCHON_HOME, '.env'),
+  '~/.archon/.env',
+  'ARCHON_HOME/.env',
+  '/.archon/.env',
   'archon auth github',
   'ARCHON_SDLC_FORGE=gh',
 ];
