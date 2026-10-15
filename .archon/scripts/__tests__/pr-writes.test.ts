@@ -470,6 +470,28 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     }
   }
 
+  it('refuses publication when the qualified live base ref cannot be read', () => {
+    const cwd = gitCheckout({}, trackTempRoot);
+    const removed = spawnSync(
+      'git',
+      ['--git-dir', join(cwd, '../remote.git'), 'update-ref', '-d', 'refs/heads/dev'],
+      { encoding: 'utf8' }
+    );
+    expect(removed.status).toBe(0);
+    const result = publishReview({
+      cwd,
+      source: 'forge',
+      inputs: { ...report, INPUTS_SCOPE: PR_URL },
+      forge: { kind: 'fake', response: prView },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('base revision could not be established (lookup exited 2)');
+    expect(result.forge).toHaveLength(1);
+    expect(result.forge[0]).toContain('forge pr.view');
+    expect(result.gh).toEqual([]);
+  });
+
   for (const moved of ['head', 'base']) {
     it(`refuses an explicit URL whose ${moved} moved after preflight, without writing a comment`, () => {
       const cwd = gitCheckout({}, trackTempRoot);
