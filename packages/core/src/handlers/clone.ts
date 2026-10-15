@@ -106,6 +106,12 @@ export async function resolveForgeAuth(url: string): Promise<CloneCredentials | 
     const config = loadGitHubAppConfig();
     let token: string | undefined;
     if (config) {
+      // Rejecting rather than returning no credentials keeps git from falling
+      // back to another credential source over cleartext HTTP.
+      if (parsed.protocol !== 'https:')
+        throw new ProjectRegistrationError(
+          'GitHub App authentication requires an HTTPS repository URL.'
+        );
       const path = parsed.pathname;
       const repository = parseOwnerRepo(
         path

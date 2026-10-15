@@ -650,6 +650,22 @@ describe('cloneRepository', () => {
       }
     );
 
+    test('rejects an HTTP GitHub URL instead of sending it an App installation token', async () => {
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
+      appRequest.mockClear();
+      try {
+        await expect(cloneRepository('http://github.com/owner/repo')).rejects.toThrow(
+          'GitHub App authentication requires an HTTPS repository URL.'
+        );
+        expect(spyCloneGitRepository).not.toHaveBeenCalled();
+        expect(appRequest).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+      }
+    });
+
     test('uses SSH authentication for SSH-scheme App clone and inspection', async () => {
       process.env.GITHUB_APP_ID = '123';
       process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
