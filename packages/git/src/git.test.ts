@@ -3419,7 +3419,10 @@ branch refs/heads/feature/auth
           await realMkdir(join(root, 'xdg/git'), { recursive: true });
           await git.execFileAsync('git', ['init', root]);
           const grant = `[safe]\n directory = "${root}"\n`;
-          await writeFile(join(root, 'xdg/git/config'), grant);
+          await writeFile(
+            join(root, 'xdg/git/config'),
+            `${grant}[safe]\n directory = /workspace/other\n`
+          );
           await writeFile(
             join(root, '.gitconfig'),
             layout === 'two-globals' ? grant : `${grant}[include]\n path = reset\n`
@@ -3435,6 +3438,9 @@ branch refs/heads/feature/auth
               'safe.directory',
             ]);
             expect(stdout.split('\0').filter(value => value === root)).toHaveLength(1);
+            expect(stdout.split('\0').filter(value => value === '/workspace/other')).toEqual([
+              '/workspace/other',
+            ]);
             await git.execFileAsync('git', ['-C', root, 'status', '--porcelain'], {
               env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
             });
