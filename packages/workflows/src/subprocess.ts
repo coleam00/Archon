@@ -5,7 +5,7 @@ import {
   type NodeProcessRecorder,
 } from './node-process-trees';
 import { hostNodeSubprocess, type ExitEvidence } from './host-node-subprocess';
-export { hostNodeSubprocess } from './host-node-subprocess';
+export { hostNodeSubprocess, HOST_NODE_TERMINATION_MAX_MS } from './host-node-subprocess';
 export { recordNodeProcessTrees, endRecordedNodeProcessTrees } from './node-process-trees';
 import { spawn } from 'node:child_process';
 import { terminateTree } from '@archon/paths/plugin-process';

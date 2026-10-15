@@ -1,11 +1,19 @@
 import { spawn } from 'node:child_process';
-import { forceTerminateWindowsTree } from '@archon/paths/plugin-process';
+import {
+  forceTerminateWindowsTree,
+  WINDOWS_TREE_TERMINATION_TIMEOUT_MS,
+} from '@archon/paths/plugin-process';
 import {
   confirmGroupGone,
   currentNodeProcessRecorder,
   ProcessGroupStillRunningError,
   TERMINATION_CONFIRM_MS,
 } from './node-process-trees';
+
+const TERMINATION_GRACE_MS = 5_000;
+export const HOST_NODE_TERMINATION_MAX_MS =
+  (process.platform === 'win32' ? WINDOWS_TREE_TERMINATION_TIMEOUT_MS : TERMINATION_GRACE_MS) +
+  TERMINATION_CONFIRM_MS;
 
 export const hostNodeSubprocess = { exec: execNodeBody };
 
@@ -59,7 +67,7 @@ async function execNodeBody(
     };
     signal('SIGTERM');
     try {
-      await confirmGroupGone(pid, 5000);
+      await confirmGroupGone(pid, TERMINATION_GRACE_MS);
     } catch (error) {
       // Once the leader exits we can probe its group, but must never signal it again.
       if (observedExit || !(error instanceof ProcessGroupStillRunningError)) throw error;

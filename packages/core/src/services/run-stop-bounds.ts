@@ -1,3 +1,4 @@
+import { HOST_NODE_TERMINATION_MAX_MS } from '@archon/workflows/subprocess';
 import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from './windows-process-tree';
 
 /*
@@ -11,8 +12,10 @@ export const TERMINATION_GRACE_MS = 5_000;
 /** POSIX: how long the group has to disappear after SIGKILL. */
 export const TERMINATION_CONFIRM_MS = 1_000;
 
-/** Includes node cleanup (TERM grace plus confirmation) and IPC scheduling slack. */
-export const DETACHED_RUN_PREPARE_MAX_MS = 10_000;
+const PREPARATION_SCHEDULING_SLACK_MS = 4_000;
+/** Includes the platform's node cleanup bound and IPC scheduling slack. */
+export const DETACHED_RUN_PREPARE_MAX_MS =
+  HOST_NODE_TERMINATION_MAX_MS + PREPARATION_SCHEDULING_SLACK_MS;
 
 /**
  * The longest a committed stop spends terminating the owner's process tree before it

@@ -41,11 +41,13 @@ export async function terminateWindowsTree(
   }
 }
 
+export const WINDOWS_TREE_TERMINATION_TIMEOUT_MS = 5_000;
+
 export function forceTerminateWindowsTree(pid: number): Promise<unknown> {
   const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
   return execFileAsync(
     join(systemRoot, 'System32', 'taskkill.exe'),
     ['/PID', String(pid), '/T', '/F'],
-    { windowsHide: true, timeout: 5_000 }
+    { windowsHide: true, timeout: WINDOWS_TREE_TERMINATION_TIMEOUT_MS }
   );
 }
