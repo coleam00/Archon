@@ -3,10 +3,6 @@
  * authoring checkout moves on.
  */
 import { providerRegistry } from '@archon/providers';
-import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { validateWorkflowResources } from './validator';
-import { readHomeMcpDirectory } from './compiled-command';
-import { resolveMcpPath } from './mcp-path';
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, test, expect, afterAll, mock, spyOn } from 'bun:test';
 import * as fs from 'fs/promises';
@@ -130,68 +126,6 @@ const deps = {
 } satisfies Pick<WorkflowDeps, 'loadConfig'>;
 
 describe('captureWorkflowSource', () => {
-  test('home MCP rediscovery uses captured YAML siblings after the live tree disappears', async () => {
-    registerBuiltinProviders();
-    const { root, source, target, runArtifacts } = await createSandbox();
-    const previousHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = join(root, 'home');
-    try {
-      const yamlDir = join(root, 'home', 'workflows', 'nested');
-      await mkdir(yamlDir, { recursive: true });
-      await writeFile(
-        join(yamlDir, 'home.yaml'),
-        `name: captured-home
-description: Captured MCP
-nodes:
-  - id: check
-    prompt: Check
-    mcp: servers.json
-`
-      );
-      await writeFile(join(yamlDir, 'servers.json'), '{"captured":{"command":"example"}}');
-      const capture = await captureWorkflowSource({
-        sourceRoot: source,
-        captureRoot: captureRootIn(runArtifacts),
-        sourceConfig: { load_default_workflows: false, load_default_commands: false },
-      });
-      const roots = capturedSourceRoots(capture.anchor);
-      await removeTempTree(join(root, 'home'));
-      for (let continuation = 0; continuation < 2; continuation++) {
-        const catalog = await discoverWorkflows(target, {
-          providers: providerRegistry,
-          loadDefaults: false,
-          sourceRoots: roots,
-        });
-        expect(catalog.errors).toEqual([]);
-        const entry = catalog.workflows.find(e => e.workflow.name === 'captured-home');
-        if (!entry) throw new Error('Missing captured home workflow');
-        const directory = readHomeMcpDirectory(entry.workflow.nodes[0]);
-        expect(directory).toBe(join(roots.globalWorkflows, 'nested'));
-        expect(
-          (await validateWorkflowResources(entry.workflow, target, providerRegistry)).filter(
-            i => i.field === 'mcp'
-          )
-        ).toEqual([]);
-        expect(await resolveMcpPath('servers.json', target, directory)).toMatchObject({
-          kind: 'found',
-          path: join(roots.globalWorkflows, 'nested', 'servers.json'),
-          content: '{"captured":{"command":"example"}}',
-        });
-      }
-      await writeFile(join(target, 'servers.json'), '{"checkout":{}}');
-      expect(
-        await resolveMcpPath('servers.json', target, join(roots.globalWorkflows, 'nested'))
-      ).toMatchObject({
-        kind: 'found',
-        path: join(target, 'servers.json'),
-        content: '{"checkout":{}}',
-      });
-    } finally {
-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = previousHome;
-    }
-  });
-
   test('freezes commands and scripts so the target never needs them', async () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'review the diff');

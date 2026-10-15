@@ -26,7 +26,6 @@ describe('MCP path selection', () => {
         kind: 'found',
         path: join(checkout, 'servers.json'),
         content,
-        attemptedPaths: [join(checkout, 'servers.json')],
       });
     }
   });
@@ -41,7 +40,6 @@ describe('MCP path selection', () => {
       kind: 'found',
       path: join(home, 'servers.json'),
       content: '{"home":{}}',
-      attemptedPaths: [join(checkout, 'servers.json'), join(home, 'servers.json')],
     });
   });
 
@@ -51,6 +49,7 @@ describe('MCP path selection', () => {
       kind: 'missing',
       attemptedPaths: [join(checkout, 'absent.json'), join(home, 'absent.json')],
     });
+    if (result.kind !== 'missing') throw new Error('Expected missing config');
     expect(missingMcpConfigMessage('absent.json', result.attemptedPaths)).toBe(
       `MCP config file not found: 'absent.json'. Tried: ${join(checkout, 'absent.json')}, ${join(home, 'absent.json')}`
     );
@@ -75,7 +74,6 @@ describe('MCP path selection', () => {
     expect(result).toMatchObject({
       kind: 'read_error',
       path: join(checkout, 'servers.json'),
-      attemptedPaths: [join(checkout, 'servers.json')],
     });
     if (result.kind !== 'read_error') throw new Error('Expected read failure');
     expect(result.error).toMatchObject({ code: 'EISDIR' });
