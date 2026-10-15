@@ -262,12 +262,54 @@ describe('review head boundary', () => {
     expect(run.stderr).toContain('no open pull request');
   });
 
-  it('refuses unknown head facts without inventing a pinned retry', () => {
-    const run = check({ source: 'forge', forge: view({ head_revision: null, head_repo: null }) });
+  for (const state of ['open', 'closed', 'merged'] as const) {
+    for (const headRepo of [PR.repo, { ...PR.repo, path: 'contributor/repo' }, null]) {
+      for (const kind of ['pull', '-/merge_requests']) {
+        it(`recovers an unknown head for ${state}, ${JSON.stringify(headRepo)}, ${kind}`, () => {
+          const cwd = gitCheckout({}, track);
+          const head = git(cwd, 'rev-parse', 'HEAD');
+          const ref = kind === 'pull' ? 'refs/pull/42/head' : 'refs/merge-requests/42/head';
+          git(cwd, 'push', '-q', 'upstream', `HEAD:${ref}`);
+          const url = `https://${PR.repo.host}/${PR.repo.path}/${kind}/42`;
+          const options: ScriptOptions = {
+            cwd,
+            source: 'forge',
+            forge: view({ state, head_repo: headRepo, head_revision: null, url }),
+            inputs: { INPUTS_SCOPE: url, INPUTS_SELECTOR: url },
+          };
+          const refused = check(options);
+          expect(refused.code).toBe(1);
+          expect(refused.stderr).toContain(`git fetch -- 'upstream' '${ref}'`);
+          expect(refused.stderr).toContain(`--from '${head}'`);
+          expect(refused.stderr).not.toContain('--branch');
+          git(cwd, 'fetch', '--', 'upstream', ref);
+          expect(git(cwd, 'rev-parse', 'FETCH_HEAD')).toBe(head);
+          const retried = check({
+            ...options,
+            inputs: {
+              ...options.inputs,
+              INPUTS_HEAD: head,
+              ARCHON_NODE_EXECUTION: execution(head),
+            },
+          });
+          expect(retried.code).toBe(0);
+        });
+      }
+    }
+  }
+
+  it('refuses an unknown head with a missing retained ref without an unusable retry', () => {
+    const cwd = gitCheckout({}, track);
+    const run = check({
+      cwd,
+      source: 'forge',
+      forge: view({ head_revision: null, head_repo: null }),
+    });
     expect(run.code).toBe(1);
-    expect(run.stderr).toContain('an unknown head');
-    expect(run.stderr).toContain('Restore resolution');
-    expect(run.stderr).not.toContain('--from');
+    expect(run.stderr).toContain('unknown head');
+    expect(run.stderr).toContain('refs/pull/42/head');
+    expect(run.stderr).toContain('Restore');
+    expect(run.stderr).not.toContain('archon workflow run');
   });
 
   it('preserves a forge read failure without falling back to gh', () => {

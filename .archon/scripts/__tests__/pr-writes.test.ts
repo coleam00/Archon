@@ -443,6 +443,55 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.forge.join(' ')).not.toContain(REPORT);
   });
 
+  for (const retained of ['matching', 'moved', 'missing'] as const) {
+    it(`checks an unknown forge head against the ${retained} retained ref before publication`, () => {
+      const cwd = gitCheckout({}, trackTempRoot);
+      const git = (...args: string[]) => {
+        const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+        expect(result.status).toBe(0);
+        return result.stdout.trim();
+      };
+      const head = git('rev-parse', 'HEAD');
+      if (retained !== 'missing') {
+        git(
+          'push',
+          '-q',
+          'upstream',
+          `${retained === 'matching' ? 'HEAD' : 'dev'}:refs/pull/42/head`
+        );
+      }
+      const result = publishReview({
+        cwd,
+        inputs: { ...report, INPUTS_HEAD: head, ARCHON_NODE_EXECUTION: atCommit(head) },
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: [
+            forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: null }) }),
+            forgeOperation('comment.upsert', {
+              target: PR,
+              outcome: 'applied',
+              changed: true,
+              comment: {
+                ref: PR,
+                id: '900',
+                url: `${PR_URL}#issuecomment-900`,
+                bodyDigest: 'digest',
+              },
+            }),
+          ],
+        },
+      });
+      expect(result.code).toBe(retained === 'matching' ? 0 : 1);
+      expect(result.forgeRequests.some(request => JSON.parse(request).marker === MARKER)).toBe(
+        retained === 'matching'
+      );
+      if (retained === 'matching') {
+        expect(JSON.parse(result.forgeRequests[1]).body).toContain(`Reviewed commit: \`${head}\``);
+      }
+    });
+  }
+
   it('still reports the verdict when the host could not audit the comment write', () => {
     const result = publishReview({
       source: 'forge',

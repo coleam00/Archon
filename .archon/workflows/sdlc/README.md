@@ -32,12 +32,16 @@ PR review has two checks at different times. After the scope agent interprets th
 trigger message and returns a selector and qualified PR, `head-check` resolves the
 explicit nonempty `scope` input first, using the agent's selector only when that
 input is empty. It rejects a missing or different PR declaration and compares the
-live PR head with the commit fixed by `mode`, before routing or lenses. A mismatch
-stops with a retained-ref fetch and pinned `--from` retry, including for forks and
-closed or merged PRs. An open same-repository PR also gets a branch retry. The check
-never changes the checkout. Keep other non-default review inputs when retrying.
+live PR head with the commit fixed by `mode`, before routing or lenses. When the
+forge omits the head revision, the check reads the retained PR ref from the base
+repository. If that lookup fails or the ref is absent, it stops with the missing
+prerequisite and no retry command. A resolved mismatch stops with a retained-ref
+fetch and pinned `--from` retry, including for forks and closed or merged PRs. An
+open same-repository PR with a forge-provided revision also gets a branch retry.
+The check never changes the checkout. Keep other non-default review inputs when retrying.
 Publication binds the target to the explicit scope and checks again before its
-write, because the PR can move while the lenses run. Working-diff reviews need no
+write, using the same retained-ref lookup for an absent forge revision, because
+the PR can move while the lenses run. Working-diff reviews need no
 forge head comparison after discovery confirms no open PR.
 
 ### Why this rule exists

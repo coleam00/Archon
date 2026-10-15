@@ -39,7 +39,12 @@ import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import { forgeSource, record, sameRepo, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import { recordedPr, declaredPr, resolveReviewPr } from '../../.shared/review-target.ts';
+import {
+  recordedPr,
+  declaredPr,
+  resolveReviewPr,
+  reviewHead,
+} from '../../.shared/review-target.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
@@ -82,10 +87,10 @@ try {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
   if (pr) {
-    const remote = requested ? requested.head_revision : viewPr(pr, source).pr.head_revision;
+    const remote = reviewHead(requested ?? viewPr(pr, source).pr);
     if (remote !== head) {
       throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote}: the commits under review were not pushed`
       );
     }
   }

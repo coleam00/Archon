@@ -9,7 +9,7 @@ import {
 } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 import { findOpenPrByHead, viewPr } from './pr.ts';
-import { urlRepo } from './remote.ts';
+import { findRemote, urlRepo } from './remote.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 export function recordedPr(scope: string): QualifiedPr | undefined {
@@ -98,4 +98,38 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
   }
   if (!pr && selector !== '') throw new Error('no open pull request matches the requested branch');
   return pr;
+}
+
+export function retainedReviewRef(pr: PrRecord): string {
+  const kind = new URL(pr.url).pathname.split('/').filter(Boolean).at(-2);
+  return kind === 'merge_requests'
+    ? `refs/merge-requests/${String(pr.number)}/head`
+    : `refs/pull/${String(pr.number)}/head`;
+}
+
+/** Resolve absent forge revisions from the base repository's retained PR ref. */
+export function reviewHead(pr: PrRecord): string {
+  if (pr.head_revision !== null) return pr.head_revision;
+  const ref = retainedReviewRef(pr);
+  const prerequisite = `Restore access to ${ref} in ${pr.repo.host}/${pr.repo.path}, or restore the forge's head revision, before starting another review.`;
+  try {
+    const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
+    const result = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
+    const rows = result.stdout.split('\n').filter(Boolean);
+    const [revision, name] = rows[0]?.split('\t') ?? [];
+    if (
+      result.code !== 0 ||
+      rows.length !== 1 ||
+      name !== ref ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision ?? '')
+    ) {
+      throw new Error(`retained ref lookup exited ${String(result.code)} without one valid head`);
+    }
+    return revision;
+  } catch (error) {
+    throw new Error(
+      `PR has an unknown head: ${error instanceof Error ? error.message : String(error)}. ${prerequisite}`,
+      { cause: error }
+    );
+  }
 }
