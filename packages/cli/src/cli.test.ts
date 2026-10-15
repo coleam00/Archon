@@ -2262,7 +2262,12 @@ describe('receipt policies in the CLI host', () => {
         tag: 'v1',
         commit: 'a'.repeat(40),
         installedAt: new Date(0).toISOString(),
-        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        files: [
+          {
+            path: 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : ''),
+            sha256: 'b'.repeat(64),
+          },
+        ],
         descriptor: {
           protocol: 'archon-chat/1',
           id: 'slack',
