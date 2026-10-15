@@ -78,16 +78,18 @@ archon isolation list
 
 Shows all active worktrees: branch name, path, creation time, and status.
 
-### Cleaning Up Stale Worktrees
+### Cleaning up stale environments
 
 ```bash
 archon isolation cleanup
 ```
 
-Removes worktrees older than 7 days. Pass a number to customize the threshold:
+Removes eligible worktrees and containers older than 7 days, including container volumes.
+Container cleanup runs even when no worktree qualifies. Live or resumable runs and platform
+retention policies protect their workspaces. Pass a number to customize the threshold:
 
 ```bash
-archon isolation cleanup 14   # Remove worktrees older than 14 days
+archon isolation cleanup 14   # Remove eligible worktrees, containers, and volumes older than 14 days
 ```
 
 To remove worktrees whose branches have already been merged into your main branch:
