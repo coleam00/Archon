@@ -93,16 +93,8 @@ if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${WEBHOOK_SECRET:-}" ] &&
   [ -n "${GITHUB_APP_PRIVATE_KEY:-}${GITHUB_APP_PRIVATE_KEY_PATH:-}" ] &&
   [ -z "${GITHUB_TOKEN:-}" ]; then
   # Exact matching preserves operator helpers; Git returns 5 when none match.
-  if $RUNNER git config --global --fixed-value --unset-all \
-    credential."https://github.com".helper "$ARCHON_PAT_HELPER"; then
-    :
-  else
-    ARCHON_PAT_CLEANUP_STATUS=$?
-    if [ "$ARCHON_PAT_CLEANUP_STATUS" -ne 5 ]; then
-      exit "$ARCHON_PAT_CLEANUP_STATUS"
-    fi
-    unset ARCHON_PAT_CLEANUP_STATUS
-  fi
+  $RUNNER git config --global --fixed-value --unset-all \
+    credential."https://github.com".helper "$ARCHON_PAT_HELPER" || [ $? -eq 5 ]
 elif [ -n "${GH_TOKEN:-}" ]; then
   # --replace-all: `gh auth login` / `gh auth setup-git` can write several values;
   # a plain set then exits non-zero under `set -e`, crash-looping on restart.

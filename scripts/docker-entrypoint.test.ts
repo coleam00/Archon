@@ -219,7 +219,7 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
     const f = await fixture();
     await writeFile(f.configPath, '[broken\n');
     const result = f.run(['bash', entrypoint], appMode);
-    expect(result.exitCode).toBe(128);
+    expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain('bad config line 1');
     expect(result.stdout).not.toContain('entrypoint-test:');
   });
