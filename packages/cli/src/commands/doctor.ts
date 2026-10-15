@@ -286,9 +286,9 @@ async function runForgeCommand(
 }
 
 /**
- * Whether the SDLC workflows' opt-in forge path works: the GitHub forge plugin is
- * installed and accepts the resolved credential. A missing plugin is skipped and a missing
- * token warns, since an install that never runs the SDLC workflows needs neither.
+ * Diagnose the optional GitHub plugin's installation and read credential. Pack
+ * preflight separately checks required operations. A missing plugin is skipped
+ * and a missing token warns: installs that never opt in need neither.
  *
  * The read is the SDLC preflight's: `pr.view` by head, which every released GitHub
  * plugin supports. It answers null when no open pull request has that head.
