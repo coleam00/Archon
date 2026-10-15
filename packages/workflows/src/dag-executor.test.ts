@@ -21726,7 +21726,13 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
-      for (const failure of ['script-directory', 'script-content', 'declaration', 'directory']) {
+      for (const failure of [
+        'script-directory',
+        'script-content',
+        'declaration',
+        'root-declaration',
+        'directory',
+      ]) {
         it(`preserves composed discovery ${failure} read failures`, async () => {
           const mockDeps = createMockDeps();
           const workflows = join(testDir, '.archon', 'workflows');
@@ -21751,7 +21757,9 @@ describe('executeDagWorkflow -- script nodes', () => {
                 ? script
                 : failure === 'declaration'
                   ? declaration
-                  : workflows;
+                  : failure === 'root-declaration'
+                    ? join(workflows, 'root-file.yaml')
+                    : workflows;
           await chmod(locked, 0o000);
           const options = dagOptions({
             deps: mockDeps,
@@ -21772,7 +21780,12 @@ describe('executeDagWorkflow -- script nodes', () => {
           try {
             await executeDagWorkflow(options);
           } finally {
-            await chmod(locked, locked === script || locked === declaration ? 0o644 : 0o755);
+            await chmod(
+              locked,
+              ['script-content', 'declaration', 'root-declaration'].includes(failure)
+                ? 0o644
+                : 0o755
+            );
           }
           expectReleased(mockDeps.store, 'fan');
           mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
@@ -21781,6 +21794,48 @@ describe('executeDagWorkflow -- script nodes', () => {
           expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
         });
       }
+
+      it('ignores an unrelated unreadable declaration when the composed target resolves', async () => {
+        const mockDeps = createMockDeps();
+        const workflows = join(testDir, '.archon', 'workflows');
+        await mkdir(workflows, { recursive: true });
+        await writeFile(
+          join(workflows, 'healthy.yaml'),
+          'name: healthy\ndescription: healthy\nnodes:\n  - id: work\n    prompt: Healthy work.\n'
+        );
+        const unrelated = join(workflows, 'unrelated.yaml');
+        await writeFile(
+          unrelated,
+          'name: unrelated\ndescription: unrelated\nnodes:\n  - id: work\n    prompt: Other work.\n'
+        );
+        await chmod(unrelated, 0o000);
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('healthy-declaration'),
+              workflow: {
+                name: 'healthy-declaration',
+                nodes: [
+                  {
+                    id: 'fan',
+                    kind: 'compose_fan_out',
+                    include: 'healthy',
+                    fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                  },
+                ],
+              },
+            })
+          );
+        } finally {
+          await chmod(unrelated, 0o644);
+        }
+        expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      });
 
       for (const nested of [false, true]) {
         it(`ignores an unrelated ${nested ? 'included' : 'direct'} command read failure`, async () => {
