@@ -9620,14 +9620,20 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
           host.deps.store.getWorkflowRun = mock(async () => {
             reads += 1;
             if (reads === 1 && replacement !== 'first-read') return run;
-            if (reads > 1) clock.mockReturnValue(Date.parse(wait.resumeAt));
+            if (reads > 1)
+              clock.mockReturnValue(
+                Date.parse(wait.resumeAt) -
+                  (replacement === 'none' && (reads === 2 || kind === 'event') ? 1 : 0)
+              );
             return {
               ...run,
               metadata: {
                 wait: {
                   ...wait,
                   pauseId: replacement !== 'none' ? 'occurrence-b' : 'occurrence-a',
-                  ...(kind === 'event' ? { signaledAt: new Date().toISOString() } : {}),
+                  ...(kind === 'event' && (replacement !== 'none' || reads > 2)
+                    ? { signaledAt: new Date().toISOString() }
+                    : {}),
                 },
               },
             };
@@ -9656,7 +9662,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
               quiet: true,
             });
             expect(submit).toHaveBeenCalledTimes(1);
-            expect(reads).toBe(replacement === 'first-read' ? 1 : 2);
+            expect(reads).toBe(replacement === 'first-read' ? 1 : replacement === 'poll' ? 2 : 3);
             if (replacement !== 'none') expect(resume).not.toHaveBeenCalled();
             else
               expect(resume).toHaveBeenCalledWith(

@@ -3822,10 +3822,9 @@ async function awaitDurableWaitDeadline(
   runId: string,
   wait: DurableWaitCursor
 ): Promise<'resume' | 'stop'> {
-  let cursor = wait;
+  if (wait.signaled) return 'resume';
   for (;;) {
-    if (cursor.signaled) return 'resume';
-    const remainingMs = Date.parse(cursor.cursor.resumeAt) - Date.now();
+    const remainingMs = Date.parse(wait.cursor.resumeAt) - Date.now();
     if (remainingMs <= 0) return 'resume';
     await new Promise<void>(resolve =>
       setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
@@ -3835,12 +3834,12 @@ async function awaitDurableWaitDeadline(
     if (
       !latest ||
       !next ||
-      next.stepName !== cursor.stepName ||
-      !resumeCursorMatches(latest, cursor.cursor)
+      next.stepName !== wait.stepName ||
+      !resumeCursorMatches(latest, wait.cursor)
     ) {
       return 'stop';
     }
-    cursor = next;
+    if (next.signaled) return 'resume';
   }
 }
 
