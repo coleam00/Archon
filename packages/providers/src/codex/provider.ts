@@ -394,19 +394,17 @@ function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions)
 
 type ToolCallEvent = Extract<ProviderEvent, { type: 'tool_call' }>;
 type ToolCallUpdateEvent = Extract<ProviderEvent, { type: 'tool_call_update' }>;
-type ToolItem = Extract<
-  ThreadItem,
-  { type: 'commandExecution' | 'webSearch' | 'mcpToolCall' | 'fileChange' | 'dynamicToolCall' }
->;
+const TOOL_ITEM_TYPES = [
+  'commandExecution',
+  'webSearch',
+  'mcpToolCall',
+  'fileChange',
+  'dynamicToolCall',
+] as const satisfies readonly ThreadItem['type'][];
+type ToolItem = Extract<ThreadItem, { type: (typeof TOOL_ITEM_TYPES)[number] }>;
 
 function isToolItem(item: ThreadItem): item is ToolItem {
-  return (
-    item.type === 'commandExecution' ||
-    item.type === 'webSearch' ||
-    item.type === 'mcpToolCall' ||
-    item.type === 'dynamicToolCall' ||
-    item.type === 'fileChange'
-  );
+  return TOOL_ITEM_TYPES.some(type => type === item.type);
 }
 
 /**
@@ -1244,6 +1242,10 @@ export class CodexProvider implements IAgentProvider {
         const failureClass = failureClassOfStop(error);
         const subtype =
           error instanceof JsonRpcError ? 'codex_request_failed' : 'codex_query_failed';
+        const actionAdvice =
+          error instanceof ConnectionClosedError && nativeTools?.length
+            ? ' An accepted Archon action may have completed. Inspect run and project state before retrying.'
+            : '';
         const result = failureResult(
           failureClass,
           subtype,
@@ -1251,7 +1253,7 @@ export class CodexProvider implements IAgentProvider {
             error instanceof ConnectionClosedError ? error.evidence : (error as Error).message,
             model,
             (error as Error).message
-          )
+          ) + actionAdvice
         );
         if (threadId) result.sessionId = codexSessionId.encode(threadId, catalogId);
         yield result;

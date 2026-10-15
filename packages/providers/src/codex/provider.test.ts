@@ -260,6 +260,68 @@ describe('CodexProvider', () => {
       ]);
     });
 
+    test('turn completion waits for an accepted tool effect and its response', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      let committed = false;
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      const chunks: MessageChunk[] = [];
+      const collecting = (async () => {
+        for await (const chunk of provider.sendQuery('go', '/repo', undefined, {
+          nativeTools: [
+            tool(async () => {
+              started.resolve();
+              await complete.promise;
+              committed = true;
+              return 'Queued';
+            }),
+          ],
+        }))
+          chunks.push(chunk);
+      })();
+      await started.promise;
+      server.processes[0].send(turnCompleted('completed'));
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(committed).toBe(false);
+        expect(chunks.some(chunk => chunk.type === 'result')).toBe(false);
+        expect(server.processes[0].toolResponses).toEqual([]);
+      } finally {
+        complete.resolve();
+        await collecting;
+      }
+      expect(committed).toBe(true);
+      expect(chunks.some(chunk => chunk.type === 'result')).toBe(true);
+      expect(server.processes[0].toolResponses[0].result.success).toBe(true);
+    });
+
+    test('connection failure discloses that an accepted action may have committed', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      let committed = false;
+      const collecting = run(provider, {
+        nativeTools: [
+          tool(async () => {
+            started.resolve();
+            await complete.promise;
+            committed = true;
+            return 'Queued';
+          }),
+        ],
+      });
+      await started.promise;
+      server.processes[0].exit(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      complete.resolve();
+      const result = resultOf(await collecting);
+      expect(committed).toBe(true);
+      expect(server.processes[0].toolResponses).toEqual([]);
+      expect(result.isError).toBe(true);
+      expect(result.errors?.join(' ')).toContain('An accepted Archon action may have completed');
+      expect(result.errors?.join(' ')).toContain('Inspect run and project state before retrying');
+    });
+
     test('resumed tool-enabled threads use this turn’s handlers without registering a new catalog', async () => {
       const { provider, server } = providerWith({ toolCalls: [call] });
       const oldHandler = mock(() => Promise.resolve('first'));
