@@ -36,6 +36,25 @@ afterAll(async () => {
   await removeTempTree(root);
 });
 
+test('deletion allows an active worktree environment', async () => {
+  const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
+  const project = await createCodebase({ name: 'worktree-delete', default_cwd: '/repos/worktree' });
+  await db.query(
+    `INSERT INTO remote_agent_isolation_environments
+     (id, codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, status)
+     VALUES ('worktree', $1, 'test', 'workflow', 'worktree', '/repos/worktree/branch', 'branch', 'active')`,
+    [project.id]
+  );
+
+  await deleteCodebase(project.id);
+
+  expect(await getCodebase(project.id)).toBeNull();
+  expect(
+    (await db.query("SELECT id FROM remote_agent_isolation_environments WHERE id = 'worktree'"))
+      .rows
+  ).toHaveLength(0);
+});
+
 test('deletion refuses a container registered after the caller snapshot and preserves references', async () => {
   const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
   const project = await createCodebase({ name: 'delete-test', default_cwd: '/repos/delete-test' });

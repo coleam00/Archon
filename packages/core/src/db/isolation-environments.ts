@@ -16,6 +16,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -439,7 +440,7 @@ export async function listActiveContainerEnvironments(): Promise<
     `SELECT e.*, c.name as codebase_name, ${dialect.daysSince('e.created_at')} as days_since_created
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
-     WHERE e.status = 'active' AND e.provider = 'container'
+     WHERE ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
      ORDER BY e.created_at DESC`
   );
   return result.rows.map(normalizeEnvironmentRow);

@@ -3,6 +3,7 @@
  */
 import { resolve } from 'node:path';
 import { ActiveContainerEnvironmentsError } from './codebase-delete-error';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
@@ -334,9 +335,9 @@ export async function deleteCodebase(id: string): Promise<void> {
       [id]
     );
     const containers = await query<{ id: string }>(
-      `SELECT id FROM remote_agent_isolation_environments
-       WHERE codebase_id = $1 AND provider = 'container' AND status = 'active'
-       ORDER BY id`,
+      `SELECT e.id FROM remote_agent_isolation_environments e
+       WHERE e.codebase_id = $1 AND ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
+       ORDER BY e.id`,
       [id]
     );
     if (containers.rows.length > 0) {
