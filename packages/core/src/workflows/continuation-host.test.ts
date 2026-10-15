@@ -324,7 +324,7 @@ test('bounds structural source failures locally and warns once', async () => {
       process.execPath,
       '--eval',
       `
-    import { wakeDueWorkflowContinuations } from ${JSON.stringify(new URL('./continuation-host.ts', import.meta.url).pathname)};
+    import { wakeDueWorkflowContinuations } from ${JSON.stringify(new URL('./continuation-host.ts', import.meta.url).href)};
     const run = ${JSON.stringify(candidate)};
     let resumed = false;
     const outcomes = await wakeDueWorkflowContinuations({

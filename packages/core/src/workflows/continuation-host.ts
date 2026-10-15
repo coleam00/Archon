@@ -52,7 +52,11 @@ export async function resumeWorkflowContinuation(
     await resolveRunSourceCapture(run.metadata);
   } catch (error) {
     if (!(error instanceof WorkflowSourceIntegrityError)) throw error;
-    return { kind: 'unavailable', reason: error.message, sourceError: error };
+    return {
+      kind: 'unavailable',
+      reason: `its recorded workflow source is unavailable: ${error.message}`,
+      sourceError: error,
+    };
   }
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
   if (run.metadata.isolation === 'container') {
