@@ -511,10 +511,6 @@ describe('bundled-defaults', () => {
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.work_order?.default).toBe('');
-      // The run-owned PR reaches review as ONE typed value, `scope`. The
-      // `target` preflight and its paired pr_number/pr_head inputs re-asserted
-      // an invariant the engine already establishes — the run owns its worktree
-      // and the PR was created in it — so they were cut (#2968).
       expect(parsed.workflow.nodes.find(node => node.id === 'target')).toBeUndefined();
       expect(parsed.workflow.inputs?.pr_number).toBeUndefined();
       expect(parsed.workflow.inputs?.pr_head).toBeUndefined();
@@ -524,21 +520,27 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       const scopeSchema = scope.output_format;
       if (scopeSchema === undefined) throw new Error('scope has no output_format');
-      // Scope returns a selector, never a PR declaration: head-check resolves the PR
-      // from the inputs through the forge, and publish writes to head-check's PR.
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
+      const target = { pr: null, base: null, head: 'reviewed-head', merge_base: null };
+      expect(
+        validateStructuredOutput({ selector: '', target, report: scopeReport }, scopeSchema).valid
+      ).toBe(true);
       expect(
         validateStructuredOutput({ selector: '', report: scopeReport }, scopeSchema).valid
-      ).toBe(true);
+      ).toBe(false);
       expect(validateStructuredOutput({ report: scopeReport }, scopeSchema).valid).toBe(false);
       expect(validateStructuredOutput({ selector: '' }, scopeSchema).valid).toBe(false);
-      expect(scopeSchema.properties).not.toHaveProperty('target');
       const headCheck = parsed.workflow.nodes.find(node => node.id === 'head-check');
       expect(headCheck).toMatchObject({
         kind: 'exec',
         script: 'check-review-head',
         depends_on: ['scope'],
-        with: { scope: '$INPUTS.scope', selector: '$scope.output.selector' },
+        with: {
+          scope: '$INPUTS.scope',
+          selector: '$scope.output.selector',
+          target: { from: '$scope.output.target' },
+        },
+        output_format: scopeSchema.properties?.target,
       });
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
