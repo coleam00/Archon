@@ -2665,7 +2665,7 @@ export async function handleMessage(
       const tools = [
         buildInvokeWorkflowTool({
           workflows: workflowsWithSource,
-          codebases,
+          listCodebases: () => codebaseDb.listCodebases(),
           onLaunch: launch => {
             if (pendingLaunch.launch !== null) return pendingLaunch.launch;
             pendingLaunch.launch = launch;
@@ -2715,7 +2715,12 @@ export async function handleMessage(
     // resolved and parked with only a generic error to show for it. The outer
     // catch cannot cover this: it does not know about the resolution.
     // continueResolvedGateRun never throws, so this cannot mask the real error.
-    const turn: ChatTurn = { startedAt: Date.now(), reported: false, routed: false };
+    const turn: ChatTurn = {
+      startedAt: Date.now(),
+      reported: false,
+      failed: false,
+      routed: false,
+    };
     try {
       if (mode === 'stream') {
         await handleStreamMode(
@@ -2785,8 +2790,14 @@ export async function handleMessage(
     }
 
     // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-    // gate it is skipped when the turn throws, and the user sees the error instead.
-    if (pendingLaunch.launch !== null) {
+    // gate it is dropped when the turn throws or ends in an error result, and the user sees
+    // the error instead. The command scan launches nothing in either case.
+    if (pendingLaunch.launch !== null && turn.failed) {
+      getLog().info(
+        { conversationId, workflowName: pendingLaunch.launch.entry.workflow.name },
+        'orchestrator.invoke_workflow_dropped_failed_turn'
+      );
+    } else if (pendingLaunch.launch !== null) {
       const { entry, codebase, prompt } = pendingLaunch.launch;
       getLog().info(
         { conversationId, workflowName: entry.workflow.name, codebaseId: codebase.id },
@@ -2846,6 +2857,8 @@ export async function handleMessage(
 interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
+  /** The turn ended in a provider error result; a launch queued during it is dropped. */
+  failed: boolean;
   /**
    * The command scan routed the turn to a workflow or a project registration, which
    * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
@@ -2871,6 +2884,7 @@ function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface)
 
 function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
   turn.reported = true;
+  turn.failed = props.outcome === 'failed';
   captureChatTurn(props);
 }
 

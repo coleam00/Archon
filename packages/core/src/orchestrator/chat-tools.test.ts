@@ -34,7 +34,7 @@ describe('invoke_workflow', () => {
     const launches: ChatLaunch[] = [];
     const tool = buildInvokeWorkflowTool({
       workflows,
-      codebases,
+      listCodebases: () => Promise.resolve(codebases),
       onLaunch: launch => {
         launches.push(launch);
         return null;
@@ -74,6 +74,23 @@ describe('invoke_workflow', () => {
     expect(launches[0]?.codebase.name).toBe('owner/my-app');
     expect(launches[0]?.prompt).toBe(prompt);
   });
+});
+
+test('invoke_workflow resolves a project registered after the tool was built', async () => {
+  const registered: Codebase[] = [];
+  const launches: ChatLaunch[] = [];
+  const tool = buildInvokeWorkflowTool({
+    workflows: [makeTestWorkflowWithSource({ name: 'archon-ship' })],
+    listCodebases: () => Promise.resolve(registered),
+    onLaunch: launch => {
+      launches.push(launch);
+      return null;
+    },
+  });
+  registered.push(makeCodebase('fresh-app'));
+  const out = await tool.handler({ workflow: 'archon-ship', project: 'fresh-app', prompt: 'x' });
+  expect(out).toContain('Queued archon-ship on fresh-app');
+  expect(launches[0]?.codebase.name).toBe('fresh-app');
 });
 
 describe('register_project', () => {

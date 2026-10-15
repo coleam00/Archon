@@ -61,7 +61,8 @@ const INVOKE_WORKFLOW_SCHEMA = defineNativeToolInputSchema({
 
 export interface InvokeWorkflowContext {
   workflows: readonly WorkflowWithSource[];
-  codebases: readonly Codebase[];
+  /** Read at call time, so a project `register_project` created earlier in the turn resolves. */
+  listCodebases: () => Promise<readonly Codebase[]>;
   /**
    * Queue the launch for dispatch after the turn ends. Returns `null` when accepted, or
    * the launch already queued this turn, which is kept and named in the refusal.
@@ -97,9 +98,10 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
           const names = ctx.workflows.map(w => w.workflow.name).join(', ');
           return `No workflow named "${workflowName}". Available: ${names || '(none)'}`;
         }
-        const codebase = findCodebaseByName(ctx.codebases, projectName);
+        const codebases = await ctx.listCodebases();
+        const codebase = findCodebaseByName(codebases, projectName);
         if (codebase === undefined) {
-          const names = ctx.codebases.map(c => c.name).join(', ');
+          const names = codebases.map(c => c.name).join(', ');
           return `No registered project matches "${projectName}". Registered projects: ${names || '(none)'}`;
         }
 

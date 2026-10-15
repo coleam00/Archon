@@ -4307,6 +4307,36 @@ describe('workflow dispatch routing', () => {
       );
     });
 
+    test.each(['stream', 'batch'] as const)(
+      'a turn that ends in an error result drops its queued launch (%s)',
+      async mode => {
+        mockSendQuery.mockImplementationOnce(async function* () {
+          const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+          await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+          yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'fix the login bug', { actor: operator });
+
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      }
+    );
+
+    test('a turn that throws after queueing a launch dispatches nothing', async () => {
+      mockSendQuery.mockImplementationOnce(async function* () {
+        const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+        await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+        yield { type: 'agent_message_chunk', text: 'On it.' };
+        throw new Error('provider crashed');
+      });
+      await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', { actor: operator });
+
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
+
     test('the command scan is off: a /invoke-workflow line in the reply is plain text', async () => {
       const reply = '/invoke-workflow test-workflow --project test-repo --prompt "x"\n';
       agentInvokes([], [], reply);
