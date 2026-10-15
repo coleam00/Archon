@@ -106,7 +106,7 @@ async function fixture(
   autoDrain = true,
   isolation:
     | { kind: 'in-place' }
-    | { kind: 'worktree'; fromBranch?: string }
+    | { kind: 'worktree'; fromBranch?: string; branch?: string }
     | { kind: 'default' } = {
     kind: 'in-place',
   },
@@ -724,41 +724,60 @@ describe('server resource-start host', () => {
     expect(engine.submitted).toHaveLength(0);
   });
 
-  test('an unbranched worktree start that failed before submission reuses its checkout on retry', async () => {
-    const { deliver, engine } = await fixture(false, { kind: 'worktree' });
-    expect((await deliver('first', 'queue')).status).toBe(200);
-    const requestId = await admitWithoutStarting();
-    const failedCwds: string[] = [];
-    const failing: IWorkflowEngine = {
-      async submit(input) {
-        failedCwds.push(input.cwd);
-        throw new Error('engine unavailable');
-      },
-      async resume() {
-        throw new Error('not used');
-      },
-      async subscribe() {
-        throw new Error('not used');
-      },
-      async watchAttention() {
-        throw new Error('not used');
-      },
-    };
-    const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
-      startAdmittedResourceStart({
-        requestId,
-        hostId: HOST_ID,
-        host: { ...createSqlWorkflowHost(), engine: target },
-        createPlatform: () => new HeadlessPlatform(),
+  test.each([undefined, 'named-reuse'])(
+    'a worktree start on branch %s records reuse on retry',
+    async branch => {
+      const { deliver, engine } = await fixture(false, {
+        kind: 'worktree',
+        ...(branch ? { branch } : {}),
       });
+      expect((await deliver('first', 'queue')).status).toBe(200);
+      const requestId = await admitWithoutStarting();
+      const failedCwds: string[] = [];
+      const failing: IWorkflowEngine = {
+        async submit(input) {
+          failedCwds.push(input.cwd);
+          throw new Error('engine unavailable');
+        },
+        async resume() {
+          throw new Error('not used');
+        },
+        async subscribe() {
+          throw new Error('not used');
+        },
+        async watchAttention() {
+          throw new Error('not used');
+        },
+      };
+      const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
+        startAdmittedResourceStart({
+          requestId,
+          hostId: HOST_ID,
+          host: { ...createSqlWorkflowHost(), engine: target },
+          createPlatform: () => new HeadlessPlatform(),
+        });
 
-    await expect(start(failing)).rejects.toThrow('engine unavailable');
-    // The operator's retry of the still-pending run reaches the engine in the same checkout.
-    expect((await start(engine)).success).toBe(true);
-    expect(engine.claimed).toEqual([requestId]);
-    expect(engine.submitted.map(input => input.cwd)).toEqual(failedCwds);
-    expect(failedCwds).toHaveLength(1);
-  });
+      await expect(start(failing)).rejects.toThrow('engine unavailable');
+      // The operator's retry of the still-pending run reaches the engine in the same checkout.
+      const logged = captureLogLines();
+      try {
+        expect((await start(engine)).success).toBe(true);
+        expect(
+          logged.lines.filter(line => line.msg === 'worktree_adopted' && line.level === 40)
+        ).toHaveLength(1);
+        const codebase = await findCodebaseByDefaultCwd(join(root, 'project'));
+        if (!codebase) throw new Error('Expected registered project');
+        const rows = await createSqlWorkflowHost().records.isolation.listByCodebase(codebase.id);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].metadata.adopted).toBe(true);
+      } finally {
+        logged.restore();
+      }
+      expect(engine.claimed).toEqual([requestId]);
+      expect(engine.submitted.map(input => input.cwd)).toEqual(failedCwds);
+      expect(failedCwds).toHaveLength(1);
+    }
+  );
 
   test('a start that fails before submission logs its run and the recovery command', async () => {
     const { deliver } = await fixture(false);

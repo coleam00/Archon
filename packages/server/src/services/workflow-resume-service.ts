@@ -1,12 +1,12 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import * as conversationDb from '@archon/core/db/conversations';
+import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import {
-  resumeWorkflowContinuation,
   unverifiableSourceGuidance,
   wakeDueWorkflowContinuations,
   type ContinuationAdmission,
-} from '@archon/core/workflows/continuation-host';
+} from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';

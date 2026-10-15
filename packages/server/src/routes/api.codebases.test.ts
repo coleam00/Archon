@@ -1,6 +1,7 @@
 import {
   ActiveContainerEnvironmentsError,
   ActiveWorktreeEnvironmentsError,
+  WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
 import { mkdtemp, writeFile, unlink, stat, rm as realRm } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -9,15 +10,28 @@ import { isPathInside } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
   toRepoPath,
+  toBranchName,
+  toWorktreePath,
   findRepoRoot as realFindRepoRoot,
   isWorktreeRegistered as realIsWorktreeRegistered,
   removeWorktree as realRemoveWorktree,
 } from '@archon/git';
-import type { markWorktreeDestroyed } from '@archon/core/db/isolation-environments';
-import type { deleteCodebase } from '@archon/core/db/codebases';
+import {
+  markWorktreeDestroyed,
+  create as realCreateEnvironment,
+  getById as realGetEnvironment,
+  listByCodebase as realListEnvironments,
+} from '@archon/core/db/isolation-environments';
+import * as connection from '@archon/core/db/connection';
+import { SqliteAdapter, sqliteDialect } from '@archon/core/db/adapters/sqlite';
+import {
+  deleteCodebase,
+  createCodebase as realCreateCodebase,
+  getCodebase as realGetCodebase,
+} from '@archon/core/db/codebases';
 import { ProjectRegistrationError } from '@archon/core/handlers/clone';
 import type { ProjectBaseBranchInspection } from '@archon/core';
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -36,6 +50,17 @@ const detectRealRepoRoot = realFindRepoRoot;
 const removeRealWorktree = realRemoveWorktree;
 const checkRealRegistration = realIsWorktreeRegistered;
 const removeRealDirectory = realRm;
+const realEnvironmentStore = {
+  create: realCreateEnvironment,
+  getById: realGetEnvironment,
+  listByCodebase: realListEnvironments,
+  markWorktreeDestroyed,
+};
+const realCodebaseStore = {
+  createCodebase: realCreateCodebase,
+  getCodebase: realGetCodebase,
+  deleteCodebase,
+};
 const fsPromises = await import('fs/promises');
 const mockRm = mock<typeof realRm>(removeRealDirectory);
 const realStat = stat;
@@ -965,12 +990,13 @@ describe('DELETE /api/codebases/:id', () => {
       mockIsWorktreeRegistered.mockImplementation(checkRealRegistration);
       mockMarkWorktreeDestroyed.mockImplementationOnce(async observed => {
         expect(observed.working_path).toBe(original);
-        if (current.working_path !== observed.working_path) throw new Error('resource changed');
+        if (current.working_path !== observed.working_path)
+          throw new WorktreeRegistrationChangedError(observed.id);
       });
       const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
         method: 'DELETE',
       });
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(409);
       expect(current.status).toBe('active');
       expect(await checkRealRegistration(toRepoPath(repo), original)).toBe(false);
       expect(await checkRealRegistration(toRepoPath(repo), replacement)).toBe(true);
@@ -1019,32 +1045,106 @@ describe('DELETE /api/codebases/:id', () => {
     }
   });
 
-  for (const registered of [false, true]) {
-    test(`an ENOTDIR worktree path still respects Git registration: ${registered}`, async () => {
-      const env = { ...MOCK_ENV, working_path: '/replaced-parent/checkout' };
-      mockStat.mockRejectedValueOnce(
-        Object.assign(new Error('not a directory'), { code: 'ENOTDIR' })
-      );
-      mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
-      mockListByCodebase.mockResolvedValueOnce([env]);
-      mockIsWorktreeRegistered.mockResolvedValueOnce(registered);
-      const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
-        method: 'DELETE',
-      });
-      expect(response.status).toBe(registered ? 500 : 200);
-      expect(mockRemoveWorktree).not.toHaveBeenCalled();
-      expect(mockIsWorktreeRegistered).toHaveBeenCalledWith(
-        MOCK_CODEBASE.default_cwd,
-        env.working_path
-      );
-      if (registered) {
-        expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
-        expect(mockDeleteCodebase).not.toHaveBeenCalled();
-      } else {
-        expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(env);
-        expect(mockDeleteCodebase).toHaveBeenCalledWith(MOCK_CODEBASE.id, {
-          requireWorktreeCleanup: true,
+  for (const [scenario, expectedStatus] of [
+    ['unregistered file ancestor', 200],
+    ['registered file ancestor', 500],
+    ['same-ID re-registration', 409],
+  ] as const) {
+    test(`real Git deletion handles ${scenario}`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'archon-delete-route-'));
+      const db = new SqliteAdapter(join(root, 'test.db'));
+      const querySpy = spyOn(connection.pool, 'query').mockImplementation(db.query.bind(db));
+      const databaseSpy = spyOn(connection, 'getDatabase').mockReturnValue(db);
+      const dialectSpy = spyOn(connection, 'getDialect').mockReturnValue(sqliteDialect);
+      const git = (...args: string[]) => {
+        expect(Bun.spawnSync(['git', ...args]).exitCode).toBe(0);
+      };
+      try {
+        const repo = join(root, 'repo');
+        const parent = join(root, 'parent');
+        const checkout = join(parent, 'checkout');
+        git('init', repo);
+        git(
+          '-C',
+          repo,
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.com',
+          'commit',
+          '--allow-empty',
+          '-m',
+          'initial'
+        );
+        git('-C', repo, 'worktree', 'add', '-b', 'checkout', checkout);
+        const project = await realCodebaseStore.createCodebase({
+          name: 'delete-route',
+          default_cwd: repo,
         });
+        const registration = {
+          codebase_id: project.id,
+          workflow_type: 'issue' as const,
+          workflow_id: '42',
+          provider: 'worktree' as const,
+          working_path: checkout,
+          branch_name: toBranchName('checkout'),
+        };
+        const original = await realEnvironmentStore.create(registration);
+        if (scenario !== 'same-ID re-registration') {
+          if (scenario === 'unregistered file ancestor') {
+            await removeRealWorktree(toRepoPath(repo), toWorktreePath(checkout));
+          }
+          await removeRealDirectory(parent, { recursive: true });
+          await writeFile(parent, 'replaced directory');
+        }
+        mockGetCodebase.mockResolvedValueOnce({
+          ...MOCK_CODEBASE,
+          id: project.id,
+          default_cwd: repo,
+        });
+        mockListByCodebase.mockImplementationOnce(async id => [
+          ...(await realEnvironmentStore.listByCodebase(id)),
+        ]);
+        mockIsWorktreeRegistered.mockImplementation(checkRealRegistration);
+        mockRemoveWorktree.mockImplementation(removeRealWorktree);
+        mockDeleteCodebase.mockImplementationOnce(realCodebaseStore.deleteCodebase);
+        mockMarkWorktreeDestroyed.mockImplementationOnce(async observed => {
+          if (scenario === 'same-ID re-registration') {
+            expect(await checkRealRegistration(toRepoPath(repo), checkout)).toBe(false);
+            git('-C', repo, 'worktree', 'add', checkout, 'checkout');
+            const replacement = await realEnvironmentStore.create(registration);
+            expect(replacement.id).toBe(original.id);
+            expect(replacement.metadata).not.toEqual(original.metadata);
+          }
+          await realEnvironmentStore.markWorktreeDestroyed(observed);
+        });
+        const response = await makeApp().request(`/api/codebases/${project.id}`, {
+          method: 'DELETE',
+        });
+        expect(response.status).toBe(expectedStatus);
+        if (scenario === 'unregistered file ancestor') {
+          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(original);
+          expect(await realCodebaseStore.getCodebase(project.id)).toBeNull();
+          expect(await realEnvironmentStore.getById(original.id)).toBeNull();
+        } else {
+          expect(await realCodebaseStore.getCodebase(project.id)).not.toBeNull();
+          expect((await realEnvironmentStore.getById(original.id))?.status).toBe('active');
+          expect(await checkRealRegistration(toRepoPath(repo), checkout)).toBe(true);
+          expect(mockDeleteCodebase).not.toHaveBeenCalled();
+          if (scenario === 'registered file ancestor') {
+            expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+            expect(mockRemoveWorktree).not.toHaveBeenCalled();
+          } else {
+            expect((await stat(checkout)).isDirectory()).toBe(true);
+            expect(((await response.json()) as { error: string }).error).toContain(original.id);
+          }
+        }
+      } finally {
+        querySpy.mockRestore();
+        databaseSpy.mockRestore();
+        dialectSpy.mockRestore();
+        await db.close();
+        await removeTempTree(root);
       }
     });
   }

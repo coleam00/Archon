@@ -4,12 +4,12 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getArchonHome } from '@archon/paths';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
+import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import {
-  resumeWorkflowContinuation,
   wakeDueWorkflowContinuations,
   type ContinuationWakeOutcome,
   type ContinuationAdmission,
-} from '@archon/core/workflows/continuation-host';
+} from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';

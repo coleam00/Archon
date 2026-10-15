@@ -1,0 +1,32 @@
+diff --git a/packages/workflows/src/loader.ts b/packages/workflows/src/loader.ts
+index 7fa135ce1..9e338058f 100644
+--- a/packages/workflows/src/loader.ts
++++ b/packages/workflows/src/loader.ts
+@@ -826,15 +826,25 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group'
+ const GATE_ON_A_SHELL_NODE =
+   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
+ 
++/** The `when:` operators that compare `parseFloat` of both sides. */
++const NUMERIC_WHEN_OPERATORS = ['<=', '>=', '<', '>'];
++
+ /**
+  * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
+  * added only when a parenthesis sits outside a quoted literal, so a typo like
+- * `$a.output = 'x'` is not blamed on grouping.
++ * `$a.output = 'x'` is not blamed on grouping. The numeric hint follows the same rule
++ * for an operator outside quotes.
+  */
+ function unsupportedConditionSyntax(nodeId: string, field: string, text: string): string {
+   const hasGrouping = ['(', ')'].some(paren => splitOutsideQuotes(text, paren).length > 1);
++  const hasNumericOperator = NUMERIC_WHEN_OPERATORS.some(
++    op => splitOutsideQuotes(text, op).length > 1
++  );
+   const hint = hasGrouping ? 'Grouping parentheses are not supported; use' : 'Use';
+-  return `Node '${nodeId}' field '${field}' has unsupported condition syntax: "${text}". ${hint} comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
++  const numericHint = hasNumericOperator
++    ? `. A numeric operator (${NUMERIC_WHEN_OPERATORS.join(' ')}) needs a numeric right-hand side`
++    : '';
++  return `Node '${nodeId}' field '${field}' has unsupported condition syntax: "${text}". ${hint} comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node${numericHint}`;
+ }
+ 
+ /**

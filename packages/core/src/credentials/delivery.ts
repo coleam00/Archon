@@ -4,9 +4,9 @@
  *
  * Pure-function "how to hand a credential to vendor X" table. Given a
  * vendor-canonical credential id and a decrypted credential (`api_key` or
- * `oauth`), returns the env vars to merge into the workflow / chat env and,
- * optionally, files to write under `artifactsDir` (e.g. Codex
- * `CODEX_HOME/auth.json` for ChatGPT subscription delivery).
+ * `oauth`), returns the env vars to merge into the workflow / chat env. Every
+ * delivery is env-only, so workflows and direct chat receive the same
+ * credential, and no provider home directory is replaced to deliver one.
  *
  * Credential ids are upstream-vendor keyed (`anthropic`, `openai`,
  * `github-copilot`, plus the Pi backend ids) — NOT agent ids: one credential
@@ -20,15 +20,15 @@
  * `PI_PROVIDER_ENV_VARS` (@archon/providers, regenerated from the installed
  * pi-ai SDK — `bun run check:pi-vendor-map` guards drift).
  */
-import { dirname, join } from 'node:path';
 import { consumesStoredCredential } from '@archon/provider-contract';
 import {
+  CODEX_CREDENTIAL_ENV,
   PI_PROVIDER_ENV_VARS,
   PI_AMBIENT_VENDORS,
   normalizeCredentialVendor,
 } from '@archon/providers';
 import { descriptor as piDescriptor } from '@archon/providers/pi/descriptor';
-import { CODEX_AUTH_JSON_RELATIVE_PATH, PI_AUTH_JSON_RELATIVE_PATH } from '@archon/workflows/deps';
+import { PI_AUTH_JSON_RELATIVE_PATH } from '@archon/workflows/deps';
 
 export { LEGACY_VENDOR_ALIASES, normalizeCredentialVendor } from '@archon/providers';
 
@@ -47,23 +47,10 @@ export type ResolvedCredential =
 
 export interface DeliveryResult {
   env: Record<string, string>;
-  /** Files to write before the provider is invoked (e.g. Codex auth.json). */
-  files?: { path: string; contents: string }[];
-}
-
-export interface DeliveryOptions {
-  /**
-   * Per-run artifacts directory. File-based deliveries (Codex `auth.json`)
-   * are written under this directory so they're scoped to the run and don't
-   * leak across users. Pass empty string from the direct-chat path to signal
-   * "env-only deliveries"; chat callers MUST drop deliveries that produce
-   * files when no artifactsDir is available (see orchestrator-agent).
-   */
-  artifactsDir: string;
 }
 
 /**
- * The set of vendor ids the delivery map can turn into env/files — i.e. the
+ * The set of vendor ids the delivery map can turn into env — i.e. the
  * connectable catalog. Derived from the generated Pi backend map (which
  * already includes `anthropic`, `openai`, and `github-copilot`); ambient
  * vendors (AWS Bedrock, Vertex ADC) are detection-only and excluded. Used at
@@ -79,48 +66,11 @@ export const KNOWN_VENDORS: ReadonlySet<string> = new Set<string>(
 );
 
 /**
- * Map the stored OpenAI subscription blob onto the Codex CLI `auth.json` shape
- * (authoritative interface: `packages/server/src/scripts/setup-auth.ts`):
- *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
- *     account_id }, last_refresh }
- *
- * The blob comes from Archon's own OpenAI PKCE flow (`openai-oauth.ts`, #1924)
- * and is `{ access, refresh, expires, accountId, id_token }` — `accountId` is
- * camelCase, and `id_token` is a REAL OpenID JWT captured at exchange/refresh
- * (the Codex CLI rejects an empty one with "invalid ID token format", which is
- * why this flow no longer goes through Pi — Pi drops the field). Legacy blobs
- * minted by Pi before the gate lift lack `id_token`; `str()` maps that to ''
- * and the run fails with the known Codex error — reconnecting the
- * subscription mints a complete blob.
+ * Translate `(provider, credential)` → env to be merged into the per-run /
+ * per-chat env bag. Throws on unknown providers so callers fail fast instead
+ * of silently swallowing the credential.
  */
-function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
-  const c = rawCreds as Record<string, unknown>;
-  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-  return JSON.stringify({
-    OPENAI_API_KEY: null,
-    tokens: {
-      id_token: str(c.id_token),
-      access_token: str(c.access),
-      refresh_token: str(c.refresh),
-      account_id: str(c.accountId),
-    },
-    last_refresh: new Date().toISOString(),
-  });
-}
-
-/**
- * Translate `(provider, credential)` → env (and optional files) to be merged
- * into the per-run / per-chat env bag. Throws on unknown providers so callers
- * fail fast instead of silently swallowing the credential.
- *
- * Env-only callers (direct chat with no artifactsDir) MUST drop results that
- * include `files` — chat has no per-call scratch directory to host them.
- */
-export function deliverCredential(
-  provider: string,
-  cred: ResolvedCredential,
-  opts: DeliveryOptions
-): DeliveryResult {
+export function deliverCredential(provider: string, cred: ResolvedCredential): DeliveryResult {
   const vendor = normalizeCredentialVendor(provider);
   switch (vendor) {
     case 'anthropic':
@@ -135,15 +85,23 @@ export function deliverCredential(
 
     case 'openai':
       if (cred.kind === 'api_key') {
-        return { env: { OPENAI_API_KEY: cred.apiKey } };
+        // Pi reads OPENAI_API_KEY; Codex reads only its own name.
+        return { env: { OPENAI_API_KEY: cred.apiKey, [CODEX_CREDENTIAL_ENV.apiKey]: cred.apiKey } };
       }
       {
-        // ChatGPT subscription → Codex CLI auth.json (real id_token since #1924).
-        const codexAuthPath = join(opts.artifactsDir, CODEX_AUTH_JSON_RELATIVE_PATH);
-        const codexHome = dirname(codexAuthPath);
+        // ChatGPT subscription → the Codex provider logs its app-server in with these
+        // in memory, so the user's CODEX_HOME stays theirs.
+        const accountId = cred.rawCreds.accountId;
+        if (typeof accountId !== 'string' || accountId === '') {
+          throw new Error(
+            'Stored OpenAI subscription has no ChatGPT account id; reconnect it with `archon ai login openai`.'
+          );
+        }
         return {
-          env: { CODEX_HOME: codexHome },
-          files: [{ path: codexAuthPath, contents: buildCodexAuthJson(cred.rawCreds) }],
+          env: {
+            [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: cred.oauthApiKey,
+            [CODEX_CREDENTIAL_ENV.chatgptAccountId]: accountId,
+          },
         };
       }
 

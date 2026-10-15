@@ -5,8 +5,10 @@
  * entrypoint (`setup-auth`) writes them back out as `~/.codex/auth.json`. They
  * carry an `ARCHON_` prefix because Archon passes its environment to the Codex
  * child, and Codex reads its own `CODEX_*` names (`CODEX_ACCESS_TOKEN` is an auth
- * input). An Archon value under a Codex-native name would override the user's
- * own Codex login, so Archon never sets one.
+ * input). A setup value under a Codex-native name would override the user's
+ * own Codex login on every run. Per-run credential delivery is different: a
+ * connected credential deliberately uses `CODEX_API_KEY` (see
+ * `CODEX_CREDENTIAL_ENV`).
  *
  * The unprefixed names are read as a deprecated fallback for one release.
  * Remove `legacy` and the fallback in the release after that.

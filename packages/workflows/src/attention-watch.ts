@@ -160,8 +160,9 @@ interface OpenItem {
   project: ProjectRef | null;
 }
 
+/** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
-  return item.kind === 'unreadable' ? null : item.occurrence;
+  return item.kind === 'unreadable' || item.kind === 'usage_limit' ? null : item.occurrence;
 }
 
 type Resolution =
@@ -456,9 +457,10 @@ export async function watchAttentionQueue(
     }
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
+      const occurrence = occurrenceOf(item);
       if (
-        item.kind !== 'unreadable' &&
-        item.occurrence === event.data.occurrence &&
+        occurrence !== null &&
+        occurrence === event.data.occurrence &&
         isInAttentionScope(item.project, scope) &&
         !matchesAttentionLabels(item, labels)
       )
@@ -467,7 +469,7 @@ export async function watchAttentionQueue(
           cursor,
           project: item.project,
           runId,
-          occurrence: item.occurrence,
+          occurrence,
           revision: item.revision,
         });
     }

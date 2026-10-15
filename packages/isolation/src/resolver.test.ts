@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
+const mockWarn = mock<(...args: unknown[]) => void>(() => undefined);
 const mockCleanupError = mock<(...args: unknown[]) => void>(() => undefined);
 const mockCleanupInfo = mock<(...args: unknown[]) => void>(() => undefined);
 
@@ -9,7 +10,7 @@ mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
     error: mockCleanupError,
-    warn: () => undefined,
+    warn: mockWarn,
     info: mockCleanupInfo,
     debug: () => undefined,
     trace: () => undefined,
@@ -60,6 +61,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         branch_name: env.branch_name,
       }),
     updateStatus: async () => undefined,
+    updateMetadata: async () => undefined,
     countActiveByCodebase: async () => 0,
     ...overrides,
   };
@@ -98,6 +100,58 @@ function makeMockProvider() {
 const defaultCodebase = { id: 'cb-1', defaultCwd: '/repos/myrepo', name: 'my-repo' };
 
 describe('IsolationResolver', () => {
+  test('refuses non-worktree records without adoption metadata or warnings', async () => {
+    const exists = spyOn(git, 'worktreeExists').mockResolvedValue(true);
+    const updateMetadata = mock(async () => {});
+    const env = makeEnvRow({ provider: 'container' });
+    const resolver = createResolver({
+      store: makeMockStore({
+        getById: async () => env,
+        updateMetadata,
+      }),
+    });
+    try {
+      await expect(
+        resolver.resolve({
+          existingEnvId: env.id,
+          codebase: defaultCodebase,
+          platformType: 'cli',
+        })
+      ).rejects.toThrow('is not a worktree');
+      expect(updateMetadata).not.toHaveBeenCalled();
+      expect(mockWarn.mock.calls.filter(([, event]) => event === 'worktree_adopted')).toHaveLength(
+        0
+      );
+    } finally {
+      exists.mockRestore();
+    }
+  });
+
+  test('a failed adoption write refuses reuse and emits no success warning', async () => {
+    const exists = spyOn(git, 'worktreeExists').mockResolvedValue(true);
+    const create = mock(async () => makeEnvRow());
+    const resolver = createResolver({
+      store: makeMockStore({
+        getById: async () => makeEnvRow(),
+        updateMetadata: async () => {
+          throw new Error('adoption write failed');
+        },
+        create,
+      }),
+    });
+    try {
+      await expect(
+        resolver.resolve({ existingEnvId: 'env-1', codebase: defaultCodebase, platformType: 'cli' })
+      ).rejects.toThrow('adoption write failed');
+      expect(create).not.toHaveBeenCalled();
+      expect(mockWarn.mock.calls.filter(([, event]) => event === 'worktree_adopted')).toHaveLength(
+        0
+      );
+    } finally {
+      exists.mockRestore();
+    }
+  });
+
   let worktreeExistsSpy: ReturnType<typeof spyOn>;
   let getCanonicalSpy: ReturnType<typeof spyOn>;
   let findWorktreeByBranchSpy: ReturnType<typeof spyOn>;
@@ -105,6 +159,7 @@ describe('IsolationResolver', () => {
   let verifyWorktreeOwnershipSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
+    mockWarn.mockClear();
     worktreeExistsSpy = spyOn(git, 'worktreeExists').mockResolvedValue(true);
     getCanonicalSpy = spyOn(git, 'getCanonicalRepoPath').mockResolvedValue(
       '/repos/myrepo' as git.RepoPath
@@ -366,9 +421,10 @@ describe('IsolationResolver', () => {
       working_path: '/worktrees/feature-branch',
       branch_name: 'feature-branch',
     });
+    const create = mock(async (_input: Parameters<IIsolationStore['create']>[0]) => adoptedEnv);
     const resolver = createResolver({
       store: makeMockStore({
-        create: async () => adoptedEnv,
+        create,
       }),
     });
 
@@ -379,6 +435,21 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].metadata).toEqual({
+      adopted: true,
+      adopted_from: 'skill',
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+    });
+    expect(
+      mockWarn.mock.calls.filter(([, event]) => event === 'isolation_worktree_adopted')
+    ).toEqual([
+      [
+        { adoptedPath: '/worktrees/feature-branch', prBranch: 'feature-branch' },
+        'isolation_worktree_adopted',
+      ],
+    ]);
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
       expect(result.method.type).toBe('branch_adoption');
@@ -477,7 +548,10 @@ describe('IsolationResolver', () => {
 
   test('passes exact existing-branch selection when adopting a task estate', async () => {
     let capturedRequest: unknown;
+    const store = makeMockStore();
+    const create = mock(store.create);
     const resolver = createResolver({
+      store: { ...store, create },
       provider: {
         ...makeMockProvider(),
         create: async request => {
@@ -509,6 +583,12 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].metadata).toMatchObject({
+      adopted: true,
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+    });
     expect(result.status).toBe('resolved');
     if (result.status !== 'resolved') throw new Error('expected resolved adoption');
     expect(result.method).toEqual({ type: 'provider_adoption' });

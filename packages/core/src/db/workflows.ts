@@ -66,7 +66,7 @@ import {
   isAttentionQueueRow,
   isScheduledWorkflowResume,
   workflowRunStatusSchema,
-  scheduledWorkflowResumeSchema,
+  pausedUsageLimitWait,
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
@@ -1085,7 +1085,13 @@ export async function resumeWorkflowRun(
       const clearedError = readMetadataError(prior?.metadata);
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
+      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
+      const usageLimitWait =
+        prior?.status === 'paused' &&
+        pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
+          undefined;
       const metadataPatch = {
+        ...(usageLimitWait ? { wait: null } : {}),
         [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
         error: null,
         [RUN_STOP_REASON_METADATA_KEY]: null,
@@ -1241,6 +1247,23 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);
   }
+}
+
+/**
+ * Whether a run executes in this conversation as its own transcript: a hidden
+ * worker conversation, or a CLI run's conversation. A foreground run started from
+ * a chat executes in that chat (`conversation_id = parent_conversation_id`), and
+ * the chat stays its owner's, so it does not count.
+ */
+export async function isRunTranscriptConversation(conversationId: string): Promise<boolean> {
+  const result = await pool.query<{ found: number }>(
+    `SELECT 1 AS found FROM remote_agent_workflow_runs
+     WHERE conversation_id = $1
+       AND (parent_conversation_id IS NULL OR parent_conversation_id <> conversation_id)
+     LIMIT 1`,
+    [conversationId]
+  );
+  return result.rows.length > 0;
 }
 
 /**
@@ -1446,24 +1469,17 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: {
-    scheduledResume?: ScheduledWorkflowResume;
-    exitReason?: RunExitReason;
-    signal?: RunStopSignal;
-  } = {}
+  options: { exitReason?: RunExitReason; signal?: RunStopSignal } = {}
 ): Promise<void> {
-  const { scheduledResume, exitReason, signal } = options;
+  const { exitReason, signal } = options;
   const dialect = getDialect();
-  const parsedSchedule =
-    scheduledResume === undefined
-      ? undefined
-      : scheduledWorkflowResumeSchema.parse(scheduledResume);
-  // Both keys belong to ONE failure and are written wholesale below, so a previous
-  // failure's copy is removed before the merge rather than merged into. Postgres `||`
-  // replaces a nested object while SQLite's json_patch recurses into it, and a run can
-  // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
-  // recovery) — under json_patch alone that would leave a previous signal attached to
-  // a new reason, the #2673 defect through the same mechanism.
+  // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
+  // quota schedule an older binary wrote with a previous failure is spent once the run
+  // ran again. A previous failure's copy is removed before the merge rather than merged
+  // into. Postgres `||` replaces a nested object while SQLite's json_patch recurses into
+  // it, and a run can reach 'running' again carrying a stale stop reason (resume, or a
+  // fan-out cancel recovery) — under json_patch alone that would leave a previous signal
+  // attached to a new reason, the #2673 defect through the same mechanism.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
@@ -1480,7 +1496,6 @@ export async function failWorkflowRun(
           id,
           JSON.stringify({
             error,
-            ...(parsedSchedule !== undefined ? { scheduled_resume: parsedSchedule } : {}),
             ...(exitReason !== undefined
               ? {
                   [RUN_STOP_REASON_METADATA_KEY]: {
@@ -1492,18 +1507,6 @@ export async function failWorkflowRun(
           }),
         ]
       );
-      if ((update.rowCount ?? 0) > 0 && parsedSchedule !== undefined) {
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'quota_resume_scheduled',
-          data: {
-            resume_at: parsedSchedule.resumeAt,
-            deadline_at: parsedSchedule.deadlineAt,
-            attempt: parsedSchedule.attempt,
-            max_attempts: parsedSchedule.maxAttempts,
-          },
-        });
-      }
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
@@ -1799,9 +1802,10 @@ export async function clearWorkflowWaitContext(
 }
 
 /**
- * Return a bounded set of runs eligible for a resume claim: due time and event waits, due
- * quota resumes, and answered gates and attention waits. The answered clauses mirror
- * `continuablePause`, which the host re-checks when it builds the claim's cursor.
+ * Return a bounded set of runs eligible for a resume claim: due time, event and usage-limit
+ * waits, due quota resumes an older binary scheduled, and answered gates and attention
+ * waits. The answered clauses mirror `continuablePause`, which the host re-checks when it
+ * builds the claim's cursor.
  */
 export async function listDueWorkflowContinuations(
   now: Date,
@@ -1833,7 +1837,7 @@ export async function listDueWorkflowContinuations(
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
-         AND ((status = 'paused' AND ${waitKind} IN ('time', 'event')
+         AND ((status = 'paused' AND ${waitKind} IN ('time', 'event', 'quota')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
           OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL)
           OR (${answeredGate})
