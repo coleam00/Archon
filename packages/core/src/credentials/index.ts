@@ -18,7 +18,6 @@ export {
   PI_AUTH_PATH_ENV,
   type ResolvedCredential,
   type DeliveryResult,
-  type DeliveryOptions,
   type OAuthCredentials,
 } from './delivery';
 export {

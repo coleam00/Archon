@@ -373,8 +373,8 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
 
 /**
  * Resolve per-user AI-provider credential env (Phase 2) for a run, and write
- * any file-based deliveries (e.g. Codex `CODEX_HOME/auth.json`) under the
- * run's artifacts directory. Returns the env bag to merge LAST into
+ * any file-based deliveries (Pi's `auth.json`) under the run's artifacts
+ * directory. Returns the env bag to merge LAST into
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
  * bags when per-user provider keys are disabled, no userId is present, the
@@ -3134,9 +3134,10 @@ export async function executeWorkflow(
     const protectedEnvKeys = new Set(config.protectedEnvKeys);
 
     // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
-    // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
-    // under it. Clear files from an earlier invocation first: a disconnected
-    // credential or failed refresh must not leave stale secrets readable on resume.
+    // created because file-based deliveries (Pi's `auth.json`) live under it.
+    // Clear files from an earlier invocation first, including the Codex
+    // `auth.json` older builds wrote: a disconnected credential or failed refresh
+    // must not leave stale secrets readable on resume.
     // Merged LAST into config.envVars so the originating user's keys
     // win over file/db/bot-github env — preserves the GitHub merge order and
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow

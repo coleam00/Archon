@@ -12,6 +12,7 @@ import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import type { Spawner } from '../codex/app-server';
 import type { ClientRequest } from '../codex/protocol/ClientRequest';
+import type { InitializeParams } from '../codex/protocol/InitializeParams';
 import type { InitializeResponse } from '../codex/protocol/InitializeResponse';
 import type { ServerNotification } from '../codex/protocol/ServerNotification';
 import type { CodexErrorInfo } from '../codex/protocol/v2/CodexErrorInfo';
@@ -22,6 +23,7 @@ import type { PluginInstalledResponse } from '../codex/protocol/v2/PluginInstall
 import type { PluginReadResponse } from '../codex/protocol/v2/PluginReadResponse';
 import type { PluginSummary } from '../codex/protocol/v2/PluginSummary';
 import type { FileUpdateChange } from '../codex/protocol/v2/FileUpdateChange';
+import type { LoginAccountParams } from '../codex/protocol/v2/LoginAccountParams';
 import type { LoginAccountResponse } from '../codex/protocol/v2/LoginAccountResponse';
 import type { McpToolCallStatus } from '../codex/protocol/v2/McpToolCallStatus';
 import type { RateLimitWindow } from '../codex/protocol/v2/RateLimitWindow';
@@ -196,6 +198,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     // Like the real server, nothing but `initialize` is served before the client
     // acknowledges with the `initialized` notification.
     let initialized = false;
+    let experimentalApi = false;
     let buffered = '';
     stdin.on('data', (chunk: Buffer) => {
       buffered += chunk.toString();
@@ -226,6 +229,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         }
         switch (method) {
           case 'initialize':
+            experimentalApi =
+              (message.params as InitializeParams).capabilities?.experimentalApi === true;
             if (!turn.ignoreInitialize) send({ id, result: initializeResponse() });
             break;
           case 'thread/start':
@@ -272,9 +277,28 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
                       } satisfies GetAccountResponse),
               });
             break;
-          case 'account/login/start':
-            send({ id, result: { type: 'apiKey' } satisfies LoginAccountResponse });
+          case 'account/login/start': {
+            const login = message.params as LoginAccountParams;
+            // The real binary's answer (codex-cli 0.162) to external tokens without the capability.
+            if (login.type === 'chatgptAuthTokens' && !experimentalApi) {
+              send({
+                id,
+                error: {
+                  code: -32600,
+                  message:
+                    'account/login/start.chatgptAuthTokens requires experimentalApi capability',
+                },
+              });
+              break;
+            }
+            send({
+              id,
+              result: {
+                type: login.type === 'chatgptAuthTokens' ? 'chatgptAuthTokens' : 'apiKey',
+              } satisfies LoginAccountResponse,
+            });
             break;
+          }
           case 'config/read':
             send({ id, result: configReadResponse(turn.configuredServers ?? []) });
             break;
