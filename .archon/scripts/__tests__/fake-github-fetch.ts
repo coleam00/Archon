@@ -38,6 +38,8 @@ export interface FakeGitHubState {
     state: string;
     state_reason?: string | null;
     labels: { name: string }[];
+    /** Present when the row is a pull request, as GitHub's issues API marks one. */
+    pull_request?: Record<string, never>;
   }[];
   labels: { name: string; color: string; description: string }[];
   pulls: FakePull[];

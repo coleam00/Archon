@@ -264,38 +264,53 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
   expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
 }, 120_000);
 
-it('closes a resolved item through the plugin, linking it to what resolved it and back', () => {
-  const host = forgeHost();
-  const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
-  const issue = (number: number): FakeGitHubState['issues'][number] => ({
-    ...seeded.issues[0],
-    number,
-    html_url: `https://${FAKE_HOST}/example/repo/issues/${String(number)}`,
-    labels: [],
-  });
-  seeded.issues.push(issue(3), issue(8));
-  writeFileSync(host.statePath, JSON.stringify(seeded));
-  const original = { repo: PR.repo, number: 3 };
-  const originalUrl = `https://${FAKE_HOST}/example/repo/issues/3`;
-  const change = `https://${FAKE_HOST}/example/repo/pull/5`;
-
+/** Run `body` with the pack's close and comment writes routed through `host`. */
+function throughForge(host: { argv: string[] }, body: () => void): void {
   const saved = { ...process.env };
   Object.assign(process.env, {
     ARCHON_SDLC_FORGE: 'forge',
     ARCHON_CLI_COMMAND: JSON.stringify(host.argv),
   });
+  try {
+    body();
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+}
+
+/** A plugin-backed host whose state also holds open issues with these numbers. */
+function forgeHostWith(...rows: { number: number; pull?: boolean }[]): { argv: string[]; statePath: string } {
+  const host = forgeHost();
+  const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  for (const row of rows) {
+    seeded.issues.push({
+      ...seeded.issues[0],
+      number: row.number,
+      html_url: `https://${FAKE_HOST}/example/repo/${row.pull ? 'pull' : 'issues'}/${String(row.number)}`,
+      labels: [],
+      ...(row.pull ? { pull_request: {} } : {}),
+    });
+  }
+  writeFileSync(host.statePath, JSON.stringify(seeded));
+  return host;
+}
+
+it('closes a resolved item through the plugin, linking it to what resolved it and back', () => {
+  const host = forgeHostWith({ number: 3 }, { number: 8 });
+  const original = { repo: PR.repo, number: 3 };
+  const originalUrl = `https://${FAKE_HOST}/example/repo/issues/3`;
+  const change = `https://${FAKE_HOST}/example/repo/pull/5`;
+
   const close = (number: number, closure: Closure): void => {
     const plan = planClose({ repo: PR.repo, number }, closure);
     if (plan.refused !== null) throw new Error(plan.refused);
     plan.close();
   };
-  try {
+  throughForge(host, () => {
     close(7, { kind: 'duplicate', url: originalUrl, original });
     close(8, { kind: 'delivered', url: change });
-  } finally {
-    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
-    Object.assign(process.env, saved);
-  }
+  });
 
   const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
   const closed = (number: number) => state.issues.find(row => row.number === number);
@@ -309,4 +324,22 @@ it('closes a resolved item through the plugin, linking it to what resolved it an
     expect.stringContaining(`https://${FAKE_HOST}/example/repo/issues/7`),
   ]);
   expect(on(8)).toEqual([expect.stringContaining(change)]);
+}, 120_000);
+
+it('refuses through the plugin to close a duplicate of a pull request', () => {
+  const host = forgeHostWith({ number: 5, pull: true });
+  const original = { repo: PR.repo, number: 5 };
+  const url = `https://${FAKE_HOST}/example/repo/pull/5`;
+  const before = readFileSync(host.statePath, 'utf8');
+
+  let plan: ReturnType<typeof planClose> | undefined;
+  throughForge(host, () => {
+    plan = planClose({ repo: PR.repo, number: 7 }, { kind: 'duplicate', url, original });
+  });
+
+  expect(plan?.refused).toContain('is a pull request, not an issue');
+  const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  const seeded = JSON.parse(before) as FakeGitHubState;
+  expect(state.issues).toEqual(seeded.issues);
+  expect(state.comments).toEqual([]);
 }, 120_000);
