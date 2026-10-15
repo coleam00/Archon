@@ -1,7 +1,7 @@
 /**
  * What every bench in this pack shares: the version record and its resolution, the
  * pack source snapshot, launching and waiting on ordinary runs through the `archon`
- * CLI, JSONL lines, and the operator's mark vocabulary.
+ * CLI, and JSONL lines.
  *
  * A bench is a script that launches ordinary top-level runs; the engine knows nothing
  * about it. It uses the `archon` on `PATH`, so pointing `PATH` at a development build
@@ -50,12 +50,6 @@ export interface ResolvedVersion {
   /** The run config layer holding only the version's tiers (`--config`). */
   readonly config: string;
 }
-
-/** The operator's marks: on a planted defect, and on a finding of an unplanted change. */
-export const MARKS = {
-  defect: ['right', 'wrong', 'partly'],
-  finding: ['false_positive', 'real'],
-} as const;
 
 /** A label, case or variant id becomes a path segment and a JSONL key, never anything else. */
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -464,16 +458,6 @@ export function readLines(file: string): Record<string, unknown>[] {
       if (!isObject(value)) throw new Error(`${file}:${index + 1} is not a JSON object`);
       return value;
     });
-}
-
-/** The newest line for each key: a later line replaces an earlier one with the same key. */
-export function latestLines(
-  file: string,
-  key: (line: Record<string, unknown>) => string
-): Map<string, Record<string, unknown>> {
-  const latest = new Map<string, Record<string, unknown>>();
-  for (const line of readLines(file)) latest.set(key(line), line);
-  return latest;
 }
 
 /** JSON with object keys sorted, so two records compare by content. */

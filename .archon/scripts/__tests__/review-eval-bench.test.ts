@@ -31,7 +31,6 @@ import {
   agentBinding,
   appendLine,
   artifactsOf,
-  latestLines,
   readLines,
   reportsOwnSpend,
   resolveVersion,
@@ -264,21 +263,6 @@ describe("a run's spend and binding are read on the engine's terms", () => {
       requested: 'opus',
       resolved: 'claude-opus',
     });
-  });
-});
-
-describe('latestLines keeps the newest line per key', () => {
-  it('replaces an earlier line with a later one of the same key', () => {
-    const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-lines-')));
-    const file = join(out, 'judgements.jsonl');
-    appendLine(file, { run_id: 'a', verdict: 'old' });
-    appendLine(file, { run_id: 'b', verdict: 'only' });
-    appendLine(file, { run_id: 'a', verdict: 'new' });
-    const latest = latestLines(file, line => String(line.run_id));
-    expect([...latest.values()]).toEqual([
-      { run_id: 'a', verdict: 'new' },
-      { run_id: 'b', verdict: 'only' },
-    ]);
   });
 });
 
