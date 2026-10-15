@@ -112,16 +112,23 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
     return stdout.trim() || null;
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    try {
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'config', '--local', '--get', `remote.${remote}.url`],
-        {
-          timeout: 10000,
-        }
-      );
-    } catch (inspectionError) {
-      if (inspectionError instanceof GitFailure && inspectionError.code === 1) return null;
+    if (error instanceof GitFailure && error.kind === 'unclassified' && error.code === 2) {
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', repoPath, 'config', '--local', '--get', `remote.${remote}.url`],
+          {
+            timeout: 10000,
+          }
+        );
+      } catch (inspectionError) {
+        if (
+          inspectionError instanceof GitFailure &&
+          inspectionError.kind === 'unclassified' &&
+          inspectionError.code === 1
+        )
+          return null;
+      }
     }
 
     // Unexpected error - surface it

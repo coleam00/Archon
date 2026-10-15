@@ -845,6 +845,24 @@ describe('git utilities', () => {
       expect(sync.error.message).toContain(failure.stderr);
     });
 
+    test('remote inspection confirms genuine absence in a repository', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-no-remote-')));
+      await git.execFileAsync('git', ['init', '-q', root]);
+      const original = await git
+        .execFileAsync('git', ['-C', root, 'remote', 'get-url', 'origin'])
+        .catch((error: unknown) => error);
+      expect(original).toMatchObject({ kind: 'unclassified', code: 2 });
+      const inspection = await git
+        .execFileAsync('git', ['-C', root, 'config', '--local', '--get', 'remote.origin.url'])
+        .catch((error: unknown) => error);
+      expect(inspection).toMatchObject({ kind: 'unclassified', code: 1 });
+      expect(await git.getRemoteUrl(repo(root))).toBeNull();
+      expect(await git.detectForge(repo(root))).toEqual({
+        type: 'github',
+        apiBase: 'https://api.github.com',
+      });
+    });
+
     test.each(['plain directory', 'damaged repository'])(
       'remote inspection preserves failure for a %s',
       async shape => {
@@ -3924,7 +3942,13 @@ branch refs/heads/feature/auth
     });
 
     test('returns null when no remote configured', async () => {
-      execSpy.mockRejectedValueOnce(new git.GitFailure('unclassified', 'remote lookup failed'));
+      execSpy.mockRejectedValueOnce(
+        new git.GitFailure(
+          'unclassified',
+          'remote lookup failed',
+          Object.assign(new Error('absent'), { code: 2 })
+        )
+      );
       execSpy.mockRejectedValueOnce(
         new git.GitFailure(
           'unclassified',
@@ -3935,6 +3959,38 @@ branch refs/heads/feature/auth
 
       const result = await git.getRemoteUrl(repo('/workspace/repo'));
       expect(result).toBeNull();
+    });
+
+    test.each([
+      new git.GitFailure(
+        'timeout',
+        'remote lookup timed out',
+        Object.assign(new Error('terminated'), { killed: true, signal: 'SIGTERM' })
+      ),
+      new git.GitFailure(
+        'unclassified',
+        'remote lookup failed',
+        Object.assign(new Error('failed'), { code: 128, stderr: 'original Git evidence' })
+      ),
+      new Error('unexpected remote lookup failure'),
+    ])('preserves non-absence remote failures through both consumers: %s', async original => {
+      for (const inspect of [
+        () => git.getRemoteUrl(repo('/workspace/repo')),
+        () => git.detectForge(repo('/workspace/repo')),
+      ]) {
+        execSpy.mockReset();
+        execSpy.mockRejectedValueOnce(original);
+        execSpy.mockRejectedValueOnce(
+          new git.GitFailure(
+            'unclassified',
+            'missing config key',
+            Object.assign(new Error('absent'), { code: 1 })
+          )
+        );
+        const failure = await inspect().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toHaveProperty('cause', original);
+      }
     });
 
     test('throws for unexpected errors', async () => {
