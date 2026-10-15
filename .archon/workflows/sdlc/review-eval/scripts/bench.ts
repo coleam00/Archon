@@ -32,7 +32,6 @@ import {
   artifactsOf,
   getRun,
   isId,
-  isObject,
   launch,
   readLines,
   resolveVersion,
@@ -40,6 +39,7 @@ import {
 } from '../../.shared/bench.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
+import { isObject } from '../../.shared/typed.ts';
 
 export const LENSES = [...REVIEW_LENSES, 'simplify'] as const;
 export type Lens = (typeof LENSES)[number];

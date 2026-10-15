@@ -17,6 +17,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { git, gitOrThrow } from './git.ts';
+import { isObject } from './typed.ts';
 
 export const TIERS = ['small', 'medium', 'large'] as const;
 export type Tier = (typeof TIERS)[number];
@@ -57,10 +58,6 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function isId(value: unknown): value is string {
   return typeof value === 'string' && ID.test(value);
-}
-
-export function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export const SAMPLES_FILE = 'samples.jsonl';
