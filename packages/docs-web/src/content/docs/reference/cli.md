@@ -964,9 +964,10 @@ change. Scope and `--label` work as for the list; `--sort`, `--count-by` and a r
 refused. **`--after <cursor>`** takes the `cursor` of an earlier line and, after the
 snapshot, replays every change since it. The line shapes and the consumer contract are in
 the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
-closed stdout stops the stream, `1` when it cannot start, `4` when the `--after` cursor
-was not issued by this install (with `--json`, the line `{"type":"error","error":"cursor_invalid"}`;
-rerun without `--after`).
+closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
+cannot start, `4` when the store cannot read the stream's cursor, an `--after` cursor this
+install did not issue or the stream's own position (with `--json`, the last line is
+`{"type":"error","error":"cursor_invalid"}`; rerun without `--after`).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
 `countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has

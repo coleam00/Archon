@@ -110,7 +110,7 @@ the same item the list returns, so treat it as a wake and answer by its `runId` 
 `occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
 lines before `ready` are the whole open set. Keep the `cursor` of the last line you
 handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
-cursor is not one this install issued: rerun without `--after`.
+store cannot read the stream's cursor: rerun without `--after`.
 
 When you answer from a run you saw paused earlier, pass the occurrence that
 `workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the

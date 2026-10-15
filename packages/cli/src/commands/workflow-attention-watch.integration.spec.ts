@@ -220,6 +220,25 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   expect((await replay.stop()).exitCode).toBe(0);
 }, 180_000);
 
+test('the text stream exits 0 at its first line after the reader closes stdout', async () => {
+  const fixture = makeFixture({ 'watch-ask': ASK });
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  watchers.add(child);
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  while (!text.includes('Ctrl-C stops.')) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error(`stdout ended before ready: ${text}`);
+    text += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel();
+
+  await launchDetached(fixture, 'watch-ask');
+  expect(await child.exited).toBe(0);
+  watchers.delete(child);
+}, 180_000);
+
 test('a cursor this install did not issue exits 4 with a cursor_invalid line', async () => {
   const fixture = makeFixture({});
   const { exitCode, stdout } = await runCli(fixture, [

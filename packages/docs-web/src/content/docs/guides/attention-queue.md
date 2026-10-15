@@ -144,8 +144,8 @@ host on the same database.
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
 | `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
 | `ready` | The snapshot is complete | `cursor` |
-| `bookmark` | 30 seconds passed with no other line | `cursor` |
-| `error` | `--after` named a cursor this install did not issue; the command exits 4 | `error: "cursor_invalid"` |
+| `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
+| `error` | The store cannot read the stream's cursor: `--after` named one this install did not issue, or the store no longer reads the stream's own position. The last line; the command exits 4 | `error: "cursor_invalid"` |
 
 - **Keep an open set keyed by `(runId, occurrence)`.** `attention` adds or updates the
   item unless you already hold that item at the same or a higher `revision`; `resolved`
@@ -158,19 +158,22 @@ host on the same database.
 - **Resume where you stopped.** Persist the `cursor` of the last line you handled and
   restart with `--after <cursor>`. The new stream sends the snapshot and `ready`, then
   replays every change after that cursor. `bookmark` lines keep the cursor moving while
-  the queue is quiet. If the cursor is rejected, rerun without `--after`.
+  the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
+  succeeds, so no line for well over 30 seconds means the stream is not reading. If the
+  cursor is rejected, rerun without `--after`.
 - **`--label` filters `attention` and `resolved`.** `terminal` and `owner_lost` arrive for
   every run in scope. A label write that leaves an open item outside the filter sends
   `unmatched`, even for an item the stream never sent.
 - **What a line reports is the row when the stream read it.** The stream reads about once
   a second, and PostgreSQL wakes it on each commit. A pause opened and answered between
   two reads may never appear as an item; the run's `terminal` line still does.
-- **Owner liveness follows `workflow wait`.** Only a run whose recorded owner is on this
-  host and user can be reported `owner_lost`; a run owned on another host is never
+- **Owner liveness follows `workflow wait`.** A running run is watched until it pauses or
+  ends, including while it reports stalled tool calls. Only a run whose recorded owner is
+  on this host and user can be reported `owner_lost`; a run owned on another host is never
   reported lost. Nothing here changes the run: abandon it with `workflow abandon`.
 
 The stream only reads. Stopping it, with a signal or by closing its stdout, affects no run
-and exits 0. An answered run continues where a continuation host runs: `archon serve`,
+and exits 0. A closed stdout is noticed when the stream next writes a line. An answered run continues where a continuation host runs: `archon serve`,
 `archon workflow wake --watch`, or a CLI answer without `--json`, which continues the run in
 place.
 

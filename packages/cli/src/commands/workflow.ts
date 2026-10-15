@@ -4663,33 +4663,38 @@ async function attentionScope(
   return { kind: 'project', project };
 }
 
-function printAttentionItem(item: AttentionQueueItem): void {
+function attentionItemLines(item: AttentionQueueItem): string[] {
   const paused =
     item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  console.log(
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`
-  );
+  const lines = [
+    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
+  ];
   if (item.fanOut !== null)
-    console.log(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
+    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
-    console.log(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
+    lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   switch (item.kind) {
     case 'attention':
-      console.log(`    ${item.node}: ${item.message}`);
+      lines.push(`    ${item.node}: ${item.message}`);
       for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
-        console.log(`    ${line}`);
+        lines.push(`    ${line}`);
       break;
     case 'awaiting_response':
-      console.log(`    gate '${item.node}': ${item.message}`);
-      console.log(
+      lines.push(
+        `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
       );
       break;
     case 'unreadable':
-      console.log(`    needs a look: ${item.detail}`);
+      lines.push(`    needs a look: ${item.detail}`);
       break;
   }
+  return lines;
+}
+
+function printAttentionItem(item: AttentionQueueItem): void {
+  for (const line of attentionItemLines(item)) console.log(line);
 }
 
 /**
@@ -4796,47 +4801,48 @@ export async function workflowAttentionCommand(
   }
 }
 
-function printAttentionStreamLine(line: AttentionStreamLine, scope: AttentionQueueScope): void {
+/** The text for one stream line; none for a bookmark. */
+function attentionStreamText(
+  line: Exclude<AttentionStreamLine, { type: 'error' }>,
+  scope: AttentionQueueScope
+): string[] {
   switch (line.type) {
     case 'attention':
-      console.log(line.snapshot ? 'Needs attention:' : 'Needs attention now:');
-      printAttentionItem(line.item);
-      return;
+      return [
+        line.snapshot ? 'Needs attention:' : 'Needs attention now:',
+        ...attentionItemLines(line.item),
+      ];
     case 'resolved':
-      console.log(
+      return [
         line.reason === 'answered'
           ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
-          : `Run ${line.runId} no longer needs attention.`
-      );
-      return;
+          : `Run ${line.runId} no longer needs attention.`,
+      ];
     case 'unmatched':
-      console.log(`Run ${line.runId} no longer matches the label filter.`);
-      return;
+      return [`Run ${line.runId} no longer matches the label filter.`];
     case 'terminal':
-      console.log(
-        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`
-      );
-      return;
+      return [
+        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
+      ];
     case 'owner_lost':
-      console.log(
+      return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`
-      );
-      return;
+          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`,
+      ];
     case 'ready':
-      console.log(
-        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`
-      );
-      return;
+      return [
+        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
+      ];
     case 'bookmark':
-      return;
+      return [];
   }
 }
 
 /**
  * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, and 4 when `--after` names a cursor this install's store cannot read, so the
- * fix is to rerun without it. Read-only: stopping the stream affects no run.
+ * 0 then, and 4 on an `error` line: the stream's cursor (from `--after`, or the tail's
+ * own position) is not one this install's store can read, so the fix is to rerun without
+ * it. Read-only: stopping the stream affects no run.
  */
 async function workflowAttentionWatch(
   host: WorkflowHost,
@@ -4850,10 +4856,23 @@ async function workflowAttentionWatch(
   const stopped = new Promise<void>(resolve => {
     stop = resolve;
   });
+  const write = (line: AttentionStreamLine): Promise<void> => {
+    if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
+    if (line.type === 'error')
+      return writeStderr(
+        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
+      );
+    const text = attentionStreamText(line, scope);
+    return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
+  };
+  let exitCode = 0;
   const listener = async (line: AttentionStreamLine): Promise<void> => {
+    if (line.type === 'error') {
+      exitCode = 4;
+      stop();
+    }
     try {
-      if (opts.json) await writeStdout(`${JSON.stringify(line)}\n`);
-      else printAttentionStreamLine(line, scope);
+      await write(line);
     } catch (error) {
       // The reader is gone (EPIPE); nothing more can be delivered.
       getLog().debug({ err: error as Error }, 'cli.workflow_attention_watch_stdout_closed');
@@ -4872,17 +4891,12 @@ async function workflowAttentionWatch(
       });
     } catch (error) {
       if (!(error instanceof WorkflowEventCursorError)) throw error;
-      if (opts.json)
-        await writeStdout(`${JSON.stringify({ type: 'error', error: 'cursor_invalid' })}\n`);
-      else
-        console.error(
-          'The --after cursor was not issued by this install. Rerun without --after: the lines before "ready" are the open set.'
-        );
-      return 4;
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return exitCode;
     }
     await stopped;
     await watch.close();
-    return 0;
+    return exitCode;
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
