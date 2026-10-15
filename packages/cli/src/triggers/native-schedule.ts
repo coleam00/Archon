@@ -117,7 +117,7 @@ function resolveRuntime(options: NativeScheduleOptions): {
 } {
   if ((options.platform ?? process.platform) !== 'darwin') {
     throw new Error(
-      'Native schedule installation is supported only on macOS. Use the documented systemd, cron, or Task Scheduler command recipe on this host.'
+      'Native schedule installation is supported only on macOS. Use the documented long-lived systemd or Task Scheduler host recipe on this host.'
     );
   }
 

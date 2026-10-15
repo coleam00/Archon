@@ -3,6 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import * as conversationDb from '@archon/core/db/conversations';
 import {
   resumeWorkflowContinuation,
+  unverifiableSourceGuidance,
   wakeDueWorkflowContinuations,
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-host';
@@ -106,6 +107,12 @@ export async function resumeWorkflowRunFromServer(
 ): Promise<boolean> {
   try {
     const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
+    if (admission.kind === 'unavailable' && admission.sourceError) {
+      log.warn(
+        { err: admission.sourceError, runId: run.id, path: admission.sourceError.path },
+        `Cannot resume run ${run.id}: ${unverifiableSourceGuidance(run.id, admission.sourceError)}`
+      );
+    }
     return admission.kind === 'accepted';
   } catch (error) {
     log.warn({ err: error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
@@ -163,7 +170,7 @@ async function admitFromServer(
     cursor,
     actorUserId
   );
-  if (admission.kind === 'unavailable') {
+  if (admission.kind === 'unavailable' && !admission.sourceError) {
     log.warn(
       { runId: run.id, reason: admission.reason },
       'workflow_resume_destination_unavailable'

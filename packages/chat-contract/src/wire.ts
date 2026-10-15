@@ -3,6 +3,11 @@ import { tokenUsageSchema } from '@archon/provider-contract';
 import { chatActorSchema, chatPluginDescriptorSchema, identityPlatformSchema } from './descriptor';
 import { chatRunEventSchema, chatApprovalDecisionSchema } from './run-events';
 import {
+  chatAttentionNoticeSchema,
+  chatAttentionNoticeRequestSchema,
+  chatAttentionNoticeResponseSchema,
+} from './attention-notices';
+import {
   chatSenderSchema,
   chatRejectedSchema,
   chatRunActionSchema,
@@ -51,6 +56,9 @@ export const chatWireSchemas = {
   ChatResultFooter: chatResultFooterSchema,
   ChatApprovalDecision: chatApprovalDecisionSchema,
   ChatRunEvent: chatRunEventSchema,
+  ChatAttentionNotice: chatAttentionNoticeSchema,
+  ChatAttentionNoticeRequest: chatAttentionNoticeRequestSchema,
+  ChatAttentionNoticeResponse: chatAttentionNoticeResponseSchema,
   ChatRunAction: chatRunActionSchema,
   ChatRunActionResponse: chatRunActionResponseSchema,
   RunActionResult: runActionResultSchema,

@@ -518,9 +518,18 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     const first = publishReview({ inputs: { ...report, INPUTS_ROUTE: JSON.stringify(route) } });
     expect(first.code).toBe(0);
     expect(recorded(first)).toEqual({ seams: true, code: true, tests: false, errors: false, docs: true });
-    // A continuation skipped route: its own (here, light) set is what ran.
+    // A light continuation skipped route: its own set is what ran.
     const light = publishReview({ inputs: report });
     expect(recorded(light)).toEqual({ seams: false, code: true, tests: false, errors: false, docs: false });
+    // An ordinary continuation ran the rerun set and the route agent's additions.
+    const continued = publishReview({
+      inputs: {
+        ...report,
+        INPUTS_ROUTE: JSON.stringify({ seams: false, code: false, tests: true, errors: false, docs: false, reason: 'r' }),
+        INPUTS_MODE: JSON.stringify({ seams: true, code: true, tests: false, errors: false, docs: false }),
+      },
+    });
+    expect(recorded(continued)).toEqual({ seams: true, code: true, tests: true, errors: false, docs: false });
   });
 
   it('names an unpushed head before any scope disagreement', () => {
