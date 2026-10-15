@@ -126,6 +126,9 @@ export type WorkflowResumeCursor =
   /** A run released after a host-local source read failure (`readSourceRelease`). */
   | { kind: 'source'; nodeId: string; releasedAt: string };
 
+/** How long an unaccepted continuation, or a run released for unreadable source, waits before the next claim. */
+export const CONTINUATION_RETRY_MS = 60_000;
+
 /**
  * True when `run` is still at the exact occurrence `cursor` names. Every store's resume
  * claim and continuation deferral judge this one way, so a host that read an older wait,

@@ -1,6 +1,7 @@
 import { resolveRunSourceCapture, WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import type { WorkflowHost } from './host-store';
 import {
+  CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
@@ -255,7 +256,7 @@ export async function wakeDueWorkflowContinuations(
         try {
           await store.deferWorkflowContinuation(
             run.id,
-            new Date(now.getTime() + 60_000).toISOString(),
+            new Date(now.getTime() + CONTINUATION_RETRY_MS).toISOString(),
             cursor
           );
         } catch (error) {

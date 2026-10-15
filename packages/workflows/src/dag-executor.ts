@@ -169,6 +169,7 @@ import {
 } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
+  CONTINUATION_RETRY_MS,
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
@@ -1012,9 +1013,6 @@ async function waitForNodeRetry(
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
-
-/** How long a released run waits before a continuation scan claims it; matches the host's deferral. */
-const SOURCE_RELEASE_RETRY_MS = 60_000;
 
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
@@ -12100,7 +12098,7 @@ export async function executeDagWorkflow(
       nodeId: error.nodeId,
       ...(error.path !== undefined ? { path: error.path } : {}),
       error: error.message,
-      retryAt: new Date(Date.now() + SOURCE_RELEASE_RETRY_MS).toISOString(),
+      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
     });
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
