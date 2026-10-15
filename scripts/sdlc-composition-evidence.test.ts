@@ -275,11 +275,12 @@ describe('three-tree project gate evidence', () => {
   });
 });
 
-it('keeps the validation producer schemas and script vocabulary in agreement', () => {
+it('keeps implement sessions and validation producer contracts in agreement', () => {
   type Workflow = {
     returns: string;
     nodes: {
       id: string;
+      loop?: { fresh_context?: boolean };
       output_type?: string;
       output_format?: { properties: { red_cause: { enum: string[] } } };
     }[];
@@ -291,6 +292,7 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   const implement = Bun.YAML.parse(
     readFileSync(join(root, 'implement/archon-implement.yaml'), 'utf8')
   ) as Workflow;
+  expect(implement.nodes.find(n => n.id === 'implement')!.loop?.fresh_context).toBe(true);
   expect(
     validate.nodes.find(n => n.id === 'compare')!.output_format!.properties.red_cause.enum
   ).toEqual([...VALIDATION_RED_CAUSES]);
