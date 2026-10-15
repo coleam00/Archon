@@ -173,6 +173,12 @@
     ],
     [
       "src/services/attention-router.integration.test.ts"
+    ],
+    [
+      "src/chat-host/attention-destination.test.ts"
+    ],
+    [
+      "src/chat-host/attention-route.integration.test.ts"
     ]
   ]
 }
