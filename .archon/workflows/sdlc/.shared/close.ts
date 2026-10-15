@@ -7,7 +7,9 @@
  * or the change, and a duplicate's original gets one linking back, so either side
  * leads to the other. Both comments are written before the close, each as one marked
  * comment, so a run that stops part way can be repeated without a second copy. An
- * item someone closed meanwhile is theirs: it is refused before anything is written.
+ * item already closed for the closure's reason was closed by an earlier run or for the
+ * same reason by someone else, so the repeat finishes without writing; one closed for
+ * another reason is theirs and is refused.
  */
 
 import { forgeSource, samePr, type QualifiedPr } from './forge.ts';
@@ -36,8 +38,12 @@ function issueKey(item: QualifiedPr): string {
 
 export function closeResolved(item: QualifiedPr, closure: Closure): void {
   const source = forgeSource();
+  const reason = closure.kind === 'duplicate' ? 'duplicate' : 'completed';
   const closed = viewIssue(item);
-  if (closed.state !== 'open') throw new Error(`${closed.url} is already closed`);
+  if (closed.state !== 'open') {
+    closeIssue(item, reason);
+    return;
+  }
   if (closure.kind === 'duplicate') {
     if (samePr(item, closure.original)) {
       throw new Error(`${issueKey(item)} cannot be closed as a duplicate of itself`);
@@ -67,7 +73,7 @@ export function closeResolved(item: QualifiedPr, closure: Closure): void {
       `${backMarker}\n${closed.url} was closed as a duplicate of this issue.`,
       source
     );
-    closeIssue(item, 'duplicate');
+    closeIssue(item, reason);
     return;
   }
   upsertComment(
@@ -76,5 +82,5 @@ export function closeResolved(item: QualifiedPr, closure: Closure): void {
     `${CLOSED_MARKER}\nClosing as already delivered by ${closure.url}.`,
     source
   );
-  closeIssue(item, 'completed');
+  closeIssue(item, reason);
 }

@@ -464,6 +464,7 @@ interface Event {
   readonly issueLabels?: readonly string[];
   readonly statuses?: Record<string, string>;
   readonly state?: 'open' | 'closed';
+  readonly stateReason?: string;
   readonly writeLost?: boolean;
   /** Other issues on the tracker, such as the original a duplicate links to. */
   readonly others?: readonly GhIssue[];
@@ -486,6 +487,7 @@ function run(
         author: event.author ?? 'Maintainer',
         body: event.body ?? BODY,
         state: event.state ?? 'open',
+        state_reason: event.stateReason,
       },
       issueLabels: event.issueLabels ?? [],
       repositoryLabels: [],
@@ -1021,13 +1023,25 @@ describe('the intake scripts', () => {
     expect(repeated.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'duplicate' }]);
   }, 60_000);
 
-  test('an item someone closed while triage ran is refused before any comment', () => {
+  test('a close repeated after the item closed finishes without writing', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const applied = outcome(at, { ...event, state: 'closed' }, decided, DUPLICATE_VERDICT);
+    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' };
+    const repeated = outcome(at, closed, decided, DUPLICATE_VERDICT);
+    expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
+    expect([...repeated.closes, ...repeated.comments]).toEqual([]);
+    expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
+  }, 60_000);
+
+  test('an item someone closed for another reason is refused before any comment', () => {
+    const at = install();
+    const event = { runId: 'run-1', others: [ORIGINAL] };
+    const decided = facts(at, event).output;
+    const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' };
+    const applied = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain(`${ISSUE_URL} is already closed`);
+    expect(applied.stderr).toContain(`${ISSUE_URL} is already closed for another reason`);
     expect([...applied.closes, ...applied.comments]).toEqual([]);
   }, 60_000);
 

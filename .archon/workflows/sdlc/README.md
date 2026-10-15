@@ -270,8 +270,10 @@ request, never the state.
   comments on the issue with a link to the original or the change and closes it as
   `duplicate` or `completed`. A duplicate's original gets a comment linking back.
   Each comment is one marked comment, so a repeated run edits it rather than adding
-  another. The outcome refuses, before any comment, an item someone already closed
-  and a declared original that is not an open issue at the declared URL. A demoted
+  another. An item already closed for the verdict's reason (an earlier run that
+  stopped after its close) finishes without writing. The outcome refuses, before any
+  comment, an item closed for another reason and a declared original that is not an
+  open issue at the declared URL. A demoted
   item, an eval run and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs

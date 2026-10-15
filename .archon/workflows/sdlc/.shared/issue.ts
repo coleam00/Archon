@@ -122,16 +122,26 @@ function forgeView(item: QualifiedPr): IssueView {
   };
 }
 
-/** Why an issue was closed, in the forge contract's vocabulary. */
-export type CloseReason = 'completed' | 'duplicate';
+/** Why the pack closes an issue: the subset of the forge contract's reasons it uses. */
+export const CLOSE_REASONS = ['completed', 'duplicate'] as const;
+export type CloseReason = (typeof CLOSE_REASONS)[number];
 
-/** Close the issue with a reason and read the result back. */
+/**
+ * Close the issue with a reason and read the result back. An issue already closed
+ * for that reason is left as it is; one closed for another reason is refused, as the
+ * forge contract does.
+ */
 export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
   if (forgeSource() === 'forge') {
     const value = invokeForge('workitem.close', { ref: item, reason });
     if (record(value?.workitem)?.state !== 'closed' || value?.reason !== reason)
       throw new Error('forge returned no verified close');
     return;
+  }
+  const before = ghIssue(item);
+  if (before.state === 'closed') {
+    if (before.state_reason === reason) return;
+    throw new Error(`${before.html_url} is already closed for another reason`);
   }
   const directory = mkdtempSync(join(tmpdir(), 'archon-close-'));
   try {
