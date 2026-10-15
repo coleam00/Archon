@@ -111,7 +111,8 @@ describe('package source edges', () => {
       {
         file: 'packages/engine/src/execute.ts',
         line: 1,
-        message: 'engine → @archon/contract is undeclared in dependencies or peerDependencies',
+        message:
+          'engine → @archon/contract is undeclared in dependencies, peerDependencies, optionalDependencies',
       },
     ]);
   });
@@ -123,6 +124,20 @@ describe('package source edges', () => {
     expect(check("import type { Contract } from '@archon/contract';", undefined, packages)).toEqual(
       []
     );
+  });
+
+  test('optionalDependencies satisfy runtime imports and layering together', () => {
+    const packages = manifests();
+    packages[0].optionalDependencies = packages[0].dependencies;
+    delete packages[0].dependencies;
+    expect(check("import { contract } from '@archon/contract';", undefined, packages)).toEqual([]);
+    expect(
+      findLayeringViolations(packages, {
+        engine: { runtime: ['contract'], test: ['providers'] },
+        contract: { runtime: [] },
+        providers: { runtime: ['contract'] },
+      })
+    ).toEqual([]);
   });
 
   test('ignores prose, unrelated imports and nonliteral calls', () => {
@@ -149,7 +164,8 @@ test('checks a new workspace package against its own manifest', () => {
     {
       file: 'packages/new/src/index.ts',
       line: 1,
-      message: 'new → @archon/paths is undeclared in dependencies or peerDependencies',
+      message:
+        'new → @archon/paths is undeclared in dependencies, peerDependencies, optionalDependencies',
     },
   ]);
 });

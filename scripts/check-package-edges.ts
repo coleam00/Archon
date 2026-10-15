@@ -9,6 +9,10 @@ const dependencySections = [
   'optionalDependencies',
 ] as const;
 
+const runtimeDependencySections = dependencySections.filter(
+  section => section !== 'devDependencies'
+);
+
 export type PackageManifest = {
   path: string;
 } & Partial<Record<(typeof dependencySections)[number], Record<string, string>>>;
@@ -179,6 +183,10 @@ export function findEdgeViolations(input: {
     const manifest = packages.get(name);
     if (!manifest) continue;
     const test = isTestFile(path);
+    const declared = declaredArchonPackages(
+      manifest,
+      test ? dependencySections : runtimeDependencySections
+    );
     for (const { specifier, line } of importedPackages({ ...file, path })) {
       if (
         (path.startsWith('packages/workflows/src/') ||
@@ -194,15 +202,11 @@ export function findEdgeViolations(input: {
       const target = packageTarget(specifier);
       if (target === undefined || target === name) continue;
       const workspaceSpecifier = `@archon/${target}`;
-      if (
-        !(workspaceSpecifier in (manifest.dependencies ?? {})) &&
-        !(workspaceSpecifier in (manifest.peerDependencies ?? {})) &&
-        !(test && workspaceSpecifier in (manifest.devDependencies ?? {}))
-      ) {
+      if (!declared.has(target)) {
         violations.push({
           file: file.path,
           line,
-          message: `${name} → ${workspaceSpecifier} is undeclared in ${test ? 'dependencies, peerDependencies or devDependencies' : 'dependencies or peerDependencies'}`,
+          message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
         });
       }
     }
@@ -252,11 +256,7 @@ export function findLayeringViolations(
       });
       continue;
     }
-    const runtime = declaredArchonPackages(manifest, [
-      'dependencies',
-      'peerDependencies',
-      'optionalDependencies',
-    ]);
+    const runtime = declaredArchonPackages(manifest, runtimeDependencySections);
     if (!sameNames(runtime, row.runtime)) {
       violations.push({
         file: manifest.path,
