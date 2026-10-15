@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { toBranchName } from '@archon/git';
 import { afterAll, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -161,3 +162,47 @@ test('workspace deletion refuses a worktree registered during cleanup and succee
   await deleteCodebase(project.id, { requireWorktreeCleanup: true });
   expect(await getCodebase(project.id)).toBeNull();
 });
+
+for (const replacement of ['path', 'creation proof', 'provider'] as const) {
+  test(`cleanup preserves a same-ID replacement with a different ${replacement}`, async () => {
+    const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
+    const { create, getById, markWorktreeDestroyed } = await import('./isolation-environments');
+    const project = await createCodebase({
+      name: `replacement-${replacement}`,
+      default_cwd: '/repos/replacement',
+    });
+    const original = await create({
+      codebase_id: project.id,
+      workflow_type: 'issue',
+      workflow_id: '42',
+      provider: 'worktree',
+      working_path: '/repos/original',
+      branch_name: toBranchName('branch'),
+      metadata: { worktree_creation_id: 'original-creation' },
+    });
+    const current = await create({
+      codebase_id: project.id,
+      workflow_type: 'issue',
+      workflow_id: '42',
+      provider: replacement === 'provider' ? 'container' : 'worktree',
+      working_path: replacement === 'path' ? '/repos/replacement' : original.working_path,
+      branch_name: toBranchName(original.branch_name),
+      metadata: {
+        worktree_creation_id:
+          replacement === 'creation proof' ? 'new-creation' : 'original-creation',
+      },
+    });
+    expect(current.id).toBe(original.id);
+    await expect(markWorktreeDestroyed(original)).rejects.toThrow('changed during cleanup');
+    expect((await getById(original.id))?.status).toBe('active');
+    await expect(deleteCodebase(project.id, { requireWorktreeCleanup: true })).rejects.toThrow(
+      original.id
+    );
+    expect(await getCodebase(project.id)).not.toBeNull();
+    if (replacement !== 'provider') {
+      await markWorktreeDestroyed(current);
+      await deleteCodebase(project.id, { requireWorktreeCleanup: true });
+      expect(await getCodebase(project.id)).toBeNull();
+    }
+  });
+}

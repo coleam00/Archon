@@ -16,6 +16,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { readWorktreeCreationId } from '@archon/isolation';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -211,6 +212,23 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
     );
   }
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');
+}
+
+/** Mark only the observed worktree resource destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(
+  env: Pick<IsolationEnvironmentRow, 'id' | 'working_path' | 'branch_name' | 'metadata'>
+): Promise<void> {
+  const creationId = getDialect().jsonText('metadata', 'worktree_creation_id');
+  const result = await pool.query(
+    `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
+     WHERE id = $1 AND provider = 'worktree' AND status = 'active'
+       AND working_path = $2 AND branch_name = $3
+       AND COALESCE(${creationId}, '') = $4`,
+    [env.id, env.working_path, env.branch_name, readWorktreeCreationId(env.metadata) ?? '']
+  );
+  if (result.rowCount !== 1) {
+    throw new Error(`Worktree ${env.id} changed during cleanup; inspect it and retry deletion`);
+  }
 }
 
 /**

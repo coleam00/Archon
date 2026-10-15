@@ -96,6 +96,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
+  isWorktreeRegistered,
   removeWorktree,
   toRepoPath,
   toWorktreePath,
@@ -3419,7 +3420,10 @@ export function registerApiRoutes(
               toWorktreePath(env.working_path)
             );
           }
-          await isolationEnvDb.updateStatus(env.id, 'destroyed');
+          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
+            throw new Error('Checkout is still registered with Git');
+          }
+          await isolationEnvDb.markWorktreeDestroyed(env);
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
@@ -3440,8 +3444,12 @@ export function registerApiRoutes(
           await rm(normalizedCwd, { recursive: true, force: true });
           getLog().info({ path: normalizedCwd }, 'workspace_removed');
         } catch (rmErr) {
-          // Directory may not exist — log but don't fail
           getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
+          );
         }
       } else {
         getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');

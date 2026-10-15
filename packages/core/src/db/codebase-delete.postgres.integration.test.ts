@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { toBranchName } from '@archon/git';
 import { expect, mock, test } from 'bun:test';
 import { Pool } from 'pg';
 import {
@@ -44,7 +45,7 @@ for (const provider of ['container', 'worktree'] as const) {
           await client.query(
             `INSERT INTO remote_agent_isolation_environments
          (codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, status)
-         VALUES ($1, 'test', 'workflow', $2, '/missing', '', 'active')`,
+         VALUES ($1, 'test', 'workflow', $2, '/missing', 'branch', 'active')`,
             [project.id, provider]
           );
           const deletion = deleteCodebase(project.id, { requireWorktreeCleanup: true });
@@ -81,6 +82,28 @@ for (const provider of ['container', 'worktree'] as const) {
               )
             ).rows
           ).toHaveLength(1);
+          if (provider === 'worktree') {
+            const { listByCodebase, create, markWorktreeDestroyed } =
+              await import('./isolation-environments');
+            const original = (await listByCodebase(project.id))[0];
+            if (!original) throw new Error('Expected registered worktree');
+            const replacement = await create({
+              codebase_id: project.id,
+              workflow_type: original.workflow_type,
+              workflow_id: original.workflow_id,
+              provider: 'worktree',
+              working_path: '/replacement',
+              branch_name: toBranchName(original.branch_name),
+            });
+            expect(replacement.id).toBe(original.id);
+            await expect(markWorktreeDestroyed(original)).rejects.toThrow('changed during cleanup');
+            await expect(
+              deleteCodebase(project.id, { requireWorktreeCleanup: true })
+            ).rejects.toThrow(original.id);
+            await markWorktreeDestroyed(replacement);
+            await deleteCodebase(project.id, { requireWorktreeCleanup: true });
+            expect(await getCodebase(project.id)).toBeNull();
+          }
         } finally {
           await client.query('ROLLBACK');
           client.release();

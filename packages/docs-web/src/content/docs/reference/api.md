@@ -200,6 +200,8 @@ curl -X DELETE http://localhost:3090/api/codebases/{id}
 
 Removes the codebase registration and cleans up associated worktrees. If active container environments remain, returns `409` with their environment IDs and leaves the registration intact. Deletion does not remove containers or volumes. A worktree cleanup failure returns `500` and keeps the registration and unfinished cleanup records for retry. If a worktree is registered during cleanup, deletion returns `409`; retry the request to clean it up.
 
+If managed-workspace removal fails after the registration is deleted, the response is `500` and names the retained path. Resolve the filesystem error and remove that directory manually.
+
 Run `archon isolation cleanup 0` to remove eligible containers, then retry the DELETE request. Cleanup preserves containers owned by resumable runs; release those runs before cleanup.
 
 ### List Environments
@@ -208,7 +210,7 @@ Run `archon isolation cleanup 0` to remove eligible containers, then retry the D
 curl http://localhost:3090/api/codebases/{id}/environments
 ```
 
-Returns the isolation environments (worktrees) associated with a codebase.
+Returns the active isolation environments (worktrees and containers) associated with a codebase.
 
 ---
 
