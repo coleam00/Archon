@@ -5,6 +5,7 @@ import pino from 'pino';
 // in Bun's single-process test runner. Re-mock with the real implementation.
 const VALID_LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace']);
 const realRootLogger = pino({ level: 'info' });
+let levelSetByCode = false;
 
 mock.module('./logger', () => ({
   rootLogger: realRootLogger,
@@ -17,10 +18,16 @@ mock.module('./logger', () => ({
       );
     }
     realRootLogger.level = normalized;
+    levelSetByCode = true;
   },
   getLogLevel: () => realRootLogger.level,
-  applyEnvLogLevel: () => {},
-  resetLogLevelOverride: () => {},
+  applyEnvLogLevel: () => {
+    const level = process.env.LOG_LEVEL?.toLowerCase();
+    if (!levelSetByCode && level && VALID_LEVELS.has(level)) realRootLogger.level = level;
+  },
+  resetLogLevelOverride: () => {
+    levelSetByCode = false;
+  },
 }));
 
 const { createLogger, setLogLevel, getLogLevel, rootLogger } = await import('./logger');
