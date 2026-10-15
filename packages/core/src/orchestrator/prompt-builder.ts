@@ -3,6 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
+import { INVOKE_WORKFLOW_SCHEMA, REGISTER_PROJECT_SCHEMA } from './chat-tools';
 import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
@@ -335,9 +336,9 @@ IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user
 ## Invoking a Workflow
 
 To invoke a workflow, call the \`invoke_workflow\` tool with:
-- \`workflow\`: the exact workflow name from Available Workflows.
-- \`project\`: the project NAME (e.g., "my-project"), not an ID or path.
-- \`prompt\`: the task for the run.
+${Object.entries(INVOKE_WORKFLOW_SCHEMA.properties)
+  .map(([name, property]) => `- \`${name}\`: ${property.description}`)
+  .join('\n')}
 
 Rules:
 ${promptRules('`prompt`')}
@@ -358,7 +359,7 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 
 ## Project Setup
 
-When a user asks to register an existing local directory, call the \`register_project\` tool with \`name\` and \`path\`.
+When a user asks to register an existing local directory, call the \`register_project\` tool with ${REGISTER_PROJECT_SCHEMA.required.map(name => `\`${name}\``).join(' and ')}.
 Pass \`folder: true\` when the user wants Archon to run in place without managing git.
 A folder project may itself be a git repository. Git belongs to the user and agent.
 Without \`folder\`, git paths are repo projects and non-git paths are folder projects.
