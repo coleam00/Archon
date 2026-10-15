@@ -9,7 +9,8 @@
  *
  * A report goes public only about the commit its round fixed at the start
  * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. The head is checked before the scope agent's declaration, so a
+ * head must be it. Its live base must also match the fetched base scope reviewed.
+ * The head is checked before the scope agent's declaration, so a
  * correction that was never pushed is named as that rather than as a scope
  * mismatch. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit on the comment
@@ -21,6 +22,7 @@
  *   pull-request record here, and that record is then the only write target.
  * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
  *   or `null` for a working diff. An explicit scope remains the write target.
+ * - INPUTS_BASE: the fetched base branch and revision scope used for its diff.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -40,6 +42,7 @@ import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import { forgeSource, record, sameRepo, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import {
+  checkReviewBase,
   recordedPr,
   declaredPr,
   resolveReviewPr,
@@ -87,12 +90,14 @@ try {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
   if (pr) {
-    const remote = reviewHead(requested ?? viewPr(pr, source).pr);
+    const live = requested ?? viewPr(pr, source).pr;
+    const remote = reviewHead(live);
     if (remote !== head) {
       throw new Error(
         `this round reviewed ${head}, but ${label(pr)} is at ${remote}: the commits under review were not pushed`
       );
     }
+    checkReviewBase(live, text(process.env.INPUTS_BASE));
   }
   if (bound && (declared?.number !== bound.number || !sameRepo(declared.repo, bound.repo))) {
     throw new Error(

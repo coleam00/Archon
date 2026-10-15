@@ -527,6 +527,15 @@ describe('bundled-defaults', () => {
         type: 'object',
         properties: {
           selector: { type: 'string' },
+          base: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            properties: {
+              branch: { type: 'string', pattern: '\\S' },
+              revision: { type: 'string', pattern: '\\S' },
+            },
+            required: ['branch', 'revision'],
+          },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -552,17 +561,21 @@ describe('bundled-defaults', () => {
             required: ['type', 'run_id', 'path'],
           },
         },
-        required: ['selector', 'pr', 'report'],
+        required: ['selector', 'pr', 'base', 'report'],
       });
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
       expect(
-        validateStructuredOutput({ selector: '', pr: null, report: scopeReport }, scopeSchema).valid
+        validateStructuredOutput(
+          { selector: '', pr: null, base: null, report: scopeReport },
+          scopeSchema
+        ).valid
       ).toBe(true);
       expect(validateStructuredOutput({ selector: '', pr: null }, scopeSchema).valid).toBe(false);
       expect(
         validateStructuredOutput(
           {
             selector: 'https://github.com/coleam00/Archon/pull/3557',
+            base: { branch: 'dev', revision: 'fetched-base-sha' },
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,

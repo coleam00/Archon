@@ -88,7 +88,8 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     return {
       pr,
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ selector: '', pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ selector: '', pr, base: null, report }, schema)
+        .valid,
     };
   });
 

@@ -3,6 +3,7 @@ import { forgeSource, samePr, sameRepo, type PrRecord } from '../../.shared/forg
 import { report, refuse, text } from '../../.shared/io.ts';
 import { findRemote } from '../../.shared/remote.ts';
 import {
+  checkReviewBase,
   declaredPr,
   recordedPr,
   resolveReviewPr,
@@ -72,6 +73,7 @@ try {
           `No review lenses ran.\n${retry(pr, remoteHead)}`
       );
     }
+    checkReviewBase(pr, text(process.env.INPUTS_BASE));
   }
   report(
     pr

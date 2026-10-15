@@ -135,6 +135,13 @@ nodes:
       type: object
       properties:
         selector: { type: string }
+        base:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            branch: { type: string, pattern: '\S' }
+            revision: { type: string, pattern: '\S' }
+          required: [branch, revision]
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -160,7 +167,7 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [selector, pr, report]
+      required: [selector, pr, base, report]
 
   - id: head-check
     script: check-review-head
@@ -170,6 +177,7 @@ nodes:
       scope: "$INPUTS.scope"
       selector: "$scope.output.selector"
       pr: "$scope.output.pr"
+      base: "$scope.output.base"
       head: "$mode.output.head"
 
   # The lens decision is quick and separate from scope: a small model reads the diff
@@ -332,6 +340,7 @@ nodes:
       # the scope agent's declaration names it only for a standalone review.
       scope: "$INPUTS.scope"
       pr: "$scope.output.pr"
+      base: "$scope.output.base"
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
       ready: "$synthesize.output.ready"

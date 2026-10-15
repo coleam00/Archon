@@ -27,6 +27,7 @@ export interface GhCommentRow {
 
 /** The pull request `gh pr view --json` reports, before any write in the run. */
 export interface GhPr {
+  readonly number?: number;
   readonly title?: string;
   readonly body?: string;
   readonly isDraft?: boolean;
@@ -36,6 +37,7 @@ export interface GhPr {
   readonly headRepository?: { readonly name: string };
   readonly headRepositoryOwner?: { readonly login: string };
   readonly baseRefName?: string;
+  readonly baseRefOid?: string;
 }
 
 export interface GhFake {
@@ -133,7 +135,7 @@ const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
 const pr = {
   number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
-  headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
+  headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev', baseRefOid: 'cafe',
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
@@ -310,7 +312,11 @@ export function packScriptRunner(): PackScriptRunner {
   const trackTempRoot = trackTempRoots();
   return {
     runPackScript: (relative, options = {}) =>
-      runPackScriptIn(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-'))), relative, options),
+      runPackScriptIn(
+        trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-'))),
+        relative,
+        options
+      ),
   };
 }
 
@@ -331,7 +337,10 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
   const preload = join(root, 'preload.ts');
-  writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog) + resolveArtifacts(options.preload ?? ''));
+  writeFileSync(
+    preload,
+    fakeGhPreload(options.gh ?? {}, ghLog) + resolveArtifacts(options.preload ?? '')
+  );
 
   // The engine hands every exec node a typed-artifact listing; an empty one by default.
   const listing = join(root, 'typed-artifacts.json');

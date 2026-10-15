@@ -7,7 +7,7 @@ import {
   type PrRecord,
   type QualifiedPr,
 } from './forge.ts';
-import { git, gitOrThrow } from './git.ts';
+import { git } from './git.ts';
 import { findOpenPrByHead, viewPr } from './pr.ts';
 import { findRemote, urlRepo } from './remote.ts';
 
@@ -25,7 +25,9 @@ function reviewPrUrl(url: URL): { pr: QualifiedPr; retainedRef: string } {
   const namespace = prUrlKinds.get(kind ?? '');
   if (kind === 'merge_requests' && parts.at(-1) === '-') parts.pop();
   if (!namespace || !number || !/^[1-9][0-9]*$/.test(number) || parts.length < 2) {
-    throw new Error('unsupported PR URL: use a full PR URL ending in its positive number or /diffs');
+    throw new Error(
+      'unsupported PR URL: use a full PR URL ending in its positive number or /diffs'
+    );
   }
   return {
     pr: { repo: { host: url.hostname, path: parts.join('/') }, number: Number(number) },
@@ -69,10 +71,7 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
   }
   if (url) {
     const { pr: ref } = reviewPrUrl(url);
-    const pr = viewPr(ref, source).pr;
-    if (!samePr(pr, ref))
-      throw new Error('the forge result does not match the requested pull request');
-    return pr;
+    return viewPr(ref, source).pr;
   }
 
   const listed = git('config', '--get-regexp', '^remote\\..*\\.url$');
@@ -83,18 +82,44 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
     const repo = urlRepo(line.slice(line.indexOf(' ') + 1));
     if (repo && !repos.some(other => sameRepo(other, repo))) repos.push(repo);
   }
+  if (selector === '') {
+    const branch = git('symbolic-ref', '--quiet', '--short', 'HEAD');
+    if (branch.code !== 0) {
+      if (branch.code === 1) return undefined;
+      throw new Error(`git branch discovery failed: ${branch.stderr}`);
+    }
+    const matches: PrRecord[] = [];
+    for (const repo of repos) {
+      for (const headRepo of repos) {
+        const pr = findOpenPrByHead(repo, headRepo, branch.stdout, source)?.pr;
+        if (!pr) continue;
+        if (
+          !sameRepo(pr.repo, repo) ||
+          pr.head_repo === null ||
+          !sameRepo(pr.head_repo, headRepo) ||
+          pr.head !== branch.stdout ||
+          pr.state !== 'open'
+        ) {
+          throw new Error('the forge result does not match the requested head');
+        }
+        if (!matches.some(other => samePr(other, pr))) matches.push(pr);
+      }
+    }
+    if (matches.length > 1)
+      throw new Error(
+        'more than one open pull request matches; retry with --input scope=<full-PR-URL>'
+      );
+    return matches[0];
+  }
   if (repos.length !== 1) {
     throw new Error('the review repository is ambiguous; retry with --input scope=<full-PR-URL>');
   }
   const repo = repos[0];
   if (/^[1-9][0-9]*$/.test(selector)) {
     const ref = { repo, number: Number(selector) };
-    const pr = viewPr(ref, source).pr;
-    if (!samePr(pr, ref))
-      throw new Error('the forge result does not match the requested pull request');
-    return pr;
+    return viewPr(ref, source).pr;
   }
-  const head = selector || gitOrThrow('symbolic-ref', '--quiet', '--short', 'HEAD');
+  const head = selector;
   const pr = findOpenPrByHead(repo, repo, head, source)?.pr;
   if (
     pr &&
@@ -106,7 +131,7 @@ export function resolveReviewPr(scope: string, source: ForgeSource): PrRecord | 
   ) {
     throw new Error('the forge result does not match the requested head');
   }
-  if (!pr && selector !== '') throw new Error('no open pull request matches the requested branch');
+  if (!pr) throw new Error('no open pull request matches the requested branch');
   return pr;
 }
 
@@ -143,4 +168,39 @@ export function reviewHead(pr: PrRecord): string {
       { cause: error }
     );
   }
+}
+
+/** Refuse a PR whose live base differs from scope's fetched diff base. */
+export function checkReviewBase(pr: PrRecord, value: string): void {
+  const base = record(JSON.parse(value || 'null'));
+  if (
+    typeof base?.branch !== 'string' ||
+    typeof base.revision !== 'string' ||
+    !base.revision.trim()
+  ) {
+    throw new Error('the PR review has no declared diff base; resolve scope again');
+  }
+  if (base.branch !== pr.base)
+    throw new Error('the PR base changed; resolve scope and review the new diff');
+  let revision = pr.base_revision;
+  if (revision === null) {
+    const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
+    const ref = `refs/heads/${pr.base}`;
+    const lookup = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
+    const rows = lookup.stdout.split('\n');
+    const [sha, name] = rows[0]?.split('\t') ?? [];
+    if (
+      lookup.code !== 0 ||
+      rows.length !== 1 ||
+      name !== ref ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha ?? '')
+    ) {
+      throw new Error(
+        `the PR base revision could not be established (lookup exited ${String(lookup.code)})`
+      );
+    }
+    revision = sha;
+  }
+  if (base.revision !== revision)
+    throw new Error('the PR base changed; fetch the base and review the new diff');
 }

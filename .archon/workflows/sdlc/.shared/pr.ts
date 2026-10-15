@@ -20,6 +20,7 @@ import {
   parsePrRecord,
   record,
   sameRepo,
+  samePr,
   type ForgeSource,
   type PrRecord,
   type QualifiedPr,
@@ -76,6 +77,7 @@ const PR_FIELDS = [
   'isDraft',
   'state',
   'baseRefName',
+  'baseRefOid',
   'headRefName',
   'headRefOid',
   'headRepository',
@@ -104,9 +106,10 @@ function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
       is_draft: row?.isDraft,
       state,
       head_repo: headPath === undefined ? null : { host: repo.host, path: headPath },
-      head_revision: typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
-      // gh does not report the base revision; the record keeps that absence explicit.
-      base_revision: null,
+      head_revision:
+        typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
+      base_revision:
+        typeof row?.baseRefOid === 'string' && row.baseRefOid !== '' ? row.baseRefOid : null,
       maintainer_can_modify:
         typeof row?.maintainerCanModify === 'boolean' ? row.maintainerCanModify : null,
     }),
@@ -178,22 +181,28 @@ export function findOpenPrByHead(
 }
 
 export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
+  let view: PrView;
   if (source === 'forge') {
-    const value = forgeResult('pr.view', {
-      selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } },
-    });
-    return forgePrView(value);
+    view = forgePrView(
+      forgeResult('pr.view', {
+        selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } },
+      })
+    );
+  } else {
+    const result = gh(
+      'pr',
+      'view',
+      String(ref.number),
+      '--repo',
+      ghRepo(ref.repo),
+      '--json',
+      PR_FIELDS
+    );
+    view = ghPrView(ref.repo, JSON.parse(required(result, `gh pr view ${String(ref.number)}`)));
   }
-  const result = gh(
-    'pr',
-    'view',
-    String(ref.number),
-    '--repo',
-    ghRepo(ref.repo),
-    '--json',
-    PR_FIELDS
-  );
-  return ghPrView(ref.repo, JSON.parse(required(result, `gh pr view ${String(ref.number)}`)));
+  if (!samePr(view.pr, ref))
+    throw new Error('the forge result does not match the requested pull request');
+  return view;
 }
 
 /**
@@ -218,7 +227,9 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   }
   const body = readFileSync(intent.bodyPath, 'utf8');
   const sameRepository = intent.headRepo.path === intent.repo.path;
-  const head = sameRepository ? intent.head : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
+  const head = sameRepository
+    ? intent.head
+    : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
   const created = gh(
     'pr',
     'create',
@@ -377,9 +388,7 @@ export function upsertComment(
   }
   const observed = ghIssueComments(ref).find(comment => comment.id === String(id));
   if (observed?.body !== body) {
-    throw new Error(
-      `comment ${String(id)} does not read back as written; it may need reconciling`
-    );
+    throw new Error(`comment ${String(id)} does not read back as written; it may need reconciling`);
   }
   return { url: observed.url };
 }

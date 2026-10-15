@@ -27,6 +27,7 @@ function check(options: ScriptOptions = {}) {
       INPUTS_SCOPE: PR_URL,
       INPUTS_SELECTOR: PR_URL,
       INPUTS_PR: JSON.stringify(PR),
+      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
       INPUTS_HEAD: HEAD,
       ARCHON_NODE_EXECUTION: execution(HEAD),
       ...options.inputs,
@@ -110,6 +111,114 @@ describe('review head boundary', () => {
       }
     }
   }
+
+  for (const scope of [PR_URL, JSON.stringify(PR)]) {
+    for (const change of [{ base: 'main' }, { base_revision: 'movedbase' }]) {
+      it(`refuses a changed diff base before lenses: ${scope}, ${JSON.stringify(change)}`, () => {
+        const run = check({
+          source: 'forge',
+          forge: view(change),
+          inputs: { INPUTS_SCOPE: scope },
+        });
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain('base changed');
+      });
+    }
+    it(`refuses a substituted forge identity: ${scope}`, () => {
+      const run = check({
+        source: 'forge',
+        forge: view({ number: 99 }),
+        inputs: { INPUTS_SCOPE: scope },
+      });
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain('does not match');
+    });
+  }
+
+  for (const change of [{ baseRefName: 'main' }, { baseRefOid: 'movedbase' }, { number: 99 }]) {
+    it(`rejects GitHub identity or base drift: ${JSON.stringify(change)}`, () => {
+      const run = check({ gh: { pr: change } });
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain('number' in change ? 'does not match' : 'base changed');
+    });
+  }
+
+  it('checks a missing forge base revision against the remote base ref', () => {
+    const cwd = gitCheckout({}, track);
+    const base = git(cwd, 'rev-parse', 'dev');
+    const options: ScriptOptions = {
+      cwd,
+      source: 'forge',
+      forge: view({ base_revision: null }),
+      inputs: { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }) },
+    };
+    expect(check(options).code).toBe(0);
+    writeFileSync(join(cwd, 'base.txt'), 'new base');
+    git(cwd, 'add', 'base.txt');
+    git(cwd, 'commit', '-qm', 'advance remote base');
+    git(cwd, 'push', '-q', 'upstream', 'HEAD:dev');
+    const changed = check(options);
+    expect(changed.code).toBe(1);
+    expect(changed.stderr).toContain('base changed');
+  });
+
+  for (const remotes of ['none', 'local', 'fork']) {
+    it(`allows an empty-scope working diff with ${remotes} remotes`, () => {
+      const cwd = gitCheckout({}, track);
+      if (remotes === 'fork')
+        git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/fork/repo.git');
+      else {
+        git(cwd, 'remote', 'remove', 'upstream');
+        if (remotes === 'local') git(cwd, 'remote', 'add', 'local', '/tmp/local-repository');
+      }
+      const run = check({
+        cwd,
+        gh: { noOpenPr: true },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null', INPUTS_BASE: 'null' },
+      });
+      expect(run.code).toBe(0);
+      expect(run.stdout).toContain('working diff');
+    });
+  }
+
+  it('discovers a unique fork PR across upstream and fork remotes', () => {
+    const cwd = gitCheckout({}, track);
+    const fork = { ...PR.repo, path: 'contributor/repo' };
+    git(cwd, 'remote', 'add', 'fork', `https://${fork.host}/${fork.path}.git`);
+    const absent = forgeOperation('pr.view', null);
+    const run = check({
+      cwd,
+      source: 'forge',
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '' },
+      forge: {
+        kind: 'fake',
+        response: [
+          absent,
+          forgeOperation('pr.view', { pr: forgePrRecord({ head_repo: fork }) }),
+          absent,
+          absent,
+        ],
+      },
+    });
+    expect(run.code).toBe(0);
+    expect(run.forgeRequests.map(value => JSON.parse(value).selector)).toContainEqual({
+      kind: 'head',
+      repo: PR.repo,
+      headRepo: fork,
+      head: 'feature',
+    });
+  });
+
+  it('requires an explicit selector when empty-scope discovery finds several PRs', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/contributor/repo.git');
+    const run = check({
+      cwd,
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('more than one open pull request matches');
+  });
 
   it('checks the live revision instead of the stale recorded revision', () => {
     const run = check({
@@ -315,17 +424,22 @@ describe('review head boundary', () => {
       expect(refused.stderr).toContain("git fetch -- 'upstream' 'refs/merge-requests/42/head'");
       expect(refused.stderr).toContain(`--from '${head}'`);
       expect(refused.stderr).not.toContain('refs/pull/');
-      expect(check({
-        ...options,
-        inputs: { ...options.inputs, INPUTS_HEAD: head, ARCHON_NODE_EXECUTION: execution(head) },
-      }).code).toBe(0);
+      expect(
+        check({
+          ...options,
+          inputs: { ...options.inputs, INPUTS_HEAD: head, ARCHON_NODE_EXECUTION: execution(head) },
+        }).code
+      ).toBe(0);
     }
   });
 
   it('refuses an unsupported forge PR URL instead of guessing a retained ref', () => {
     const run = check({
       source: 'forge',
-      forge: view({ url: `https://${PR.repo.host}/${PR.repo.path}/unknown/42`, head_revision: null }),
+      forge: view({
+        url: `https://${PR.repo.host}/${PR.repo.path}/unknown/42`,
+        head_revision: null,
+      }),
       inputs: { INPUTS_SCOPE: JSON.stringify(PR) },
     });
     expect(run.code).toBe(1);
@@ -557,6 +671,7 @@ console.log(response);
             docs: continuation,
           };
           stubs.scope = {
+            base: { branch: 'dev', revision: 'cafe' },
             selector: scenario === 'erased-selector' ? '' : selector,
             pr:
               scenario === 'null' ||
@@ -681,6 +796,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           docs: false,
         };
         stubs['rereview__scope'] = {
+          base: { branch: 'dev', revision: 'cafe' },
           selector: PR_URL,
           pr: scenario === 'missing declaration' ? null : PR,
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },

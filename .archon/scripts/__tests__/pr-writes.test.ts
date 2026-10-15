@@ -42,7 +42,9 @@ interface Target {
  * repository (a local bare repository behind `url.insteadOf`), so the push it makes
  * first lands and reads back. The fake forge reports that pushed commit as the head.
  */
-function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string; cwd: string } {
+function publishPr(
+  options: ScriptOptions & { target?: Target } = {}
+): ScriptRun & { head: string; cwd: string } {
   const { target = {}, ...rest } = options;
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
@@ -107,7 +109,9 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL, is_draft: true });
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
-    expect(result.gh.every(call => call.includes('--repo ghe.example.com/example/repo'))).toBe(true);
+    expect(result.gh.every(call => call.includes('--repo ghe.example.com/example/repo'))).toBe(
+      true
+    );
     expect(result.forge).toEqual([]);
   });
 
@@ -272,7 +276,28 @@ describe('publish-pr opens the pull request at most once', () => {
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('not the recorded');
-    const remote = spawnSync('git', ['ls-remote', '--heads', 'upstream', 'feature'], { cwd: result.cwd, encoding: 'utf8' });
+    const remote = spawnSync('git', ['ls-remote', '--heads', 'upstream', 'feature'], {
+      cwd: result.cwd,
+      encoding: 'utf8',
+    });
+    expect(remote.stdout.trim()).toBe('');
+  });
+
+  it('refuses a substituted identity from the shared numbered reader before pushing', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.view', { pr: forgePrRecord({ number: 99 }) }),
+      },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('does not match');
+    const remote = spawnSync('git', ['ls-remote', '--heads', 'upstream', 'feature'], {
+      cwd: result.cwd,
+      encoding: 'utf8',
+    });
     expect(remote.stdout.trim()).toBe('');
   });
 
@@ -289,6 +314,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
     ...options,
     inputs: {
       INPUTS_PR: JSON.stringify(PR),
+      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
       INPUTS_REPORT: '{ARTIFACTS}/review/report.md',
       INPUTS_HEAD: REVIEWED,
       ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
@@ -303,7 +329,13 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
       INPUTS_DISCOVERIES: '[]',
       INPUTS_CONTRACT_LEFT: '["acceptance: the console shows it"]',
       INPUTS_ROUTE: 'null',
-      INPUTS_MODE: JSON.stringify({ seams: false, code: true, tests: false, errors: false, docs: false }),
+      INPUTS_MODE: JSON.stringify({
+        seams: false,
+        code: true,
+        tests: false,
+        errors: false,
+        docs: false,
+      }),
       ...options.inputs,
     },
     artifacts: { 'review-report.md': REPORT, ...options.artifacts },
@@ -399,6 +431,45 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       inputs: { ...report, INPUTS_SCOPE: PR_URL, INPUTS_PR: JSON.stringify({ ...PR, number: 99 }) },
     });
     expect(result.code).toBe(1);
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  for (const scope of [PR_URL, JSON.stringify(PR)]) {
+    for (const change of [{ base: 'main' }, { base_revision: 'movedbase' }, { number: 99 }]) {
+      it(`refuses publication after target drift: ${scope}, ${JSON.stringify(change)}`, () => {
+        const result = publishReview({
+          source: 'forge',
+          inputs: { ...report, INPUTS_SCOPE: scope },
+          forge: {
+            kind: 'fake',
+            response: forgeOperation('pr.view', { pr: forgePrRecord(change) }),
+          },
+        });
+        expect(result.code).toBe(1);
+        expect(result.forge).toHaveLength(1);
+        expect(result.stderr).toContain('number' in change ? 'does not match' : 'base changed');
+        expect(result.gh).toEqual([]);
+      });
+    }
+  }
+
+  it('refuses an explicit URL whose head moved after preflight, without writing a comment', () => {
+    const preflight = runPackScript('review/scripts/check-review-head', {
+      inputs: {
+        INPUTS_SCOPE: PR_URL,
+        INPUTS_PR: JSON.stringify(PR),
+        INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
+        INPUTS_HEAD: REVIEWED,
+        ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
+      },
+    });
+    expect(preflight.code).toBe(0);
+    const result = publishReview({
+      inputs: { ...report, INPUTS_SCOPE: PR_URL },
+      gh: { pr: { headRefOid: 'pushed-after-preflight' } },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('pushed-after-preflight');
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
 
@@ -526,7 +597,10 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       inputs: report,
       forge: {
         kind: 'fake',
-        response: [prView, forgeFailure('comment.upsert', 'outcome_unknown', 'forge plugin timed out')],
+        response: [
+          prView,
+          forgeFailure('comment.upsert', 'outcome_unknown', 'forge plugin timed out'),
+        ],
       },
     });
     expect(result.code).not.toBe(0);
@@ -542,7 +616,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
   const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
   const STALE = 'stale0000';
 
-  it('records the reviewed commit beside the report as the next round\'s cursor', () => {
+  it("records the reviewed commit beside the report as the next round's cursor", () => {
     const result = publishReview({ inputs: report });
     expect(result.code).toBe(0);
     expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
@@ -572,19 +646,50 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     const route = { seams: true, code: true, tests: false, errors: false, docs: true, reason: 'r' };
     const first = publishReview({ inputs: { ...report, INPUTS_ROUTE: JSON.stringify(route) } });
     expect(first.code).toBe(0);
-    expect(recorded(first)).toEqual({ seams: true, code: true, tests: false, errors: false, docs: true });
+    expect(recorded(first)).toEqual({
+      seams: true,
+      code: true,
+      tests: false,
+      errors: false,
+      docs: true,
+    });
     // A light continuation skipped route: its own set is what ran.
     const light = publishReview({ inputs: report });
-    expect(recorded(light)).toEqual({ seams: false, code: true, tests: false, errors: false, docs: false });
+    expect(recorded(light)).toEqual({
+      seams: false,
+      code: true,
+      tests: false,
+      errors: false,
+      docs: false,
+    });
     // An ordinary continuation ran the rerun set and the route agent's additions.
     const continued = publishReview({
       inputs: {
         ...report,
-        INPUTS_ROUTE: JSON.stringify({ seams: false, code: false, tests: true, errors: false, docs: false, reason: 'r' }),
-        INPUTS_MODE: JSON.stringify({ seams: true, code: true, tests: false, errors: false, docs: false }),
+        INPUTS_ROUTE: JSON.stringify({
+          seams: false,
+          code: false,
+          tests: true,
+          errors: false,
+          docs: false,
+          reason: 'r',
+        }),
+        INPUTS_MODE: JSON.stringify({
+          seams: true,
+          code: true,
+          tests: false,
+          errors: false,
+          docs: false,
+        }),
       },
     });
-    expect(recorded(continued)).toEqual({ seams: true, code: true, tests: true, errors: false, docs: false });
+    expect(recorded(continued)).toEqual({
+      seams: true,
+      code: true,
+      tests: true,
+      errors: false,
+      docs: false,
+    });
   });
 
   it('names an unpushed head before any scope disagreement', () => {
@@ -628,6 +733,12 @@ describe('markPrDraft uses the selected source', () => {
   it('does not write for an already-draft PR', () => {
     const result = runPackScript(script);
     expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('refuses a substituted numbered read before converting a draft', () => {
+    const result = runPackScript(script, { gh: { pr: { number: 99, isDraft: false } } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('does not match');
     expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
   });
   it('fails when gh conversion does not read back', () => {
