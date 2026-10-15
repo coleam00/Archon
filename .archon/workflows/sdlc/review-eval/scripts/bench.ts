@@ -1074,11 +1074,15 @@ const MARKS_HEADER = `# One entry per judged defect and, on clean samples, per f
 # ${MARKS.finding.join(' or ')}. The bench rewrites this file but keeps every entry with a mark or note.
 `;
 
-const entryKey = (entry: Record<string, unknown>): string => JSON.stringify([
-  isObject(entry.judged_by) ? [entry.judged_by.spec, entry.judged_by.prompt_sha] : null,
-  entry.run_id,
-  entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect, isObject(entry.judge) ? [entry.judge.caught_by, entry.judge.finding] : null],
-]);
+function entryKey(entry: Record<string, unknown>): string {
+  const judge = isObject(entry.judge) ? entry.judge : null;
+  const caughtBy = textList(judge?.caught_by) ? [...new Set(judge.caught_by)].sort() : judge?.caught_by;
+  return JSON.stringify([
+    isObject(entry.judged_by) ? [entry.judged_by.spec, entry.judged_by.prompt_sha] : null,
+    entry.run_id,
+    entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect, judge === null ? null : [caughtBy, judge.finding]],
+  ]);
+}
 
 /**
  * Merge freshly generated entries into the operator's `marks.yaml`. An entry the

@@ -681,12 +681,25 @@ describe('the batch page and marks', () => {
     }
   });
 
-  it('preserves an operator mark when the judged verdict is unchanged', () => {
+  it.each([
+    { previous: ['code'], current: ['code'] },
+    { previous: ['code', 'seams'], current: ['seams', 'code'] },
+    { previous: ['code', 'seams', 'code'], current: ['seams', 'code'] },
+  ])('preserves an operator mark for equivalent catching lenses: %j', ({ previous, current }) => {
     const file = join(track(mkdtempSync(join(tmpdir(), 'archon-same-verdict-'))), 'marks.yaml');
-    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: ['code'], finding: 'R1' }, mark: null, note: null };
-    const marked = { ...fresh, judge: { finding: 'R1', caught_by: ['code'] }, mark: 'right', note: 'Confirmed.' };
+    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: [...current], finding: 'R1' }, mark: null, note: null };
+    const marked = { ...fresh, judge: { finding: 'R1', caught_by: previous }, mark: 'right', note: 'Confirmed.' };
     writeFileSync(file, Bun.YAML.stringify([marked], null, 2));
     expect(mergeMarks(file, [fresh])).toEqual([marked]);
+    expect(fresh.judge.caught_by).toEqual([...current]);
+  });
+
+  it('leaves changed catching-lens membership unmarked with the same cited finding', () => {
+    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-changed-lenses-'))), 'marks.yaml');
+    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: ['code', 'seams'], finding: 'R1' }, mark: null, note: null };
+    const marked = { ...fresh, judge: { caught_by: ['code'], finding: 'R1' }, mark: 'right', note: 'Confirmed code only.' };
+    writeFileSync(file, Bun.YAML.stringify([marked], null, 2));
+    expect(mergeMarks(file, [fresh])).toEqual([fresh, marked]);
   });
 
   it('leaves both batch outputs unchanged when saved marks are malformed', () => {
@@ -1124,6 +1137,31 @@ describe('bench run', () => {
     expect(judged.sort()).toEqual(['run-1 by run-2', 'run-1 by run-5', 'run-3 by run-4', 'run-3 by run-6']);
     expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([{ ...defect, judge: { caught_by: [], finding: null } }, finding, marked]);
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
+  });
+
+  it('leaves a changed cited finding unmarked and retains the marked previous verdict', () => {
+    const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
+      const detail = passing(root);
+      const file = join(getRunArtifactsDirForRoot(root, 'run-1'), 'review/findings.json');
+      const [first] = JSON.parse(readFileSync(file, 'utf8')) as Finding[];
+      writeFileSync(file, JSON.stringify([first, { ...first, id: 'R2', claim: 'Wrong count.' }]));
+      return detail;
+    });
+    const verdict = { id: 'D1', caught_by: ['code'], finding: 'R1', evidence: 'Stated.' };
+    judgeReturns('run-2', { defects: [verdict], shape_unmatched: 0 });
+    expect(run('--variant', 'v1').status).toBe(0);
+    const marks = join(out, 'batches/counting/marks.yaml');
+    const [entry] = Bun.YAML.parse(readFileSync(marks, 'utf8')) as Record<string, unknown>[];
+    const marked = { ...entry, mark: 'right', note: 'Confirmed R1.' };
+    writeFileSync(marks, Bun.YAML.stringify([marked], null, 2));
+
+    judgeReturns('run-3', { defects: [{ ...verdict, finding: 'R2' }], shape_unmatched: 0 });
+    expect(judge('--batch', 'counting').status).toBe(0);
+    expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([
+      { ...entry, judge: { caught_by: ['code'], finding: 'R2' } },
+      marked,
+    ]);
+    expect(readFileSync(join(out, 'batches/counting/page.md'), 'utf8')).toContain('R2');
   });
 
   it('renders saved judgements after marks repair without launching a judge', () => {
