@@ -305,6 +305,9 @@ function createMockStore(): MockWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+      Promise.resolve({ released: false })
+    ),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
@@ -378,8 +381,8 @@ function createMockStore(): MockWorkflowStore {
     ),
     failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async (_id, _error) => {}),
     pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, _approvalContext, _extraMetadata, suspension) => {
-        if (suspension) await createWorkflowEvent(suspension);
+      async (_id, _approvalContext, _extraMetadata, event) => {
+        if (event) await createWorkflowEvent(event);
       }
     ),
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
@@ -33911,6 +33914,15 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     // pending_writeback is folded into the SAME pause write (M3), not a 2nd update.
     const extraMeta = pauseCall[2] as { pending_writeback?: { envId: string } };
     expect(extraMeta.pending_writeback?.envId).toBe('env-x');
+    // The request row commits with the pause, and is not written a second time beside it.
+    expect(pauseCall[3]).toEqual({
+      workflow_run_id: expect.any(String),
+      event_type: 'writeback_requested',
+      step_name: 'container',
+      data: { total_count: 1 },
+    });
+    const writes = (store.createWorkflowEvent as MockWorkflowEventCollector).mock.calls;
+    expect(writes.filter(([event]) => event.event_type === 'writeback_requested')).toHaveLength(1);
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });

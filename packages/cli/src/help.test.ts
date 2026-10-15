@@ -228,7 +228,7 @@ Commands:
   workflow get <run-id>      Show detail for a single run (any status)
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
-  workflow attention [<run-id>] List the attention queue, count it, or read the item one run stands for
+  workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at

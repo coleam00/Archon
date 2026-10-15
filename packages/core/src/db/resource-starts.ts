@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
+  drainableStarts,
+  resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
@@ -30,8 +32,8 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
-  liveResourceSlotHolders,
   lockResourceSlot,
+  resourceStartOccupancy,
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
@@ -48,29 +50,20 @@ interface RequestRow {
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
-async function oldestQueuedRequest(query: Query, resource: string): Promise<RequestRow | null> {
-  const queued = await query<RequestRow>(
-    `SELECT * FROM remote_agent_resource_start_requests
-      WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position LIMIT 1${getDialect().rowLock()}`,
-    [resource]
-  );
-  return queued.rows[0] ?? null;
-}
-
-async function admitExisting(query: Query, row: RequestRow): Promise<ResourceStartDisposition> {
-  const launch = preparedWorkflowLaunchSchema.parse(
-    typeof row.launch === 'string' ? JSON.parse(row.launch) : row.launch
-  );
-  await insertWorkflowRun(query, launch.run);
+async function admitExisting(
+  query: Query,
+  resource: string,
+  start: { id: string; launch: PreparedWorkflowLaunch }
+): Promise<ResourceStartDisposition> {
+  await insertWorkflowRun(query, start.launch.run);
   await query(
     `UPDATE remote_agent_resource_start_requests
         SET status = 'admitted', admitted_at = ${getDialect().now()}, blocker_run_id = NULL
       WHERE id = $1 AND status = 'queued'`,
-    [row.id]
+    [start.id]
   );
-  await addResourceSlotHolder(query, row.resource_key, { kind: 'run', id: row.id });
-  return { status: 'admitted', requestId: row.id, runId: row.id };
+  await addResourceSlotHolder(query, resource, { kind: 'run', id: start.id });
+  return { status: 'admitted', requestId: start.id, runId: start.id };
 }
 
 function disposition(row: RequestRow): ResourceStartDisposition {
@@ -103,14 +96,11 @@ async function admitResourceStartWithQuery(
   );
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
-  // An older waiter keeps FIFO even when a slot is free, so a new arrival cannot pass it.
-  const older = await oldestQueuedRequest(query, intent.resource);
-  const holders = await liveResourceSlotHolders(query, intent.resource);
-  const blocker: ResourceStartRequestInspection['blocker'] = older
-    ? { kind: 'request', id: older.id }
-    : holders.length >= capacity && holders[0]
-      ? { kind: 'run', id: holders[0].id }
-      : null;
+  const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+  const blocker = resourceStartBlocker(
+    await resourceStartOccupancy(query, intent.resource, capacity),
+    launch
+  );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -139,7 +129,7 @@ async function admitResourceStartWithQuery(
     blocker_kind: blocker?.kind ?? null,
     launch: intent.launch,
   };
-  return blocker ? disposition(row) : admitExisting(query, row);
+  return blocker ? disposition(row) : admitExisting(query, intent.resource, { id: row.id, launch });
 }
 
 export async function admitResourceStart(
@@ -148,24 +138,17 @@ export async function admitResourceStart(
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
 }
 
-/**
- * Admit this host's queued requests while the slot has free capacity. Stops at the first
- * queued request that belongs to another host: FIFO order is per resource, not per host.
- */
+/** Admit this host's queued requests that can run while the slot has free capacity. */
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
     const { capacity } = await lockResourceSlot(query, options.resource);
-    let free = capacity - (await liveResourceSlotHolders(query, options.resource)).length;
+    const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
-    while (free > 0) {
-      const head = await oldestQueuedRequest(query, options.resource);
-      if (head?.host_id !== options.hostId) break;
-      admitted.push(await admitExisting(query, head));
-      free -= 1;
-    }
+    for (const start of drainableStarts(slot, options.hostId))
+      admitted.push(await admitExisting(query, options.resource, start));
     return admitted;
   });
 }

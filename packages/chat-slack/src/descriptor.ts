@@ -7,6 +7,7 @@ export const descriptor = {
   displayName: 'Slack',
   version,
   capabilities: {
+    attentionNotices: true,
     canDetachProject: true,
     defaultWorkflowDispatch: 'foreground',
     resultFooter: true,

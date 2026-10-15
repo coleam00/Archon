@@ -332,9 +332,9 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
   const native = registration.factory();
   const checkCredential = mock(native.checkCredential.bind(native));
   native.checkCredential = checkCredential;
-  const getUserProviderCredentialStatus = mock(async (_user: string, _vendor: string) => ({
+  const getUserProviderCredential = mock(async (_user: string, _vendor: string) => ({
     kind: 'api_key' as const,
-    status: { state: 'usable' as const, source: 'archon' as const },
+    getStatus: async () => ({ state: 'usable' as const, source: 'archon' as const }),
   }));
   const providers = {
     get: (id: string) => (id === 'pi' ? registration : undefined),
@@ -350,7 +350,7 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
     store: { getCodebaseEnvVars: async () => ({}) },
     getAgentProvider: () => native,
     isPerUserProviderKeysEnabled: () => true,
-    getUserProviderCredentialStatus,
+    getUserProviderCredential,
   };
   const prepared = await prepareRunAiConfiguration(
     deps,
@@ -366,6 +366,6 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
     ...prepared,
     requirements: [{ provider: 'pi', model, vendor: registration.credentials.vendorFor(model) }],
   });
-  expect(getUserProviderCredentialStatus).toHaveBeenCalledWith('user', 'google');
+  expect(getUserProviderCredential).toHaveBeenCalledWith('user', 'google');
   expect(checkCredential).not.toHaveBeenCalled();
 });

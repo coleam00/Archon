@@ -1,6 +1,6 @@
 /**
- * The pack's pull-request reads and writes, through whichever source the run
- * selected (./forge.ts).
+ * The pack's pull-request reads and writes, and the marked comment on an issue or
+ * pull request, through whichever source the run selected (./forge.ts).
  *
  * Every write here is performed and then read back before it is reported as
  * applied. On the forge path the plugin owns that verification and reports which
@@ -8,8 +8,8 @@
  * and raises the failure itself. Neither path falls back to the other, and an
  * operation whose outcome could not be established is never retried here.
  *
- * Authored content — a pull-request body, a review report — is passed by file
- * path on both paths, so it never reaches any process's argv.
+ * Authored content — a pull-request body, a comment — travels in a request file
+ * on both paths, so it never reaches any process's argv.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -324,6 +324,12 @@ function ghIssueComments(ref: QualifiedPr): GhComment[] {
   }
 }
 
+/** An issue or a pull request, as a comment addresses it. */
+export interface CommentSubject {
+  readonly kind: 'issue' | 'pr';
+  readonly ref: QualifiedPr;
+}
+
 /**
  * Write the one comment carrying `marker` on its first line, creating it if it is
  * not there yet and replacing it in place when it is. More than one marked
@@ -331,18 +337,19 @@ function ghIssueComments(ref: QualifiedPr): GhComment[] {
  * the other.
  */
 export function upsertComment(
-  ref: QualifiedPr,
+  subject: CommentSubject,
   marker: string,
-  bodyPath: string,
+  body: string,
   source: ForgeSource
 ): { readonly url: string } {
-  const body = readFileSync(bodyPath, 'utf8');
+  const ref = { repo: subject.ref.repo, number: subject.ref.number };
   if (source === 'forge') {
-    const value = forgeResult('comment.upsert', {
-      ref: { repo: ref.repo, number: ref.number },
-      marker,
-      body,
-    });
+    // A pull request keeps the original operation, so a plugin that predates
+    // subjects still publishes reviews; an issue needs the subject form.
+    const value =
+      subject.kind === 'pr'
+        ? forgeResult('comment.upsert', { ref, marker, body })
+        : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
     const comment = record(value.comment);
     if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
     return { url: comment.url };
@@ -354,7 +361,7 @@ export function upsertComment(
     comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
   );
   if (marked.length > 1) {
-    throw new Error('more than one comment on this pull request carries the canonical marker');
+    throw new Error('more than one comment on this item carries the canonical marker');
   }
   const previous = marked[0];
   if (previous?.body === body) return { url: previous.url };

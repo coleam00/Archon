@@ -283,6 +283,23 @@ request, never the state.
   attempt finishes, so one item that cannot be read or labelled never starves the
   rest. A claim whose run is pending, running, paused or unknown is never released,
   and there is no age timeout.
+- **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
+  another open issue or a merged change already delivered it, and the triage policy
+  lets it close without a person. Before writing anything, the outcome checks a
+  duplicate's declared original: it must be another item, an issue rather than a pull
+  request, open, and at the declared URL. When a check fails, the item is stored and
+  labelled `BLOCKED` with the reason, for a maintainer to decide. Otherwise the
+  outcome writes the work item and labels, then comments on the issue with a link to
+  the original or the change and closes it as `duplicate` or `completed`. A
+  duplicate's original gets a comment linking back. Each comment is one marked
+  comment, so a repeated run edits it rather than adding another. An item already
+  closed for the verdict's reason (an earlier run that stopped after its close)
+  still records the work item and its labels, but posts no comment and doesn't close
+  it again; one closed for another reason fails the run before any comment. A demoted item, an eval run and every other verdict close nothing.
+  Intake is the one workflow that closes: `archon-triage` run alone, even with
+  `publish`, only labels the item `archon-close`, because inside intake triage runs
+  unpublished so the outcome can withhold a verdict judged on text no maintainer
+  promoted.
 - **Closed issues.** Intake records the event and changes nothing else: no trust
   decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
@@ -302,9 +319,9 @@ request, never the state.
   `evaluation.seen.body_from` says which one triage saw. The outcome returns the
   whole decision as `evaluation`: the trust input, what triage saw, the label delta
   live would write, this run's history entries, and triage's verdict with its five
-  fields. The triage agent keeps its read tools and can still look the issue up,
-  and it reads the run's message too, so launch an eval run without a message that
-  names the issue.
+  fields and, for `NO_ACTION`, the closure live would perform. The triage agent
+  keeps its read tools and can still look the issue up, and it reads the run's
+  message too, so launch an eval run without a message that names the issue.
 
 The pack installs no binding, and none should be installed on a repository until the
 backlog bench passes. Two bindings in the GitHub source plugin's configuration start

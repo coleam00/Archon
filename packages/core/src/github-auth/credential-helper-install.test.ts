@@ -14,6 +14,7 @@ import { installCredentialHelper } from './credential-helper-install';
 import { credentialHelperScript } from './credential-helper-script';
 
 const trackTempRoot = trackTempRoots();
+const realExecFileAsync = git.execFileAsync;
 
 async function runHelper(
   command: string[],
@@ -274,9 +275,65 @@ describe('installCredentialHelper', () => {
     const result = await installCredentialHelper('/tmp/some-worktree');
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') throw new Error('unreachable');
-    expect(result.error.message).toContain('https://github.com/owner/repo.git');
+    expect(result.error.message).toContain('Failed to remove credentials from remote.origin.url');
     expect(result.error.message).not.toContain(pat);
   });
+
+  for (const key of ['remote.origin.url', 'remote.origin.pushurl']) {
+    for (const failAt of [1, 2]) {
+      test(`failed rewrite ${failAt} preserves every ${key} destination without exposing credentials`, async () => {
+        const repoPath = join(archonHome, 'repo');
+        const run = (...args: string[]) => realExecFileAsync('git', ['-C', repoPath, ...args]);
+        await realExecFileAsync('git', ['init', repoPath]);
+        const urls = [
+          'https://user:retained-secret@gitlab.com/owner/mirror.git',
+          'https://user:github-secret-one@github.com/owner/one.git',
+          'https://user:github-secret-two@github.com/owner/two.git',
+        ];
+        for (const url of urls) await run('config', '--local', '--add', key, url);
+        let writes = 0;
+        execSpy.mockImplementation(async (file, args, options) => {
+          if ((args.includes('--replace-all') || args.includes('--add')) && ++writes === failAt) {
+            throw Object.assign(new Error(`Command failed: git ${args.join(' ')}`), {
+              code: 128,
+              cmd: args.join(' '),
+              stderr: args.join(' '),
+            });
+          }
+          return realExecFileAsync(file, args, options);
+        });
+
+        const result = await installCredentialHelper(repoPath);
+        expect(result.kind).toBe('failed');
+        if (result.kind !== 'failed') throw new Error('expected write failure');
+        const diagnostic = result.error.stack + JSON.stringify(result.error);
+        for (const secret of ['github-secret-one', 'github-secret-two', 'retained-secret']) {
+          expect(diagnostic).not.toContain(secret);
+        }
+        const destinations = async () => {
+          const { stdout } = await run('config', '--local', '--get-all', key);
+          const values = stdout.trim().split('\n');
+          expect(values).toContain(urls[0]);
+          return values.map(value => {
+            const url = new URL(value);
+            url.username = '';
+            url.password = '';
+            return url.href;
+          });
+        };
+        const expected = [
+          'https://gitlab.com/owner/mirror.git',
+          'https://github.com/owner/one.git',
+          'https://github.com/owner/two.git',
+        ];
+        expect(await destinations()).toEqual(expected);
+        expect((await installCredentialHelper(repoPath)).kind).toBe('installed');
+        expect(await destinations()).toEqual(expected);
+        const { stdout } = await run('config', '--local', '--get-all', key);
+        expect(stdout).not.toContain('github-secret');
+      });
+    }
+  }
 
   test.skipIf(process.platform === 'win32' || skipCompiledBinaryTests())(
     'loads from Docker source packaging and embeds in a compiled binary',
