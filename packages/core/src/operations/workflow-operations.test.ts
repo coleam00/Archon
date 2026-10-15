@@ -1683,7 +1683,7 @@ describe('respondToWorkflow', () => {
   });
 });
 
-describe('whitespace-only answer text', () => {
+describe('answer text defaults', () => {
   const newModeGate = (): WorkflowRun =>
     makePausedRun({
       metadata: {
@@ -1698,10 +1698,11 @@ describe('whitespace-only answer text', () => {
     });
 
   async function answerWith(
-    decision: 'approve' | 'reject' | 'revise'
+    decision: 'approve' | 'reject' | 'revise',
+    text = '   '
   ): Promise<Array<Record<string, unknown>>> {
     mockGetWorkflowRun.mockResolvedValueOnce(newModeGate());
-    await respondToWorkflow('run-1', decision, '   ', operator, { via: 'cli' });
+    await respondToWorkflow('run-1', decision, text, operator, { via: 'cli' });
     const call = mockResolveApprovalGate.mock.calls.at(-1);
     if (!call) throw new Error('Expected resolveApprovalGate to be called');
     return call[2] as unknown[] as Array<Record<string, unknown>>;
@@ -1731,6 +1732,31 @@ describe('whitespace-only answer text', () => {
       text: '',
     });
     expect(recorded(revise, 'approval_received')?.comment).toBe('revise');
+  });
+
+  test('keeps explicit text verbatim on approve, reject and respond', async () => {
+    const text = '  too risky\n';
+
+    const approve = await answerWith('approve', text);
+    expect(recorded(approve, 'node_completed')?.structured_output).toEqual({
+      decision: 'approve',
+      text,
+    });
+    expect(recorded(approve, 'approval_received')?.comment).toBe(text);
+
+    const reject = await answerWith('reject', text);
+    expect(recorded(reject, 'node_completed')?.structured_output).toEqual({
+      decision: 'reject',
+      text,
+    });
+    expect(recorded(reject, 'approval_received')?.reason).toBe(text);
+
+    const revise = await answerWith('revise', text);
+    expect(recorded(revise, 'node_completed')?.structured_output).toEqual({
+      decision: 'revise',
+      text,
+    });
+    expect(recorded(revise, 'approval_received')?.comment).toBe(text);
   });
 });
 
