@@ -115,12 +115,6 @@ async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName):
   const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
     timeout: 10000,
   });
-  const { stdout: refs } = await execFileAsync(
-    'git',
-    ['-C', repoPath, 'for-each-ref', '--format=%(refname)'],
-    { timeout: 10000 }
-  );
-  const existingRefs = new Set(refs.trim().split('\n'));
   const sourceRef = `refs/heads/${branchName}`;
   for (const remote of remotes.trim().split('\n').filter(Boolean)) {
     let fetchSpecs: string;
@@ -143,7 +137,7 @@ async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName):
       if (!source || !destination) continue;
       const star = source.indexOf('*');
       if (star === -1) {
-        if (source === sourceRef && existingRefs.has(destination)) return true;
+        if (source === sourceRef && (await refExists(repoPath, destination))) return true;
       } else {
         const prefix = source.slice(0, star);
         const suffix = source.slice(star + 1);
@@ -154,7 +148,7 @@ async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName):
         )
           continue;
         const matched = sourceRef.slice(prefix.length, sourceRef.length - suffix.length);
-        if (existingRefs.has(destination.replace('*', matched))) return true;
+        if (await refExists(repoPath, destination.replace('*', matched))) return true;
       }
     }
   }
@@ -493,21 +487,26 @@ export async function localBranchExists(
   branchName: BranchName
 ): Promise<boolean> {
   try {
-    await execFileAsync(
-      'git',
-      ['-C', repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branchName}`],
-      { timeout: 10000 }
+    return await refExists(repoPath, `refs/heads/${branchName}`);
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(
+      `Failed to verify local branch '${branchName}' at ${repoPath}: ${err.message}`,
+      { cause: error }
     );
+  }
+}
+
+async function refExists(repoPath: RepoPath, ref: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['-C', repoPath, 'show-ref', '--verify', '--quiet', ref], {
+      timeout: 10000,
+    });
     return true;
   } catch (error) {
     const err = error as Error & { code?: number | string };
     if (err.code === 1 || err.code === '1') return false;
-    throw new Error(
-      `Failed to verify local branch '${branchName}' at ${repoPath}: ${err.message}`,
-      {
-        cause: error,
-      }
-    );
+    throw error;
   }
 }
 
