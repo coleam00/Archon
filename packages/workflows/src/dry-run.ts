@@ -76,8 +76,11 @@ import {
   type WaitCondition,
   type WorkflowRunOutcome,
 } from './schemas';
-import { APPROVAL_ATTENTION_OPTIONS } from './schemas/dag-node';
-import { attentionAnswerSchema, attentionChoiceProblem } from './schemas/workflow-run';
+import {
+  attentionAnswerSchema,
+  attentionChoiceProblem,
+  attentionOptions,
+} from './schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -869,9 +872,9 @@ function assertStubAnswerChoosesDeclared(
   answer: DryRunStubValue
 ): void {
   if (typeof condition.options === 'string') return;
-  const declared = (
-    condition.form === 'approval' ? APPROVAL_ATTENTION_OPTIONS : (condition.options ?? [])
-  ).map(option => option.id);
+  const declared = attentionOptions({ form: condition.form, options: condition.options }).map(
+    option => option.id
+  );
   // The output contract already held, so a string stub is one JSON document. A parse
   // failure is an empty decision or decision list, which chooses nothing.
   const parsed = attentionAnswerSchema.safeParse(

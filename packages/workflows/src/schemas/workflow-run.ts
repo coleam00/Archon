@@ -169,13 +169,16 @@ export function pausedAttentionWait(
   return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
 }
 
+/** The form and literal options an attention wait declares, paused or authored. */
+type AttentionDeclaration = { form?: AttentionForm; options?: readonly AttentionOption[] };
+
 /** The form an attention wait is answered in; a wait from before forms is a message. */
-export function attentionForm(wait: WorkflowAttentionWaitContext): AttentionForm {
+export function attentionForm(wait: AttentionDeclaration): AttentionForm {
   return wait.form ?? 'message';
 }
 
 /** The ids an attention wait's answer may choose from: none for a message. */
-export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly AttentionOption[] {
+export function attentionOptions(wait: AttentionDeclaration): readonly AttentionOption[] {
   switch (attentionForm(wait)) {
     case 'message':
       return [];
