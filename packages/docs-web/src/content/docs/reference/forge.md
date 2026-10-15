@@ -111,7 +111,7 @@ Multi-run requests can have partial effects. Submission stops at the first failu
 
 ## GitHub credentials and check observations
 
-The GitHub plugin uses `GH_TOKEN` or `GITHUB_TOKEN`. The dispatcher passes the selected value to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
+The host resolves `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` CLI login for the target host. The dispatcher passes the selected token to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
 
 Inside a workflow (`WORKFLOW_ID` is set), a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the command inherits is the run's credential. Neither `~/.archon/.env` nor the repository's `.archon/.env` replaces it, and an empty value (a credential the run withholds) stays empty. When the run sets no value, or a project `.env` names the key so startup strips it, those files supply the credential as they do outside a workflow.
 
@@ -121,7 +121,7 @@ The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`.
 
 `approvalPending` is independent of the unit summary. True means explicit approval evidence at the evaluated revision, false means the authoritative lookup found none, and null/absence means it was not established. GitHub reads head-filtered Actions workflow runs, including approval-blocked runs that registered no check units. Thus `summary.state: "none"` can coexist with `approvalPending: true`. Generic waiting states and zero units never imply approval. A failed Actions read or a query exceeding GitHub's 1,000-result search cap fails the observation rather than certifying no approval requirement.
 
-GitHub tokens need repository pull-request and check/status read permissions, plus Actions read permission for check observations and Actions write permission for reruns. Merge requires Contents write permission. An authorization failure stays explicit; there is no CLI fallback.
+GitHub tokens need repository pull-request and check/status read permissions, plus Actions read permission for check observations and Actions write permission for reruns. Merge requires Contents write permission. An authorization failure stays explicit; Archon does not switch credential sources or use the CLI to read checks after a plugin failure.
 
 `required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names.
 
@@ -130,7 +130,11 @@ GitHub tokens need repository pull-request and check/status read permissions, pl
 The bundled SDLC pack reads and writes pull requests, issues, labels and checks through the forge plugin by default. For github.com it needs two things, set up once:
 
 1. **The plugin.** With the release binary or Homebrew, `archon plugin add coleam00/Archon/plugins/forge-github`. In a source checkout, `bun run cli plugin add coleam00/Archon/plugins/forge-github`, or a plugin you built yourself (see above). In Docker, `docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github`.
-2. **A token.** `GH_TOKEN` in Archon's env file, `~/.archon/.env` (the compose `.env` in Docker), or GitHub App mode, which hands each run its token. Use `GH_TOKEN`, not `GITHUB_TOKEN`: beside `WEBHOOK_SECRET`, `GITHUB_TOKEN` switches the server's GitHub adapter into token mode. The forge path never reads the `gh` login. `archon setup` offers to write the token, and `archon doctor` checks both steps.
+2. **A credential.** The host resolves GitHub credentials in order: `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` CLI login via `gh auth token --hostname <forge-host>`. It passes the token to the plugin, including released v0.11.1 plugins. If a source is absent, the host tries the next; a selected token rejected by the forge, or an installed `gh` that fails or returns an empty token, is reported without trying another source. Tokens are never logged. `archon doctor` names the source used.
+
+With the release binary, Homebrew or a source install, an existing `gh auth login` works. Alternatively, put `GH_TOKEN` in Archon's env file, `~/.archon/.env`. In Docker, set `GH_TOKEN` in the compose `.env`, or authenticate `gh` inside the container; the host machine's login is not shared automatically. GitHub App mode supplies each run its token. `archon setup` offers to write `GH_TOKEN`. Prefer it when configuring the forge alone: beside `WEBHOOK_SECRET`, `GITHUB_TOKEN` also switches the server's GitHub adapter into token mode.
+
+An explicitly empty credential with no non-empty alternative refuses instead of using the host login. The engine uses empty values to deny an unconnected user's run access to shared credentials. For a solo install with an empty `GH_TOKEN=` line, remove that line to use `gh auth login`. An explicit `token_env` in trusted forge configuration selects only that variable; it does not consult the default sources.
 
 To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs with, for example `~/.archon/.env`. A [container execution](/guides/container-isolation/) receives only the project's configured env, never `~/.archon/.env`, and has no host command for the forge path, so select `gh` for it in the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`. One switch covers every read and write the pack makes, with one exception: standalone `archon-review` given a pull-request number, URL or branch, or run on a branch with an open pull request, still reads that pull request with `gh pr view` and `gh pr diff`; inside delivery it reviews the recorded pull request and reads nothing from the forge. A value other than `forge` or `gh` fails the steps that use it. A selected non-GitHub plugin must advertise the operations those steps use; an unsupported operation fails without falling back to `gh`.
 

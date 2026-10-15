@@ -62,8 +62,8 @@ replacing *what*.
 
 The SDLC workflows, such as `archon-ship` below, open and update the pull request
 through the GitHub forge plugin. Set them up once with
-`archon plugin add coleam00/Archon/plugins/forge-github` and `GH_TOKEN` in
-`~/.archon/.env`, or set `ARCHON_SDLC_FORGE=gh` to use the GitHub CLI instead. See
+`archon plugin add coleam00/Archon/plugins/forge-github` and `gh auth login` (or `GH_TOKEN` in
+`~/.archon/.env`), or set `ARCHON_SDLC_FORGE=gh` to use the GitHub CLI instead. See
 [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 A brief worth running looks like this:

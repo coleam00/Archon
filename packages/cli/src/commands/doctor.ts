@@ -38,6 +38,7 @@ import {
 } from '@archon/provider-contract';
 import { forgeResponseSchema, type ForgeResponse } from '@archon/forge/operations';
 import { forgeCommand } from './forge';
+import { dispatchForge, type ForgeDispatchResult } from '@archon/forge/dispatch';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -252,32 +253,41 @@ function selectedSdlcForge(env: NodeJS.ProcessEnv): string {
   return (env.ARCHON_SDLC_FORGE ?? '').trim();
 }
 
-/** One forge read, answered with the response `archon forge` would print. */
-export type RunForge = (op: string, data: unknown) => Promise<ForgeResponse>;
+/** One forge read with its host-resolved credential source, outside the plugin protocol. */
+export type RunForge = (
+  op: string,
+  data: unknown
+) => Promise<Pick<ForgeDispatchResult, 'response' | 'credentialSource'>>;
 
 async function runForgeCommand(
   op: string,
   data: unknown,
   env: NodeJS.ProcessEnv
-): Promise<ForgeResponse> {
+): ReturnType<RunForge> {
   let response: ForgeResponse | undefined;
+  let credentialSource: string | undefined;
   await forgeCommand(
     op,
     { data: JSON.stringify(data) },
     {
       env,
+      dispatch: async (request, options) => {
+        const result = await dispatchForge(request, options);
+        credentialSource = result.credentialSource;
+        return result;
+      },
       write: async value => {
         response = forgeResponseSchema.parse(value);
       },
     }
   );
   if (!response) throw new Error(`archon forge ${op} printed no response`);
-  return response;
+  return { response, credentialSource };
 }
 
 /**
  * Whether the SDLC workflows' default forge path works: the GitHub forge plugin is
- * installed and accepts the configured token. A missing plugin is skipped and a missing
+ * installed and accepts the resolved credential. A missing plugin is skipped and a missing
  * token warns, since an install that never runs the SDLC workflows needs neither.
  *
  * The read is the SDLC preflight's: `pr.view` by head, which every released GitHub
@@ -303,10 +313,12 @@ export async function checkGithubForge(
   const envFile = join(getArchonHome(env), '.env');
   // A public repository, the plugin's own source, so any valid token can read it.
   const repo = { host: 'github.com', path: 'coleam00/Archon' };
-  const response = await runForge('pr.view', {
+  const { response, credentialSource } = await runForge('pr.view', {
     selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
   });
-  if (response.ok) return { label, status: 'pass', message: 'installed; the token is accepted' };
+  const source = credentialSource ? ` (source: ${credentialSource})` : '';
+  if (response.ok)
+    return { label, status: 'pass', message: `installed; the token is accepted${source}` };
   const { kind, message } = response.error;
   // Which token names count belongs to the plugin, so with none installed doctor
   // cannot tell a forge setup in progress from an install that never runs the pack.
@@ -314,7 +326,7 @@ export async function checkGithubForge(
     return {
       label,
       status: 'skip',
-      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and GH_TOKEN in ${envFile} (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
+      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and a credential: GH_TOKEN in ${envFile}, GITHUB_TOKEN, or gh auth login (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
     };
   }
   if (kind === 'unsupported_op') {
@@ -334,10 +346,10 @@ export async function checkGithubForge(
       : {
           label,
           status: 'warn',
-          message: `installed, but no token. Set GH_TOKEN in ${envFile}.`,
+          message: `installed, but no token. Set GH_TOKEN in ${envFile}, GITHUB_TOKEN, or run gh auth login. ${message}`,
         };
   }
-  return { label, status: 'fail', message };
+  return { label, status: 'fail', message: `${message}${source}` };
 }
 
 export interface AssistantLoginDeps {

@@ -45,6 +45,8 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
+import type { ForgeError } from '@archon/forge/operations';
+import type { RunForge } from './doctor';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import {
   clearRegistry,
@@ -64,11 +66,16 @@ spyOn(paths, 'createLogger').mockImplementation(module =>
 
 describe('checkGithubForge', () => {
   const answering =
-    (response: Record<string, unknown>) =>
-    async (op: string): Promise<never> =>
-      ({ operationId: 'op', ...response, ...(response.ok ? { result: { op } } : {}) }) as never;
-  const refusing = (kind: string, message = `${kind} message`) =>
-    answering({ ok: false, error: { kind, message } });
+    (credentialSource?: string): RunForge =>
+    async () => ({
+      response: { operationId: 'op', ok: true, result: { op: 'pr.view', value: null } },
+      credentialSource,
+    });
+  const refusing =
+    (kind: ForgeError['kind'], message = `${kind} message`): RunForge =>
+    async () => ({
+      response: { operationId: 'op', ok: false, error: { kind, message } },
+    });
 
   it('fails on exactly the ARCHON_SDLC_FORGE values the SDLC pack refuses', async () => {
     const saved = process.env.ARCHON_SDLC_FORGE;
@@ -83,7 +90,7 @@ describe('checkGithubForge', () => {
         }
         const result = await checkGithubForge(
           { ARCHON_SDLC_FORGE: value, GH_TOKEN: 'ghp_x' },
-          answering({ ok: true })
+          answering()
         );
         expect({ value, failed: result.status === 'fail' }).toEqual({ value, failed: packRefuses });
       }
@@ -94,17 +101,42 @@ describe('checkGithubForge', () => {
   });
 
   it('skips without a forge read when the operator selected gh', async () => {
-    const runForge = mock(answering({ ok: true }));
+    const runForge = mock(answering());
     const result = await checkGithubForge({ ARCHON_SDLC_FORGE: 'gh' }, runForge);
     expect(result.status).toBe('skip');
     expect(runForge).not.toHaveBeenCalled();
   });
 
   it('passes when the plugin answers the SDLC preflight read', async () => {
-    const runForge = mock(answering({ ok: true }));
+    const runForge = mock(answering());
     expect((await checkGithubForge({ GH_TOKEN: 'ghp_x' }, runForge)).status).toBe('pass');
     const read = forgeAccessRead({ host: 'github.com', path: 'coleam00/Archon' });
     expect(runForge).toHaveBeenCalledWith(read.op, read.data);
+  });
+
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
+    'names the source used: %s',
+    async credentialSource => {
+      const result = await checkGithubForge({}, answering(credentialSource));
+      expect(result).toMatchObject({
+        status: 'pass',
+        message: expect.stringContaining(credentialSource),
+      });
+    }
+  );
+
+  it('names the selected source when the forge rejects its token', async () => {
+    const response = await refusing('authorization', 'Bad credentials')('pr.view', {});
+    const result = await checkGithubForge({}, async () => ({
+      ...response,
+      credentialSource: 'GH_TOKEN',
+    }));
+    expect(result).toMatchObject({ status: 'fail', message: 'Bad credentials (source: GH_TOKEN)' });
+  });
+
+  it('fails when gh credential lookup fails instead of warning about an absent token', async () => {
+    const result = await checkGithubForge({}, refusing('process_failed', 'gh auth token failed'));
+    expect(result).toMatchObject({ status: 'fail', message: 'gh auth token failed' });
   });
 
   it('names the plugin the SDLC pack names', () => {

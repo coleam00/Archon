@@ -66,7 +66,7 @@ Archon will explore your codebase and trace the answer through the actual code. 
 
 ## Your Second Win: Fix an Issue (2 minutes)
 
-If your repository has a GitHub issue open, try this. `archon-ship` opens and updates the pull request through the GitHub forge plugin, so set that up once first: run `archon plugin add coleam00/Archon/plugins/forge-github` and put `GH_TOKEN` in `~/.archon/.env` (or set `ARCHON_SDLC_FORGE=gh` there to use the GitHub CLI instead). See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack). Without one of these, the run stops at its first step, before any AI cost.
+If your repository has a GitHub issue open, try this. `archon-ship` opens and updates the pull request through the GitHub forge plugin, so set that up once first: run `archon plugin add coleam00/Archon/plugins/forge-github` and authenticate with `gh auth login`, or put `GH_TOKEN` in `~/.archon/.env`. To use the GitHub CLI for operations instead, set `ARCHON_SDLC_FORGE=gh` there. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack). Without one of these, the run stops at its first step, before any AI cost.
 
 ```bash
 archon workflow run archon-ship --branch fix/my-first-run "Fix #<issue-number>"

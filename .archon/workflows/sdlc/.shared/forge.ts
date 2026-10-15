@@ -58,7 +58,7 @@ const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 const SETUP =
   'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
   `\`archon plugin add ${GITHUB_FORGE_PLUGIN}\`, and set \`GH_TOKEN\` in ` +
-  `Archon's env file \`${archonEnvFile()}\` or configure GitHub App mode. When per-user GitHub ` +
+  `Archon's env file \`${archonEnvFile()}\`, set \`GITHUB_TOKEN\`, use \`gh auth login\`, or configure GitHub App mode. When per-user GitHub ` +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
   '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
   USE_GH;

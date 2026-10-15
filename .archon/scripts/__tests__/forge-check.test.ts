@@ -168,10 +168,10 @@ describe('forge-check with the GitHub plugin release v0.11.1 shipped', () => {
     expect(run.stderr).toContain('write access');
   });
 
-  it('refuses without a token, naming the setup', () => {
+  it('refuses an explicitly empty token, naming the setup', () => {
     const run = withToken('');
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('credential environment GH_TOKEN or GITHUB_TOKEN is not set');
+    expect(run.stderr).toContain('credential environment GH_TOKEN or GITHUB_TOKEN is empty');
     expect(run.stderr).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
   });
 

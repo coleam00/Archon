@@ -82,7 +82,8 @@ same shapes from either source:
 
 - **`forge` (default).** Operations go through `archon forge`, which needs a forge
   plugin installed for the repository's host, a credential that plugin accepts
-  (for GitHub, `GH_TOKEN` in `~/.archon/.env` or GitHub App mode; see the forge
+  (for GitHub, the host tries `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth login`;
+  GitHub App mode supplies a run token; see the forge
   reference in the docs), and the `ARCHON_CLI_COMMAND` host command that the CLI
   and server publish at startup.
 - **`gh` (opt-in).** Set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs
