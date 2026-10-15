@@ -27,6 +27,44 @@ const preparationFailureSchema = z.object({
   kind: z.literal('preparation_failed'),
   message: z.string().max(MAX_PREPARATION_MESSAGE_CHARS),
 });
+function excerptPreparationError(
+  error: unknown,
+  credentials: readonly string[],
+  limit: number
+): string {
+  const message = redactCredentialValues(
+    error instanceof Error ? error.message : String(error),
+    credentials
+  );
+  if (message.length <= limit) return message;
+  const marker = '\n[truncated]\n';
+  const endLength = Math.floor((limit - marker.length) / 2);
+  return `${message.slice(0, endLength)}${marker}${message.slice(-endLength)}`;
+}
+
+function preparationFailureMessage(error: unknown): string {
+  const credentials = collectCredentialValues(process.env);
+  const failures: unknown[] =
+    error instanceof AggregateError && error.errors.length > 0 ? error.errors : [error];
+  for (const failure of failures) {
+    console.error(
+      'Could not prepare detached owner termination:',
+      excerptPreparationError(failure, credentials, MAX_PREPARATION_MESSAGE_CHARS)
+    );
+  }
+  // Keep each root's leading termination and trailing confirmation evidence together.
+  const reported = failures.slice(0, 4);
+  const omitted = failures.length - reported.length;
+  const suffix = omitted > 0 ? `\n${omitted} additional failures omitted; see owner log` : '';
+  const limit = Math.floor(
+    (MAX_PREPARATION_MESSAGE_CHARS - suffix.length - (reported.length - 1)) / reported.length
+  );
+  return (
+    reported.map(failure => excerptPreparationError(failure, credentials, limit)).join('\n') +
+    suffix
+  );
+}
+
 /**
  * How long `close` waits for a controller holding a stop lease to release it before
  * dropping the lease. A committed lease has no lifetime of its own: it lasts while both
@@ -360,16 +398,7 @@ export async function startRunLiveOwner(
             await terminationPreparation;
             socket.write(TERMINATE_READY);
           })().catch((error: unknown) => {
-            let message = redactCredentialValues(
-              error instanceof Error ? error.message : String(error),
-              collectCredentialValues(process.env)
-            );
-            if (message.length > MAX_PREPARATION_MESSAGE_CHARS) {
-              const marker = '\n[truncated]\n';
-              const endLength = Math.floor((MAX_PREPARATION_MESSAGE_CHARS - marker.length) / 2);
-              message = `${message.slice(0, endLength)}${marker}${message.slice(-endLength)}`;
-            }
-            console.error('Could not prepare detached owner termination:', message);
+            const message = preparationFailureMessage(error);
             const failure: z.infer<typeof preparationFailureSchema> = {
               kind: 'preparation_failed',
               message,

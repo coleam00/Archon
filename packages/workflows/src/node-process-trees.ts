@@ -34,18 +34,23 @@ export function recordNodeProcessTrees(recordLegacyNodes = true): {
     recordLegacyNodes,
     end: async () => {
       recorder.ended = true;
-      const failed: string[] = [];
+      const failed: Error[] = [];
       await Promise.all(
         [...recorder.roots].map(([pid, tree]) =>
           tree.end().then(tree.disarm, (error: unknown) => {
             failed.push(
-              `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
+              new Error(
+                `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
+              )
             );
           })
         )
       );
       if (failed.length > 0) {
-        throw new Error(`could not end node process trees: ${failed.join(', ')}`);
+        throw new AggregateError(
+          failed,
+          `could not end node process trees: ${failed.map(error => error.message).join(', ')}`
+        );
       }
     },
   };

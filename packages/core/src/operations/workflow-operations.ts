@@ -797,7 +797,8 @@ export type AbandonOwnerOutcome =
     };
 
 /**
- * A live owner answered, but abandon could not stop it. The run is unchanged.
+ * A live owner answered, but abandon could not stop it. Abandon does not mark it cancelled.
+ * Failed node cleanup can independently fail the run.
  * Surfaces show the message as is; it states the reason and what the operator can do.
  */
 export class AbandonOwnerNotStoppedError extends Error {
@@ -916,7 +917,7 @@ function ownerNotStoppedMessage(runId: string, error: DetachedRunOwnerUnavailabl
 }
 
 /**
- * Why cancel left a run unchanged.
+ * Why cancellation was refused.
  *
  * `not_running`: only a running run has live work to stop.
  * `no_owner_answered`: nothing answered at the run's live-owner endpoint on this host.
@@ -927,7 +928,7 @@ function ownerNotStoppedMessage(runId: string, error: DetachedRunOwnerUnavailabl
  */
 export type CancelRefusal = 'not_running' | 'no_owner_answered' | 'not_stopped';
 
-/** Cancel refused; the run is unchanged. The message states why. */
+/** Cancel refused without marking the run cancelled. The message states why. */
 export class CancelRefusedError extends Error {
   constructor(
     readonly reason: CancelRefusal,
@@ -1666,7 +1667,8 @@ export function createWorkflowOperations({
    * - Another live process owns it, sub-run or not: stop that owner through the shared stop path
    *   (prove it, terminate its process tree, wait), then record `cancelled`.
    * - No owner answers, or the owner cannot be stopped: refuse with
-   *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
+   *   {@link CancelRefusedError} without marking it cancelled. Failed node cleanup can
+   *   independently fail the run. `cancelled` releases the
    *   run's worktree lock and resource slot, so it is never recorded on a guess.
    */
   async function cancelWorkflow(runId: string, actor: RunActor): Promise<CancelWorkflowResult> {

@@ -2163,7 +2163,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description No live owner answered, or the owner could not be stopped; the run was not changed */
+        /** @description No live owner answered, or the owner could not be stopped; cancellation was refused. Failed node cleanup can independently fail the run; inspect the run and reported processes before starting more work */
         409: {
           headers: {
             [name: string]: unknown;

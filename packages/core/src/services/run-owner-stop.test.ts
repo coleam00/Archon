@@ -58,6 +58,65 @@ describe('detached run control', () => {
     }
   });
 
+  it.each([3, 8])(
+    'retains per-tree evidence for %i cleanup failures through the lease',
+    async count => {
+      const log = spyOn(console, 'error').mockImplementation(() => {});
+      const previous = process.env.ARCHON_TEST_TREE_TOKEN;
+      process.env.ARCHON_TEST_TREE_TOKEN = 'private-tree-credential';
+      const runId = `multi-cleanup-${crypto.randomUUID()}`;
+      const failures = Array.from(
+        { length: count },
+        (_, index) =>
+          new Error(
+            `${(index + 1) * 10} (taskkill denied private-tree-credential; ${'x'.repeat(700)}; ancestry unproved for ${(index + 1) * 10})`
+          )
+      );
+      const owner = await startRunLiveOwner(runId, {
+        detachedProcessPid: process.pid,
+        beforeTerminate: async () => {
+          throw new AggregateError(
+            failures,
+            `could not end node process trees: ${failures.map(error => error.message).join(', ')}`
+          );
+        },
+      });
+      try {
+        const target = await requestDetachedRunStop(runId);
+        const error = await rejectionFrom(() => target.stop());
+        if (!(error instanceof Error)) throw new Error('Expected cleanup to fail');
+        for (let index = 0; index < Math.min(count, 4); index++) {
+          expect(error.message).toContain(`${(index + 1) * 10} (taskkill denied [REDACTED]`);
+          expect(error.message).toContain(`ancestry unproved for ${(index + 1) * 10})`);
+        }
+        if (count > 4)
+          expect(error.message).toContain('4 additional failures omitted; see owner log');
+        expect(error.message.length).toBeLessThan(1100);
+        expect(error.message).not.toContain('private-tree-credential');
+        const records = log.mock.calls.map(call => call.join(' '));
+        for (let index = 0; index < count; index++) {
+          expect(
+            records.some(
+              record =>
+                record.includes(`${(index + 1) * 10} (taskkill denied [REDACTED]`) &&
+                record.includes(`ancestry unproved for ${(index + 1) * 10})`)
+            )
+          ).toBe(true);
+        }
+        expect(
+          records.every(
+            record => record.length < 1100 && !record.includes('private-tree-credential')
+          )
+        ).toBe(true);
+      } finally {
+        await owner.close();
+        log.mockRestore();
+        if (previous === undefined) delete process.env.ARCHON_TEST_TREE_TOKEN;
+        else process.env.ARCHON_TEST_TREE_TOKEN = previous;
+      }
+    }
+  );
+
   it('fails explicitly when no live owner is reachable', async () => {
     const runId = `missing-${crypto.randomUUID()}`;
     const error = await rejectionFrom(() => requestDetachedRunStop(runId));

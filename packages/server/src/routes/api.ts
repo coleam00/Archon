@@ -1195,7 +1195,7 @@ const cancelWorkflowRunRoute = createRoute({
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     409: jsonError(
-      'No live owner answered, or the owner could not be stopped; the run was not changed'
+      'No live owner answered, or the owner could not be stopped; cancellation was refused. Failed node cleanup can independently fail the run; inspect the run and reported processes before starting more work'
     ),
     500: jsonError('Server error'),
   },

@@ -1,3 +1,4 @@
+import { currentNodeProcessRecorder } from './node-process-trees';
 import * as git from '@archon/git';
 import * as windowsTree from '@archon/paths/windows-process-tree';
 import { expect, test, spyOn } from 'bun:test';
@@ -905,3 +906,27 @@ for (const trigger of ['timeout', 'recorder', 'buffer'] as const) {
     }
   );
 }
+
+test('recorded cleanup failures retain each root as aggregate evidence', async () => {
+  const trees = recordNodeProcessTrees(false);
+  const recorder = currentNodeProcessRecorder();
+  if (!recorder) throw new Error('Expected recorder');
+  try {
+    for (const pid of [10, 20, 30]) {
+      recorder.roots.set(pid, {
+        end: async () => {
+          throw new Error(`taskkill denied; ancestry ${pid}`);
+        },
+        disarm: () => {},
+      });
+    }
+    const error = await trees.end().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw new Error('Expected aggregate evidence');
+    expect(error.errors.map((failure: Error) => failure.message)).toEqual(
+      [10, 20, 30].map(pid => `${pid} (taskkill denied; ancestry ${pid})`)
+    );
+  } finally {
+    trees.release();
+  }
+});
