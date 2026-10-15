@@ -1,0 +1,13 @@
+diff --git a/packages/cli/src/commands/plugin.ts b/packages/cli/src/commands/plugin.ts
+index 0e42d9766..017377cd6 100644
+--- a/packages/cli/src/commands/plugin.ts
++++ b/packages/cli/src/commands/plugin.ts
+@@ -766,7 +766,7 @@ async function installPlugin(
+     throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
+   }
+   // A fresh install cannot know which files a broken receipt owns, so it could claim them.
+-  if (!previous && !brokenSelf && broken.length > 0) {
++  if (mode === 'install' && !brokenSelf && broken.length > 0) {
+     throw new Error(
+       `Nothing was installed: the files these plugins own are unknown until their receipts are repaired.\n${broken.map(brokenReceiptNote).join('\n')}`
+     );

@@ -234,7 +234,7 @@ Commands:
                              Set or remove labels on the attention wait a run is paused at
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
-  workflow signal <full-run-id> Signal and wake one exact event wait occurrence
+  workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
   workflow respond <run-id> <decision> [text]

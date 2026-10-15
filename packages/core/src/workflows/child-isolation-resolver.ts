@@ -47,8 +47,8 @@ const NODE_HASH_LEN = 8;
  * so it must be UNIQUE per (parent run, workflow node, fan-out index).
  *
  * Uniqueness is load-bearing, not cosmetic: `WorktreeProvider.create()` ADOPTS an
- * existing worktree at the computed path (an INFO `worktree_adopted` line, no error).
- * Two children colliding on an identifier therefore silently share one checkout —
+ * existing worktree at the computed path (a WARN `worktree_adopted` line, no error).
+ * Two children colliding on an identifier therefore share one checkout —
  * the opposite of what `isolation: worktree` asked for — and, when they're in the
  * same DAG layer, land on the same `working_path`, where the sibling path-lock
  * cancels one of them (#2180 Defect A, reproduced in the case the author got right).
@@ -178,21 +178,6 @@ export function createCodebaseChildResolver(
           metadata: { parent_run_id: req.parentRun.id, child_index: childIndex },
         });
         const { env } = created;
-
-        // A spawn can fail before its run row is written. Reusing that slot
-        // recovers it, but adoption revokes the previous creation proof.
-        if (env.metadata.adopted) {
-          getLog().warn(
-            {
-              parentRunId: req.parentRun.id,
-              nodeId: req.nodeId,
-              childIndex,
-              branch: env.branchName,
-              workingPath: env.workingPath,
-            },
-            'workflow.child_worktree_adopted'
-          );
-        }
 
         getLog().info(
           {

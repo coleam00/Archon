@@ -93,6 +93,7 @@ test('file host records persist across hosts and released worktrees fence pendin
     working_path: join(home, 'checkout'),
     branch_name: toBranchName('feature'),
     created_by_user_id: 'first',
+    metadata: { worktree_creation_id: 'proof', worktree_branch_created: true, adopted: false },
   });
   const upsert = await host.records.isolation.create({
     ...env,
@@ -102,6 +103,7 @@ test('file host records persist across hosts and released worktrees fence pendin
   });
   expect(upsert.id).toBe(env.id);
   expect(upsert.created_by_user_id).toBe('first');
+  await host.records.isolation.updateMetadata(upsert.id, { adopted: true });
   const reopened = await createFileWorkflowHost(root);
   expect(await reopened.records.users.getUserById(user!.id)).toEqual(user);
   expect(await reopened.deps.store.getCodebaseEnvVars(codebase.id)).toEqual({
@@ -113,7 +115,8 @@ test('file host records persist across hosts and released worktrees fence pendin
   expect(await reopened.records.isolation.getById(env.id)).toMatchObject({
     id: env.id,
     branch_name: 'other',
-    created_at: expect.any(Date),
+    created_at: upsert.created_at,
+    metadata: { worktree_creation_id: 'proof', worktree_branch_created: true, adopted: true },
   });
   expect(await reopened.records.isolation.countActiveByCodebase(codebase.id)).toBe(1);
   await reopened.records.isolation.updateStatus(env.id, 'destroyed');
@@ -210,3 +213,64 @@ test.each(['persisted', 'legacy'])(
     ).toBe(known.id);
   }
 );
+
+test('file adoption metadata refuses a replaced registration, including the same path', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-adoption-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const store = host.records.isolation;
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  };
+  for (const path of [home, join(home, 'other')]) {
+    const observed = await store.create(input);
+    const replacement = await store.create({ ...input, working_path: path });
+    await expect(store.updateMetadata(observed.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await store.getById(observed.id)).toEqual(replacement);
+    await store.updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await store.getById(replacement.id))?.metadata.adopted).toBe(true);
+  }
+});
+
+test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'legacy-adoption-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const {
+    records: { isolation: store },
+  } = await createFileWorkflowHost(root);
+  const created = await store.create({
+    codebase_id: 'cb',
+    workflow_type: 'task',
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  });
+  const observed = { ...created, metadata: {} };
+  for (const replacement of [
+    { ...observed, working_path: join(home, 'other') },
+    { ...observed, branch_name: 'other' },
+    { ...observed, created_at: new Date(0) },
+    { ...observed, metadata: { legacy: true } },
+  ]) {
+    await commit(root, [], async () => ({
+      result: undefined,
+      changes: { documents: { 'host/isolation.json': [replacement] } },
+    }));
+    await expect(store.updateMetadata(observed.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await store.getById(created.id)).toEqual(replacement);
+    await store.updateMetadata(replacement.id, { adopted: true }, replacement);
+  }
+});

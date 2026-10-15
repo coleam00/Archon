@@ -16,7 +16,11 @@ import {
   ownedWorktreeSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import {
+  WORKTREE_REGISTRATION_ID,
+  sameWorktreeRegistration,
+  type IsolationEnvironmentRow,
+} from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { assertProjectRegistrationAvailable } from '../services/project-registration-identity';
@@ -215,7 +219,12 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
             created_by_user_id: prior
               ? prior.created_by_user_id
               : (input.created_by_user_id ?? null),
-            metadata: input.metadata ?? {},
+            metadata: {
+              ...input.metadata,
+              ...((input.provider ?? 'worktree') === 'worktree'
+                ? { [WORKTREE_REGISTRATION_ID]: randomUUID() }
+                : {}),
+            },
             status: 'active',
             created_at: new Date(),
           };
@@ -225,6 +234,17 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
               documents: { 'host/isolation.json': [...rows.filter(row => row !== prior), row] },
             },
           };
+        }),
+      updateMetadata: (id, metadata, observed) =>
+        commit(root, [], async () => {
+          const rows = await environments();
+          const row = rows.find(row => row.id === id);
+          if (!row) throw new Error(`Isolation environment ${id} not found`);
+          if (observed && !sameWorktreeRegistration(row, observed)) {
+            throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
+          }
+          row.metadata = { ...row.metadata, ...metadata };
+          return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       updateStatus: (id, status) =>
         commit(root, [], async () => {

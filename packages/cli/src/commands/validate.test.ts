@@ -29,7 +29,11 @@ mock.module('@archon/core', () => ({
   loadRepoConfig: mockLoadRepoConfig,
 }));
 
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { validateWorkflowsCommand } from './validate';
+
+// The CLI entrypoint registers providers before any command runs.
+registerBuiltinProviders();
 
 describe('validateWorkflowsCommand', () => {
   const originalLog = console.log;
@@ -119,7 +123,7 @@ describe('validateWorkflowsCommand', () => {
 
     expect(exitCode).toBe(1);
     expect(JSON.stringify(mockConsoleLog.mock.calls)).toContain(
-      "Claude skill 'user-only' not found"
+      "skill 'user-only' not found in an enabled skill directory"
     );
   });
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parseCopilotConfig } from './config';
+import {
+  parseCopilotConfig,
+  parseCopilotConfigStrict,
+  type CopilotProviderDefaults,
+} from './config';
 
 describe('parseCopilotConfig', () => {
   test('returns empty object for empty input', () => {
@@ -97,18 +101,8 @@ describe('parseCopilotConfig', () => {
     expect(() => parseCopilotConfig({ logLevel: null })).not.toThrow();
   });
 
-  test('combines all fields', () => {
-    expect(
-      parseCopilotConfig({
-        model: 'gpt-5-mini',
-        modelReasoningEffort: 'high',
-        copilotCliPath: '/bin/copilot',
-        configDir: '/etc/copilot',
-        enableConfigDiscovery: true,
-        useLoggedInUser: false,
-        logLevel: 'debug',
-      })
-    ).toEqual({
+  test('validates every setting and snapshots only portable settings', () => {
+    const config = {
       model: 'gpt-5-mini',
       modelReasoningEffort: 'high',
       copilotCliPath: '/bin/copilot',
@@ -116,6 +110,13 @@ describe('parseCopilotConfig', () => {
       enableConfigDiscovery: true,
       useLoggedInUser: false,
       logLevel: 'debug',
+    } satisfies Required<CopilotProviderDefaults>;
+    expect(parseCopilotConfig(config)).toEqual(config);
+    expect(parseCopilotConfigStrict(config)).toEqual(config);
+    expect(parseCopilotConfigStrict(config, 'snapshot')).toEqual({
+      model: 'gpt-5-mini',
+      modelReasoningEffort: 'high',
     });
+    expect(() => parseCopilotConfigStrict({ ...config, configDir: 42 }, 'snapshot')).toThrow();
   });
 });

@@ -193,6 +193,50 @@ describe('git utilities', () => {
     });
   });
 
+  describe('readWorktreeRegistration', () => {
+    test('propagates permission errors resolving a path listed by Git', async () => {
+      const targetPath = join(testDir, 'checkout');
+      await realMkdir(targetPath);
+      const resolvedTarget = await realpath(targetPath);
+      const error = Object.assign(new Error('cannot resolve listed path'), { code: 'EACCES' });
+      const fsPromises = await import('fs/promises');
+      const realpathSpy = spyOn(fsPromises, 'realpath')
+        .mockResolvedValueOnce(resolvedTarget)
+        .mockRejectedValueOnce(error);
+      const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+        stdout: `worktree ${targetPath}\0HEAD abc123\0branch refs/heads/main\0\0`,
+        stderr: '',
+      });
+      try {
+        await expect(git.readWorktreeRegistration(testDir, targetPath)).rejects.toBe(error);
+        expect(realpathSpy).toHaveBeenCalledTimes(2);
+        expect(realpathSpy).toHaveBeenNthCalledWith(1, targetPath);
+        expect(realpathSpy).toHaveBeenNthCalledWith(2, targetPath);
+      } finally {
+        realpathSpy.mockRestore();
+        execSpy.mockRestore();
+      }
+    });
+
+    for (const code of ['EACCES', 'EIO', 'ELOOP']) {
+      test(`propagates ancestor resolution errors: ${code}`, async () => {
+        const error = Object.assign(new Error('cannot resolve path'), { code });
+        const fsPromises = await import('fs/promises');
+        const realpathSpy = spyOn(fsPromises, 'realpath').mockRejectedValueOnce(error);
+        const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+        try {
+          await expect(
+            git.readWorktreeRegistration(testDir, join(testDir, 'checkout'))
+          ).rejects.toBe(error);
+          expect(realpathSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          realpathSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+    }
+  });
+
   describe('getCanonicalRepoPath', () => {
     test('returns same path for non-worktree', async () => {
       const result = await git.getCanonicalRepoPath(testDir);
@@ -979,6 +1023,49 @@ branch refs/heads/feature/auth
           branchName: 'some-branch',
         }),
         'checkout_failed'
+      );
+    });
+  });
+
+  describe('hasUncommittedChangesStrict', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test.each(['', '?? new-file\0', ' M tracked\0'])(
+      'uses explicit removal status flags and record presence: %j',
+      async stdout => {
+        execSpy.mockResolvedValue({ stdout, stderr: '' });
+        expect(await git.hasUncommittedChangesStrict(worktree('/workspace/wt'))).toBe(
+          stdout.length > 0
+        );
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          [
+            '-C',
+            '/workspace/wt',
+            'status',
+            '--porcelain=v1',
+            '-z',
+            '--untracked-files=all',
+            '--ignore-submodules=none',
+          ],
+          { timeout: 5 * 60 * 1000 }
+        );
+      }
+    );
+
+    test('propagates status failures rather than reporting dirty state', async () => {
+      const failure = new Error('status unavailable');
+      execSpy.mockRejectedValue(failure);
+      await expect(git.hasUncommittedChangesStrict(worktree('/workspace/wt'))).rejects.toBe(
+        failure
       );
     });
   });

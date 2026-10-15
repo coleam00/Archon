@@ -887,6 +887,7 @@ describe('workflows database', () => {
 
       await deferWorkflowContinuation('workflow-run-123', '2026-08-25T10:01:00.000Z', {
         kind: 'wait',
+        pauseId: 'wait-occurrence',
         nodeId: wait.nodeId,
         resumeAt: wait.resumeAt,
       });
@@ -895,11 +896,12 @@ describe('workflows database', () => {
       expect(query).toContain("status = 'paused'");
       expect(query).toContain("status = 'failed'");
       expect(query).not.toContain('SET status =');
+      expect(query).toContain("metadata->'wait'->>'pauseId' = $7");
       expect(query).toContain("metadata->'wait'->>'nodeId' = $4");
       expect(JSON.parse(params[1] as string)).toEqual({
         continuation_retry_at: '2026-08-25T10:01:00.000Z',
       });
-      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null]);
+      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null, 'wait-occurrence']);
     });
 
     test('keys quota backoff to the exact attempt cursor', async () => {
@@ -913,7 +915,7 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null]);
+      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null, null]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {

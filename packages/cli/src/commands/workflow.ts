@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -59,6 +60,9 @@ import {
   WorkflowResourceBusyError,
   PROVIDER_EVENT_ROW_TYPES,
   workflowEventCursor,
+  deadlineWaitCursor,
+  resumeCursorMatches,
+  type WorkflowResumeCursor,
 } from '@archon/workflows/store';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { Codebase } from '@archon/core/schemas/codebase';
@@ -216,7 +220,10 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+} from '@archon/core/operations/workflow-adoption';
 import {
   attentionProjectForCwd,
   attentionQueueSource,
@@ -397,6 +404,7 @@ export interface WorkflowRunOptions {
    * means live discovery.
    */
   continuationRun?: WorkflowRun;
+  continuationCursor?: WorkflowResumeCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -2493,7 +2501,7 @@ async function runWorkflowWithOwnedSource(
       // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
-          ? detachedAdoptionLane.workingPath
+          ? detachedAdoptionLane.environment.working_path
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
@@ -2787,15 +2795,20 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        workingCwd = lane.workingPath;
-        isolationEnvId = lane.envId;
+        const env = await adoptRegisteredWorktree(
+          host.records.isolation,
+          lane,
+          codebase.default_cwd
+        );
+        workingCwd = env.working_path;
+        isolationEnvId = env.id;
         adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below
         // and silently cut a fresh worktree from base over the inherited one.
         wantsIsolation = false;
         console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'checkout-branch') {
         adoptedTaskBranch = lane.taskBranch;
@@ -2872,6 +2885,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3152,7 +3166,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {
@@ -3447,6 +3461,7 @@ async function runWorkflowWithOwnedSource(
             legacyWorkflow: workflow,
             userMessage,
             run: resumable,
+            cursor: options.continuationCursor,
             options: commonOptions,
           });
         } catch (error) {
@@ -3696,14 +3711,16 @@ async function runWorkflowWithOwnedSource(
     if (result.success && 'paused' in result && result.paused) {
       // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
       // `attention` pause has no deadline and stays with whoever resolves it.
-      const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
-      if (pausedRun !== null && wait !== undefined) {
+      if (result.waitCursor !== undefined) {
+        const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+        if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
+        const wait = pendingDurableWait(pausedRun);
+        if (wait === undefined) return;
         console.log(
-          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
             'this process resumes the run at its deadline.'
         );
-        return { run: pausedRun, wait, destination };
+        return { run: pausedRun, wait: { ...wait, cursor: result.waitCursor }, destination };
       }
       if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
         console.log('\nWorkflow paused — waiting for approval.');
@@ -3753,7 +3770,7 @@ async function runWorkflowWithOwnedSource(
  */
 export interface DurableWaitCursor {
   stepName: string;
-  resumeAt: string;
+  cursor: ReturnType<typeof deadlineWaitCursor>;
   signaled: boolean;
 }
 
@@ -3781,7 +3798,7 @@ export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefi
   if (!wait) return undefined;
   return {
     stepName: workflowWaitStepName(wait),
-    resumeAt: wait.resumeAt,
+    cursor: deadlineWaitCursor(wait),
     signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
   };
 }
@@ -3803,20 +3820,24 @@ async function awaitDurableWaitDeadline(
   runId: string,
   wait: DurableWaitCursor
 ): Promise<'resume' | 'stop'> {
-  let cursor = wait;
+  if (wait.signaled) return 'resume';
   for (;;) {
-    if (cursor.signaled) return 'resume';
-    const remainingMs = Date.parse(cursor.resumeAt) - Date.now();
+    const remainingMs = Date.parse(wait.cursor.resumeAt) - Date.now();
     if (remainingMs <= 0) return 'resume';
     await new Promise<void>(resolve =>
       setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
     );
     const latest = await host.deps.store.getWorkflowRun(runId);
     const next = latest === null ? undefined : pendingDurableWait(latest);
-    if (next?.stepName !== cursor.stepName || next.resumeAt !== cursor.resumeAt) {
+    if (
+      !latest ||
+      !next ||
+      next.stepName !== wait.stepName ||
+      !resumeCursorMatches(latest, wait.cursor)
+    ) {
       return 'stop';
     }
-    cursor = next;
+    if (next.signaled) return 'resume';
   }
 }
 
@@ -3832,7 +3853,8 @@ interface WaitResumeAttempt {
 async function buildWaitResumeAttempt(
   host: WorkflowHost,
   run: WorkflowRun,
-  destination: RunDestination
+  destination: RunDestination,
+  wait: DurableWaitCursor
 ): Promise<WaitResumeAttempt> {
   if (!run.working_path) {
     throw new Error(
@@ -3849,6 +3871,7 @@ async function buildWaitResumeAttempt(
     userMessage: run.user_message ?? '',
     options: {
       continuationRun: run,
+      continuationCursor: wait.cursor,
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
       ...(destination.kind === 'conversation'
@@ -3953,7 +3976,7 @@ export async function workflowRunCommand(
     }
     if (pending === undefined) return;
     if ((await awaitDurableWaitDeadline(host, pending.run.id, pending.wait)) === 'stop') return;
-    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination);
+    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination, pending.wait);
   }
 }
 

@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -366,6 +366,7 @@ async function worktreeLane(
       lane.branch
     );
     if (existing && (await provider.healthCheck(existing.working_path))) {
+      await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
       return { cwd: existing.working_path, envId: existing.id };
     }
   }

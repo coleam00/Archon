@@ -233,6 +233,54 @@ describe('OpencodeProvider', () => {
     tempDirs.clear();
   });
 
+  test.each([
+    { options: { appendSystemPrompt: 'append' }, expected: 'append' },
+    {
+      options: { nodeConfig: { systemPrompt: 'node' }, appendSystemPrompt: 'append' },
+      expected: 'node',
+    },
+    {
+      options: {
+        systemPrompt: 'request',
+        nodeConfig: { systemPrompt: 'node' },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'request',
+    },
+    {
+      options: {
+        nodeConfig: { systemPrompt: ['node', 'lines'] as string[] },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'node\nlines',
+    },
+    {
+      options: {
+        systemPrompt: ['request', 'lines'] as string[],
+        nodeConfig: { systemPrompt: ['node', 'lines'] as string[] },
+        appendSystemPrompt: 'append',
+      },
+      expected: 'request\nlines',
+    },
+  ])('sends the selected system prompt to the SDK: $expected', async ({ options, expected }) => {
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+    const result = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        ...options,
+      })
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.failure).toBeUndefined();
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: '/tmp' },
+      body: expect.objectContaining({ system: expected }),
+    });
+  });
+
   test('a part-update stream yields one chunk per text or reasoning part, once it ends', async () => {
     const update = (part: Record<string, unknown>, delta?: string): OpencodeEvent => ({
       type: 'message.part.updated',
@@ -1676,148 +1724,6 @@ describe('OpencodeProvider', () => {
         agent: 'archon-tools-agent',
       }),
     });
-  });
-
-  test('external baseUrl mode is rejected to enforce managed runtime control', async () => {
-    const cwd = await createTempProjectDir();
-    const nodeConfig = {
-      agents: {
-        reviewer: {
-          description: 'Review agent',
-          prompt: 'Review safely',
-        },
-      },
-    };
-
-    const { chunks, failure } = await consume(
-      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
-        assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
-        nodeConfig,
-      })
-    );
-
-    // Only the failure result precedes `settled`.
-    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
-    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
-    expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
-    expect(mockCreateOpencode).not.toHaveBeenCalled();
-  });
-
-  test('external baseUrl mode is rejected even when pre-generated agent files exist', async () => {
-    const cwd = await createTempProjectDir();
-    const agentsDir = join(cwd, '.opencode', 'agents');
-    await mkdir(agentsDir, { recursive: true });
-    await writeFile(
-      join(agentsDir, 'archon-reviewer.md'),
-      ['---', 'name: archon-reviewer', 'description: "Review agent"', '---', '', 'Review'].join(
-        '\n'
-      ),
-      'utf8'
-    );
-    await writeFile(join(agentsDir, 'custom-agent.md'), '# user content\n', 'utf8');
-
-    const runtime = makeRuntime();
-    runtimeQueue.push(runtime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const nodeConfig = {
-      agents: {
-        reviewer: {
-          description: 'Review agent',
-          prompt: 'Review',
-        },
-      },
-    };
-
-    const { failure } = await consume(
-      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
-        assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
-        nodeConfig,
-      })
-    );
-
-    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
-    expect(await readFile(join(agentsDir, 'custom-agent.md'), 'utf8')).toBe('# user content\n');
-    expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
-    expect(mockCreateOpencode).not.toHaveBeenCalled();
-  });
-
-  test('external baseUrl mode rejection happens before runtime/dispose side effects', async () => {
-    const cwd = await createTempProjectDir();
-    const agentsDir = join(cwd, '.opencode', 'agents');
-    await mkdir(agentsDir, { recursive: true });
-    await writeFile(
-      join(agentsDir, 'archon-reviewer.md'),
-      ['---', 'name: archon-reviewer', 'description: "Review agent"', '---', '', 'Review'].join(
-        '\n'
-      ),
-      'utf8'
-    );
-
-    const callOrder: string[] = [];
-    const runtime = makeRuntime({
-      instanceDispose: mock(async () => {
-        callOrder.push('dispose');
-        return true;
-      }),
-      promptAsync: mock(async () => {
-        callOrder.push('prompt');
-      }),
-    });
-    runtimeQueue.push(runtime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const nodeConfig = {
-      nodeId: 'node-remote',
-      agents: {
-        reviewer: {
-          description: 'Review agent',
-          prompt: 'Review',
-        },
-      },
-    };
-
-    const { failure } = await consume(
-      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
-        assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
-        nodeConfig,
-      })
-    );
-
-    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
-    expect(runtime.client.instance.dispose).not.toHaveBeenCalled();
-    expect(callOrder).toEqual([]);
-    expect(mockCreateOpencode).not.toHaveBeenCalled();
-    expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
-  });
-
-  test('external baseUrl mode rejects multi-agent execution with same deprecation error', async () => {
-    const cwd = await createTempProjectDir();
-    const agentsDir = join(cwd, '.opencode', 'agents');
-    await mkdir(agentsDir, { recursive: true });
-    await writeFile(join(agentsDir, 'archon-agent-a.md'), '---\nmode: subagent\n---\nA\n', 'utf8');
-    await writeFile(join(agentsDir, 'archon-agent-b.md'), '---\nmode: subagent\n---\nB\n', 'utf8');
-
-    const nodeConfig = {
-      nodeId: 'node-multi-remote',
-      agents: {
-        'agent-a': { description: 'A', prompt: 'A' },
-        'agent-b': { description: 'B', prompt: 'B' },
-      },
-    };
-
-    const { chunks, failure } = await consume(
-      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
-        assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
-        nodeConfig,
-      })
-    );
-
-    // Only the failure result precedes `settled`.
-    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
-    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
-    expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
-    expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
 
   test('uses node prompt as task when agent is configured', async () => {

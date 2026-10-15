@@ -1,0 +1,15 @@
+diff --git a/.archon/workflows/sdlc/README.md b/.archon/workflows/sdlc/README.md
+index dfd76a605..d52dc8f3d 100644
+--- a/.archon/workflows/sdlc/README.md
++++ b/.archon/workflows/sdlc/README.md
+@@ -94,8 +94,8 @@ An agent judges and authors; the node after it performs the one public write and
+ proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
+ request, and `publish-review` upserts the one marked review comment. Every pack
+ label is declared in `.shared/labels.ts`, and every stage writes labels through its
+-`writeLabels`, which adds and removes them as a delta so labels another writer adds
+-survive. On the `forge` source it still writes the whole label set back, because
++`writeLabels`, which adds and removes them as a delta and also clears any label
++another writer added since the stage read the item. On the `forge` source it still writes the whole label set back, because
+ the forge contract has no single-label add or remove yet. No node files discoveries: the
+ outcome relays them to the operator. Each acts on the values the agent
+ before it declared in its typed output, which the engine certified, writes through

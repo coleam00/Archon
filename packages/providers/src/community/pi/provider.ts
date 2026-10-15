@@ -888,12 +888,11 @@ export class PiProvider implements IAgentProvider {
       }
 
       //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
-      //        node-level; either overrides Pi's default.
-      //        Pi only supports string system prompts; structured preset objects
-      //        and string[] are dropped. Validate each level INDEPENDENTLY before
-      //        applying precedence — a non-string request-level value (e.g. a
-      //        preset object) must not win via `??` and mask a valid node-level
-      //        string.
+      //        node-level, which wins over `appendSystemPrompt`; any of them
+      //        overrides Pi's default. Pi only supports string system prompts, so
+      //        string[] is dropped. Validate each level INDEPENDENTLY before
+      //        applying precedence — a dropped request-level value must not win
+      //        via `??` and mask a valid node-level string.
       const coerceStringPrompt = (
         value: SystemPromptInput | undefined,
         source: 'request' | 'node'
@@ -908,7 +907,8 @@ export class PiProvider implements IAgentProvider {
       };
       const systemPrompt =
         coerceStringPrompt(requestOptions?.systemPrompt, 'request') ??
-        coerceStringPrompt(nodeConfig?.systemPrompt, 'node');
+        coerceStringPrompt(nodeConfig?.systemPrompt, 'node') ??
+        requestOptions?.appendSystemPrompt;
 
       //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
       //        Resolve each name against .agents/skills and .claude/skills (project
