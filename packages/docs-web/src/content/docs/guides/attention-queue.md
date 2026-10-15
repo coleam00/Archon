@@ -41,8 +41,11 @@ disagree about what a run needs.
 
 ## Queue items
 
-Malformed stored run data makes the list read fail with the affected run's ID instead
-of returning a partial queue. Inspect and repair that run's stored data before retrying.
+Malformed stored run data makes the list read fail instead of returning a partial
+queue. Database paused-row normalization errors identify the affected run. File-store
+errors may lack a run ID; inspect the run snapshots and logs under
+`$ARCHON_HOME/store/runs/<id>/` using the [storage layout](/reference/database/#file-storage-for-cli-workflows).
+Repair the invalid stored data before retrying.
 
 ```json
 {

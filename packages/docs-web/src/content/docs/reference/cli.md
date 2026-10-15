@@ -951,8 +951,11 @@ archon workflow attention <run-id> --json                          # one item
 `item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. Malformed stored run data fails the
-list read with the affected run's ID rather than returning a partial queue; repair that
-run's stored data before retrying. An unknown run id prints `error: "not_found"` and
+list read rather than returning a partial queue. Database paused-row normalization
+errors identify the affected run; file-store errors may lack a run ID. For file storage,
+inspect the snapshots and logs under `$ARCHON_HOME/store/runs/<id>/` using the
+[storage layout](/reference/database/#file-storage-for-cli-workflows). Repair the invalid stored data
+before retrying. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
