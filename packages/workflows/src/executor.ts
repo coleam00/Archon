@@ -369,7 +369,7 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
  * bags when per-user provider keys are disabled, no userId is present, the
- * deps adapter is absent, or no vendor is required. Delivery and file-write
+ * deps adapter is absent, or preflight connected no vendor. Delivery and file-write
  * failures stop execution rather than falling back to ambient credentials.
  */
 async function resolveUserProviderEnvForWorkflow(
@@ -383,11 +383,13 @@ async function resolveUserProviderEnvForWorkflow(
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
     return { env: {}, protectedValues: [] };
   }
-  const vendors = [...new Set(requirements.flatMap(r => (r.vendor ? [r.vendor] : [])))];
+  // Only vendors preflight connected: a stored credential no node's provider consumes
+  // (a Claude subscription in a Pi-only run) is neither refreshed nor delivered.
+  const vendors = [...connectedVendors];
   if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;
   try {
-    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, [...connectedVendors]);
+    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, vendors);
   } catch (error) {
     if (error instanceof StoredCredentialDeliveryError) {
       const requirement = requirements.find(r => r.vendor === error.vendor);
