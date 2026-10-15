@@ -3410,7 +3410,7 @@ export function registerApiRoutes(
           const exists = await stat(env.working_path).then(
             () => true,
             (error: NodeJS.ErrnoException) => {
-              if (error.code === 'ENOENT') return false;
+              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
               throw error;
             }
           );

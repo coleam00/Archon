@@ -38,7 +38,9 @@ const checkRealRegistration = realIsWorktreeRegistered;
 const removeRealDirectory = realRm;
 const fsPromises = await import('fs/promises');
 const mockRm = mock<typeof realRm>(removeRealDirectory);
-mock.module('fs/promises', () => ({ ...fsPromises, rm: mockRm }));
+const realStat = stat;
+const mockStat = mock<typeof stat>(realStat);
+mock.module('fs/promises', () => ({ ...fsPromises, rm: mockRm, stat: mockStat }));
 
 const mockGetCodebase = mock(
   async (_id: string) =>
@@ -852,6 +854,8 @@ describe('DELETE /api/codebases/:id', () => {
     mockMarkWorktreeDestroyed.mockResolvedValue(undefined);
     mockIsWorktreeRegistered.mockReset();
     mockIsWorktreeRegistered.mockResolvedValue(false);
+    mockStat.mockReset();
+    mockStat.mockImplementation(realStat);
     mockRm.mockReset();
     mockRm.mockImplementation(removeRealDirectory);
   });
@@ -1013,6 +1017,52 @@ describe('DELETE /api/codebases/:id', () => {
     } finally {
       await removeTempTree(root);
     }
+  });
+
+  for (const registered of [false, true]) {
+    test(`an ENOTDIR worktree path still respects Git registration: ${registered}`, async () => {
+      const env = { ...MOCK_ENV, working_path: '/replaced-parent/checkout' };
+      mockStat.mockRejectedValueOnce(
+        Object.assign(new Error('not a directory'), { code: 'ENOTDIR' })
+      );
+      mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+      mockListByCodebase.mockResolvedValueOnce([env]);
+      mockIsWorktreeRegistered.mockResolvedValueOnce(registered);
+      const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(registered ? 500 : 200);
+      expect(mockRemoveWorktree).not.toHaveBeenCalled();
+      expect(mockIsWorktreeRegistered).toHaveBeenCalledWith(
+        MOCK_CODEBASE.default_cwd,
+        env.working_path
+      );
+      if (registered) {
+        expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+        expect(mockDeleteCodebase).not.toHaveBeenCalled();
+      } else {
+        expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(env);
+        expect(mockDeleteCodebase).toHaveBeenCalledWith(MOCK_CODEBASE.id, {
+          requireWorktreeCleanup: true,
+        });
+      }
+    });
+  }
+
+  test('a worktree stat permission error keeps its cleanup record and project', async () => {
+    mockStat.mockRejectedValueOnce(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    );
+    mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+    mockListByCodebase.mockResolvedValueOnce([MOCK_ENV]);
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(500);
+    expect(mockIsWorktreeRegistered).not.toHaveBeenCalled();
+    expect(mockRemoveWorktree).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    expect(mockDeleteCodebase).not.toHaveBeenCalled();
   });
 
   test('reports the retained workspace and manual cleanup when directory removal fails', async () => {
