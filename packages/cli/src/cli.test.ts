@@ -262,6 +262,8 @@ if (process.argv[3] === 'metadata') {
             ARCHON_HOME: trustedHome,
             ARCHON_TELEMETRY_DISABLED: '1',
             FORGE_SECRET: '',
+            // Inside an Archon run this would make the forge audit a run id the scratch DB lacks.
+            WORKFLOW_ID: '',
           },
         }
       );
