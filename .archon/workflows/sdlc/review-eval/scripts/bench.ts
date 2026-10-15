@@ -182,6 +182,9 @@ export function loadSet(path: string): BenchSet {
       ids.add(itemId);
       return true;
     };
+    for (const field of ['known_defects', 'variants']) {
+      if (entry[field] !== undefined && !Array.isArray(entry[field])) problems.push(`${name}: ${field} must be an array when present`);
+    }
     const known: { id: string; claim: string }[] = [];
     for (const record of Array.isArray(entry.known_defects) ? entry.known_defects : []) {
       if (!isObject(record) || !claim(record.id, 'known defect')) continue;
@@ -1065,7 +1068,7 @@ export function markEntries(samples: readonly BatchSample[], judgedBy: Judge): (
 }
 
 const MARKS_HEADER = `# One entry per judged defect and, on clean samples, per finding no defect accounts for.
-# judged_by identifies the model and rubric being marked; older identities are retained separately.
+# judged_by identifies the model and rubric being marked; older identities and verdicts are retained separately.
 # A defect's mark is ${MARKS.defect.join(', ')} (the judge's verdict); add caught_by with
 # the lenses that did catch it when the judge was wrong. A finding's mark is
 # ${MARKS.finding.join(' or ')}. The bench rewrites this file but keeps every entry with a mark or note.
@@ -1074,7 +1077,7 @@ const MARKS_HEADER = `# One entry per judged defect and, on clean samples, per f
 const entryKey = (entry: Record<string, unknown>): string => JSON.stringify([
   isObject(entry.judged_by) ? [entry.judged_by.spec, entry.judged_by.prompt_sha] : null,
   entry.run_id,
-  entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect],
+  entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect, isObject(entry.judge) ? [entry.judge.caught_by, entry.judge.finding] : null],
 ]);
 
 /**
@@ -1151,11 +1154,10 @@ async function main(argv: readonly string[]): Promise<void> {
   if (command === 'judge' || command === 'render') {
     if (values.judge === undefined) throw new Error(`${command} needs --judge <spec>`);
     const judge = resolveJudge(values.judge);
-    const samples = readSamples(outDir, values.batch).filter(line => command === 'render' || line.passed);
+    const samples = readSamples(outDir, values.batch);
     if (samples.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)}${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
     if (command === 'judge') {
-      const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
-      if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
+      const judged = samples.flatMap(line => (!line.passed || line.item === null ? [] : [{ ...line, item: line.item }]));
       await Promise.all(judged.map(line => judgeSample(line, { outDir, repoRoot, judge })));
     }
     for (const caseId of new Set(samples.map(line => line.case))) {

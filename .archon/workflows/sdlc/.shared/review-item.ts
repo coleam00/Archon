@@ -92,5 +92,10 @@ export function readFindings(dir: string): Finding[] {
     Array.isArray(record.sources) &&
     record.sources.every(source => typeof source === 'string');
   if (!Array.isArray(raw) || !raw.every(isFinding)) throw new Error(`${file} is not a list of findings`);
+  const ids = new Set<string>();
+  for (const finding of raw) {
+    if (ids.has(finding.id)) throw new Error(`${file}: duplicate finding id ${finding.id}`);
+    ids.add(finding.id);
+  }
   return raw;
 }
