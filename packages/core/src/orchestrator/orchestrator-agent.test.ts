@@ -5789,19 +5789,26 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(titleOptions?.protectedEnvKeys).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
   });
 
-  test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
+  test('a ChatGPT subscription reaches chat as the in-memory Codex login env, with no CODEX_HOME', async () => {
     mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
       {
-        provider: 'codex',
-        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok' } },
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok', accountId: 'acct' } },
       },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as
-      | { env?: Record<string, string> }
+      | { env?: Record<string, string>; protectedEnvKeys?: string[] }
       | undefined;
-    // Codex OAuth would write auth.json + set CODEX_HOME — both must be absent in chat.
+    expect(requestOptions?.env).toMatchObject({
+      ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'tok',
+      ARCHON_CODEX_CHATGPT_ACCOUNT_ID: 'acct',
+    });
+    expect(requestOptions?.protectedEnvKeys).toEqual([
+      'ARCHON_CODEX_CHATGPT_ACCESS_TOKEN',
+      'ARCHON_CODEX_CHATGPT_ACCOUNT_ID',
+    ]);
     expect(requestOptions?.env?.CODEX_HOME).toBeUndefined();
   });
 

@@ -458,11 +458,9 @@ function isCommandFullyParsed(accumulated: string): boolean {
 }
 
 /**
- * Resolve the env-only per-user AI-provider credential bag for a direct-chat
- * turn (Phase 2). Drops deliveries that require file writes (Codex
- * `CODEX_HOME/auth.json` for the ChatGPT subscription path) because chat has
- * no per-call scratch directory — those rely on the workflow inject path that
- * provides an `artifactsDir`.
+ * Resolve the per-user AI-provider credential env for a direct-chat turn
+ * (Phase 2). Every connected credential is delivered as env, the ChatGPT
+ * subscription included, so chat and workflows authenticate the same way.
  *
  * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
  * whatever process-global env was already in place.
@@ -473,9 +471,7 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
     const env: Record<string, string> = {};
     for (const { provider, cred } of creds) {
       try {
-        // artifactsDir intentionally empty: chat doesn't host file deliveries.
-        const result = deliverCredential(provider, cred, { artifactsDir: '' });
-        if (!result.files?.length) Object.assign(env, result.env);
+        Object.assign(env, deliverCredential(provider, cred).env);
       } catch (err) {
         getLog().error(
           { err: err as Error, userId, provider },
@@ -2585,11 +2581,8 @@ export async function handleMessage(
         );
       }
     }
-    // Per-user AI-provider credentials (Phase 2): env-only delivery in direct
-    // chat — there's no per-call artifacts directory, so deliveries that need
-    // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
-    // path) are dropped here and only apply to workflow runs. Merged LAST so
-    // a connected user's keys win over file/db env. No-op when the feature is
+    // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
+    // so a connected user's keys win over file/db env. No-op when the feature is
     // disabled or no execution identity resolved (sender, else creator).
     const userProviderEnv =
       isPerUserProviderKeysEnabled() && executionUserId
