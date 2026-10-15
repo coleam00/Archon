@@ -257,8 +257,8 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
  * A paused run that still holds its slot keeps it. A paused run that gave its slot back
  * never lost its admission, so it waits only for holders and for waiters refused before
  * it, never for queued new starts. A failed run's claim ended, so its resume is a new
- * decision and must not pass any promised work: a waiter or a queued request that could
- * run.
+ * decision and must not pass any promised work: a waiter the slot cannot also fit, or a
+ * queued request that could run.
  */
 export function resourceResumeBlocker(
   slot: ResourceSlotOccupancy,
@@ -278,7 +278,9 @@ export function resourceResumeBlocker(
       ? { kind: 'run', id: ahead[0].id }
       : null;
   }
-  if (slot.waiters[0]) return { kind: 'run', id: slot.waiters[0].id };
+  const waiter = slot.waiters[0];
+  if (waiter && others.length + slot.waiters.length >= slot.capacity)
+    return { kind: 'run', id: waiter.id };
   const queued = runnableQueue(slot)[0];
   return queued ? { kind: 'request', id: queued.id } : null;
 }
