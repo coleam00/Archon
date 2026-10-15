@@ -1,7 +1,7 @@
 /**
  * What every bench in this pack shares: the version record and its resolution, the
  * pack source snapshot, launching and waiting on ordinary runs through the `archon`
- * CLI, and JSONL lines.
+ * CLI, JSONL lines, and the operator's marks.
  *
  * A bench is a script that launches ordinary top-level runs; the engine knows nothing
  * about it. It uses the `archon` on `PATH`, so pointing `PATH` at a development build
@@ -206,7 +206,8 @@ export interface Launch {
   readonly workflow: string;
   readonly cwd: string;
   readonly source: string;
-  readonly config: string;
+  /** A run config layer (`--config`); without one the run reads the checkout's own config. */
+  readonly config?: string;
   readonly inputs: Readonly<Record<string, string>>;
   readonly message: string;
   /** `--model` rebindings, such as a judge's `large=<spec>`. */
@@ -224,8 +225,7 @@ export async function launch(run: Launch): Promise<string> {
     '--no-worktree',
     '--workflow-source',
     run.source,
-    '--config',
-    run.config,
+    ...(run.config === undefined ? [] : ['--config', run.config]),
     ...Object.entries(run.inputs).flatMap(([name, value]) => ['--input', `${name}=${value}`]),
     ...Object.entries(run.model ?? {}).flatMap(([name, spec]) => ['--model', `${name}=${spec}`]),
     '--detach',
@@ -253,6 +253,22 @@ export async function waitRun(runId: string): Promise<TerminalStatus> {
     if (status === 'completed' || status === 'failed' || status === 'cancelled') return status;
   }
   throw new Error(`run ${runId} stopped without finishing: ${JSON.stringify(result)}`);
+}
+
+/** A finished run's returned value, or why its terminal record holds none. */
+export type Returned = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string };
+
+/** What a finished run's `returns:` node produced, from its terminal record. */
+export async function getReturns(runId: string): Promise<Returned> {
+  const run = await archonJson(['workflow', 'get', runId, '--json']);
+  const record = run.terminal_record;
+  if (!isObject(record) || !isObject(record.returns)) {
+    throw new Error(`archon workflow get ${runId}: the field \`terminal_record.returns\` is missing`);
+  }
+  const { returns } = record;
+  if (returns.availability === 'available') return { ok: true, value: returns.value };
+  const reason = returns.availability === 'unavailable' ? `unavailable (${String(returns.reason)})` : String(returns.availability);
+  return { ok: false, reason: `its returned value is ${reason}` };
 }
 
 /** A provider's usage fact: a reported value, or the reason it is not one. */
@@ -459,6 +475,31 @@ export function readLines(file: string): Record<string, unknown>[] {
       return value;
     });
 }
+
+/** The newest line for each key, in the order each key first appeared; a line with no key is skipped. */
+export function latestLines(
+  file: string,
+  key: (line: Record<string, unknown>) => string | undefined
+): Map<string, Record<string, unknown>> {
+  const latest = new Map<string, Record<string, unknown>>();
+  for (const line of readLines(file)) {
+    const name = key(line);
+    if (name !== undefined) latest.set(name, line);
+  }
+  return latest;
+}
+
+/**
+ * The operator's marks. On a judged defect a mark says whether the judge was right; on
+ * a finding no planted or known defect accounts for, whether it is a real problem. An
+ * unmarked entry is null.
+ */
+export const MARKS = {
+  defect: ['right', 'wrong', 'partly'],
+  finding: ['false_positive', 'real'],
+} as const;
+export type DefectMark = (typeof MARKS.defect)[number];
+export type FindingMark = (typeof MARKS.finding)[number];
 
 /** JSON with object keys sorted, so two records compare by content. */
 export function canonical(value: unknown): string {
