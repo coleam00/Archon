@@ -1746,8 +1746,11 @@ fenced occurrence is still a live parameter.
 Executable source never receives the value. In an inline `bash:` body and in `loop.until_bash`
 or `loop_group.until_bash`, the macro becomes a double-quoted reference to the input's
 environment variable: `$INPUTS.base_branch` expands to `"${INPUTS_BASE_BRANCH}"`, so a value
-containing `$(...)` or quotes stays data. Inside single quotes the reference stays literal, and
-inside a heredoc its quotes become part of the text; read `$INPUTS_<UPPER_SNAKE>` directly there. An inline `script:`
+containing `$(...)` or quotes stays data. Write the macro bare: the expansion brings its own
+quotes, so `"$INPUTS.base_branch"` becomes `""${INPUTS_BASE_BRANCH}""`, which leaves the
+reference unquoted and splits a value containing spaces. Inside single quotes the reference
+stays literal, and inside a heredoc its quotes become part of the text; read
+`$INPUTS_<UPPER_SNAKE>` directly there. An inline `script:`
 body (`bun` or `uv`) has no language-neutral quoting form, so `$INPUTS.<name>` there is a load
 error naming the variable to read instead (`process.env.INPUTS_BASE_BRANCH`,
 `os.environ["INPUTS_BASE_BRANCH"]`).

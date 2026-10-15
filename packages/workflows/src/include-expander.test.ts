@@ -882,6 +882,20 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     });
   });
 
+  test('a shell macro the author already quoted is not unquoted', () => {
+    // The expansion carries its own quotes and the expander does not parse shell, so
+    // `"$INPUTS.value"` leaves the reference unquoted between two empty strings. The
+    // guide tells authors to write the macro bare.
+    const block = wf('quoted', [{ id: 'shell', bash: 'echo "$INPUTS.value"' }]);
+    const parent = wf('parent', [{ id: 'inc', include: 'quoted', with: { value: 'a b' } }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    expect(nodeById(workflows.get('parent')!, 'inc__shell')).toMatchObject({
+      script: 'echo ""${INPUTS_VALUE}""',
+    });
+  });
+
   test('rejects the input macro in an inline script body and names the env var', () => {
     const block = wf('parameterized', [
       { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.base-branch")' },
