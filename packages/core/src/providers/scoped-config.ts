@@ -7,7 +7,10 @@ import { z } from 'zod';
 
 type JsonSchema = z.core.JSONSchema.BaseSchema | boolean;
 
-function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSchema): JsonSchema {
+function resolveConfigReference(
+  node: JsonSchema,
+  schema: z.core.JSONSchema.BaseSchema
+): JsonSchema {
   if (typeof node !== 'object' || !node.$ref) return node;
   const referenced = node.$ref
     .split('/')
@@ -17,10 +20,12 @@ function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSch
       return Reflect.get(value, key.replaceAll('~1', '/').replaceAll('~0', '~'));
     }, schema);
   if (referenced === undefined) throw new Error(`Unresolved config schema reference ${node.$ref}`);
-  return resolveConfigSchema(
-    z.union([z.boolean(), z.record(z.string(), z.json())]).parse(referenced),
-    schema
-  );
+  return z.union([z.boolean(), z.record(z.string(), z.json())]).parse(referenced);
+}
+
+function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSchema): JsonSchema {
+  const resolved = resolveConfigReference(node, schema);
+  return resolved === node ? node : resolveConfigSchema(resolved, schema);
 }
 
 // Credential selection has only a model; root constraints and unrelated run fields
@@ -28,30 +33,52 @@ function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSch
 export function modelConfigSchema(
   schema: z.core.JSONSchema.BaseSchema
 ): z.ZodType<{ model: string }> {
-  const modelRule = (unresolved: JsonSchema): z.core.JSONSchema.BaseSchema => {
-    const node = resolveConfigSchema(unresolved, schema);
+  const modelRule = (node: JsonSchema): z.core.JSONSchema.BaseSchema => {
     if (typeof node !== 'object') return node ? {} : { not: {} };
-    if (node.anyOf) return { anyOf: node.anyOf.map(modelRule) };
-    // Distinct run branches can share a model rule once unrelated fields are removed.
-    if (node.oneOf) return { anyOf: node.oneOf.map(modelRule) };
-    if (node.allOf) {
-      const rules = node.allOf.map(modelRule).filter(rule => Object.keys(rule).length > 0);
-      return rules.length === 0 ? {} : rules.length === 1 ? rules[0] : { allOf: rules };
-    }
     const field = node.properties?.model ?? true;
-    return typeof field === 'object' ? field : field ? {} : { not: {} };
+    const rules: z.core.JSONSchema.BaseSchema[] = [
+      typeof field === 'object' ? field : field ? {} : { not: {} },
+    ];
+    if (node.$ref) rules.push(modelRule(resolveConfigReference(node, schema)));
+    if (node.anyOf) rules.push({ anyOf: node.anyOf.map(modelRule) });
+    // Distinct run branches can share a model rule once unrelated fields are removed.
+    if (node.oneOf) rules.push({ anyOf: node.oneOf.map(modelRule) });
+    if (node.allOf) rules.push(...node.allOf.map(modelRule));
+    const constraints = rules.filter(rule => Object.keys(rule).length > 0);
+    return constraints.length === 0
+      ? {}
+      : constraints.length === 1
+        ? constraints[0]
+        : { allOf: constraints };
   };
-  return scopedConfigSchema(
-    {
-      type: 'object',
-      properties: { model: modelRule(schema) },
-      required: ['model'],
-      $defs: schema.$defs,
-      definitions: schema.definitions,
-    },
-    false,
-    false
-  ).pipe(z.object({ model: z.string() }));
+  const rule = modelRule(schema);
+  const validator = (node: JsonSchema) =>
+    z.fromJSONSchema(
+      typeof node === 'object'
+        ? { $defs: schema.$defs, definitions: schema.definitions, ...node }
+        : node
+    );
+  // Validate every conjunct against the raw model before applying normalization.
+  // Intersecting transformed outputs would conflict with identity-only rules.
+  const normalize = (raw: string, node: JsonSchema, value = raw): string => {
+    if (typeof node !== 'object') return value;
+    const mode = node[CONFIG_STRING_NORMALIZATION_KEY];
+    if (mode !== undefined)
+      value = normalizeConfigString(value, configStringNormalizationSchema.parse(mode));
+    if (node.$ref) value = normalize(raw, resolveConfigReference(node, schema), value);
+    const branches = node.anyOf ?? node.oneOf;
+    if (branches) {
+      const branch = branches.find(candidate => validator(candidate).safeParse(raw).success);
+      if (branch !== undefined) value = normalize(raw, branch, value);
+    }
+    for (const branch of node.allOf ?? []) value = normalize(raw, branch, value);
+    return value;
+  };
+  return z.object({
+    model: validator(rule)
+      .pipe(z.string())
+      .transform(value => normalize(value, rule)),
+  });
 }
 
 export function scopedConfigSchema(

@@ -198,6 +198,99 @@ test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
   }
 );
 
+test.each(
+  (['$ref', 'allOf', 'anyOf', 'oneOf'] as const).flatMap(composition =>
+    [false, true].map(constrainBranchModel => ({ composition, constrainBranchModel }))
+  )
+)(
+  '$composition siblings preserve root model rules (branch model constraint: $constrainBranchModel)',
+  ({ composition, constrainBranchModel }) => {
+    const root = z.toJSONSchema(
+      z.object({
+        model: normalizedConfigString(z.string().regex(/^\s*openai\s*\//), 'slash-separated'),
+      }),
+      { io: 'input' }
+    );
+    const region: z.core.JSONSchema.BaseSchema = {
+      type: 'object',
+      properties: {
+        region: { const: 'eu' },
+        ...(constrainBranchModel
+          ? { model: { type: 'string', pattern: '^\\s*[a-z]+\\s*/\\s*gpt\\s*$' } }
+          : {}),
+      },
+      required: ['region'],
+    };
+    const run = {
+      ...root,
+      ...(composition === '$ref'
+        ? { $defs: { region }, $ref: '#/$defs/region' }
+        : { [composition]: [region] }),
+    };
+    const registration = processProviderRegistration(
+      providerPluginDescriptorSchema.parse({
+        ...descriptor,
+        config: { install: run, run, snapshot: run },
+        credentials: {
+          kind: 'static',
+          specs: [
+            { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+            { vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'] },
+          ],
+        },
+      }),
+      argv
+    );
+    expect(z.fromJSONSchema(run).safeParse({ model: ' openai / gpt ', region: 'eu' }).success).toBe(
+      true
+    );
+    expect(registration.credentials.vendorFor(' openai / gpt ')).toBe('openai');
+    expect(registration.credentials.vendorFor('anthropic/gpt')).toBeUndefined();
+    expect(registration.credentials.vendorFor('openai/other')).toBe(
+      constrainBranchModel ? undefined : 'openai'
+    );
+  }
+);
+
+test('oneOf credential lookup accepts a distinct second model branch', () => {
+  const branch = (vendor: string, region: string) =>
+    z.toJSONSchema(
+      z.strictObject({
+        model: normalizedConfigString(
+          z.string().regex(new RegExp(`^\\s*${vendor}\\s*\\/`)),
+          'slash-separated'
+        ),
+        region: z.literal(region),
+      }),
+      { io: 'input' }
+    );
+  const run = { oneOf: [branch('openai', 'eu'), branch('anthropic', 'us')] };
+  const registration = processProviderRegistration(
+    providerPluginDescriptorSchema.parse({
+      ...descriptor,
+      config: { install: run, run, snapshot: run },
+      credentials: {
+        kind: 'static',
+        specs: [
+          { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+          { vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'] },
+        ],
+      },
+    }),
+    argv
+  );
+  for (const [vendor, model, region] of [
+    ['openai', ' openai / gpt ', 'eu'],
+    ['anthropic', ' anthropic / sonnet ', 'us'],
+  ]) {
+    expect(registration.parseConfig({ model, region }, 'run')).toEqual({
+      model: `${vendor}/${vendor === 'openai' ? 'gpt' : 'sonnet'}`,
+      region,
+    });
+    expect(registration.credentials.vendorFor(model)).toBe(vendor);
+  }
+});
+
 test('a declared skillDiscovery survives process registration', () => {
   const skillDiscovery = { project: ['.stub/skills'], user: ['skills'] };
   expect(
