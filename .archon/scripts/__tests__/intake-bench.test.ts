@@ -923,6 +923,16 @@ describe('lookups', () => {
     }
   });
 
+  it('forwards a PR-only query unchanged without treating its number as a batch issue read', async () => {
+    const body = JSON.stringify({ query: 'query($number: Int!) { repository(owner: "o", name: "r") { pullRequest(number: $number) { state } } }', variables: { number: 4 } }, null, 2);
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', { method: 'POST', body }), REPO, views, async (_url, init) => {
+      expect(init.body).toBe(body);
+      return Response.json({ data: { repository: { pullRequest: { state: 'MERGED' } } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { repository: { pullRequest: { state: 'MERGED' } } } });
+    expect([answer.answered, answer.live]).toEqual([[], []]);
+  });
+
   it('answer a batch issue history locally and forward anything else unchanged', async () => {
     const calls: string[] = [];
     const upstream = async (url: string): Promise<Response> => {

@@ -7,7 +7,7 @@
  * the operator's own with `http_unix_socket` set to it, so every `gh` call of the run
  * reaches the server. A `gh` on `PATH` would not do: Codex runs each command in a
  * login shell that rebuilds `PATH` from the user's profile, while `GH_CONFIG_DIR`
- * survives it. The server forwards every request to the real host unchanged, then
+ * survives it. The server forwards requests to the real host, then
  * rewrites each batch issue in the answer to its creation view, and answers a batch
  * issue's comments, events and timeline as empty without forwarding. Anything else
  * answers as live.
@@ -158,6 +158,7 @@ function identifyIssues(body: string | undefined): string | undefined {
     }
     if (tokens[j]?.[0] === '{') insertions.push(tokens[j].index + 1);
   }
+  if (insertions.length === 0) return body;
   let identified = query;
   for (const at of insertions.reverse()) identified = `${identified.slice(0, at)} ... on Issue { ${ISSUE_ID}: id } ${identified.slice(at)}`;
   return JSON.stringify({ ...request, query: identified });
@@ -202,9 +203,12 @@ function namedIssues(path: string, body: string | undefined, repo: Repo, views: 
     } catch {
       request = undefined;
     }
-    if (isObject(request) && isObject(request.variables) && typeof request.variables.number === 'number') named.add(request.variables.number);
+    const variables = isObject(request) && isObject(request.variables) ? request.variables : {};
     const query = isObject(request) && typeof request.query === 'string' ? request.query : body;
-    for (const literal of query.matchAll(/\bnumber\s*:\s*(\d+)/g)) named.add(Number(literal[1]));
+    for (const selection of query.matchAll(/\bissue(?:OrPullRequest)?\s*\(\s*number\s*:\s*(?:\$(\w+)|(\d+))/g)) {
+      const number = selection[1] === undefined ? Number(selection[2]) : variables[selection[1]];
+      if (typeof number === 'number') named.add(number);
+    }
   }
   return [...named].filter(number => views.has(number));
 }
