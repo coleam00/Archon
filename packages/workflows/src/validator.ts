@@ -779,7 +779,7 @@ export async function validateWorkflowResources(
                 nodeId: node.id,
                 field: 'skills',
                 message: `Skill '${skillName}' not found in ${searchRoots.join(', ') || 'any enabled skill directory'}`,
-                hint: `Create ${searchRoots[0] ?? '<skill directory>'}/${skillName}/SKILL.md or check the spelling. Names the provider resolves itself, such as built-in or plugin skills, have no directory; a plugin:skill name also needs its plugin under plugins:`,
+                hint: `Create ${join(searchRoots[0] ?? '<skill directory>', skillName, 'SKILL.md')} or check the spelling. Names the provider resolves itself, such as built-in or plugin skills, have no directory; a plugin:skill name also needs its plugin under plugins:`,
               });
             }
           }
