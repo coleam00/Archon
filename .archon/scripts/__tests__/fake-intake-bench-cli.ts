@@ -18,6 +18,8 @@
  * `gh api graphql` would, and keeps that answer in `lookup-literal-run-<n>.json`.
  * Upstream of that socket, `fetch` to the tracker answers each issue as it is now.
  */
+import { mock } from 'bun:test';
+import * as fs from 'node:fs';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -70,6 +72,10 @@ export interface FakeConfig {
   readonly lookupIssue?: number;
   /** After that lookup, the agent asks for the issue's state with literals only. */
   readonly lookupLiteral?: true;
+  readonly lookupFailFirst?: true;
+  readonly cleanupFails?: true;
+  readonly batchIssueOverrides?: Record<string, unknown>;
+  readonly batchErrors?: readonly { message: string }[];
 }
 
 const verdict = {
@@ -146,7 +152,7 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
   if (config.lookupIssue === undefined || !existsSync(ghConfig)) return;
   const settings = Bun.YAML.parse(readFileSync(join(readFileSync(ghConfig, 'utf8'), 'config.yml'), 'utf8')) as { http_unix_socket: string };
   const [owner, repo] = config.repo.path.split('/');
-  const response = await fetch('http://api.github.com/graphql', {
+  const request = () => fetch('http://api.github.com/graphql', {
     unix: settings.http_unix_socket,
     method: 'POST',
     headers: { host: 'api.github.com', 'content-type': 'application/json' },
@@ -155,6 +161,8 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
       variables: { owner, repo, number: config.lookupIssue },
     }),
   });
+  if (config.lookupFailFirst) await (await request()).text();
+  const response = await request();
   writeFileSync(join(dir, `lookup-${runId}.json`), await response.text());
   if (config.lookupLiteral !== true) return;
   const literal = await fetch('http://api.github.com/graphql', {
@@ -169,6 +177,10 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
 /** The tracker as it is now, as the lookup server forwards to it. */
 function upstream(dir: string, url: string, body: string | undefined): Response | undefined {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
+  if (config.lookupFailFirst && !existsSync(join(dir, 'lookup-failed'))) {
+    writeFileSync(join(dir, 'lookup-failed'), 'yes');
+    throw new Error('forced lookup failure');
+  }
   const now = (number: number) => {
     const issue = config.issues.find(entry => entry.number === number);
     if (issue === undefined) return undefined;
@@ -306,6 +318,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
       label: { name: entry.label },
     });
     return JSON.stringify({
+      ...(config.batchErrors ? { errors: config.batchErrors } : {}),
       data: {
         repository: {
           issue: {
@@ -318,6 +331,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
               nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
             },
+            ...config.batchIssueOverrides,
           },
         },
       },
@@ -353,6 +367,14 @@ function ghAnswer(dir: string, args: readonly string[]): string {
 }
 
 export function install(dir: string): void {
+  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
+  if (config.cleanupFails) {
+    const remove = fs.rmSync;
+    mock.module('node:fs', () => ({ ...fs, rmSync: (path: Parameters<typeof remove>[0], options: Parameters<typeof remove>[1]) => {
+      remove(path, options);
+      if (String(path).includes('archon-bench-')) throw new Error('forced cleanup failure');
+    } }));
+  }
   const spawn = Bun.spawn;
   const spawnSync = Bun.spawnSync;
   const realFetch = globalThis.fetch;

@@ -138,6 +138,7 @@ interface Selection {
   readonly wireKey: string;
   readonly children: Selections;
   readonly number?: number;
+  readonly ids?: readonly string[];
   readonly labelArguments?: Readonly<Record<string, unknown>>;
 }
 type Selections = readonly (Selection | string)[];
@@ -147,6 +148,7 @@ interface Graphql {
   readonly fields: Selections;
   readonly fragments: ReadonlyMap<string, Selections>;
   readonly numbers: readonly number[];
+  readonly ids: readonly string[];
 }
 
 /** Preserve schema-field identity separately from response aliases, including fragments. */
@@ -164,7 +166,28 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
     .filter(token => !token[0].startsWith('#'));
   let identity = ISSUE_ID;
   while (tokens.some(token => token[0] === identity)) identity += '_';
-  const variables = isObject(request.variables) ? request.variables : {};
+  const variables: Record<string, unknown> = isObject(request.variables) ? { ...request.variables } : {};
+  let depth = 0;
+  for (let j = 0; j < tokens.length; j++) {
+    const current = tokens[j][0];
+    if (current === '{') depth++;
+    if (current === '}') depth--;
+    if (depth !== 0 || !['query', 'mutation', 'subscription'].includes(current)) continue;
+    const name = tokens[j + 1]?.[0];
+    if (typeof request.operationName === 'string' && name !== request.operationName) continue;
+    while (j < tokens.length && tokens[j][0] !== '{') {
+      if (tokens[j][0] === '$') {
+        const variable = tokens[j + 1]?.[0] ?? '';
+        j += 2;
+        while (j < tokens.length && !['$', '=', ')'].includes(tokens[j][0])) j++;
+        if (tokens[j]?.[0] === '=' && !(variable in variables)) {
+          const value = tokens[j + 1]?.[0];
+          if (value === 'true' || value === 'false') variables[variable] = value === 'true';
+        }
+      } else j++;
+    }
+    j--;
+  }
   const insertions: number[] = [];
   const aliases: { at: number; end: number; text: string }[] = [];
   const aliasNames = new Map<string, string>();
@@ -180,13 +203,21 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       i++;
     } while (i < tokens.length && depth > 0);
   };
-  const directives = (): void => {
+  const directives = (): boolean => {
+    let enabled = true;
     while (token() === '@') {
+      const name = tokens[i + 1]?.[0];
       i += 2;
+      if (token() === '(' && tokens[i + 1]?.[0] === 'if' && tokens[i + 2]?.[0] === ':') {
+        const value = tokens[i + 3]?.[0];
+        const condition = value === '$' ? variables[tokens[i + 4]?.[0] ?? ''] : value === 'true';
+        if ((name === 'skip' && condition === true) || (name === 'include' && condition === false)) enabled = false;
+      }
       skipGroup('(', ')');
     }
+    return enabled;
   };
-  const selectionSet = (issue = false, inFragment = false): Selections => {
+  const selectionSet = (issue = false, inFragment = false, root = false): Selections => {
     if (token() !== '{') return [];
     if (issue) insertions.push(tokens[i].index + 1);
     i++;
@@ -198,15 +229,17 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
           i++;
           const type = token();
           i++;
-          directives();
-          fields.push(...selectionSet(type === 'Issue', true));
+          const enabled = directives();
+          const children = selectionSet(type === 'Issue', true, type === 'Query');
+          if (enabled) fields.push(...children);
         } else if (token() === '@' || token() === '{') {
-          directives();
-          fields.push(...selectionSet(false, inFragment));
+          const enabled = directives();
+          const children = selectionSet(false, inFragment, root);
+          if (enabled) fields.push(...children);
         } else {
-          fields.push(token() ?? '');
+          const fragment = token() ?? '';
           i++;
-          directives();
+          if (directives()) fields.push(fragment);
         }
         continue;
       }
@@ -229,6 +262,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         }
       }
       const issueField = name === 'issue' || name === 'issueOrPullRequest';
+      const nodeField = root && (name === 'node' || name === 'nodes');
       let issueNumber: number | undefined;
       if (issueField && token() === '(') {
         for (let j = i + 1; j < tokens.length && tokens[j][0] !== ')'; j++) {
@@ -236,6 +270,17 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
           const value = tokens[j + 2]?.[0];
           const number = value === '$' ? variables[tokens[j + 3]?.[0] ?? ''] : Number(value);
           if (typeof number === 'number') issueNumber = number;
+        }
+      }
+      const ids: string[] = [];
+      if (nodeField && token() === '(') {
+        for (let j = i + 1; j < tokens.length && tokens[j][0] !== ')'; j++) {
+          const value = tokens[j][0];
+          if (value === '$') {
+            const resolved = variables[tokens[++j]?.[0] ?? ''];
+            if (typeof resolved === 'string') ids.push(resolved);
+            else if (Array.isArray(resolved)) ids.push(...resolved.filter((id): id is string => typeof id === 'string'));
+          } else if (value.startsWith('"')) ids.push(String(JSON.parse(value)));
         }
       }
       const labelArguments: Record<string, unknown> = {};
@@ -248,8 +293,9 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         }
       }
       skipGroup('(', ')');
-      directives();
-      fields.push({ key, wireKey, name, number: issueNumber, labelArguments, children: selectionSet(issueField, inFragment) });
+      const enabled = directives();
+      const children = selectionSet(issueField || nodeField, inFragment);
+      if (enabled) fields.push({ key, wireKey, name, number: issueNumber, ids, labelArguments, children });
     }
     i++;
     return fields;
@@ -261,7 +307,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       const type = tokens[i + 3]?.[0];
       i += 4;
       directives();
-      fragments.set(name, selectionSet(type === 'Issue', true));
+      fragments.set(name, selectionSet(type === 'Issue', true, type === 'Query'));
     } else {
       let name = '';
       if (token() !== '{') {
@@ -273,7 +319,7 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         skipGroup('(', ')');
         directives();
       }
-      operations.set(name, selectionSet());
+      operations.set(name, selectionSet(false, false, true));
     }
   }
   let identified = query;
@@ -282,10 +328,13 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
   const fields = typeof request.operationName === 'string'
     ? operations.get(request.operationName) ?? []
     : operations.size === 1 ? [...operations.values()][0] : [];
-  const numbers = (selections: Selections): number[] => selectedFields(selections, { fragments }).flatMap(field => [
-    ...(field.number === undefined ? [] : [field.number]), ...numbers(field.children),
-  ]);
-  return { body: edits.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers: numbers(fields) };
+  const flatten = (selections: Selections): Selection[] => selectedFields(selections, { fragments }).flatMap(field => [field, ...flatten(field.children)]);
+  const selected = flatten(fields);
+  return {
+    body: edits.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments,
+    numbers: selected.flatMap(field => field.number === undefined ? [] : [field.number]),
+    ids: selected.flatMap(field => field.ids ?? []),
+  };
 }
 
 function selectedFields(fields: Selections, graphql: Pick<Graphql, 'fragments'>): Selection[] {
@@ -372,6 +421,7 @@ function namedIssues(path: string, graphql: Graphql | undefined, repo: Repo, vie
   if (rest !== null && sameText(rest[1], repo.path)) named.add(Number(rest[2]));
   if (path.endsWith('/graphql')) {
     for (const number of graphql?.numbers ?? []) named.add(number);
+    for (const view of views.values()) if (graphql?.ids.includes(view.id)) named.add(view.number);
   }
   return [...named].filter(number => views.has(number));
 }
@@ -432,7 +482,11 @@ export async function answerLookup(
   const answered = [...rewritten.answered];
   // Enriched selections carry their own identity. An unmatched number can name a
   // sibling PR or an issue in another repository, not a live read of this batch.
-  const live = body !== originalBody || refused ? [] : named.filter(number => !answered.includes(number));
+  const namedNodes = [...views.values()].filter(view => graphql?.ids.includes(view.id)).map(view => view.number);
+  const live = [...new Set([
+    ...(body !== originalBody || refused ? [] : named),
+    ...(refused ? [] : namedNodes),
+  ])].filter(number => !answered.includes(number));
   return { response: new Response(JSON.stringify(rewritten.value), init), answered, live };
 }
 
@@ -451,6 +505,7 @@ export interface LookupServer {
   answered(number: number): number;
   /** The requests that named this batch issue and were answered live, by method and path. */
   answeredLive(number: number): readonly string[];
+  readonly problems: readonly string[];
   stop(): void;
 }
 
@@ -472,20 +527,24 @@ export function serveLookups(repo: Repo, views: ReadonlyMap<number, CreationView
     if (existsSync(join(operator, 'hosts.yml'))) symlinkSync(join(operator, 'hosts.yml'), join(dir, 'hosts.yml'));
     const counts = new Map<number, number>();
     const live = new Map<number, string[]>();
+    const problems: string[] = [];
     const server = Bun.serve({
       unix: socket,
       async fetch(request) {
         const answer = await answerLookup(request, repo, views, (url, init) => fetch(url, init));
+        if (!answer.response.ok) problems.push(`lookup server: ${request.method} ${new URL(request.url).pathname} returned ${String(answer.response.status)}`);
         for (const number of answer.answered) counts.set(number, (counts.get(number) ?? 0) + 1);
         for (const number of answer.live) live.set(number, [...(live.get(number) ?? []), `${request.method} ${new URL(request.url).pathname}`]);
         return answer.response;
       },
       error(error) {
+        problems.push(`lookup server: ${error.message}`);
         return new Response(`the bench lookup server could not answer: ${error.message}`, { status: 502 });
       },
     });
     return {
       env: { GH_CONFIG_DIR: dir },
+      problems,
       answered: number => counts.get(number) ?? 0,
       answeredLive: number => live.get(number) ?? [],
       stop() {

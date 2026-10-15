@@ -396,12 +396,15 @@ are the operator's and stay outside the pack and the repository.
   answer as empty; anything else answers as live. GraphQL label selections must
   request the complete creation-label set: a smaller limit or a non-null pagination
   cursor fails the lookup with an explicit error instead of returning a false page.
-  A request that names a batch issue by its REST path or a GraphQL `number` but
-  that the server answered live is a leak. Each eval line also records the merged pull requests on the base that reference
-  the row's issue. An eval row whose creation metadata cannot be read completely
-  does not run, and its line says why. This includes label histories exceeding the
-  first 20 events or reference histories exceeding the first 100 events. Live
-  scratch runs do not read this eval metadata.
+  A request that names a batch issue by its REST path, GraphQL `number` or node id
+  but that the server answered live is a leak. Failed lookup requests and server
+  cleanup errors are recorded as row problems, so those rows cannot pass.
+  Every eval or live line records the merged pull requests on the base that
+  reference the original row's issue. A row whose original issue metadata cannot
+  be read completely does not run, and its line says why. This includes partial
+  GraphQL responses, label histories exceeding the first 20 events or reference
+  histories exceeding the first 100 events. Live scratch runs read that evidence
+  for scoring; their lookups stay live.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no

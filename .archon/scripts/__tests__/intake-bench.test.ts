@@ -338,8 +338,19 @@ describe('bench run', () => {
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
     config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
-    return { ...runWith(['--live', join(out, 'live.yaml')], 'base'), argv, scratch };
+    return { ...runWith(['--live', join(out, 'live.yaml')], 'base'), argv, scratch, cli };
   }
+
+  it('records original merged-base evidence in live scratch runs without a lookup server', () => {
+    const { status, lines, argv, cli } = benchLive({ issues: [
+      { number: 11, labels: [], comments: 0, refs: [{ url: 'https://github.com/o/r/pull/30', merged: true, oid: 'HEAD' }] },
+      { number: 12, labels: [], comments: 0 },
+    ] });
+    expect(status).toBe(0);
+    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30']);
+    expect(argv(1)).toContain('mode=live');
+    expect(existsSync(join(cli, 'ghconfig-run-1'))).toBe(false);
+  });
 
   it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
     const { status, stderr, lines, checks, argv, scratch } = benchLive();
@@ -356,11 +367,11 @@ describe('bench run', () => {
     expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
   });
 
-  it('does not read eval metadata for live scratch runs', () => {
+  it('fails live rows when original merged-base evidence is incomplete', () => {
     const refs = Array.from({ length: 101 }, (_, i) => ({ url: `https://github.com/o/r/pull/${String(i)}`, merged: false, oid: null }));
     const { status, lines } = benchLive({ issues: [{ number: 11, labels: [], comments: 0, refs }, { number: 12, labels: [], comments: 0 }] });
-    expect(status).toBe(0);
-    expect(lines.every(line => line.status === 'completed')).toBe(true);
+    expect(status).toBe(1);
+    expect(lines.find(line => line.row === '11')?.problems.join('; ')).toContain('more than 100 cross-references');
   });
 
   it('does not pass a trust: auto row on which intake took a path without triage', () => {
@@ -555,6 +566,38 @@ describe('bench run', () => {
     expect(JSON.parse(readFileSync(join(cli, `lookup-literal-run-${String(n)}.json`), 'utf8'))).toEqual({ data: { repository: { issue: { state: 'OPEN' } } } });
     expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
     expect(triaged?.leak).toEqual([]);
+  });
+
+  it('records a failed snapshot request even when another lookup succeeds', () => {
+    const { run } = bench({ lookupIssue: 11, lookupFailFirst: true });
+    const { lines, checks } = run('base');
+    const row = lines.find(line => line.row === '11');
+    expect(row?.problems.join('; ')).toContain('forced lookup failure');
+    expect(row?.passed).toBe(false);
+    expect(checks).toHaveLength(1);
+  });
+
+  it('records lookup cleanup failures and still writes every row and batch checks', () => {
+    const { run } = bench({ cleanupFails: true });
+    const { lines, checks } = run('base');
+    expect(lines).toHaveLength(2);
+    expect(lines.every(line => !line.passed && line.problems.includes('forced cleanup failure'))).toBe(true);
+    expect(checks).toHaveLength(1);
+  });
+
+  it('fails rows with missing or malformed creation history instead of fabricating empty history', () => {
+    const valid: boolean[] = [];
+    for (const connection of ['labelEvents', 'refs']) {
+      for (const value of [null, {}, { nodes: null, pageInfo: { hasNextPage: false } }, { nodes: [], pageInfo: {} }, { nodes: [], pageInfo: { hasNextPage: 'false' } }]) {
+        const { run } = bench({ batchIssueOverrides: { [connection]: value } });
+        const { lines } = run('base');
+        expect(lines).toHaveLength(2);
+        valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes(connection))));
+      }
+    }
+    const { run } = bench({ batchErrors: [{ message: 'partial GraphQL history' }] });
+    valid.push(run('base').lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('partial GraphQL history'))));
+    expect(valid).toEqual(Array(11).fill(true));
   });
 
   it('records the merged pull requests on the base that reference the row issue', () => {
@@ -771,6 +814,26 @@ describe('leaks', () => {
     ].join('\n');
     expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(["triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md <<'EOF'\ncat /runs/1/triage.md"]);
   });
+  it('flags substitutions expanded by an outer shell in quoted inner heredocs', () => {
+    const counts: number[] = [];
+    for (const writer of ['cat > report', 'tee report']) {
+      for (const delimiter of ["'EOF'", '\\EOF']) {
+        for (const substitution of ['$(curl https://github.com/o/r/issues/4)', '`curl https://github.com/o/r/issues/4`']) {
+          const command = `/bin/zsh -lc "mkdir -p /tmp && ${writer} <<${delimiter}\n${substitution}\nEOF"`;
+          for (const event of [
+            { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
+            { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
+          ]) {
+            const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
+            counts.push(found.length);
+            expect(splitLookups(found, true, []).leak).toEqual(found);
+          }
+        }
+      }
+    }
+    expect(counts).toEqual(Array(16).fill(1));
+  });
+
   it('flags expanding cat and tee heredocs through tool calls and command subtasks', () => {
     for (const writer of ['cat > report', 'tee report']) {
       for (const delimiter of ['EOF', "'EOF'", '"EOF"', '\\EOF']) {
@@ -935,6 +998,71 @@ describe('lookups', () => {
     }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_other', state: 'CLOSED' } } } }));
     expect(await other.response.json()).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
     expect([other.answered, other.live]).toEqual([[], []]);
+  });
+
+  it('identifies interface-only node lookups before returning a creation snapshot', async () => {
+    for (const query of ['{ node(id: "I_4") { ... on Closable { closed } } }', 'query($id: ID!) { node(id: $id) { ...ClosableFields } } fragment ClosableFields on Closable { closed }', '{ ... on Query { node(id: "I_4") { ... on Closable { closed } } } }', 'fragment RootFields on Query { node(id: "I_4") { ... on Closable { closed } } } query { ...RootFields }']) {
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query, variables: { id: 'I_4' } }),
+      }), REPO, views, async (_url, init) => {
+        const forwarded = JSON.parse(String(init.body)) as { query: string };
+        return Response.json({ data: { node: { closed: true, ...(forwarded.query.includes('_archonBenchIssueId: id') ? { _archonBenchIssueId: 'I_4' } : {}) } } });
+      });
+      expect([await answer.response.json(), answer.answered, answer.live]).toEqual([{ data: { node: { closed: false } } }, [4], []]);
+    }
+  });
+
+  it('reports an identified batch node answered without its requested identity as live', async () => {
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: 'query($ids: [ID!]!) { nodes(ids: $ids) { ... on Closable { closed } } }', variables: { ids: ['I_4'] } }),
+    }), REPO, views, async () => Response.json({ data: { nodes: [{ closed: true }] } }));
+    expect([answer.answered, answer.live]).toEqual([[], [4]]);
+  });
+
+  it('rewrites and counts both batch issues in one GraphQL response', async () => {
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: '{ nodes(ids: ["I_4", "I_5"]) { ... on Issue { title body state } } }' }),
+    }), REPO, new Map([[4, view(4)], [5, { ...view(5), body: 'Second creation body' }]]), async () => Response.json({ data: { nodes: [
+      { _archonBenchIssueId: 'I_4', title: 'Fixed first', body: 'Closed first', state: 'CLOSED' },
+      { _archonBenchIssueId: 'I_5', title: 'Fixed second', body: 'Closed second', state: 'CLOSED' },
+    ] } }));
+    expect(await answer.response.json()).toEqual({ data: { nodes: [
+      { title: 'Issue 4 as opened', body: 'As opened.', state: 'OPEN' },
+      { title: 'Issue 5 as opened', body: 'Second creation body', state: 'OPEN' },
+    ] } });
+    expect([answer.answered, answer.live]).toEqual([[4, 5], []]);
+  });
+
+  it('respects skip and include directives when projecting synthetic connections', async () => {
+    for (const directive of ['@skip(if: true)', '@include(if: false)', '@skip(if: $omit)', '@include(if: $keep)']) {
+      const query = `query($omit: Boolean!, $keep: Boolean!) { repository(owner: "o", name: "r") { issue(number: 4) {
+        labels(first: 10) { nodes { name ${directive} } edges { cursor ${directive} node { name ${directive} } } pageInfo { hasNextPage ${directive} endCursor } }
+        comments { nodes { body } totalCount ${directive} pageInfo { hasNextPage ${directive} endCursor } }
+      } } }`;
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query, variables: { omit: true, keep: false } }),
+      }), REPO, views, async () => Response.json({ data: { repository: { issue: {
+        _archonBenchIssueId: 'I_4', labels: { nodes: [{}], edges: [{ node: {} }], pageInfo: { endCursor: 'live' } },
+        comments: { nodes: [{ body: 'Fixed' }], pageInfo: { endCursor: 'live' } },
+      } } } }));
+      expect(await answer.response.json()).toEqual({ data: { repository: { issue: {
+        labels: { nodes: [{}], edges: [{ node: {} }], pageInfo: { endCursor: expect.any(String) } },
+        comments: { nodes: [], pageInfo: { endCursor: null } },
+      } } } });
+    }
+  });
+
+  it('uses directive variable defaults and conditional fragment selections for creation labels', async () => {
+    const query = `query($omit: Boolean = true, $keep: Boolean = false) {
+      repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { nodes {
+        ... on Label @skip(if: $omit) { name }
+        ...LabelName @include(if: $keep)
+      } } } }
+    } fragment LabelName on Label { name }`;
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [{}] } } } } }));
+    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{}] } } } } });
   });
 
   it('returns creation label edges and complete page metadata', async () => {

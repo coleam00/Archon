@@ -440,6 +440,9 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
   );
   if (result.exitCode !== 0) throw new Error(`reading ${where} at creation failed: ${result.stderr.toString().trim()}`);
   const answer: unknown = JSON.parse(result.stdout.toString());
+  if (isObject(answer) && 'errors' in answer && (!Array.isArray(answer.errors) || answer.errors.length > 0)) {
+    throw new Error(`${where} GraphQL read failed: ${JSON.stringify(answer.errors)}`);
+  }
   const data = isObject(answer) && isObject(answer.data) ? answer.data : {};
   const issue = isObject(data.repository) && isObject(data.repository.issue) ? data.repository.issue : {};
   const { id, url, createdAt, author, labelEvents, refs } = issue;
@@ -452,15 +455,20 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
   if (isObject(refs) && isObject(refs.pageInfo) && refs.pageInfo.hasNextPage === true) {
     throw new Error(`${where} has more than 100 cross-references; the bench reads only the first page`);
   }
-  const nodes = (connection: unknown): unknown[] => (isObject(connection) && Array.isArray(connection.nodes) ? connection.nodes : []);
-  const events = nodes(labelEvents).flatMap((event): LabelEvent[] => {
+  const nodes = (name: string, connection: unknown): unknown[] => {
+    if (!isObject(connection) || !Array.isArray(connection.nodes) || !isObject(connection.pageInfo) || typeof connection.pageInfo.hasNextPage !== 'boolean') {
+      throw new Error(`${where} answered with incomplete ${name} history`);
+    }
+    return connection.nodes;
+  };
+  const events = nodes('labelEvents', labelEvents).flatMap((event): LabelEvent[] => {
     if (!isObject(event) || typeof event.createdAt !== 'string' || !isObject(event.label) || typeof event.label.name !== 'string') return [];
     const actor = isObject(event.actor) && typeof event.actor.login === 'string' ? event.actor.login : null;
     return [{ createdAt: event.createdAt, actor, label: event.label.name, removed: event.__typename === 'UnlabeledEvent' }];
   });
   const login = isObject(author) && typeof author.login === 'string' ? author.login : null;
   const merged = new Set<string>();
-  for (const node of nodes(refs)) {
+  for (const node of nodes('refs', refs)) {
     const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;
     if (!isObject(pr) || pr.merged !== true || typeof pr.url !== 'string' || !isObject(pr.mergeCommit)) continue;
     const oid = pr.mergeCommit.oid;
@@ -593,13 +601,16 @@ const HEREDOC = /(?<!<)<<(?!<)-?[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A
 const WRITES_FILE = /^(?:cat\s*>>?\s*[^\s;&|<>]+|tee(?:\s+-a)?\s+[^\s;&|<>]+(?:\s*>\s*\/dev\/null)?)$/;
 
 /**
- * Only quoted heredocs written by cat/tee are inert. Unquoted heredocs expand
- * command substitutions even when their destination is a report file.
+ * Quoted cat/tee heredocs are inert unless an enclosing shell expands their
+ * substitutions first. Unquoted heredocs expand even when writing a report.
  */
 function withoutWrittenHeredocs(command: string): string {
   const kept: string[] = [];
   let terminator: string | undefined;
+  let offset = 0;
   for (const line of command.split('\n')) {
+    const start = offset;
+    offset += line.length + 1;
     if (terminator !== undefined) {
       if (line.trim() === terminator) terminator = undefined;
       continue;
@@ -608,7 +619,16 @@ function withoutWrittenHeredocs(command: string): string {
     if (opened !== null) {
       const segment = line.slice(0, opened.index).split(/&&|\|\||[;|(]/).pop() ?? '';
       const writer = `${segment} ${line.slice(opened.index + opened[0].length)}`.trim().replace(/\s+/g, ' ');
-      if (WRITES_FILE.test(writer)) terminator = opened[1] ?? opened[2] ?? opened[3];
+      let quote: string | undefined;
+      const prefix = command.slice(0, start + opened.index);
+      for (let i = 0; i < prefix.length; i++) {
+        const char = prefix[i];
+        if (char === '\\' && quote !== "'") i++;
+        else if (char === quote) quote = undefined;
+        else if (quote === undefined && (char === "'" || char === '"')) quote = char;
+      }
+      const outerExpansion = quote === '"' && /\$\(|`/.test(command.slice(prefix.length));
+      if (WRITES_FILE.test(writer) && !outerExpansion) terminator = opened[1] ?? opened[2] ?? opened[3];
     }
     kept.push(line);
   }
@@ -856,7 +876,12 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     fail(error);
     if (runId !== null && status === 'not_started') status = 'unknown';
   } finally {
-    lookups?.stop();
+    try {
+      lookups?.stop();
+    } catch (error) {
+      fail(error);
+    }
+    problems.push(...(lookups?.problems ?? []));
   }
 
   const nodes = detail?.nodes ?? [];
@@ -1027,7 +1052,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
   const issues = new Map<number, BatchIssue>();
   const unread = new Map<number, string>();
-  for (const row of live === undefined ? rows : []) {
+  for (const row of rows) {
     if (issues.has(row.number) || unread.has(row.number)) continue;
     try {
       issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));
