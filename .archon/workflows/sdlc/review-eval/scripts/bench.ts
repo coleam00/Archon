@@ -437,14 +437,24 @@ function versionTruth(run: RunDetail, resolved: ResolvedVersion, lenses: readonl
   return problems;
 }
 
+/**
+ * A completed run can still hold a failed node: `review-complete` joins the lenses
+ * with `all_done`, so a crashed lens leaves a hole the run's status does not show.
+ */
+function completedProblems(run: RunDetail): string[] {
+  const problems = run.status === 'completed' ? [] : [`the run is ${run.status}`];
+  for (const node of run.nodes) if (node.state === 'failed') problems.push(`node ${node.nodeId} failed`);
+  return problems;
+}
+
 export interface HardChecks {
   readonly checks: { readonly completed: Check; readonly output: Check; readonly sealed: Check; readonly version: Check };
   readonly passed: boolean;
 }
 
 /**
- * Whether a finished sample counts: the run completed, left lens files and the
- * review's `findings.json`, diffed against the case's base branch (the rest of the
+ * Whether a finished sample counts: the run completed with no failed node, left lens
+ * files and the review's `findings.json`, diffed against the case's base branch (the rest of the
  * seal is checked before launch), and every lens ran on the version's tiers.
  */
 export function hardChecks(
@@ -457,7 +467,7 @@ export function hardChecks(
   if (item.lenses.length === 0) output.push('the run left no lens file');
   if (!item.findings) output.push('the run left no review/findings.json');
   const checks = {
-    completed: check(run.status === 'completed' ? [] : [`the run is ${run.status}`]),
+    completed: check(completedProblems(run)),
     output: check(output),
     sealed: check(run.base_branch === bench.base_branch ? [] : [`the run's base branch is ${run.base_branch}, not ${bench.base_branch}`]),
     version: check(versionTruth(run, resolved, item.lenses)),

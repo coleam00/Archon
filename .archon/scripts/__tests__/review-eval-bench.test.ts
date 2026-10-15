@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { type ModelAliasPreset, TIER_NAMES, modelAliasPresetSchema } from '../../../packages/workflows/src/schemas/model-binding';
 import {
@@ -18,6 +19,7 @@ import {
   TIERS,
   type TierBinding,
   appendLine,
+  artifactsOf,
   latestLines,
   readLines,
   resolveVersion,
@@ -323,6 +325,19 @@ describe('hard checks decide whether a sample counts', () => {
     expect(verdict.checks.completed.problems).toEqual(['the run is failed']);
   });
 
+  it('fail a completed run in which a lens failed', () => {
+    const failed: RunNode = { nodeId: 'review__errors', state: 'failed', execution: { node: { kind: 'agent' }, binding: {} } };
+    const verdict = judge(run({ nodes: [...run().nodes, failed] }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.checks.completed.problems).toEqual(['node review__errors failed']);
+  });
+
+  it('fail a run that diffed against another base branch', () => {
+    const verdict = judge(run({ base_branch: 'main' }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.checks.sealed.problems).toEqual(["the run's base branch is main, not dev"]);
+  });
+
   it('fail a completed run that left no review output', () => {
     const verdict = judge(run(), { lenses: [], findings: false });
     expect(verdict.passed).toBe(false);
@@ -362,9 +377,16 @@ describe('hard checks decide whether a sample counts', () => {
 });
 
 describe('collectItem', () => {
+  it('reads the artifacts directory the engine writes', () => {
+    const detail = { id: 'r1', output_root: '/home/me/.archon/workspaces/o/r' } as const;
+    expect(artifactsOf({ ...detail, status: 'completed', started_at: '', completed_at: null, base_branch: 'dev', aliases: {}, nodes: [] })).toBe(
+      getRunArtifactsDirForRoot(detail.output_root, detail.id)
+    );
+  });
+
   it('names lens files, not the review\'s own files, and sees findings.json', () => {
     const root = track(mkdtempSync(join(tmpdir(), 'archon-bench-item-')));
-    const artifacts = join(root, 'artifacts', 'runs', 'r1');
+    const artifacts = getRunArtifactsDirForRoot(root, 'r1');
     for (const file of ['code.md', 'scope.md', 'report.md', 'code-round-1.md', 'findings.json']) write(artifacts, `review/${file}`, 'x');
     write(artifacts, 'shape.md', 'x');
     const detail: RunDetail = {
@@ -388,11 +410,11 @@ describe('bench run', () => {
   const script = join(import.meta.dir, '../../workflows/sdlc/review-eval/scripts/bench.ts');
 
   /**
-   * `bench.ts run` over a case with an `archon` stub first on PATH: `run` acknowledges
-   * numbered runs, `wait` answers with `wait`, and `get` returns a run detail missing
-   * every field but id and status.
+   * `bench.ts run` over a case with an `archon` stub first on PATH: `run` records its
+   * arguments and acknowledges numbered runs, `wait` answers with `wait`, and `get`
+   * returns `detail`, or a run detail missing every field but id and status.
    */
-  function benchCase(wait: unknown) {
+  function benchCase(wait: unknown, detail?: (out: string) => unknown) {
     const { repo, set } = caseRepository();
     write(repo, '.archon/workflows/sdlc/review-eval/archon-review-eval.yaml', 'name: archon-review-eval\n');
     const packSha = commitAll(repo, 'pack');
@@ -402,14 +424,15 @@ describe('bench run', () => {
 
     const bin = track(mkdtempSync(join(tmpdir(), 'archon-bench-bin-')));
     const count = join(bin, 'count');
+    if (detail !== undefined) writeFileSync(join(bin, 'detail.json'), JSON.stringify(detail(out)));
     writeFileSync(
       join(bin, 'archon'),
       [
         '#!/bin/sh',
         'case "$2" in',
-        `  run) n=$(($(cat '${count}' 2>/dev/null || echo 0) + 1)); echo "$n" > '${count}'; echo "{\\"runId\\":\\"run-$n\\"}" ;;`,
+        `  run) n=$(($(cat '${count}' 2>/dev/null || echo 0) + 1)); echo "$n" > '${count}'; printf '%s\\0' "$@" > '${bin}/argv-'$n; echo "{\\"runId\\":\\"run-$n\\"}" ;;`,
         `  wait) echo '${JSON.stringify(wait)}' ;;`,
-        `  get) echo "{\\"id\\":\\"$3\\",\\"status\\":\\"completed\\"}" ;;`,
+        `  get) cat '${bin}/detail.json' 2>/dev/null || echo "{\\"id\\":\\"$3\\",\\"status\\":\\"completed\\"}" ;;`,
         'esac',
         '',
       ].join('\n')
@@ -423,8 +446,69 @@ describe('bench run', () => {
       );
       return { status: result.status, stderr: result.stderr, lines: readLines(join(out, 'samples.jsonl')) };
     };
-    return { out, run };
+    const argv = (n: number) => readFileSync(join(bin, `argv-${n}`), 'utf8').split('\0').slice(0, -1);
+    return { out, run, argv, packSha };
   }
+
+  it('launches a sealed checkout with the work order and records a completed sample', () => {
+    const tierOpus = { provider: 'claude', model: 'opus' };
+    const binding = { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } } };
+    const spend = (costUsd: number) => ({ costUsd: { source: 'provider', value: costUsd }, tokens: { source: 'provider', value: { input: 10, output: 1 } } });
+    const { out, run, argv, packSha } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
+      const artifacts = getRunArtifactsDirForRoot(root, 'run-1');
+      write(artifacts, 'review/code.md', 'x');
+      write(artifacts, 'review/findings.json', '[]');
+      write(artifacts, 'shape.md', 'x');
+      return {
+        id: 'run-1',
+        status: 'completed',
+        output_root: root,
+        started_at: '2026-10-01T12:00:00Z',
+        completed_at: '2026-10-01T12:10:00Z',
+        metadata: {
+          dispatch: { base_branch: 'dev' },
+          model_bindings: { effective: { aliases: { small: tierOpus, medium: tierOpus, large: tierOpus } } },
+        },
+        nodes: [
+          { nodeId: 'review__code', state: 'completed', execution: { node: { kind: 'agent' }, binding, spend: spend(1.5) } },
+          { nodeId: 'simplify__simplify', state: 'completed', execution: { node: { kind: 'agent' }, binding, spend: spend(0.25) } },
+        ],
+      };
+    });
+    const { status, lines } = run('--variant', 'v1');
+    expect(status).toBe(0);
+
+    const checkout = join(out, 'checkouts', 'eval-v', 'counting');
+    expect(argv(1)).toEqual([
+      'workflow',
+      'run',
+      'archon-review-eval',
+      '--cwd',
+      checkout,
+      '--no-worktree',
+      '--workflow-source',
+      join(out, 'sources', packSha),
+      '--config',
+      join(out, 'versions', 'v.config.yaml'),
+      '--input',
+      'work_order=Count to two.\n',
+      '--detach',
+      '--json',
+      "Review this branch's change against its merge-base with dev. It has no pull request; declare pr as null.",
+    ]);
+
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    expect([line.case, line.variant, line.sample, line.run_id, line.status, line.passed]).toEqual(['counting', 'v1', 1, 'run-1', 'completed', true]);
+    expect(line.version).toMatchObject({ label: 'v', pack_sha: packSha });
+    const lens = { tier: 'large', provider: 'claude', model: 'opus', resolved_model: 'claude-opus', tokens: { input: 10, output: 1 } };
+    expect(line.lenses).toEqual({
+      code: { node: 'review__code', ...lens, cost_usd: 1.5 },
+      simplify: { node: 'simplify__simplify', ...lens, cost_usd: 0.25 },
+    });
+    expect([line.cost_usd, line.tokens, line.duration_ms, line.item]).toEqual([1.75, { input: 20, output: 2 }, 600_000, join('items', 'run-1')]);
+    expect(existsSync(join(out, 'items', 'run-1', 'review', 'code.md'))).toBe(true);
+  });
 
   it('records every paid sample after the ones already taken, even when its detail cannot be read', () => {
     const { run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
