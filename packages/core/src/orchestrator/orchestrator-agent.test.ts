@@ -4294,6 +4294,23 @@ describe('workflow dispatch routing', () => {
       mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     });
 
+    test('a launch sees a project registered earlier in the same turn', async () => {
+      mockListCodebases.mockImplementation(() => Promise.resolve([]));
+      const results: string[] = [];
+      mockSendQuery.mockImplementationOnce(async function* () {
+        const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+        mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase()]));
+        results.push(
+          await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch)
+        );
+        yield { type: 'result', sessionId: 'session-1' };
+      });
+      await handleMessage(makePlatform(), 'conv-1', 'clone and fix', { actor: operator });
+
+      expect(results[0]).toContain('Queued test-workflow on test-repo');
+      expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+    });
+
     test('a second launch in the same turn is refused and only the first dispatches', async () => {
       const results: string[] = [];
       agentInvokes([launch, { ...launch, prompt: 'something else' }], results);
