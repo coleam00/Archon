@@ -1,6 +1,6 @@
 ---
 title: The Attention Queue
-description: List, read, label and answer paused runs from outside Archon, and route classes of questions to your own handler workflows.
+description: List, stream, read, label and answer paused runs from outside Archon, and route classes of questions to your own handler workflows.
 category: guides
 area: workflows
 audience: [user]
@@ -11,7 +11,7 @@ sidebar:
 
 Every paused run that needs someone is an item in the attention queue. A person at a
 terminal, an agent wired to the queue through a skill, or a workflow you write can list
-the items, read one, and answer it, all as JSON. Archon routes nothing: every answerer
+the items, follow them as a stream, read one, and answer it, all as JSON. Archon routes nothing: every answerer
 sees every item, the answer names the pause it is for, and a second answer to the same
 pause is refused.
 
@@ -21,14 +21,15 @@ pause is refused.
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
 | Count | `archon workflow attention --json --count-by project\|label:<key>` | `GET /api/runs/attention?countBy=…` |
+| Stream | `archon workflow attention --watch --json [--project … \| --all] [--label k=v]… [--after <cursor>]` | Not yet |
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |
 | Answer | `archon workflow answer <run-id> --occurrence <id> …`, or `respond`, `approve`, `reject` | `POST /api/workflows/runs/<run-id>/answer` |
 | Give up on the run | `archon workflow abandon <run-id>` | `POST /api/workflows/runs/<run-id>/abandon` |
 
 The [CLI reference](/reference/cli/#workflow-attention) lists every flag. The list, the
-single read and `workflow wait` all derive from the same run projection, so they cannot
-disagree about what a run needs.
+single read, the stream and `workflow wait` all derive from the same run projection, so
+they cannot disagree about what a run needs.
 
 - **Scope.** The CLI defaults to the project of the working directory. `--project` names
   another project and `--all` covers the install. Every `workflow attention` form runs from
@@ -119,6 +120,65 @@ Counting shows which classes of question recur often enough to deserve a handler
 archon workflow attention --json --all --count-by label:ci
 ```
 
+## Stream the queue
+
+`--watch` turns the list into a stream of JSON lines, one object per line, across every run
+in scope, including runs that start after the stream does. It is the alternative to polling
+the list and diffing it. It runs until Ctrl-C, SIGTERM, or its reader closes stdout, and
+then exits 0. On Windows a process kill is not a signal: it ends the stream without that
+exit.
+
+```bash
+archon workflow attention --watch --json --all
+```
+
+A stream starts with one `attention` line per open item, with `snapshot: true`, then a
+`ready` line. The lines before `ready` are the complete open set: on every connect, an item
+you held that is not among them is gone. After `ready`, a line arrives for every change the
+store commits, whichever process made it: a detached run, a trigger, the server, another
+host on the same database.
+
+| `type` | When | Fields |
+|---|---|---|
+| `attention` | An item opened, or a label write changed it | `cursor`, `snapshot`, `project`, `item` (a queue item, as above) |
+| `resolved` | An item this stream sent no longer needs an answer | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
+| `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `occurrence`, `revision` |
+| `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
+| `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
+| `ready` | The snapshot is complete | `cursor` |
+| `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
+| `error` | The store cannot read the stream's cursor: `--after` named one this install did not issue, or the store no longer reads the stream's own position. The last line; the command exits 4 | `error: "cursor_invalid"` |
+
+- **Keep an open set keyed by `(runId, occurrence)`.** `attention` adds or updates the
+  item unless you already hold that item at the same or a higher `revision`; `resolved`
+  removes it. `reason` is `answered`, or `withdrawn` when the item closed without an answer:
+  the run was resumed, ended, deleted, or paused somewhere new. `answeredAt` is null when the
+  run had moved past the answer before the stream read it.
+- **Delivery is at least once.** Dedupe `attention` on `(runId, occurrence, revision)` and
+  `terminal` on `(runId, cursor)`. `owner_lost` is a live observation: it is not replayed,
+  and the next connection reports it again if the owner is still gone.
+- **Resume where you stopped.** Persist the `cursor` of the last line you handled and
+  restart with `--after <cursor>`. The new stream sends the snapshot and `ready`, then
+  replays every change after that cursor. `bookmark` lines keep the cursor moving while
+  the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
+  succeeds, so no line for well over 30 seconds means the stream is not reading. If the
+  cursor is rejected, rerun without `--after`.
+- **`--label` filters `attention` and `resolved`.** `terminal` and `owner_lost` arrive for
+  every run in scope. A label write that leaves an open item outside the filter sends
+  `unmatched`, even for an item the stream never sent.
+- **What a line reports is the row when the stream read it.** The stream reads about once
+  a second, and PostgreSQL wakes it on each commit. A pause opened and answered between
+  two reads may never appear as an item; the run's `terminal` line still does.
+- **Owner liveness follows `workflow wait`.** A running run is watched until it pauses or
+  ends, including while it reports stalled tool calls. Only a run whose recorded owner is
+  on this host and user can be reported `owner_lost`; a run owned on another host is never
+  reported lost. Nothing here changes the run: abandon it with `workflow abandon`.
+
+The stream only reads. Stopping it, with a signal or by closing its stdout, affects no run
+and exits 0. A closed stdout is noticed when the stream next writes a line. An answered run continues where a continuation host runs: `archon serve`,
+`archon workflow wake --watch`, or a CLI answer without `--json`, which continues the run in
+place.
+
 ## Handle a class of questions with a workflow
 
 Labels are how your own handler workflows find their items. A workflow that hits a
@@ -175,7 +235,8 @@ and the run stays answered once.
 A handler can also classify items for other handlers instead of answering them. This
 example puts a cheap classifier in front of the queue:
 
-1. **Watch.** A scheduled workflow polls `archon workflow attention --json --all` and keeps
+1. **Watch.** A scheduled workflow polls `archon workflow attention --json --all`, or a
+   long-running process reads `archon workflow attention --watch --json --all`, and keeps
    the items whose `labels` have no `class` yet.
 2. **Classify.** For each item it reads the message, labels, project, form, options and
    `pausedAt`, and asks a small model for a typed choice: a class, an urgency, and whether

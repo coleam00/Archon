@@ -211,7 +211,7 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'attention',
     spec: 'workflow attention [<run-id>]',
     description:
-      'List the attention queue, count it, or read the item one run stands for\n(defaults to the current project)',
+      'List, count or stream the attention queue, or read the item one run stands for\n(defaults to the current project)',
     scopedFlags: [
       { spec: '--project <id|name|key>', description: 'Scope to another project' },
       { spec: '--all', description: 'The whole install' },
@@ -224,6 +224,11 @@ const commandHelp: HelpEntry[] = [
         spec: '--count-by project|label:<key>',
         description: 'Count items per project or per label value',
       },
+      {
+        spec: '--watch',
+        description: 'Stream every change as lines until stopped; the open set comes first',
+      },
+      { spec: '--after <cursor>', description: 'With --watch: replay after an earlier line' },
     ],
   },
   {

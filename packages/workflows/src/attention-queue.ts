@@ -3,8 +3,8 @@
  * outside Archon can list, filter, count and read without parsing prose (#4039).
  *
  * `toAttentionQueueItem` is the one constructor: it builds an item from a run row and its
- * run-attention projection, so the list, the single read and a later stream cannot
- * disagree. Labels are data. The queue filters them by exact match and sorts them as
+ * run-attention projection, so the list, the single read and the stream
+ * (`attention-watch.ts`) cannot disagree. Labels are data. The queue filters them by exact match and sorts them as
  * plain strings, and nothing here depends on who is asking.
  */
 import { z } from 'zod';
@@ -225,20 +225,34 @@ export interface AttentionQueueSource {
 
 type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
 
+function codebaseFor(
+  source: Pick<AttentionQueueSource, 'store'>,
+  run: WorkflowRun,
+  codebases: CodebaseCache
+): Promise<AttentionQueueItemSources['codebase']> {
+  if (run.codebase_id === null) return Promise.resolve(null);
+  const cached = codebases.get(run.codebase_id) ?? source.store.getCodebase(run.codebase_id);
+  codebases.set(run.codebase_id, cached);
+  return cached;
+}
+
+/** The project `run` belongs to, by the rule its queue item reports. */
+export async function runProject(
+  source: Pick<AttentionQueueSource, 'store'>,
+  run: WorkflowRun,
+  codebases: CodebaseCache = new Map()
+): Promise<ProjectRef | null> {
+  return projectRefForRun(run, await codebaseFor(source, run, codebases));
+}
+
 async function itemFor(
   source: AttentionQueueSource,
   run: WorkflowRun,
   attention: QueuedRunAttention,
   codebases: CodebaseCache
 ): Promise<AttentionQueueItem> {
-  let codebase: Promise<AttentionQueueItemSources['codebase']> = Promise.resolve(null);
-  if (run.codebase_id !== null) {
-    const cached = codebases.get(run.codebase_id) ?? source.store.getCodebase(run.codebase_id);
-    codebases.set(run.codebase_id, cached);
-    codebase = cached;
-  }
   return toAttentionQueueItem(run, attention, {
-    codebase: await codebase,
+    codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
   });
 }
@@ -260,6 +274,21 @@ async function ownQueuedAttention(
     : undefined;
 }
 
+/**
+ * The item `run` is on its own, or null when it is none: not paused, or a parent whose
+ * walk reaches a child, which is an item by its own row. The list and the stream use
+ * this one rule.
+ */
+export async function attentionQueueItemForRun(
+  source: AttentionQueueSource,
+  run: WorkflowRun,
+  codebases: CodebaseCache = new Map()
+): Promise<AttentionQueueItem | null> {
+  if (run.status !== 'paused') return null;
+  const attention = await ownQueuedAttention(source, run);
+  return attention === undefined ? null : itemFor(source, run, attention, codebases);
+}
+
 /** The items for rows the store's queue list returned, in their order. */
 export async function attentionQueueItems(
   source: AttentionQueueSource,
@@ -268,8 +297,8 @@ export async function attentionQueueItems(
   const codebases: CodebaseCache = new Map();
   const items: AttentionQueueItem[] = [];
   for (const run of runs) {
-    const attention = await ownQueuedAttention(source, run);
-    if (attention !== undefined) items.push(await itemFor(source, run, attention, codebases));
+    const item = await attentionQueueItemForRun(source, run, codebases);
+    if (item !== null) items.push(item);
   }
   return items;
 }
@@ -404,12 +433,19 @@ export function parseAttentionQueueRequest(request: AttentionQueueRequestText): 
   };
 }
 
+/** True when the item carries every one of `labels`, each with exactly that value. */
+export function matchesAttentionLabels(
+  item: Pick<AttentionQueueItem, 'labels'>,
+  labels: Readonly<AttentionLabels>
+): boolean {
+  return Object.entries(labels).every(
+    ([key, value]) => Object.hasOwn(item.labels, key) && item.labels[key] === value
+  );
+}
+
 function inQuery(item: AttentionQueueItem, query: AttentionQueueQuery): boolean {
   return (
-    isInAttentionScope(item.project, query.scope) &&
-    Object.entries(query.labels).every(
-      ([key, value]) => Object.hasOwn(item.labels, key) && item.labels[key] === value
-    )
+    isInAttentionScope(item.project, query.scope) && matchesAttentionLabels(item, query.labels)
   );
 }
 

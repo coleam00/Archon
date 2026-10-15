@@ -25,8 +25,12 @@ import {
 import {
   TERMINAL_WORKFLOW_STATUSES,
   approvalContextSchema,
+  attentionLabels,
+  attentionRevision,
   continuablePause,
+  pausedAttentionWait,
   pendingWorkflowWaitDeadline,
+  queuedRunAttention,
   readCapacityWait,
   workflowWaitContextSchema,
   isTerminalRunStatus,
@@ -51,6 +55,7 @@ import {
   type AttentionQueueSource,
   type ProjectRef,
 } from './attention-queue';
+import { watchAttentionQueue, type AttentionStreamLine } from './attention-watch';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
@@ -1045,7 +1050,7 @@ export function describeWorkflowStoreConformance(
         )
       ).toEqual([next.id]);
     });
-    test('feed rejects malformed and foreign cursors and invalid page limits', async () => {
+    test('feed rejects malformed cursors, cursors beyond its head and invalid page limits', async () => {
       for (const cursor of ['foreign:1', 'sql:-1', 'file:NaN.0', 'memory:1.5']) {
         expect(
           await rejection(
@@ -1053,6 +1058,13 @@ export function describeWorkflowStoreConformance(
           )
         ).toBeInstanceOf(WorkflowEventCursorError);
       }
+      const head = await store.getWorkflowEventHead();
+      const beyondHead = head.replace(/[0-9]+/, order => String(BigInt(order) + 1000n));
+      expect(
+        await rejection(
+          store.readWorkflowEventsAfter(beyondHead as WorkflowEventCursor, { limit: 1 })
+        )
+      ).toBeInstanceOf(WorkflowEventCursorError);
       for (const limit of [0, -1, 1.5, Infinity])
         expect(
           await rejection(
@@ -1134,9 +1146,10 @@ export function describeWorkflowStoreConformance(
         const metadata = (await store.getWorkflowRun(run.id))?.metadata;
         expect(metadata).not.toHaveProperty('error');
         expect(metadata).not.toHaveProperty('stop_reason');
+        // Only the winning resume writes, and a resumed pause is in the feed.
         expect(await types(store, run.id)).toEqual([
           ...before,
-          ...(status === 'failed' ? ['workflow_resumed'] : []),
+          ...(status === 'failed' ? ['workflow_resumed'] : ['workflow_unpaused']),
         ]);
         if (status === 'failed') {
           const resumed = (await store.listWorkflowEvents(run.id)).find(
@@ -1152,7 +1165,10 @@ export function describeWorkflowStoreConformance(
         await store.pauseWorkflowRun(run.id, approval);
         await store.resumeWorkflowRun(run.id);
         const events = await store.listWorkflowEvents(run.id);
-        expect(events.map(event => event.event_type)).toEqual(error ? ['workflow_resumed'] : []);
+        expect(events.map(event => event.event_type)).toEqual([
+          ...(error ? ['workflow_resumed'] : []),
+          'workflow_unpaused',
+        ]);
         if (error) expect(events[0]?.data).toEqual({ error });
         expect((await store.getWorkflowRun(run.id))?.metadata).not.toHaveProperty('error');
       }
@@ -1204,6 +1220,7 @@ export function describeWorkflowStoreConformance(
       });
       expect(await types(store, run.id)).toEqual([
         'wait_started',
+        'workflow_unpaused',
         'quota_resume_scheduled',
         'workflow_failed',
         'workflow_resumed',
@@ -1258,7 +1275,7 @@ export function describeWorkflowStoreConformance(
         extra: true,
         approval,
       });
-      expect(await types(store, run.id)).toEqual(['node_suspended']);
+      expect(await types(store, run.id)).toEqual(['workflow_unpaused', 'node_suspended']);
     });
     test('continued waits do not duplicate the start; consumption matches the exact running cursor', async () => {
       const run = await running(store);
@@ -1272,7 +1289,11 @@ export function describeWorkflowStoreConformance(
       });
       await store.resumeWorkflowRun(run.id);
       await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'continued' });
-      expect(await types(store, run.id)).toEqual(['wait_started']);
+      expect(await types(store, run.id)).toEqual([
+        'wait_started',
+        'workflow_unpaused',
+        'wait_continued',
+      ]);
       await store.resumeWorkflowRun(run.id);
       expect(
         await store.clearWorkflowWaitContext(
@@ -1287,12 +1308,129 @@ export function describeWorkflowStoreConformance(
       const rows = await store.listWorkflowEvents(run.id);
       expect(rows.map(row => row.event_type)).toEqual([
         'wait_started',
+        'workflow_unpaused',
+        'wait_continued',
+        'workflow_unpaused',
         'wait_completed',
         'node_completed',
       ]);
       if (!winner?.cleared) throw new Error('No wait winner');
-      expect(rows[2]).toMatchObject(winner.nodeEvent);
+      expect(rows[5]).toMatchObject(winner.nodeEvent);
       expect((await store.getWorkflowRun(run.id))?.metadata).not.toHaveProperty('wait');
+    });
+    test('every write that opens, revises, answers or closes a queue item, or ends a run, commits an event for that run', async () => {
+      // What the attention queue reports for a run, as its stream compares it.
+      const reported = async (id: string): Promise<string> => {
+        const run = await store.getWorkflowRun(id);
+        if (run === null) throw new Error(`run ${id} vanished`);
+        const attention = queuedRunAttention(run);
+        const wait = pausedAttentionWait(run);
+        return JSON.stringify({
+          status: run.status,
+          kind: attention?.kind,
+          occurrence:
+            attention !== undefined && 'occurrence' in attention ? attention.occurrence : null,
+          labels: wait === undefined ? {} : attentionLabels(wait),
+          revision: wait === undefined ? 1 : attentionRevision(wait),
+        });
+      };
+      const commits = async (id: string, write: () => Promise<unknown>): Promise<void> => {
+        const head = await store.getWorkflowEventHead();
+        const before = await reported(id);
+        await write();
+        expect(await reported(id)).not.toBe(before);
+        const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+        expect(page.events.map(({ event }) => event.workflow_run_id)).toContain(id);
+      };
+      const expected = { nodeId: 'review', pauseId: 'first' };
+      const suspended = (id: string): Parameters<IWorkflowStore['pauseWorkflowRun']>[3] => ({
+        workflow_run_id: id,
+        event_type: 'node_suspended',
+        step_name: 'review',
+        data: {},
+      });
+
+      const gate = await running(store);
+      await commits(gate.id, () =>
+        store.pauseWorkflowRun(gate.id, approval, undefined, suspended(gate.id))
+      );
+      await commits(gate.id, () =>
+        store.resolveApprovalGate(
+          gate.id,
+          { approval: { ...approval, resolved: 'approved' } },
+          gateEvents(0),
+          expected
+        )
+      );
+      await commits(gate.id, () => store.resumeWorkflowRun(gate.id));
+      await commits(gate.id, () => store.completeWorkflowRun(gate.id, { duration_ms: 1 }));
+
+      const ask = await running(store);
+      const write = { pauseId: 'ask-1', set: { ci: 'pr' }, unset: [], via: 'cli' };
+      await commits(ask.id, () =>
+        store.pauseWorkflowRunForWait(ask.id, attentionWait, { kind: 'started', stepName: 'ask' })
+      );
+      await commits(ask.id, () => store.labelAttentionWait(ask.id, write));
+      await commits(ask.id, () => store.resumeWorkflowRun(ask.id));
+      await commits(ask.id, () =>
+        store.pauseWorkflowRunForWait(ask.id, attentionWait, { kind: 'continued' })
+      );
+      await commits(ask.id, () => store.answerAttentionWait(ask.id, attentionAnswer('use-main')));
+      await commits(ask.id, () => store.resumeWorkflowRun(ask.id));
+      await commits(ask.id, () => store.failWorkflowRun(ask.id, 'boom'));
+
+      const rejected = await running(store);
+      await store.pauseWorkflowRun(rejected.id, approval, undefined, suspended(rejected.id));
+      await commits(rejected.id, () =>
+        store.resolveAndCancelApprovalGate(
+          rejected.id,
+          gateEvents(0),
+          { reason: 'rejected' },
+          expected
+        )
+      );
+
+      const abandoned = await running(store);
+      await store.pauseWorkflowRun(abandoned.id, approval, undefined, suspended(abandoned.id));
+      await commits(abandoned.id, () => store.cancelWorkflowRun(abandoned.id));
+    });
+    test('the attention watch follows a run from the store feed alone', async () => {
+      const lines: AttentionStreamLine[] = [];
+      const watch = await watchAttentionQueue(
+        store,
+        { branchOf: async () => null },
+        line => void lines.push(line),
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      );
+      const next = async (type: AttentionStreamLine['type']): Promise<AttentionStreamLine> => {
+        for (let waited = 0; waited < 5000; waited += 5) {
+          const line = lines.find(candidate => candidate.type === type);
+          if (line) return line;
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        throw new Error(`no ${type} line in ${JSON.stringify(lines)}`);
+      };
+      try {
+        const run = await running(store);
+        await store.pauseWorkflowRunForWait(run.id, attentionWait, {
+          kind: 'started',
+          stepName: 'ask',
+        });
+        expect(await next('attention')).toMatchObject({
+          item: { runId: run.id, occurrence: 'ask-1' },
+        });
+        await store.answerAttentionWait(run.id, attentionAnswer('use-main'));
+        expect(await next('resolved')).toMatchObject({
+          runId: run.id,
+          reason: 'answered',
+          answeredVia: 'cli',
+        });
+        await store.resumeWorkflowRun(run.id);
+        await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        expect(await next('terminal')).toMatchObject({ runId: run.id, status: 'completed' });
+      } finally {
+        await watch.close();
+      }
     });
     test('continuation scans honor exact-cursor deferral and an event signal has one winner', async () => {
       const due = async (now: Date): Promise<string[]> =>

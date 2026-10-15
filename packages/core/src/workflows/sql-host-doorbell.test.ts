@@ -6,7 +6,7 @@ import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
 const getListener = mock((): DbNotificationListener | null => null);
 const connection = await import('../db/connection');
 mock.module('../db/connection', () => ({ ...connection, getDbNotificationListener: getListener }));
-const { subscribeToSqlRunDoorbell } = await import('./sql-host');
+const { subscribeToSqlEventDoorbell, subscribeToSqlRunDoorbell } = await import('./sql-host');
 
 beforeEach(() => getListener.mockReset());
 
@@ -29,6 +29,21 @@ test('SQL notifications ring only for the requested run and expose unsubscribe',
   expect(unsubscribe).toHaveBeenCalledTimes(1);
 });
 
+test('the event doorbell rings for every run on one listener', async () => {
+  let notify: ((payload: string) => void) | undefined;
+  const listen = mock<DbNotificationListener['listen']>(async (_channel, callback) => {
+    notify = callback;
+    return () => undefined;
+  });
+  getListener.mockReturnValue({ listen });
+  const rang: string[] = [];
+  await subscribeToSqlEventDoorbell(runId => rang.push(runId));
+  notify?.('a');
+  notify?.('b');
+  expect(rang).toEqual(['a', 'b']);
+  expect(listen).toHaveBeenCalledTimes(1);
+});
+
 test('missing and failed SQL listeners leave polling available', async () => {
   getListener.mockReturnValue(null);
   expect(await subscribeToSqlRunDoorbell('run', () => undefined)).toBeNull();
@@ -38,4 +53,5 @@ test('missing and failed SQL listeners leave polling available', async () => {
     },
   });
   expect(await subscribeToSqlRunDoorbell('run', () => undefined)).toBeNull();
+  expect(await subscribeToSqlEventDoorbell(() => undefined)).toBeNull();
 });

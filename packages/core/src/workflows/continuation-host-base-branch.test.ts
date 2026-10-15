@@ -72,6 +72,9 @@ for (const choice of [null, '', ' release ']) {
       async subscribe() {
         throw new Error('not invoked');
       },
+      async watchAttention() {
+        throw new Error('not invoked');
+      },
     };
     await resumeWorkflowContinuation(
       {

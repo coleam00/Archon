@@ -18,6 +18,8 @@ import {
   labeledAttentionWait,
   answeredAttentionWait,
   attentionLabeledEvent,
+  waitContinuedEvent,
+  workflowUnpausedEvent,
 } from '../store';
 import {
   answeredPauseContinuation,
@@ -376,7 +378,7 @@ export function createTransactionView(
       id,
       approval,
       metadata,
-      suspension
+      event
     ): ReturnType<IWorkflowStore['pauseWorkflowRun']> => {
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
@@ -384,7 +386,7 @@ export function createTransactionView(
       run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
       // A gate replaces a finished wait's context, exactly as the SQL store does.
       delete run.metadata.wait;
-      if (suspension) record(suspension);
+      if (event) record(event);
     },
     resolveApprovalGate: async (
       id,
@@ -417,6 +419,7 @@ export function createTransactionView(
           event_type: 'workflow_resumed',
           data: { error: run.metadata.error },
         });
+      if (run.status === 'paused') record(workflowUnpausedEvent(id));
       if (
         run.status === 'failed' &&
         isScheduledWorkflowResume(scheduled) &&
@@ -755,6 +758,7 @@ export function createTransactionView(
             ...(wait.kind === 'event' ? { event: wait.event } : {}),
           },
         });
+      else record(waitContinuedEvent(id, wait));
     },
     clearWorkflowWaitContext: async (id, wait, completion) => {
       const run = runs.get(id);

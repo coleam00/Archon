@@ -7,6 +7,7 @@ import { getProjectStoragePaths, resolveProjectStorageKey } from '@archon/paths/
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
+import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { AttentionQueueItem } from '@archon/workflows/attention-queue';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -40,7 +41,9 @@ function createHost(): WorkflowHost {
   return {
     deps,
     records,
-    engine: new InProcessWorkflowEngine(deps),
+    engine: new InProcessWorkflowEngine(deps, {
+      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+    }),
     operations: createWorkflowOperations({
       getUserRole: async () => undefined,
       store: { ...store, deleteWorkflowRun: unused },
@@ -270,4 +273,129 @@ test('the queue scopes by project the way archon state names it, across a rename
     workflowAttentionLabelCommand(host, prefix, `pause-${current}`, ['seen=yes'], [], true, subdir)
   );
   expect(labeledByPrefix).toMatchObject({ code: 0, json: { ok: true, runId: current } });
+});
+
+/** The JSON lines a long-running command writes until `stopWhen` holds, then SIGTERM. */
+async function streamed(
+  command: () => Promise<number>,
+  stopWhen: (lines: Record<string, unknown>[]) => boolean
+): Promise<{ code: number; lines: Record<string, unknown>[] }> {
+  const lines: Record<string, unknown>[] = [];
+  const write = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: string,
+    done?: (error?: Error | null) => void
+  ) => {
+    for (const text of String(chunk).split('\n')) {
+      if (text === '') continue;
+      const line = JSON.parse(text) as Record<string, unknown>;
+      // The test logger shares stdout; stream lines are the ones with a type.
+      if (typeof line.type === 'string') lines.push(line);
+    }
+    done?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    const running = command();
+    for (let waited = 0; !stopWhen(lines); waited += 5) {
+      if (waited > 5000) throw new Error(`stream never satisfied: ${JSON.stringify(lines)}`);
+      await Bun.sleep(5);
+    }
+    process.emit('SIGTERM');
+    return { code: await running, lines };
+  } finally {
+    write.mockRestore();
+  }
+}
+
+test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-watch-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  const projectDir = (name: string): string => {
+    mkdirSync(join(root, name));
+    return realpathSync(join(root, name));
+  };
+  const pausedIn = async (dir: string): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    await store.pauseWorkflowRunForWait(
+      run.id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Retry?',
+        pauseId: `pause-${run.id}`,
+        form: 'approval',
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return run.id;
+  };
+  const alphaDir = projectDir('alpha');
+  const alpha = await pausedIn(alphaDir);
+  const beta = await pausedIn(projectDir('beta'));
+  const watch = (opts: Partial<Parameters<typeof workflowAttentionCommand>[3]> = {}) =>
+    streamed(
+      () =>
+        workflowAttentionCommand(host, alphaDir, undefined, {
+          json: true,
+          labels: [],
+          watch: true,
+          ...opts,
+        }),
+      lines => lines.some(line => line.type === 'ready')
+    );
+  const runsOf = (lines: Record<string, unknown>[]): unknown[] =>
+    lines.flatMap(line =>
+      line.type === 'attention' ? [[(line.item as AttentionQueueItem).runId, line.project]] : []
+    );
+  const alphaProject = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
+  const betaProject = { key: '_cwd/beta', codebaseId: null, name: 'beta' };
+
+  const own = await watch();
+  expect(own.code).toBe(0);
+  expect(runsOf(own.lines)).toEqual([[alpha, alphaProject]]);
+  expect(
+    (await watch({ project: '_cwd/beta' })).lines.filter(line => line.type === 'attention')
+  ).toMatchObject([{ project: betaProject, item: { runId: beta } }]);
+  expect(runsOf((await watch({ all: true })).lines)).toEqual(
+    expect.arrayContaining([
+      [alpha, alphaProject],
+      [beta, betaProject],
+    ])
+  );
+
+  for (const opts of [{ watch: false, after: 'x' }, { sort: 'age' }, { countBy: 'project' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, alphaDir, undefined, {
+        json: true,
+        labels: [],
+        watch: true,
+        ...opts,
+      })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+  expect(
+    await captured(() =>
+      workflowAttentionCommand(host, alphaDir, alpha, { json: true, labels: [], watch: true })
+    )
+  ).toMatchObject({ code: 1, json: { ok: false } });
+
+  expect(
+    await captured(() =>
+      workflowAttentionCommand(host, alphaDir, undefined, {
+        json: true,
+        labels: [],
+        watch: true,
+        after: 'sql:1',
+      })
+    )
+  ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid' } });
 });
