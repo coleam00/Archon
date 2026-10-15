@@ -175,7 +175,7 @@ describe('checkGithubForge', () => {
 });
 
 describe('checkGhAuth', () => {
-  const GH_AUTH_STATUS = ['auth', 'status', '--active', '--hostname', 'github.com'];
+  const GH_AUTH_STATUS = ['auth', 'status', '--active'];
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
 
   beforeEach(() => {
