@@ -40,7 +40,7 @@ export function findCodebaseByName(
   });
 }
 
-const INVOKE_WORKFLOW_SCHEMA = defineNativeToolInputSchema({
+export const INVOKE_WORKFLOW_SCHEMA = defineNativeToolInputSchema({
   properties: {
     workflow: {
       kind: 'string',
@@ -123,7 +123,7 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
   };
 }
 
-const REGISTER_PROJECT_SCHEMA = defineNativeToolInputSchema({
+export const REGISTER_PROJECT_SCHEMA = defineNativeToolInputSchema({
   properties: {
     name: { kind: 'string', description: 'Project name to register.' },
     path: { kind: 'string', description: 'Absolute path of the local directory.' },

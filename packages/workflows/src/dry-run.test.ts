@@ -1850,6 +1850,38 @@ describe('dryRunWorkflow', () => {
     ).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('at most once') });
   });
 
+  test('validates stub answers against options from simulated upstream output', async () => {
+    const run = (options: DryRunStubValue, decision: string) =>
+      dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'dynamic-attention-options',
+          nodes: [
+            { id: 'choices', bash: 'unused' },
+            {
+              id: 'ask',
+              depends_on: ['choices'],
+              wait: {
+                attention: 'Which base?',
+                form: 'select',
+                options: '$choices.output.options',
+              },
+            },
+          ],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { choices: { options }, ask: { decision, text: '' } },
+      });
+
+    expect((await run([{ id: 'use-dev' }], 'use-dev')).outcome).toBe('completed');
+    const undeclared = await run([{ id: 'use-dev' }], 'unknown');
+    expect(undeclared.outcome).toBe('failed');
+    expect(undeclared.trace.at(-1)?.reason).toContain("does not declare option 'unknown'");
+    const invalid = await run([{ id: 'duplicate' }, { id: 'duplicate' }], 'duplicate');
+    expect(invalid.outcome).toBe('failed');
+    expect(invalid.trace.at(-1)?.reason).toContain('not a valid option list');
+  });
+
   test('simulates loop completion and max-iteration failure', async () => {
     const completing = makeTestWorkflow({
       name: 'loop-ok',

@@ -7136,7 +7136,7 @@ async function executeWaitNode(
     if (message === '') {
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
-    const options = resolveAttentionOptions(node.id, condition.options, ctx);
+    const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs);
     const labels =
       condition.labels === undefined
         ? undefined
@@ -7270,14 +7270,14 @@ async function executeWaitNode(
  * reference is read here and must pass the same rules as literal options; the node fails,
  * naming the producer, rather than pausing with options nobody can answer.
  */
-function resolveAttentionOptions(
+export function resolveAttentionOptions(
   nodeId: string,
   options: AttentionOption[] | string | undefined,
-  ctx: RunLayersContext
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): AttentionOption[] | undefined {
   if (typeof options !== 'string') return options;
   const ref = parseWholeOutputRef(options);
-  const producer = ref === undefined ? undefined : ctx.nodeOutputs.get(ref.nodeId);
+  const producer = ref === undefined ? undefined : nodeOutputs.get(ref.nodeId);
   if (ref === undefined || producer === undefined) {
     throw new Error(
       `Wait node '${nodeId}' options '${options}' name no node that has produced output`

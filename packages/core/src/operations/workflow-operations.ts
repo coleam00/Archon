@@ -407,8 +407,7 @@ const LOST_GATE_MESSAGE = (runId: string): string =>
 
 /**
  * An answer named an occurrence that is not the run's open one. Typed so a surface can
- * report it as a conflict rather than a server failure; the message names the occurrence
- * the run is at now.
+ * report it as a conflict rather than a server failure.
  */
 export class StaleGateAnswerError extends Error {
   constructor(message: string) {
@@ -1344,8 +1343,10 @@ export function createWorkflowOperations({
       answeredAt: new Date().toISOString(),
     });
     if (!answered) {
-      const current = await store.getWorkflowRun(run.id);
-      throw staleGateError(run.id, current);
+      throw await lostGateError(run.id, {
+        nodeId: workflowWaitStepName(wait),
+        pauseId: wait.pauseId,
+      });
     }
     return {
       workflowName: run.workflow_name,
@@ -1800,8 +1801,8 @@ export function createWorkflowOperations({
   }
 
   /**
-   * A resolution that lost its compare-and-swap. When the caller named an occurrence, say
-   * which occurrence the run is at now, so a stale answer is visibly stale.
+   * A lost compare-and-swap for a named occurrence remains a conflict even when the
+   * diagnostic lookup cannot read the current pause.
    */
   async function lostGateError(
     runId: string,
@@ -1813,7 +1814,7 @@ export function createWorkflowOperations({
       current = await store.getWorkflowRun(runId);
     } catch (err) {
       getLog().warn({ err, runId }, 'operations.workflow_gate_occurrence_lookup_failed');
-      return new Error(LOST_GATE_MESSAGE(runId));
+      return new StaleGateAnswerError(LOST_GATE_MESSAGE(runId));
     }
     return staleGateError(runId, current);
   }

@@ -7,6 +7,7 @@ import {
   userRowSchema,
   userIdentityRowSchema,
   sessionRowSchema,
+  SESSION_TRANSITION_REASONS,
   sessionMetadataSchema,
   workflowEventRowSchema,
   codebaseEnvVarSchema,
@@ -214,6 +215,33 @@ describe('core schemas', () => {
       ended_reason: null,
     });
     expect(result.success).toBe(true);
+  });
+
+  test('session reasons validate supported history and reject unknown values independently', () => {
+    const row = {
+      id: 'sess-1',
+      conversation_id: 'conv-1',
+      codebase_id: null,
+      ai_assistant_type: 'claude',
+      assistant_session_id: null,
+      active: true,
+      metadata: {},
+      started_at: new Date(),
+      ended_at: null,
+      parent_session_id: null,
+      transition_reason: null,
+      ended_reason: null,
+    };
+    expect(SESSION_TRANSITION_REASONS).toContain('plan-to-execute');
+    expect(SESSION_TRANSITION_REASONS).toContain('cwd-changed');
+    for (const field of ['transition_reason', 'ended_reason']) {
+      for (const value of [null, ...SESSION_TRANSITION_REASONS]) {
+        expect(sessionRowSchema.safeParse({ ...row, [field]: value }).success).toBe(true);
+      }
+      for (const value of ['unknown-reason', 42, {}, undefined]) {
+        expect(sessionRowSchema.safeParse({ ...row, [field]: value }).success).toBe(false);
+      }
+    }
   });
 
   test('sessionMetadataSchema allows extra keys via passthrough', () => {

@@ -52,7 +52,11 @@ describe('pushHead', () => {
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'commit', '-q', '--allow-empty', '-m', 'local');
     git(cwd, 'checkout', '-q', '--detach', 'HEAD~2');
-    const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
+    const run = runPackScript('../../scripts/__tests__/push-pr-head', {
+      cwd,
+      inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) },
+      preload: 'Bun.sleepSync = () => {};',
+    });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('refused');
   });

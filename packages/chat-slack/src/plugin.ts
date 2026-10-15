@@ -1,4 +1,6 @@
 import type {
+  ChatAttentionNoticeRequest,
+  ChatAttentionNoticeResponse,
   ChatPlugin,
   ChatContext,
   ChatRunEvent,
@@ -8,10 +10,12 @@ import type {
 import { descriptor } from './descriptor';
 import { SlackAdapter } from './adapter';
 import { SlackWorkflowBridge } from './workflow-bridge';
+import { SlackAttentionNotices } from './attention';
 
 export class SlackPlugin implements ChatPlugin {
   readonly descriptor = descriptor;
   private bridge?: SlackWorkflowBridge;
+  private notices?: SlackAttentionNotices;
 
   constructor(private readonly adapter = new SlackAdapter()) {}
 
@@ -19,6 +23,8 @@ export class SlackPlugin implements ChatPlugin {
     await this.adapter.start(ctx, () => {
       this.bridge = new SlackWorkflowBridge(this.adapter, ctx);
       this.bridge.attach();
+      this.notices = new SlackAttentionNotices(this.adapter, ctx);
+      this.notices.attach();
     });
   }
 
@@ -33,8 +39,14 @@ export class SlackPlugin implements ChatPlugin {
     return this.bridge?.handleEvent(event) ?? Promise.resolve();
   }
 
+  attentionNotice(params: ChatAttentionNoticeRequest): Promise<ChatAttentionNoticeResponse> {
+    if (!this.notices) throw new Error('Slack has not started');
+    return this.notices.notice(params);
+  }
+
   async stop(): Promise<void> {
     await this.bridge?.detach();
+    this.notices?.detach();
     await this.adapter.stop();
   }
 }

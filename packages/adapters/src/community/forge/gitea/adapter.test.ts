@@ -242,6 +242,10 @@ describe('GiteaAdapter', () => {
     );
 
     try {
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith('/definitely/missing/forgejo-repo');
+        return { ok: true, value: undefined };
+      });
       await (
         forgejoAdapter as unknown as {
           ensureRepoReady(

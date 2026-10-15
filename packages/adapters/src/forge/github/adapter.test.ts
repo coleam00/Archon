@@ -1725,7 +1725,10 @@ describe('GitHubAdapter', () => {
     }
 
     test('clones repository when directory does not exist', async () => {
-      mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
+        return { ok: true, value: undefined };
+      });
 
       await callEnsureRepoReady('owner', 'repo', 'main', '/nonexistent/path', false);
 
@@ -2355,7 +2358,7 @@ describe('GitHubAdapter', () => {
     });
 
     test.each(['safe directory', 'credential helper'])(
-      'retries failed App %s setup without re-cloning',
+      'retries failed App %s setup without duplicate clones',
       async failure => {
         const root = await mkdtemp(join(tmpdir(), 'github-setup-retry-'));
         const repoPath = join(root, 'source');
@@ -2379,7 +2382,8 @@ describe('GitHubAdapter', () => {
         };
         try {
           await expect(ensureReady()).rejects.toThrow(`${failure} setup failed`);
-          await access(join(repoPath, '.git'));
+          if (failure === 'safe directory') expect(mockCloneRepository).not.toHaveBeenCalled();
+          else await access(join(repoPath, '.git'));
           await ensureReady();
           expect(mockCloneRepository).toHaveBeenCalledTimes(1);
           expect(mockAddSafeDirectory).toHaveBeenCalledTimes(2);

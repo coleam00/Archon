@@ -98,13 +98,23 @@ export async function workflowResumeTargetForRun(
   );
 }
 
+/**
+ * The run's resource is busy: `waiting_for_capacity` keeps the paused run's place as a
+ * capacity waiter, `resource_busy` leaves it failed or not-ready paused with no place.
+ * `message` says what blocks it and who continues it.
+ */
+export type ServerResumeOutcome =
+  | { kind: 'resumed' }
+  | { kind: 'waiting_for_capacity' | 'resource_busy'; message: string }
+  | { kind: 'not_resumed' };
+
 export async function resumeWorkflowRunFromServer(
   host: WorkflowHost,
   run: WorkflowRun,
   actorUserId?: string,
   target: WorkflowResumeTarget = { kind: 'headless' },
   cursor?: WorkflowResumeCursor
-): Promise<boolean> {
+): Promise<ServerResumeOutcome> {
   try {
     const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
     if (admission.kind === 'unavailable' && admission.sourceError) {
@@ -113,10 +123,13 @@ export async function resumeWorkflowRunFromServer(
         `Cannot resume run ${run.id}: ${unverifiableSourceGuidance(run.id, admission.sourceError)}`
       );
     }
-    return admission.kind === 'accepted';
+    if (admission.kind === 'accepted') return { kind: 'resumed' };
+    if (admission.kind === 'waiting_for_capacity' || admission.kind === 'resource_busy')
+      return { kind: admission.kind, message: admission.message };
+    return { kind: 'not_resumed' };
   } catch (error) {
     log.warn({ err: error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
-    return false;
+    return { kind: 'not_resumed' };
   }
 }
 

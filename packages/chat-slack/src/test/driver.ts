@@ -68,17 +68,22 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
           return Response.json(inboundResult);
         }
         if (path === '/action') {
-          const action = chatRunActionSchema.parse(raw);
-          if (action.action === 'answer' || action.action === 'resume')
-            throw new Error(`Slack renders no ${action.action} control`);
-          const actionId = action.action === 'cancel' ? `cancel:${action.runId}` : 'respond:0';
+          const { sender, ...action } = chatRunActionSchema.parse(raw);
+          // Answer and resume controls appear only on attention notices.
+          const notice = action.action === 'answer' || action.action === 'resume';
+          const actionId =
+            action.action === 'cancel'
+              ? `cancel:${action.runId}`
+              : notice
+                ? 'attention:choose:0'
+                : 'respond:0';
           const handler = slack.actions.find(entry => entry.pattern.test(actionId));
           if (!handler) throw new Error('missing Slack action handler');
           actionResult = undefined;
           await handler.handler({
             ack: async () => {},
             body: {
-              user: { id: action.sender.platformUserId },
+              user: { id: sender.platformUserId },
               channel: { id: 'fixture' },
               message: { ts: '1' },
             } as BlockButtonAction,
@@ -88,7 +93,9 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
               value:
                 action.action === 'cancel'
                   ? undefined
-                  : JSON.stringify({ runId: action.runId, ...action.response }),
+                  : notice
+                    ? JSON.stringify(action)
+                    : JSON.stringify({ runId: action.runId, ...action.response }),
             } as ButtonAction,
           });
           if (!actionResult) throw new Error('Slack did not dispatch run action');
@@ -161,6 +168,7 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
         send: plugin.send.bind(plugin),
         resultFooter: plugin.resultFooter?.bind(plugin),
         onRunEvent: plugin.onRunEvent?.bind(plugin),
+        attentionNotice: plugin.attentionNotice?.bind(plugin),
       },
       { readable, writable: Writable.toWeb(process.stdout) }
     );
