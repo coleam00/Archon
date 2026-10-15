@@ -469,9 +469,11 @@ export function runCost(nodes: readonly RunNode[]): number | null {
 /**
  * The machine tokens by which a lookup names one issue: its URL, its REST path, and
  * `n` or `#n` as an argument of `gh issue view`, before or after its flags and up to
- * the next command, the end of a command substitution or a redirect. A match is a
- * reporting flag that moves the row out of the accuracy numbers; it never changes how
- * a run is launched or retried.
+ * the next command, the end of a command substitution or a redirect. A flag value may
+ * hold parentheses (`--jq '(.body)'`), so `$(gh issue view 41) 4` also matches; that
+ * false positive is rare and errs toward reporting. A match is a reporting flag that
+ * moves the row out of the accuracy numbers; it never changes how a run is launched
+ * or retried.
  */
 export function issueTokens(repo: Repo, number: number): RegExp[] {
   const path = repo.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -480,7 +482,7 @@ export function issueTokens(repo: Repo, number: number): RegExp[] {
   return [
     new RegExp(`${host}/${path}/issues/${n}(?!\\d)`, 'i'),
     new RegExp(`repos/${path}/issues/${n}(?!\\d)`, 'i'),
-    new RegExp(`issue view(?:[ \\t]+[^\\s;&|()<>\`]+)*?[ \\t]+['"]?#?${n}(?![^\\s'"\`;&|()<>])`),
+    new RegExp(`issue view(?:[ \\t]+[^\\s;&|<>\`]+)*?[ \\t]+['"]?#?${n}(?![^\\s'"\`;&|()<>])`),
   ];
 }
 
