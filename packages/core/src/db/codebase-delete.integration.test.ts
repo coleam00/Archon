@@ -163,8 +163,13 @@ test('workspace deletion refuses a worktree registered during cleanup and succee
   expect(await getCodebase(project.id)).toBeNull();
 });
 
-for (const replacement of ['path', 'creation proof', 'provider'] as const) {
-  test(`cleanup preserves a same-ID replacement with a different ${replacement}`, async () => {
+for (const replacement of [
+  'path',
+  'creation proof',
+  'provider',
+  'identical adopted registration',
+] as const) {
+  test(`cleanup preserves a same-ID replacement: ${replacement}`, async () => {
     const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
     const { create, getById, markWorktreeDestroyed } = await import('./isolation-environments');
     const project = await createCodebase({
@@ -178,7 +183,10 @@ for (const replacement of ['path', 'creation proof', 'provider'] as const) {
       provider: 'worktree',
       working_path: '/repos/original',
       branch_name: toBranchName('branch'),
-      metadata: { worktree_creation_id: 'original-creation' },
+      metadata: {
+        worktree_creation_id:
+          replacement === 'identical adopted registration' ? null : 'original-creation',
+      },
     });
     const current = await create({
       codebase_id: project.id,
@@ -188,8 +196,8 @@ for (const replacement of ['path', 'creation proof', 'provider'] as const) {
       working_path: replacement === 'path' ? '/repos/replacement' : original.working_path,
       branch_name: toBranchName(original.branch_name),
       metadata: {
-        worktree_creation_id:
-          replacement === 'creation proof' ? 'new-creation' : 'original-creation',
+        ...original.metadata,
+        ...(replacement === 'creation proof' ? { worktree_creation_id: 'new-creation' } : {}),
       },
     });
     expect(current.id).toBe(original.id);
@@ -206,3 +214,46 @@ for (const replacement of ['path', 'creation proof', 'provider'] as const) {
     }
   });
 }
+
+test('cleanup supports legacy registrations and rejects their identical re-registration', async () => {
+  const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
+  const { create, getById, markWorktreeDestroyed, updateMetadata } =
+    await import('./isolation-environments');
+  for (const replace of [false, true]) {
+    const project = await createCodebase({
+      name: `legacy-${replace}`,
+      default_cwd: '/repos/legacy',
+    });
+    await db.query(
+      `INSERT INTO remote_agent_isolation_environments
+       (codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, metadata)
+       VALUES ($1, '42', 'issue', 'worktree', '/repos/legacy/branch', 'branch', '{"worktree_creation_id":null}')`,
+      [project.id]
+    );
+    const { listByCodebase } = await import('./isolation-environments');
+    const original = (await listByCodebase(project.id))[0];
+    if (!original) throw new Error('Expected legacy worktree');
+    if (replace) {
+      const current = await create({
+        codebase_id: project.id,
+        workflow_type: original.workflow_type,
+        workflow_id: original.workflow_id,
+        working_path: original.working_path,
+        branch_name: toBranchName(original.branch_name),
+        metadata: original.metadata,
+      });
+      expect(current.id).toBe(original.id);
+      await expect(markWorktreeDestroyed(original)).rejects.toThrow('changed during cleanup');
+      expect((await getById(original.id))?.status).toBe('active');
+      await expect(deleteCodebase(project.id, { requireWorktreeCleanup: true })).rejects.toThrow(
+        original.id
+      );
+      await updateMetadata(current.id, { pr_number: 42 });
+      await markWorktreeDestroyed(current);
+    } else {
+      await markWorktreeDestroyed(original);
+    }
+    await deleteCodebase(project.id, { requireWorktreeCleanup: true });
+    expect(await getCodebase(project.id)).toBeNull();
+  }
+});

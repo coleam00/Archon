@@ -92,7 +92,8 @@ for (const provider of ['container', 'worktree'] as const) {
               workflow_type: original.workflow_type,
               workflow_id: original.workflow_id,
               provider: 'worktree',
-              working_path: '/replacement',
+              working_path: original.working_path,
+              metadata: { ...original.metadata, worktree_creation_id: null },
               branch_name: toBranchName(original.branch_name),
             });
             expect(replacement.id).toBe(original.id);
@@ -100,7 +101,22 @@ for (const provider of ['container', 'worktree'] as const) {
             await expect(
               deleteCodebase(project.id, { requireWorktreeCleanup: true })
             ).rejects.toThrow(original.id);
-            await markWorktreeDestroyed(replacement);
+            const identical = await create({
+              codebase_id: project.id,
+              workflow_type: replacement.workflow_type,
+              workflow_id: replacement.workflow_id,
+              working_path: replacement.working_path,
+              branch_name: toBranchName(replacement.branch_name),
+              metadata: replacement.metadata,
+            });
+            expect(identical.id).toBe(replacement.id);
+            await expect(markWorktreeDestroyed(replacement)).rejects.toThrow(
+              'changed during cleanup'
+            );
+            await expect(
+              deleteCodebase(project.id, { requireWorktreeCleanup: true })
+            ).rejects.toThrow(identical.id);
+            await markWorktreeDestroyed(identical);
             await deleteCodebase(project.id, { requireWorktreeCleanup: true });
             expect(await getCodebase(project.id)).toBeNull();
           }
