@@ -70,13 +70,13 @@ One caution: a paused or failed sub-run tree can still be resumed, and a resume 
 
 Worktrees accumulate over time. Archon gives you a few commands to stay on top of them.
 
-### Viewing Active Worktrees
+### Viewing active environments
 
 ```bash
 archon isolation list
 ```
 
-Shows all active worktrees: branch name, path, creation time, and status.
+Lists active worktrees and containers.
 
 ### Cleaning up stale environments
 
