@@ -1,7 +1,7 @@
 /**
  * Zod schema for step retry configuration.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 const retryDelaySchema = z.number().max(60000, "'retry.delay_ms' must not exceed 60000");
 

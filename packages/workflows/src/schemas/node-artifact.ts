@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /** One enclosing loop_group execution frame for a typed body artifact. */
 export const nodeArtifactLoopFrameSchema = z.object({

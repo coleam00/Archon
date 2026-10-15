@@ -2,7 +2,7 @@
  * Zod schemas for workflow definition types, plus result types for
  * workflow loading and execution (non-schema hand-written discriminated unions).
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   dagNodeSchema,
   effortLevelSchema,

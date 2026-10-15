@@ -10,7 +10,7 @@
  * z.union() is NOT used here — YAML nodes lack an explicit `type` discriminant,
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
@@ -2148,7 +2148,7 @@ export const dagNodeSchema = z
       ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
     } satisfies LoopNode;
   })
-  .openapi('DagNode');
+  .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
 // Type guards (preserved from original types.ts)
