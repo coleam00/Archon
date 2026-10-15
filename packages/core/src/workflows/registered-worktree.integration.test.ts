@@ -338,3 +338,28 @@ for (const changed of ['working_path', 'branch_name', 'created_at', 'metadata'] 
     expect((await isolation.getById(replacement.id))?.metadata.adopted).toBe(true);
   });
 }
+
+test('unchanged legacy registration remains adoptable after an integer-like metadata key is merged', async () => {
+  git('worktree', 'add', '-qb', 'legacy-merge', join(root, 'legacy-merge'));
+  const created = await isolation.create({
+    codebase_id: codebaseId,
+    workflow_type: 'task',
+    workflow_id: 'legacy-merge',
+    working_path: join(root, 'legacy-merge'),
+    branch_name: toBranchName('legacy-merge'),
+  });
+  await db.query('UPDATE remote_agent_isolation_environments SET metadata = $1 WHERE id = $2', [
+    '{"label":"legacy"}',
+    created.id,
+  ]);
+  await isolation.updateMetadata(created.id, { '1': 'step result' });
+  const observed = (await isolation.getById(created.id))!;
+  events.length = 0;
+  await recordWorktreeAdoption(isolation, observed, repo);
+  expect((await isolation.getById(created.id))?.metadata).toEqual({
+    label: 'legacy',
+    '1': 'step result',
+    adopted: true,
+  });
+  expectAdoptionWarning(observed.branch_name, observed.working_path, 'legacy-merge');
+});

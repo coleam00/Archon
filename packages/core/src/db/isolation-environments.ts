@@ -257,7 +257,22 @@ export async function updateMetadata(
            ? `
        AND branch_name = $5
        AND ${getDatabaseType() === 'sqlite' ? 'julianday(created_at) = julianday($6)' : "date_trunc('milliseconds', created_at) = $6::timestamptz"}
-       AND ${getDatabaseType() === 'sqlite' ? 'json(metadata) = json($7)' : 'metadata = $7::jsonb'}
+       AND ${
+         getDatabaseType() === 'sqlite'
+           ? `NOT EXISTS (
+         WITH current_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(metadata)
+         ), observed_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree($7)
+         )
+         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
+         UNION ALL
+         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
+       )`
+           : 'metadata = $7::jsonb'
+       }
        AND codebase_id = $8 AND workflow_type = $9 AND workflow_id = $10
        AND created_by_platform IS NOT DISTINCT FROM $11 AND created_by_user_id IS NOT DISTINCT FROM $12`
            : ''
