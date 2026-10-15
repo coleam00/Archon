@@ -357,6 +357,93 @@ describe('watchAttentionQueue', () => {
     await stream.close();
   });
 
+  test('an answer the row no longer records is read from its event in the same page', async () => {
+    const store = await makeStore();
+    let held = false;
+    const holding: IWorkflowStore = Object.create(store);
+    holding.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : store.readWorkflowEventsAfter(cursor, options);
+    const answeredGate = await running(store);
+    const first = gate();
+    await store.pauseWorkflowRun(answeredGate, first, undefined, {
+      workflow_run_id: answeredGate,
+      event_type: 'node_suspended',
+      step_name: 'review',
+      data: {},
+    });
+    const asked = await pausedAtAsk(store);
+    const stream = await watch(holding);
+    await stream.next(line => line.type === 'ready');
+
+    // While the tail is held, each answer is followed by a write that drops it from the row,
+    // so only the answer event in the page can tell answered from withdrawn.
+    held = true;
+    await store.resolveApprovalGate(
+      answeredGate,
+      { approval: { ...first, resolved: 'approved' } },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { via: 'web', occurrence: first.pauseId, decision: 'approved' },
+        },
+      ],
+      { nodeId: first.nodeId, pauseId: first.pauseId }
+    );
+    await store.resumeWorkflowRun(answeredGate);
+    const second = gate();
+    await store.pauseWorkflowRun(answeredGate, second, undefined, {
+      workflow_run_id: answeredGate,
+      event_type: 'node_suspended',
+      step_name: 'review',
+      data: {},
+    });
+    await store.answerAttentionWait(asked.runId, answer(asked.wait.pauseId));
+    await store.resumeWorkflowRun(asked.runId);
+    await store.pauseWorkflowRunForWait(asked.runId, ask(), { kind: 'started', stepName: 'ask' });
+    held = false;
+
+    for (const [runId, occurrence, via] of [
+      [answeredGate, first.pauseId, 'web'],
+      [asked.runId, asked.wait.pauseId, 'cli'],
+    ] as const) {
+      expect(await stream.next(ofRun(runId, 'resolved'))).toMatchObject({
+        occurrence,
+        reason: 'answered',
+        answeredVia: via,
+        answeredAt: null,
+      });
+      await stream.next(() => stream.lines.filter(attentionOf(runId)).length === 2);
+    }
+    await stream.close();
+    expect(
+      stream.lines.filter(line => line.type === 'resolved' || line.type === 'attention')
+    ).toHaveLength(6);
+  });
+
+  test('terminal and owner_lost reach a label-filtered stream for every run in scope', async () => {
+    const store = await makeStore();
+    const orphan = await running(store);
+    const finishing = await running(store);
+    const stream = await watch(
+      store,
+      { labels: { ci: 'pr' } },
+      {
+        ...host,
+        ownerLoss: (runId, signal) =>
+          runId === orphan
+            ? Promise.resolve({ observedStatus: 'running' })
+            : new Promise(resolve => signal.addEventListener('abort', () => resolve(null))),
+      }
+    );
+    await stream.next(ofRun(orphan, 'owner_lost'));
+    await store.completeWorkflowRun(finishing, { duration_ms: 1 });
+    expect(await stream.next(ofRun(finishing, 'terminal'))).toMatchObject({ status: 'completed' });
+    await stream.close();
+  });
+
   test('owner loss arrives once, and only through the liveness port', async () => {
     const store = await makeStore();
     const orphan = await running(store);

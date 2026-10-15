@@ -291,9 +291,9 @@ export async function waitForRunAttention(
 /**
  * The attention watch's owner liveness, by the rule `workflow wait` uses: `owner_lost`
  * reports the observed status, and any other end of the wait means the run no longer
- * needs watching. A running row's tool-call attention is the stream's item, not an end
- * of the wait: a process that died mid-call leaves exactly that row, so the watch reads
- * running rows without it and keeps asking for their owner. Polls only; one notification
+ * needs watching. A running row's tool-call attention is not an end of the wait: a process
+ * that died mid-call leaves exactly that row, so the watch reads running rows without it
+ * and keeps asking for their owner. Polls only; one notification
  * listener per running run would hold one database connection each.
  */
 export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWatch {

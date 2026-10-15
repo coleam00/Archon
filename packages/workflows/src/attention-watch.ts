@@ -28,6 +28,7 @@ import type {
   WorkflowEventDoorbell,
   WorkflowRunDelivery,
 } from './engine-port';
+import type { TERMINAL_RUN_EVENT_TYPES } from './file-store/transaction-view';
 import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-subscription';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -40,6 +41,7 @@ import {
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
+  type RunTerminalStatus,
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
@@ -145,7 +147,7 @@ const TERMINAL_EVENT_STATUS = {
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
-} as const;
+} as const satisfies Record<(typeof TERMINAL_RUN_EVENT_TYPES)[number], RunTerminalStatus>;
 
 function isTerminalEventType(type: string): type is keyof typeof TERMINAL_EVENT_STATUS {
   return Object.hasOwn(TERMINAL_EVENT_STATUS, type);
