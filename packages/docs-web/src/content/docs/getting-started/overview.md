@@ -493,17 +493,17 @@ The CLI is standalone, but if you also want to interact via Telegram, Slack, Dis
 
 ## Troubleshooting
 
-### "Cannot create worktree: repository registration failed" (stale workspace symlink)
+### "Cannot run workflow: project registration failed" (stale workspace symlink)
 
 This happens when `~/.archon/workspaces/<owner>/<repo>/source` is a symlink pointing at a previous checkout (common after moving or renaming the repo). The error message includes the exact cleanup path to follow:
 
 ```
-Cannot create worktree: repository registration failed.
+Cannot run workflow: project registration failed.
 Error: Source symlink at ~/.archon/workspaces/<owner>/<repo>/source already points to <old-path>, expected <new-path>
-Hint: Remove the stale workspace entry at ~/.archon/workspaces/<owner>/<repo> and retry, or use --no-worktree to skip isolation.
+Hint: Remove the stale workspace entry at ~/.archon/workspaces/<owner>/<repo> and retry.
 ```
 
-Follow the hint — delete the stale workspace folder and re-run, or pass `--no-worktree` to skip isolation for one run.
+Follow the hint — delete the stale workspace folder and re-run. `--no-worktree` does not skip registration: a run never continues unregistered, because it would share `_cwd/<folder name>` storage and state with every checkout of the same folder name.
 
 > On Archon versions before this fix, the same root cause surfaced as the misleading "Cannot create worktree: not in a git repository" (even though the repo was valid). If you see that string, upgrade and you'll get the actionable message above.
 

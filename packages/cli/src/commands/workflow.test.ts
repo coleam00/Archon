@@ -388,6 +388,7 @@ mock.module('@archon/core', () => ({
   getDecryptedAccessToken: mock(() => Promise.resolve(null)),
 }));
 
+class MockProjectRegistrationError extends Error {}
 const mockedCore = await import('@archon/core');
 mock.module('@archon/core/config/config-loader', () => ({
   loadConfig: (...args: Parameters<typeof mockedCore.loadConfig>) => mockedCore.loadConfig(...args),
@@ -401,6 +402,7 @@ mock.module('@archon/core/handlers/clone', () => ({
   ) => mockedCore.registerRepository(...args),
   registerFolder: (_records: unknown, ...args: Parameters<typeof mockedCore.registerFolder>) =>
     mockedCore.registerFolder(...args),
+  ProjectRegistrationError: MockProjectRegistrationError,
 }));
 
 mock.module('@archon/core/db/users', () => ({
@@ -3876,7 +3878,7 @@ describe('workflowRunCommand', () => {
     );
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('Cannot create worktree: repository registration failed.');
+    expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain(
       'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
     );
@@ -3913,7 +3915,7 @@ describe('workflowRunCommand', () => {
     );
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('Cannot resume: repository registration failed.');
+    expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain(
       'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
     );
@@ -3945,7 +3947,7 @@ describe('workflowRunCommand', () => {
     );
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('Cannot create worktree: repository registration failed.');
+    expect(error.message).toContain('Cannot run workflow: project registration failed.');
     expect(error.message).toContain('EACCES: permission denied');
     // Path-separator-agnostic check: on Windows path.join normalizes to `\`,
     // on POSIX to `/`. Assert the hint prefix + the final segment separately.
@@ -15101,6 +15103,35 @@ describe('run codebase resolution', () => {
     });
     expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: 'release' });
     expectChildExecution();
+  });
+
+  it('a registration failure is fatal instead of running unregistered', async () => {
+    (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('Source symlink at /w/_local/child/source already points to /a, expected /b')
+    );
+    const error = await captureError(
+      workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', { noWorktree: true })
+    );
+    expect(error.message).toContain('Cannot run workflow: project registration failed.');
+    expect(error.message).toContain(
+      'Remove the stale workspace entry at /w/_local/child and retry.'
+    );
+    expect(executor.executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('reports a registration refusal without a workspace hint', async () => {
+    const { ProjectRegistrationError } = await import('@archon/core/handlers/clone');
+    (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new ProjectRegistrationError('Project "acme/app" is already registered at /prod/app')
+    );
+    const error = await captureError(
+      workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', { noWorktree: true })
+    );
+    expect(error.message).toBe(
+      'Cannot run workflow: project registration failed.\n' +
+        'Error: Project "acme/app" is already registered at /prod/app'
+    );
+    expect(executor.executeWorkflow).not.toHaveBeenCalled();
   });
 
   it('explicit registration failure is fatal even without worktrees', async () => {

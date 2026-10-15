@@ -1631,6 +1631,8 @@ The CLI determines where to run based on:
 
 Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves to the nearest git repository root (e.g., `/repo`). A nested repository resolves as its own codebase and registers on first workflow use. Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
 
+A run never continues unregistered: when registration fails, the command fails with the registration error, even with `--no-worktree`. Registering a second clone of an already-registered remote is refused with the registered project's path; use worktrees (`--branch`) for parallel checkouts. A new project whose name or storage folder is already taken by a different path registers under the first free suffixed name, such as `_local/api-2`.
+
 When using `--branch`, workflows run inside the worktree directory.
 
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
@@ -1761,8 +1763,6 @@ node identity also fails. A node reaches only its run's project, or install scop
 names one directly (the workspace-relative key, such as `owner/repo` or `_folder/ops`),
 and `--install` selects install scope. The writer is recorded as
 `{kind: "surface", via: "cli"}`: the surface the write came through, not who made it.
-Projects with colliding storage names share state, just as with `$STATE_DIR`; register
-them with distinct names.
 
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.

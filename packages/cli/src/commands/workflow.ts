@@ -38,7 +38,11 @@ import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execu
 import type { NodeState } from '@archon/workflows/schemas/node-state';
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
-import { registerRepository, registerFolder } from '@archon/core/handlers/clone';
+import {
+  registerRepository,
+  registerFolder,
+  ProjectRegistrationError,
+} from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { toPersistedMessageMetadata } from '@archon/core/types';
@@ -775,32 +779,33 @@ export function extractStaleWorkspaceEntry(message: string): string | null {
 }
 
 /**
- * Wraps a codebase auto-registration failure for either the worktree-create or
- * resume path. Preserves the original error message and delegates hint detail
- * to `extractStaleWorkspaceEntry`; falls back to a workspace-root pointer when
- * the error shape is unrecognized.
+ * Wraps a codebase auto-registration failure. Preserves the original error message;
+ * a refusal already says what to do, other failures get a hint from
+ * `extractStaleWorkspaceEntry`, or a workspace-root pointer when the error shape is
+ * unrecognized.
  */
-function buildRegistrationFailureError(action: string, error: Error): Error {
-  const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
-  let hint: string;
-  if (staleWorkspaceEntry) {
-    hint = `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`;
-  } else {
-    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
-    // the registration error we're wrapping is the load-bearing one — we'd
-    // rather lose the exact path in the hint than replace it with a secondary
-    // home-resolution error that masks the root cause.
-    try {
-      const workspacesPath = join(getArchonHome(), 'workspaces');
-      hint = `Hint: Check your Archon workspace registration under ${workspacesPath} and retry, or use --no-worktree to skip isolation.`;
-    } catch {
-      hint =
-        'Hint: Check your Archon workspace registration and retry, or use --no-worktree to skip isolation.';
+function buildRegistrationFailureError(error: Error): Error {
+  let hint = '';
+  if (!(error instanceof ProjectRegistrationError)) {
+    const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
+    if (staleWorkspaceEntry) {
+      hint = `\nHint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry.`;
+    } else {
+      // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
+      // the registration error we're wrapping is the load-bearing one — we'd
+      // rather lose the exact path in the hint than replace it with a secondary
+      // home-resolution error that masks the root cause.
+      try {
+        const workspacesPath = join(getArchonHome(), 'workspaces');
+        hint = `\nHint: Check your Archon workspace registration under ${workspacesPath} and retry.`;
+      } catch {
+        hint = '\nHint: Check your Archon workspace registration and retry.';
+      }
     }
   }
 
   return new Error(
-    `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`
+    `Cannot run workflow: project registration failed.\nError: ${error.message}${hint}`
   );
 }
 
@@ -844,9 +849,8 @@ function folderWorktreePolicyError(workflowName: string): Error {
 
 /**
  * Error for a failed `--folder` project registration. Distinct from
- * {@link buildRegistrationFailureError} (which mentions worktrees / `--no-worktree`)
- * because no worktree is ever created for a folder project — that hint would be
- * misleading here.
+ * {@link buildRegistrationFailureError} because a folder project has no workspace
+ * `source` link, so its workspace hints would be misleading here.
  */
 function buildFolderRegistrationFailureError(error: Error): Error {
   return new Error(
@@ -871,7 +875,6 @@ function buildFolderRegistrationFailureError(error: Error): Error {
 function assertCodebaseResolvedForIsolation(resolved: {
   codebase: Codebase | null;
   lookupError: Error | null;
-  registrationError: Error | null;
 }): void {
   if (resolved.codebase) return;
   if (resolved.lookupError) {
@@ -880,9 +883,6 @@ function assertCodebaseResolvedForIsolation(resolved: {
         `Error: ${resolved.lookupError.message}\n` +
         'Hint: Check your database connection, or use --no-worktree to skip isolation.'
     );
-  }
-  if (resolved.registrationError) {
-    throw buildRegistrationFailureError('create worktree', resolved.registrationError);
   }
   throw new Error(
     'Cannot create worktree: not in a git repository.\n' +
@@ -1609,10 +1609,10 @@ export async function workflowListCommand(
  * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
  * so the detached child's own call finds what the parent registered.
  *
- * Explicit folder selection fails on unknown or conflicting registration.
- * Other lookup and registration failures are returned for the caller's isolation,
- * resume and adoption policy. First-time folder registration is returned too,
- * because detached JSON output cannot include a prose notice.
+ * Explicit folder selection fails on unknown or conflicting registration, and any
+ * registration failure is fatal. A lookup failure is returned for the caller's
+ * isolation, resume and adoption policy. First-time folder registration is returned
+ * too, because detached JSON output cannot include a prose notice.
  */
 async function resolveRunCodebase(
   host: WorkflowHost,
@@ -1621,13 +1621,11 @@ async function resolveRunCodebase(
 ): Promise<{
   codebase: Codebase | null;
   lookupError: Error | null;
-  registrationError: Error | null;
   /** Set only when THIS call registered a new folder project. */
   registeredFolder?: { name: string; defaultCwd: string };
 }> {
   let codebase: Codebase | null = null;
   let lookupError: Error | null = null;
-  let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
   cwd = await canonicalizeProjectPath(cwd);
   let repoRoot: string | null = null;
@@ -1705,12 +1703,15 @@ async function resolveRunCodebase(
       if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
       const err = error as Error;
       if (options.registrationBaseBranch !== undefined) throw err;
-      registrationError = err;
-      getLog().warn({ err, cwd }, 'cli.codebase_auto_registration_failed');
+      // Running unregistered would file the run under `_cwd/<folder name>`, storage
+      // and state that every checkout with the same folder name shares (#1192).
+      throw options.folder
+        ? buildFolderRegistrationFailureError(err)
+        : buildRegistrationFailureError(err);
     }
   }
 
-  return { codebase, lookupError, registrationError, registeredFolder };
+  return { codebase, lookupError, registeredFolder };
 }
 
 /**
@@ -2404,9 +2405,6 @@ async function runWorkflowWithOwnedSource(
           `(${detachResolved.registeredFolder.defaultCwd})`
       );
     }
-    if (options.folder && !detachCodebase && detachResolved.registrationError) {
-      throw buildFolderRegistrationFailureError(detachResolved.registrationError);
-    }
     // The refusal the plain `run <name> --detach` launch was still missing: an isolating
     // run with no project to isolate. The isolation block enforces it in whichever
     // process reaches it, which for a detached launch is the child — after the parent has
@@ -2704,22 +2702,12 @@ async function runWorkflowWithOwnedSource(
   const {
     codebase,
     lookupError: codebaseLookupError,
-    registrationError: codebaseRegistrationError,
     registeredFolder,
   } = await resolveRunCodebase(host, cwd, options);
   if (registeredFolder) {
     console.log(
       `Registered folder project "${registeredFolder.name}" (${registeredFolder.defaultCwd})`
     );
-  }
-
-  // A --folder registration failure must be fatal regardless of the workflow's
-  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow,
-  // wantsIsolation is false, so the later isolation fail-fast branch never fires
-  // and the run would silently proceed against the bare cwd with no registered
-  // project.
-  if (options.folder && !codebase && codebaseRegistrationError) {
-    throw buildFolderRegistrationFailureError(codebaseRegistrationError);
   }
 
   // Handle isolation (worktree creation)
@@ -2836,9 +2824,6 @@ async function runWorkflowWithOwnedSource(
             `Error: ${codebaseLookupError.message}\n` +
             'Hint: Check your database connection before using --resume.'
         );
-      }
-      if (codebaseRegistrationError) {
-        throw buildRegistrationFailureError('resume', codebaseRegistrationError);
       }
       throw new Error(
         'Cannot resume: Not in a git repository.\n' +
@@ -3267,11 +3252,7 @@ async function runWorkflowWithOwnedSource(
     } else if (wantsIsolation) {
       // Isolation was expected (default) but codebase is unavailable — fail fast. The
       // `--detach` pre-flight enforces the same refusal before the fork.
-      assertCodebaseResolvedForIsolation({
-        codebase,
-        lookupError: codebaseLookupError,
-        registrationError: codebaseRegistrationError,
-      });
+      assertCodebaseResolvedForIsolation({ codebase, lookupError: codebaseLookupError });
     }
 
     if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
