@@ -202,7 +202,7 @@ warning still appears.
 | `approval: { message }` | `wait: { attention: <message>, form: approval }`. A legacy reject cancels the run; the attention form continues with decision `reject`, so add a `cancel:` node on reject where rejecting should end the run. Archon does not translate this for you. |
 | `approval.decisions` | `form: select` with the same ids and labels as `options`. The output is the same `{ decision, text }`. |
 | `approval.capture_response` | The answer's text, `$<id>.output.text`. Every form records it. |
-| `approval.on_reject` and `$REJECTION_REASON` | A rework node with `when: "$<id>.output.decision == 'reject'"` that reads `$<id>.output.text`, inside a `loop_group` if the rework should repeat. See [Rework until approved](#rework-until-approved). |
+| `approval.on_reject` and `$REJECTION_REASON` | A rework node with `when: "$<id>.output.decision == 'reject'"` that reads `$<id>.output.text`. To repeat the rework, use a `loop_group` whose body ends in the wait, with the rework node first reading `$LOOP_PREV.<id>.output.text`. See [Rework until approved](#rework-until-approved). |
 | Interactive loop gates (`interactive: true` with `gate_message` on `loop:` or `loop_group:`, and `$LOOP_USER_INPUT`) | A `loop_group` whose body ends in `wait: attention`. The next iteration reads `$LOOP_PREV.<wait-id>.output`, and `until_bash` checks the answer. |
 
 A plain gate, before and after:

@@ -7955,7 +7955,7 @@ nodes:
           '        prompt: fix it',
         ],
         [
-          "Node 'gate': 'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'; put both in a 'loop_group' if the rework should repeat. It keeps running as before until rewritten.",
+          "Node 'gate': 'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat the rework, write a 'loop_group' whose body ends in the wait; the rework node comes first and reads '$LOOP_PREV.<id>.output.text'. It keeps running as before until rewritten.",
         ],
       ],
       [
@@ -8017,6 +8017,43 @@ nodes:
       expect(pw).toEqual([
         expect.stringContaining("Nodes 'first', 'second': 'approval:' is deprecated."),
       ]);
+    });
+
+    it("the on_reject replacement repeats rework by reading $LOOP_PREV, keeping the wait as the body's sink", async () => {
+      const groupLines = (bodyLines: string[]): string[] => [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until_bash: \'decision=$review.output.decision; test "$decision" = approve\'',
+        '      max_iterations: 3',
+        '      nodes:',
+        ...bodyLines,
+      ];
+      const pw = await warningsFor(
+        groupLines([
+          '        - id: rework',
+          '          prompt: "Revise. Feedback, if any: $LOOP_PREV.review.output.text"',
+          '        - id: review',
+          '          depends_on: [rework]',
+          '          wait: { attention: ok?, form: approval }',
+        ])
+      );
+      expect(pw).toEqual([]);
+
+      // A rework node after the wait, as a one-shot replacement writes it, cannot repeat.
+      const error = await loadErrorFor(
+        groupLines([
+          '        - id: review',
+          '          wait: { attention: ok?, form: approval }',
+          '        - id: rework',
+          '          depends_on: [review]',
+          '          when: "$review.output.decision == \'reject\'"',
+          '          prompt: "Revise: $review.output.text"',
+        ])
+      );
+      expect(error).toContain("wait node 'review' must be the body's sole terminal sink");
     });
 
     it('does not warn on attention waits, the replacement', async () => {

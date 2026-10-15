@@ -647,8 +647,9 @@ const LEGACY_PAUSE_REPLACEMENTS: Record<LegacyPauseShape, string> = {
   on_reject:
     "'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: " +
     "<message>, form: approval }' followed by a rework node with " +
-    "when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'; put both " +
-    "in a 'loop_group' if the rework should repeat.",
+    "when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat " +
+    "the rework, write a 'loop_group' whose body ends in the wait; the rework node comes " +
+    "first and reads '$LOOP_PREV.<id>.output.text'.",
   capture_response:
     "'approval.capture_response' is deprecated. An attention wait always records the answer; " +
     "the next node reads '$<id>.output.text'.",
