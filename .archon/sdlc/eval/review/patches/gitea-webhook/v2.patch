@@ -1,0 +1,27 @@
+diff --git a/packages/adapters/src/community/forge/gitea/adapter.ts b/packages/adapters/src/community/forge/gitea/adapter.ts
+index d16923069..467fe0e21 100644
+--- a/packages/adapters/src/community/forge/gitea/adapter.ts
++++ b/packages/adapters/src/community/forge/gitea/adapter.ts
+@@ -5,7 +5,7 @@
+  * Community forge adapter — see packages/adapters/src/community/forge/README.md
+  */
+ import { giteaPolicy } from './policy';
+-import { createHmac, timingSafeEqual } from 'crypto';
++import { createHmac } from 'crypto';
+ import { readdir, access } from 'fs/promises';
+ import { join } from 'path';
+ import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+@@ -289,7 +289,12 @@ export class GiteaAdapter implements IPlatformAdapter {
+         return false;
+       }
+ 
+-      const isValid = timingSafeEqual(digestBuffer, signatureBuffer);
++      // Constant-time compare: fold every byte difference before deciding.
++      let difference = 0;
++      for (let i = 0; i < digestBuffer.length; i++) {
++        difference |= digestBuffer[i] ^ signatureBuffer[i];
++      }
++      const isValid = difference === 0;
+ 
+       if (!isValid) {
+         getLog().error(
