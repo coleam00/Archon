@@ -3,8 +3,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
-import { tmpdir } from 'os';
+import { join, dirname, relative, resolve } from 'path';
+import { homedir, tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
 import * as git from '@archon/git';
 import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
@@ -1202,6 +1202,7 @@ describe('GitHub setup wizard', () => {
   let root: string;
   let target: string;
   let keyPath: string;
+  let allowedUsers: string | symbol;
   let savedHome: string | undefined;
   let authMode: 'app' | 'pat';
   let keySource: 'path' | 'inline';
@@ -1225,6 +1226,7 @@ describe('GitHub setup wizard', () => {
     botDisplayName = 'Archon';
     keyPem = privateKey;
     keyValidation = [];
+    allowedUsers = '';
     keyPath = join(root, 'app.pem');
     writeFileSync(keyPath, privateKey);
     authMode = 'app';
@@ -1260,6 +1262,11 @@ describe('GitHub setup wizard', () => {
         return 'U222';
       if (options.message === 'Enter the bot display name:') return botDisplayName;
       if (options.message === 'GitHub App ID:') return '123';
+      if (
+        options.message ===
+        'Enter allowed GitHub usernames (comma-separated, or leave empty for all):'
+      )
+        return allowedUsers;
       if (options.message === 'GitHub App private key path:') {
         const error = await options.validate?.(keyPath);
         keyValidation.push(error);
@@ -1448,6 +1455,53 @@ describe('GitHub setup wizard', () => {
       expect(existsSync(join(root, 'home', '.env'))).toBe(false);
     }
   );
+
+  it.each(['home', 'relative'] as const)(
+    'validates and stores the absolute private key path from a %s path',
+    async form => {
+      const absolutePath = keyPath;
+      keyPath =
+        form === 'home'
+          ? `  ~/${relative(homedir(), absolutePath)}  `
+          : `  ${relative(process.cwd(), absolutePath)}  `;
+      expect(await run()).toBe(0);
+      expect(keyValidation).toEqual([undefined]);
+      expect(read().GITHUB_APP_PRIVATE_KEY_PATH).toBe(resolve(absolutePath));
+      expect(loadGitHubAppConfig(read())?.privateKey).toBe(privateKey);
+    }
+  );
+
+  it.each(['app', 'pat'] as const)(
+    '%s setup persists the selected allowlist and permits an explicitly empty list',
+    async mode => {
+      authMode = mode;
+      allowedUsers = 'Alice,bob';
+      expect(await run()).toBe(0);
+      expect(read().GITHUB_ALLOWED_USERS).toBe('Alice,bob');
+      allowedUsers = '';
+      expect(await run(true)).toBe(0);
+      expect(read().GITHUB_ALLOWED_USERS).toBeUndefined();
+    }
+  );
+
+  it('App reruns retain an existing allowlist unless forced', async () => {
+    allowedUsers = 'new-user';
+    writeFileSync(target, 'GITHUB_ALLOWED_USERS=existing-user\n');
+    expect(await run()).toBe(0);
+    expect(read().GITHUB_ALLOWED_USERS).toBe('existing-user');
+    expect(await run(true)).toBe(0);
+    expect(read().GITHUB_ALLOWED_USERS).toBe('new-user');
+  });
+
+  it('cancelling the App allowlist prompt leaves the env file untouched', async () => {
+    allowedUsers = cancelled;
+    const original = 'CUSTOM_KEY=keep\n';
+    writeFileSync(target, original);
+    expect(await run()).toBe(0);
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(output).toContain('Setup cancelled.');
+    expect(Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target)))).toEqual([]);
+  });
 
   it.each([
     ['"', 'fresh'],

@@ -63,6 +63,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   getPluginsPath,
+  expandTilde,
 } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -1217,12 +1218,13 @@ async function collectGitHubAppConfig(): Promise<GitHubConfig> {
     cancel('Setup cancelled.');
     exitSetup(0);
   }
+  const resolveKeyPath = (value: string): string => resolve(expandTilde(value.trim()));
   const validateKey = (value: string | undefined): string | undefined => {
     if (!value?.trim()) return 'A private key is required';
     try {
       const pem =
         source === 'path'
-          ? readFileSync(resolve(value.trim()), 'utf8')
+          ? readFileSync(resolveKeyPath(value), 'utf8')
           : value.replace(/\\r\\n|\\n/g, '\n');
       if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') return 'Use an RSA PEM private key';
     } catch {
@@ -1257,12 +1259,25 @@ async function collectGitHubAppConfig(): Promise<GitHubConfig> {
     appId: appId.trim(),
     privateKey:
       source === 'path'
-        ? { source: 'path', value: resolve(key.trim()) }
+        ? { source: 'path', value: resolveKeyPath(key) }
         : { source: 'inline', value: key.replace(/\\r\\n|\\n/g, '\n') },
     webhookSecret,
     slug: slug.trim() || undefined,
-    allowedUsers: '',
+    allowedUsers: await collectGitHubAllowedUsers(),
   };
+}
+
+async function collectGitHubAllowedUsers(): Promise<string> {
+  const allowedUsers = await text({
+    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
+    placeholder: 'username1,username2',
+  });
+
+  if (isCancel(allowedUsers)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return allowedUsers;
 }
 
 async function collectGitHubPatConfig(): Promise<GitHubConfig> {
@@ -1349,15 +1364,7 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
     }
   }
 
-  const allowedUsers = await text({
-    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
-    placeholder: 'username1,username2',
-  });
-
-  if (isCancel(allowedUsers)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  const allowedUsers = await collectGitHubAllowedUsers();
 
   const customMention = await confirm({
     message: 'Do you want to set a custom @mention name? (Default: archon)',
