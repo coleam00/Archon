@@ -35414,6 +35414,132 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
     );
   }
 
+  for (const kind of ['loop', 'loop_group'] as const) {
+    for (const composed of [false, true]) {
+      it(`#4164: ${kind}.until_bash receives ${composed ? 'composed' : 'run'} inputs`, async () => {
+        const predicate = `[ "$INPUTS_TARGET" = "done" ] && [ "$INPUTS_PAYLOAD" = '$(touch injected); "quoted"' ] && [ "$ARGUMENTS" = "real-args" ]`;
+        const block = buildWf(
+          'input-loop',
+          [
+            kind === 'loop'
+              ? { id: 'poll', loop: { prompt: 'work', until_bash: predicate, max_iterations: 2 } }
+              : {
+                  id: 'poll',
+                  loop_group: {
+                    until_bash: predicate,
+                    max_iterations: 2,
+                    nodes: [{ id: 'work', prompt: 'work' }],
+                  },
+                },
+          ],
+          { inputs: { target: { required: true }, payload: { required: true } } }
+        );
+        const parent = buildWf('input-parent', [
+          {
+            id: 'inc',
+            include: 'input-loop',
+            with: { target: 'done', payload: '$(touch injected); "quoted"' },
+          },
+        ]);
+        const { workflows, errors } = expandWorkflowIncludes(
+          new Map([
+            ['input-loop', block],
+            ['input-parent', parent],
+          ])
+        );
+        expect(errors).toEqual([]);
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: ready(composed ? workflows.get('input-parent')! : block),
+            workflowRun: makeWorkflowRun('input-loop-run', {
+              user_message: 'real-args',
+              metadata: {
+                inputs: {
+                  target: composed ? 'wrong-run-value' : 'done',
+                  payload: '$(touch injected); "quoted"',
+                },
+              },
+            }),
+            config: {
+              ...minimalConfig,
+              envVars: { INPUTS_TARGET: 'wrong-project-value', ARGUMENTS: 'hijacked' },
+            },
+          })
+        );
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+        expect(store.completeWorkflowRun.mock.calls.length).toBe(1);
+        expect(await Bun.file(join(testDir, 'injected')).exists()).toBe(false);
+      });
+    }
+  }
+
+  it("#4164: an included shell's $INPUTS macro reads the input as data", async () => {
+    const payload = '$(touch injected); "quoted"';
+    const block = buildWf(
+      'macro-blk',
+      [
+        { id: 'echo', bash: "printf '%s' $INPUTS.payload" },
+        {
+          id: 'poll',
+          depends_on: ['echo'],
+          loop: { prompt: 'work', until_bash: '[ $INPUTS.target = done ]', max_iterations: 2 },
+        },
+      ],
+      { inputs: { target: { required: true }, payload: { required: true } } }
+    );
+    const parent = buildWf('macro-parent', [
+      { id: 'inc', include: 'macro-blk', with: { target: 'done', payload } },
+    ]);
+    const store = createMockStore();
+
+    await runExpanded([block, parent], 'macro-parent', createMockDeps(store));
+
+    expect(nodeOutputOf(store, 'inc__echo')).toBe(payload);
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(store.completeWorkflowRun.mock.calls.length).toBe(1);
+    expect(await Bun.file(join(testDir, 'injected')).exists()).toBe(false);
+  });
+
+  it("a script node's own with: binding beats a colliding composed and run input", async () => {
+    const block = buildWf(
+      'collide-blk',
+      [
+        {
+          id: 'emit',
+          runtime: 'bun',
+          script: 'console.log(process.env.INPUTS_TARGET);',
+          with: { target: 'local' },
+        },
+      ],
+      { inputs: { target: { required: true } } }
+    );
+    const parent = buildWf('collide-parent', [
+      { id: 'inc', include: 'collide-blk', with: { target: 'composed' } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['collide-blk', block],
+        ['collide-parent', parent],
+      ])
+    );
+    expect(errors).toEqual([]);
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(workflows.get('collide-parent')!),
+        workflowRun: makeWorkflowRun('collide-run', { metadata: { inputs: { target: 'run' } } }),
+      })
+    );
+
+    expect(nodeOutputOf(store, 'inc__emit')).toBe('local');
+  });
+
   it('AC7 — a composed block entry starts a fresh session even after a same-provider node', async () => {
     const block = buildWf('sess-blk', [
       { id: 'first', prompt: 'block first' },
@@ -38854,6 +38980,61 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     // until_bash read the answer; the group's output is still the work (#4043).
     expect(completedEvents[0].data?.node_output).toBe('work output');
     expect(completedEvents[0].data?.structured_output).toBeUndefined();
+  });
+
+  it('#4164: resumed loop_group.until_bash receives named inputs', async () => {
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'should not run' };
+      yield { type: 'result', sessionId: 'unexpected-session' };
+    });
+
+    const store = createEscalationStore('run-escalation-2');
+    const platform = createMockPlatform();
+    const approvedDecision = { decision: 'approve', text: '' };
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['grp.work', { output: 'work output' }],
+      [
+        'grp.check',
+        { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
+      ],
+    ]);
+    const workflowRun = makeWorkflowRun('run-escalation-2', {
+      metadata: {
+        inputs: { target: 'done' },
+        approval: {
+          nodeId: 'grp',
+          message: 'Continue?',
+          type: 'approval',
+          bodyGateId: 'check',
+          iteration: 1,
+          decisions: [{ id: 'approve' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        } satisfies ApprovalContext,
+      },
+    });
+
+    const workflow = gateTerminatedLoopGroupWorkflow();
+    workflow.inputs = { target: { required: true } };
+    const group = workflow.nodes[0];
+    if (group?.kind !== 'loop_group') throw new Error('expected group');
+    group.loop_group.until_bash = '[ "$INPUTS_TARGET" = done ]';
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow: ready(workflow),
+        workflowRun,
+        priorCompletedNodes,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    expect(
+      (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock.calls.length
+    ).toBe(1);
   });
 
   it('resuming after a non-completing decision advances to a fresh iteration, with the text available via $LOOP_PREV', async () => {

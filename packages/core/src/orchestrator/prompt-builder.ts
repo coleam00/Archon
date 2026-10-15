@@ -286,30 +286,93 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 }
 
 /**
- * Build the routing rules section of the prompt.
+ * How the chat agent launches workflows and registers projects. `tools`: the typed
+ * `invoke_workflow` and `register_project` native tools (providers with in-process
+ * tools). `commands`: `/invoke-workflow` and `/register-project` lines the command
+ * scan reads from the reply (every other provider).
  */
-export function buildRoutingRules(): string {
-  return buildRoutingRulesWithProject();
-}
+export type LaunchChannel = 'tools' | 'commands';
 
 /**
  * Build the routing rules section, optionally scoped to a specific project.
  * When projectName is provided, rule #4 defaults to that project instead of asking.
  */
-export function buildRoutingRulesWithProject(projectName?: string): string {
+export function buildRoutingRulesWithProject(channel: LaunchChannel, projectName?: string): string {
   const rule4 = projectName
     ? `4. If ambiguous which project → use **${projectName}** (the active project)`
     : '4. If ambiguous which project → ask the user';
   const workspaces = getArchonWorkspacesPath();
 
-  return `## Routing Rules
+  const routingRules = `## Routing Rules
 
 1. If the user asks a question, wants to explore code, or needs help → answer directly
 2. If the user wants structured development work → invoke the appropriate workflow
 3. If the user mentions a specific project → use that project's name
 ${rule4}
 5. If no project needed (general question) → answer directly without workflow
-6. If the user wants to add a new project → clone it, then register it (see below)
+6. If the user wants to add a new project → clone it, then register it (see below)`;
+
+  const promptRules = (
+    arg: string
+  ): string => `- The ${arg} MUST be a complete, self-contained task description that fully captures the user's intent.
+- Synthesize the prompt from conversation context — do NOT use vague references like "do what we discussed" or "yes, go ahead."
+- The prompt should make sense to someone with NO knowledge of the conversation history.`;
+
+  const exampleTask =
+    'Fix GitHub issue #42: the login form rejects valid email addresses. Check the issue against the current code, fix the root cause, and open a reviewed pull request.';
+
+  const projectMaintenance = `To update a project's path:
+   /update-project {project-name} {new-path}
+
+To remove a registered project:
+   /remove-project {project-name}
+
+IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
+
+  if (channel === 'tools') {
+    return `${routingRules}
+
+## Invoking a Workflow
+
+To invoke a workflow, call the \`invoke_workflow\` tool with:
+- \`workflow\`: the exact workflow name from Available Workflows.
+- \`project\`: the project NAME (e.g., "my-project"), not an ID or path.
+- \`prompt\`: the task for the run.
+
+Rules:
+${promptRules('`prompt`')}
+- Call \`invoke_workflow\` at most once per reply. The run starts after your reply ends: say what you launched, and never claim the run finished.
+
+Routing behavior:
+- If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → briefly explain what you're doing and call \`invoke_workflow\`.
+- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-investigate** workflow to find the root cause if you'd like"), but do NOT call \`invoke_workflow\`.
+
+Example (clear intent):
+User: "Fix issue #42, the login form rejects valid emails"
+Response: I'll take issue #42 through to a reviewed pull request.
+invoke_workflow(workflow: "archon-ship", project: "my-project", prompt: "${exampleTask}")
+
+Example (ambiguous — answer directly):
+User: "What do you think about adding dark mode?"
+Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-plan** workflow." Do NOT call \`invoke_workflow\`.
+
+## Project Setup
+
+When a user asks to register an existing local directory, call the \`register_project\` tool with \`name\` and \`path\`.
+Pass \`folder: true\` when the user wants Archon to run in place without managing git.
+A folder project may itself be a git repository. Git belongs to the user and agent.
+Without \`folder\`, git paths are repo projects and non-git paths are folder projects.
+
+When a user asks to clone a new repository:
+1. Clone the repository into ${workspaces}/:
+   git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
+2. Register it by calling \`register_project\` with the project name and the path to \`source\`, e.g.
+   register_project(name: "my-new-app", path: "${workspaces}/user/my-new-app/source")
+
+${projectMaintenance}`;
+  }
+
+  return `${routingRules}
 
 ## Workflow Invocation Format
 
@@ -318,9 +381,7 @@ When invoking a workflow, output the command as the VERY LAST line of your respo
 
 Rules:
 - Use the project NAME (e.g., "my-project"), not an ID or path.
-- The --prompt MUST be a complete, self-contained task description that fully captures the user's intent.
-- Synthesize the prompt from conversation context — do NOT use vague references like "do what we discussed" or "yes, go ahead."
-- The prompt should make sense to someone with NO knowledge of the conversation history.
+${promptRules('--prompt')}
 - You may include a brief explanation before the command. The user will see this text.
 - /invoke-workflow MUST be the absolute last thing in your response. Do NOT use any tools or generate additional text after it.
 
@@ -331,7 +392,7 @@ Routing behavior:
 Example (clear intent):
 User: "Fix issue #42, the login form rejects valid emails"
 Response: I'll take issue #42 through to a reviewed pull request.
-/invoke-workflow archon-ship --project my-project --prompt "Fix GitHub issue #42: the login form rejects valid email addresses. Check the issue against the current code, fix the root cause, and open a reviewed pull request."
+/invoke-workflow archon-ship --project my-project --prompt "${exampleTask}"
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
@@ -355,13 +416,7 @@ When a user asks to clone a new repository:
 Example:
    /register-project my-new-app ${workspaces}/user/my-new-app/source
 
-To update a project's path:
-   /update-project {project-name} {new-path}
-
-To remove a registered project:
-   /remove-project {project-name}
-
-IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
+${projectMaintenance}`;
 }
 
 /**
@@ -370,7 +425,8 @@ IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user
  */
 export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
-  workflows: readonly PromptWorkflow[]
+  workflows: readonly PromptWorkflow[],
+  channel: LaunchChannel
 ): string {
   let prompt = `# Archon Orchestrator
 
@@ -395,7 +451,7 @@ You can answer questions directly or invoke workflows for structured development
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
-  prompt += buildRoutingRules();
+  prompt += buildRoutingRulesWithProject(channel);
 
   return prompt;
 }
@@ -408,7 +464,8 @@ You can answer questions directly or invoke workflows for structured development
 export async function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
-  workflows: readonly PromptWorkflow[]
+  workflows: readonly PromptWorkflow[],
+  channel: LaunchChannel
 ): Promise<string> {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
@@ -436,7 +493,7 @@ ${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodeb
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
-  prompt += buildRoutingRulesWithProject(scopedCodebase.name);
+  prompt += buildRoutingRulesWithProject(channel, scopedCodebase.name);
 
   return prompt;
 }
@@ -477,20 +534,22 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 /**
  * Build the static orchestrator context string for use as a cacheable system prompt append.
  * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
- * on whether the conversation is scoped to a project. The run-management section is NOT
+ * on whether the conversation is scoped to a project, with launch instructions for the
+ * given channel. The run-management section is NOT
  * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
  * providers) via buildRunManagementSection().
  */
 export async function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
-  workflows: readonly PromptWorkflow[]
+  workflows: readonly PromptWorkflow[],
+  channel: LaunchChannel
 ): Promise<string> {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
   return scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, channel)
+    : buildOrchestratorPrompt(codebases, workflows, channel);
 }

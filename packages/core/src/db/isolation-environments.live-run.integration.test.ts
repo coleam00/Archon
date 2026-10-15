@@ -79,6 +79,14 @@ async function seedRunAt(
   );
 }
 
+/** Stamp a failed run's failure time the way failWorkflowRun's datetime('now') does. */
+async function failedDaysAgo(id: string, days: number): Promise<void> {
+  await db.query(
+    `UPDATE remote_agent_workflow_runs SET completed_at = datetime('now', '-' || $1 || ' days') WHERE id = $2`,
+    [days, id]
+  );
+}
+
 describe('getLiveRunOwningEnv — real SQLite behavior', () => {
   test('an env whose conversation holds only terminal runs is NOT pinned (#2868)', async () => {
     const env = await create({
@@ -142,9 +150,8 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
     await expect(getLiveRunOwningEnv(env.id)).resolves.toBeNull();
   });
 
-  // 'failed' is terminal but resumable. Releasing its env lets cleanup run
-  // `git branch -D` on the only branch `--resume`/`--adopt` can attach to, so a
-  // failed run keeps its pin while completed and cancelled runs let go.
+  // 'failed' is terminal but resumable: without a release it keeps its pin while
+  // completed and cancelled runs let go.
   test('a failed run still pins the env — it remains resumable', async () => {
     const env = await create({
       codebase_id: 'cb-1',
@@ -160,6 +167,62 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
       id: 'run-failed',
       status: 'failed',
     });
+  });
+
+  test('a failed run stops pinning once a sweep settles its outcome', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-failed-settled',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-failed-settled', env.id);
+    await seedRun('run-failed-settled', 'conv-failed-settled', 'failed');
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toBeNull();
+  });
+
+  test('a failed run stops pinning only once it has been inactive past the stale window', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-failed-stale',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-failed-stale', env.id);
+    await seedRun('run-failed-stale', 'conv-failed-stale', 'failed');
+    const stale = { kind: 'stale', staleDays: 7 } as const;
+
+    await failedDaysAgo('run-failed-stale', 1);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toEqual({
+      id: 'run-failed-stale',
+      status: 'failed',
+    });
+
+    await failedDaysAgo('run-failed-stale', 10);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toBeNull();
+  });
+
+  test('a paused run pins the env through every release, whatever its age', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-old-paused',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-old-paused', env.id);
+    await seedRunAt('run-old-paused', 'conv-old-paused', 'paused', '2020-01-01 00:00:00');
+    await seedRunAt('run-newer-failed', 'conv-old-paused', 'failed', '2020-01-02 00:00:00');
+    await failedDaysAgo('run-newer-failed', 30);
+    const paused = { id: 'run-old-paused', status: 'paused' };
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(
+      paused
+    );
   });
 
   test.each(['completed', 'cancelled'])(
