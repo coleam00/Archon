@@ -38,6 +38,7 @@ A small, mechanical change — a version bump, a one-line fix, a rename, a test-
 tweak — rarely earns errors or docs. Depth follows what a change can break, not its
 size: do not economize on real risk, and do not invent it.
 
+Every round selects at least one lens: when your judgment leaves none, select `code`.
 Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`) and
 `reason`: one or two sentences citing what in the diff decided it. If you cannot read
 the diff, select every lens and say so in `reason`; never answer that no lens runs

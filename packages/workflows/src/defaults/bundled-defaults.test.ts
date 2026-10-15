@@ -340,8 +340,8 @@ describe('bundled-defaults', () => {
     });
 
     // Every implementation pass before CI is reviewed: the first by the full routed
-    // review, later ones by delta (the same lenses after review findings, the general
-    // code reviewer after a CI fix). One named exception: the post-review reshape,
+    // review, later ones by delta (the previous round's lenses plus any the delta needs
+    // after review findings, the general code reviewer after a CI fix). One named exception: the post-review reshape,
     // which adopts or declines the structure pass's findings and goes straight to CI.
     it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(

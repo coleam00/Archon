@@ -5,7 +5,7 @@ Produce one evidence-based verdict and write the review report humans read. You 
 There are two modes in `$ARTIFACTS_DIR/review/scope.md`:
 
 - **Full review:** aggregate the independent specialist reports. Connect and prioritize their evidence; do not perform another broad review or invent findings beyond the contract coverage below.
-- **Continuation review:** continue from the previous report as the reviewer. This round's lenses (the first round's selection, or the general code reviewer alone after a CI fix) reviewed only the correction delta against their prior findings; aggregate their reports, verify the prior findings, and decide whether the change converged. Do not treat the latest SHA as a new PR and do not repeat the specialist fan-out in your own head as a checklist.
+- **Continuation review:** continue from the previous report as the reviewer. This round's lenses (the previous round's lenses plus any the delta needs, or the general code reviewer alone after a CI fix) reviewed only the correction delta against their prior findings; aggregate their reports, verify the prior findings, and decide whether the change converged. Do not treat the latest SHA as a new PR and do not repeat the specialist fan-out in your own head as a checklist.
 
 ## Read the review state
 

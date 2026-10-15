@@ -16,8 +16,9 @@
  *
  * A first round's lenses are the route agent's call. An ordinary continuation
  * reruns the lenses the previous round ran, which publish-review recorded beside
- * the report, on the delta only, and the route agent adds any the delta needs, so
- * a record with no lenses never leaves a round with nothing to certify. A light
+ * the report, on the delta only, and the route agent adds any the delta needs. The
+ * route agent is told to select at least one lens, so a record with no lenses
+ * still leaves the round something to certify. A light
  * continuation, which follows a correction for CI rather than for review, runs
  * the general code lens alone and does not route.
  *
