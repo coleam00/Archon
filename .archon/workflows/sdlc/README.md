@@ -106,7 +106,10 @@ label is declared in `.shared/labels.ts`, and every stage writes labels through 
 `writeLabels`, which adds and removes them as a delta so labels another writer adds
 survive. On the `forge` source it still writes the whole label set back, because
 the forge contract has no single-label add or remove yet. No node files discoveries: the
-outcome relays them to the operator. Each acts on the values the agent
+run's terminal report relays them to the operator. In `archon-deliver` and
+`archon-ship` that is the `report` node, which also runs when a node fails, so a
+workflow that includes `archon-deliver` runs after a failed delivery and must gate
+on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in

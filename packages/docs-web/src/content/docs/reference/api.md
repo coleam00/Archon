@@ -32,7 +32,19 @@ You can feed this into tools like Swagger UI or use it to generate typed API cli
 
 ## Authentication
 
-None. Archon is a single-developer tool -- there is no authentication on the API by default. If you expose Archon on a network, use a reverse proxy or firewall to restrict access.
+Authentication is optional for a local or trusted solo install. When Web authentication is enabled, the API requires a Better Auth session or a trusted proxy identity unless `ARCHON_WEB_AUTH_REQUIRED=false`. The `/api/auth/` and `/api/health` surfaces are exempt from that general gate, but per-user endpoints still require an identity.
+
+The trusted identity header defaults to `X-Archon-User` and can be changed with `ARCHON_WEB_AUTH_HEADER`. Bind the server to loopback (`HOST=127.0.0.1`) or keep the app port reachable only through a trusted reverse proxy. The proxy must strip client-supplied identity headers. If the proxy supplies an identity header, it must set that value only from an authenticated identity. For network deployments, see the [reverse-proxy deployment guide](/deployment/reverse-proxy/#authentication-and-headers).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/status` | Read Web auth availability and signup posture (no identity required) |
+| GET | `/api/auth/github` | Read the current user's GitHub connection status |
+| DELETE | `/api/auth/github` | Disconnect the current user's GitHub identity |
+| POST | `/api/auth/github/device/start` | Start a GitHub device login for the current user |
+| POST | `/api/auth/github/device/poll` | Poll a GitHub device login and persist the authorized connection |
+
+The GitHub connection routes require a resolved Web identity. The device login routes also require per-user GitHub to be enabled on the install.
 
 ---
 
@@ -141,6 +153,10 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
 | DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
+| POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
+| GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
+| PUT | `/api/codebases/{id}/env` | Set or update a codebase environment variable |
+| DELETE | `/api/codebases/{id}/env/{key}` | Delete a codebase environment variable |
 
 ### List Codebases
 
@@ -205,6 +221,7 @@ Returns the isolation environments (worktrees) associated with a codebase.
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
+| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes` |
 
 #### List Workflows
 
@@ -285,6 +302,9 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, cascade-cancels non-terminal `workflow:` sub-run descendants, and removes the worktrees those runs created, keeping their branches. A cancelled run with a worktree still to remove can be abandoned again to retry. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
+| POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
+| POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
+| POST | `/api/workflows/runs/{runId}/signal` | Signal the exact external event occurrence awaited by a paused run |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
@@ -398,7 +418,21 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -d '{"reason": "Please add error handling first"}'
 ```
 
+These routes record the decision and return. The server's continuation scheduler then continues the run on the platform that started it, whichever surface answered; a container run, or a gate that was already paused when you upgraded to this version, is the exception and needs `archon workflow resume <run-id>`. The response message says which applies.
+
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id (a fan-out parent's error names every child it waits on). `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
+
+---
+
+## Attention queue
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
+| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when the run needs no attention |
+| POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
+
+Outside answerers can read the queue, then submit an answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
 
 ---
 
@@ -445,10 +479,12 @@ workflow's total node count. This state describes node lifecycle, not process-ow
 | PATCH | `/api/config/tiers` | Update model-tier presets (`small`/`medium`/`large`) |
 | PATCH | `/api/config/aliases` | Update `@custom` model aliases (per-key merge; `null` unsets) |
 | GET | `/api/providers/pi/models` | Pi's model catalog (cost/reasoning metadata; best-effort, `[]` on failure) |
+| GET | `/api/providers` | List registered AI providers |
+| GET | `/api/providers/opencode/credentials` | Inspect OpenCode's backend catalog and install-wide auth state (metadata only; starts the embedded runtime on demand) |
 
 `GET /api/config` returns the safe config subset, now including the configured `tiers`, the built-in `tierDefaults` for the current default provider (what an unset tier resolves to), and the configured `aliases`.
 
-These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
+These config routes write non-secret model config to `~/.archon/config.yaml` and work on solo installs without an identity or `TOKEN_ENCRYPTION_KEY`. They follow the general API authentication gate when enabled. Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which always require an identity.
 
 A `PATCH` whose resulting config would be invalid is refused with `400` and nothing is written. The `error` field names the refused key, for example `Invalid assistants config: 'assistants.codex.modelReasoningEffort': ...`. This includes an invalid value already in the file that the patch leaves in place: fix that key (in the same request or by editing the file) before other changes save.
 
@@ -526,7 +562,7 @@ curl http://localhost:3090/api/auth/providers \
 Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable, agents }`:
 - `available` -- every **vendor** id you can connect an API key for (`anthropic`, `openai`, `github-copilot`, plus the Pi backends). Legacy `claude`/`codex`/`copilot` ids are accepted on writes and normalized.
 - `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`**, **`openai`**, and **`github-copilot`**. (The ChatGPT/Codex subscription runs an Archon-owned PKCE flow that captures the `id_token` the Codex CLI requires -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
-- `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, subscriptionAvailable, installEnv, ambientConfigured? }] }`. `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
+- `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, connectionConsumed, subscriptionAvailable, installEnv, ambientConfigured?, usable }] }`. `connectionConsumed` says whether the agent uses the `connected` credential's kind (a connected `anthropic` subscription is consumed by Claude Code, not Pi). `usable` is true for a consumed connection, install env, or detected ambient chain, and `ready` is true when any credential is `usable`. `installEnv` counts only the env vars that agent reads; `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
 
 ### Connect an API Key
 
@@ -571,6 +607,18 @@ curl -X POST http://localhost:3090/api/auth/providers/anthropic/oauth/poll \
 `poll` returns `{ status: "pending" | "connected" | "error", detail? }`. A provider that does not support subscription login returns `400` on `start`.
 
 The CLI equivalent of this whole surface is [`archon ai`](/reference/cli/#ai). For the end-to-end setup walkthrough, see [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+---
+
+## Web push
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/web-push/key` | Get the browser push VAPID public key |
+| POST | `/api/web-push/subscriptions` | Subscribe this browser to push notifications for the current user |
+| DELETE | `/api/web-push/subscriptions` | Remove a browser push subscription by endpoint for the current user |
+
+Subscription writes require a resolved Web identity, including on solo installs.
 
 ---
 

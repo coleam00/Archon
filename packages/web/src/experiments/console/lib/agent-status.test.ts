@@ -3,20 +3,24 @@ import {
   agentReadiness,
   connectionLabel,
   filterCredentials,
-  isCredentialUsable,
   modelCountByBackend,
   providerOptionHint,
   splitPiCredentials,
+  unconsumedConnectionNote,
 } from './agent-status';
 import type { AgentCredentialStatus, AgentCredentials, PiModelInfo } from '../skills';
 
+/** Server-shaped row: a connection is consumed and the row usable unless the override says otherwise. */
 function cred(over: Partial<AgentCredentialStatus> & { vendor: string }): AgentCredentialStatus {
+  const connectionConsumed = over.connectionConsumed ?? (over.connected ?? null) !== null;
   return {
     displayName: over.vendor,
     kinds: ['api_key'],
     connected: null,
+    connectionConsumed,
     subscriptionAvailable: false,
     installEnv: false,
+    usable: connectionConsumed || over.installEnv === true || over.ambientConfigured === true,
     ...over,
   };
 }
@@ -30,20 +34,6 @@ function agent(over: Partial<AgentCredentials> & { id: string }): AgentCredentia
     ...over,
   };
 }
-
-describe('isCredentialUsable', () => {
-  test('connected, install env, or ambient-detected each count', () => {
-    expect(isCredentialUsable(cred({ vendor: 'a', connected: 'api_key' }))).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', connected: 'oauth' }))).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', installEnv: true }))).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', ambientConfigured: true }))).toBe(true);
-  });
-
-  test('nothing detected → not usable (ambientConfigured false stays false)', () => {
-    expect(isCredentialUsable(cred({ vendor: 'a' }))).toBe(false);
-    expect(isCredentialUsable(cred({ vendor: 'a', ambientConfigured: false }))).toBe(false);
-  });
-});
 
 describe('agentReadiness', () => {
   test('dynamic catalog → dynamic state regardless of credentials', () => {
@@ -82,7 +72,13 @@ describe('agentReadiness', () => {
         agent({
           id: 'copilot',
           ready: true,
-          credentials: [cred({ vendor: 'github-copilot', connected: 'oauth' })],
+          credentials: [
+            cred({
+              vendor: 'github-copilot',
+              kinds: ['api_key', 'subscription'],
+              connected: 'oauth',
+            }),
+          ],
         })
       ).detail
     ).toBe('subscription connected');
@@ -94,6 +90,18 @@ describe('agentReadiness', () => {
           credentials: [cred({ vendor: 'anthropic', installEnv: true })],
         })
       ).detail
+    ).toBe('using install env');
+  });
+
+  test('a stored connection the agent does not consume is never named as its reason', () => {
+    const claudeSubscriptionOnPi = cred({
+      vendor: 'anthropic',
+      connected: 'oauth',
+      connectionConsumed: false,
+      installEnv: true,
+    });
+    expect(
+      agentReadiness(agent({ id: 'pi', ready: true, credentials: [claudeSubscriptionOnPi] })).detail
     ).toBe('using install env');
   });
 
@@ -132,15 +140,6 @@ describe('agentReadiness', () => {
       credentials: [cred({ vendor: 'anthropic', connected: 'api_key' }), cred({ vendor: 'groq' })],
     });
     expect(agentReadiness(pi).detail).toBe('1 backend connected');
-  });
-
-  test('drift guard: server ready:true with no client-detectable credential → generic label', () => {
-    // The server verdict wins; the client falls back to a generic 'ready'
-    // rather than contradicting it when it can't name the credential.
-    const r = agentReadiness(
-      agent({ id: 'claude', ready: true, credentials: [cred({ vendor: 'anthropic' })] })
-    );
-    expect(r).toEqual({ state: 'ready', detail: 'ready' });
   });
 });
 
@@ -264,5 +263,27 @@ describe('connectionLabel', () => {
     expect(connectionLabel(connections, 'anthropic')).toBe('work');
     expect(connectionLabel(connections, 'groq')).toBeNull();
     expect(connectionLabel(connections, 'openai')).toBeNull();
+  });
+});
+
+describe('unconsumedConnectionNote', () => {
+  test('a stored connection the agent does not consume points at the env channel', () => {
+    const note = unconsumedConnectionNote(
+      cred({
+        vendor: 'anthropic',
+        displayName: 'Anthropic',
+        kinds: ['api_key'],
+        connected: 'oauth',
+        connectionConsumed: false,
+      })
+    );
+    expect(note).toBe(
+      'subscription used by another agent · to use Anthropic here, set its API key in the install or codebase env'
+    );
+  });
+
+  test('a consumed or absent connection has no note', () => {
+    expect(unconsumedConnectionNote(cred({ vendor: 'anthropic', connected: 'oauth' }))).toBeNull();
+    expect(unconsumedConnectionNote(cred({ vendor: 'anthropic' }))).toBeNull();
   });
 });

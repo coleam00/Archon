@@ -106,16 +106,12 @@ const mockSetRuntimeApiKey = mock(async (providerId: string, key: string) => {
 const mockGetAuth = mock(async (providerId: string) => {
   // Mirror Pi's runtime resolution: runtime override → file api_key → file
   // oauth → ambient (not exercised in unit tests). Returns the new
-  // `AuthResult` shape so the provider can read `auth.apiKey` (the shape
-  // discriminator for Anthropic subscription OAuth lives on the apiKey
-  // value itself, so a raw string is fine).
+  // `AuthResult` shape so the provider can read `auth.apiKey`.
   if (runtimeOverrides[providerId]) {
     return { auth: { apiKey: runtimeOverrides[providerId] }, source: 'runtime-override' };
   }
   const cred = fileCreds[providerId];
   if (cred?.type === 'api_key') return { auth: { apiKey: cred.key }, source: 'auth.json' };
-  // Real Anthropic subscription OAuth access tokens are `sk-ant-oat…` — keep
-  // the stub shape-accurate so token-shape-based detection is exercised.
   if (cred?.type === 'oauth')
     return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
   return undefined;
@@ -347,7 +343,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
-import { ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT, PiProvider } from './provider';
+import { PiProvider } from './provider';
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
 // resets the loader the provider reuses across calls (issue #1877).
@@ -1325,6 +1321,28 @@ describe('PiProvider', () => {
     expect(failure?.evidence).not.toContain('undefined');
   });
 
+  test('a Pi turn on an Anthropic model with only an Archon-delivered subscription fails before the session starts and names provider: claude', async () => {
+    resetScript(scriptedAgentEnd());
+
+    // The env bag chat delivery built from a stored Claude subscription.
+    const { failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-delivered',
+          ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-delivered',
+        },
+      })
+    );
+
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain('provider: claude');
+    expect(failure?.evidence).toContain('ANTHROPIC_API_KEY');
+    expect(failure?.evidence).not.toContain('sk-ant-oat01-delivered');
+    expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
     process.env.GEMINI_API_KEY = 'from-process-env';
     resetScript([
@@ -1402,122 +1420,6 @@ describe('PiProvider', () => {
       })
     );
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'from-env');
-  });
-
-  test('ANTHROPIC_OAUTH_TOKEN (subscription) routes into setRuntimeApiKey for anthropic (#1984)', async () => {
-    // Env-only chat delivers a Claude Pro/Max subscription under the OAuth var.
-    // The bridge must read it (Pi never sees requestOptions.env via process.env),
-    // and the sk-ant-oat* bearer flows through the same runtime channel — pi-ai's
-    // createClient detects OAuth by token content downstream.
-    resetScript([
-      {
-        type: 'agent_end',
-        willRetry: false,
-        messages: [
-          {
-            role: 'assistant',
-            api: 'test',
-            provider: 'test',
-            model: 'test',
-            timestamp: 0,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: 'stop',
-            content: [],
-          },
-        ],
-      },
-    ]);
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'anthropic/claude-haiku-4-5',
-        env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
-      })
-    );
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
-  });
-
-  test('OAuth var wins over the API-key var when both are delivered (#1984)', async () => {
-    resetScript([
-      {
-        type: 'agent_end',
-        willRetry: false,
-        messages: [
-          {
-            role: 'assistant',
-            api: 'test',
-            provider: 'test',
-            model: 'test',
-            timestamp: 0,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: 'stop',
-            content: [],
-          },
-        ],
-      },
-    ]);
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'anthropic/claude-haiku-4-5',
-        env: {
-          ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer',
-          ANTHROPIC_API_KEY: 'sk-ant-apikey',
-        },
-      })
-    );
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-bearer');
-  });
-
-  test('ANTHROPIC_OAUTH_TOKEN is read from process.env when absent from request env (#1984)', async () => {
-    // Shell/ambient override parity with the API-key var path.
-    process.env.ANTHROPIC_OAUTH_TOKEN = 'sk-ant-oat01-proc';
-    resetScript([
-      {
-        type: 'agent_end',
-        willRetry: false,
-        messages: [
-          {
-            role: 'assistant',
-            api: 'test',
-            provider: 'test',
-            model: 'test',
-            timestamp: 0,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: 'stop',
-            content: [],
-          },
-        ],
-      },
-    ]);
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'anthropic/claude-haiku-4-5',
-      })
-    );
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-proc');
   });
 
   test('coalesces text_delta events into a single agent_message_chunk (#1814)', async () => {
@@ -2179,55 +2081,35 @@ describe('PiProvider', () => {
     expect(loaderArgs?.systemPrompt).toBe('node-level prompt');
   });
 
-  // ─── Anthropic subscription-OAuth default system prompt (#1831) ───────
-
-  test('Anthropic OAuth session (env token) falls back to the OAuth-safe default prompt', async () => {
-    // A subscription token (sk-ant-oat*) with no explicit systemPrompt must
-    // suppress Pi's built-in prompt — Anthropic's OAuth endpoint 400s it.
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'anthropic/claude-haiku-4-5',
-        env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
-      })
-    );
-
-    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(loaderArgs?.systemPrompt).toBe(ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT);
-  });
-
-  test('Anthropic OAuth session (auth.json subscription cred) falls back to the default prompt', async () => {
-    // Same detection via the `pi /login` path: getApiKey resolves the stored
-    // OAuth access token (sk-ant-oat*), no env var involved.
+  test("a user's own Pi Anthropic login is used as Pi configures it, with no Archon prompt", async () => {
     fileCreds.anthropic = { type: 'oauth' };
     resetScript(scriptedAgentEnd());
 
-    await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'anthropic/claude-haiku-4-5',
       })
     );
 
+    expect(failure).toBeUndefined();
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
       | Record<string, unknown>
       | undefined;
-    expect(loaderArgs?.systemPrompt).toBe(ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT);
+    expect(loaderArgs?.systemPrompt).toBeUndefined();
   });
 
-  test('Anthropic API-key session keeps Pi built-in prompt (systemPrompt undefined)', async () => {
-    // Narrowed scope: API-key auth is not affected by the OAuth classifier, so
-    // Pi's built-in prompt (with its dynamic tool list) must stay intact.
+  test('Anthropic API-key session runs with Pi built-in prompt (systemPrompt undefined)', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-key';
     resetScript(scriptedAgentEnd());
 
-    await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'anthropic/claude-haiku-4-5',
       })
     );
+
+    expect(failure).toBeUndefined();
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-api03-key');
 
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
       | Record<string, unknown>
@@ -2247,32 +2129,6 @@ describe('PiProvider', () => {
       | Record<string, unknown>
       | undefined;
     expect(loaderArgs?.systemPrompt).toBeUndefined();
-  });
-
-  test('explicit systemPrompt wins over the OAuth default on an OAuth session', async () => {
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'anthropic/claude-haiku-4-5',
-        env: { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-bearer' },
-        nodeConfig: { systemPrompt: 'node-level custom prompt' },
-      })
-    );
-
-    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(loaderArgs?.systemPrompt).toBe('node-level custom prompt');
-  });
-
-  test('ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT carries no third-party "pi harness" tell', () => {
-    // Regression guard: the default must never reintroduce the self-referential
-    // vocabulary that trips Anthropic's subscription-OAuth detector.
-    const p = ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT.toLowerCase();
-    expect(p).not.toContain('pi documentation');
-    expect(p).not.toContain('coding agent harness');
-    expect(p).not.toContain('operating inside pi');
   });
 
   test('capabilities reflect v2 wiring', () => {

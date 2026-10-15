@@ -7,7 +7,11 @@ import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platfor
 import { createLogger } from '@archon/paths';
 import { lstat } from 'node:fs/promises';
 import * as isolationDb from '../db/isolation-environments';
-import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
+import {
+  cleanupStaleWorktrees,
+  cleanupMergedWorktrees,
+  getLiveRunBlocker,
+} from '../services/cleanup-service';
 import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
@@ -49,9 +53,10 @@ export { type CleanupOperationResult, type MergedCleanupResult } from '../servic
  * An env a run can still claim is left active even with its directory gone: marking
  * it destroyed invalidates that run's resume handle, and this runs from
  * `listEnvironments()` ahead of the per-item live-run guard in the `isolation
- * cleanup` commands, so a row ghosted here never reaches that guard. Same rule as
- * the scheduled sweep's path-missing branch. The env stays visible in `isolation
- * list` with its missing path, which is the operator's signal to act.
+ * cleanup` commands, so a row ghosted here never reaches that guard. A failed run
+ * stays here too: no outcome is judged here, and those per-item sweeps release
+ * its lock once they settle one. The env stays visible in `isolation list` with
+ * its missing path, which is the operator's signal to act.
  */
 async function reconcileGhosts(
   envs: readonly {
@@ -76,10 +81,15 @@ async function reconcileGhosts(
         }
       );
       if (!exists) {
-        const liveRun = await isolationDb.getLiveRunOwningEnv(env.id);
+        const liveRun = await getLiveRunBlocker(env.id);
         if (liveRun) {
           getLog().info(
-            { envId: env.id, path: env.working_path, runId: liveRun.id, runStatus: liveRun.status },
+            {
+              envId: env.id,
+              path: env.working_path,
+              runId: liveRun.runId,
+              runStatus: liveRun.runStatus,
+            },
             'isolation.ghost_kept_for_live_run'
           );
           continue;

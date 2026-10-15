@@ -580,6 +580,118 @@ describe('Workflow Loader', () => {
       expect(result.errors[0].error).toContain('required: boolean');
     });
 
+    describe('run budget (#2814)', () => {
+      const budgeted = (nodes: string, budget = 'budget:\n  max_spend_usd: 2.5\n'): string =>
+        `name: budgeted\ndescription: d\n${budget}nodes:\n${nodes}`;
+
+      it('parses a budget declaring either ceiling or both', () => {
+        for (const [yaml, expected] of [
+          ['budget:\n  max_work_units: 3\n', { max_work_units: 3 }],
+          ['budget:\n  max_spend_usd: 2.5\n', { max_spend_usd: 2.5 }],
+          [
+            'budget:\n  max_work_units: 3\n  max_spend_usd: 2.5\n',
+            { max_work_units: 3, max_spend_usd: 2.5 },
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error).toBeNull();
+          expect(result.workflow?.budget).toEqual(expected);
+        }
+      });
+
+      it('rejects a malformed budget instead of running without a ceiling', () => {
+        for (const yaml of [
+          'budget: {}\n',
+          'budget:\n  max_spend_usd: 0\n',
+          'budget:\n  max_work_units: 1.5\n',
+          'budget:\n  max_spend: 5\n',
+          'budget:\n  max_work_units: 3\n  max_spend: 5\n',
+          'budget: lots\n',
+        ]) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain('Invalid budget');
+        }
+      });
+
+      it('rejects loops, workflow: children and fan-out under a budget', () => {
+        for (const [nodeYaml, kind] of [
+          ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+          [
+            '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+            'loop_group',
+          ],
+          ['    workflow: child', 'workflow'],
+          ['    workflow: child\n    fan_out:\n      items: \'["a"]\'\n      as: item', 'workflow'],
+          [
+            '    include: block\n    fan_out:\n      items: \'["a"]\'\n      as: item',
+            'include with fan_out',
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`), `${kind}.yaml`);
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain(`node 'x' is a ${kind} node`);
+          // The same shape without a budget is not refused for this reason.
+          const unbudgeted = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`, ''), 'u.yaml');
+          expect(unbudgeted.error?.error ?? '').not.toContain('budget');
+        }
+      });
+
+      it('rejects a loop that reaches a budgeted workflow through include:', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'looping-block.yaml',
+          'name: looping-block\ndescription: block\nnodes:\n  - id: spin\n    loop:\n      until: done\n      max_iterations: 2\n      prompt: p\n'
+        );
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-parent.yaml',
+          budgeted('  - id: blk\n    include: looping-block\n')
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        const err = result.errors.find(e => e.filename === 'budgeted-parent.yaml');
+        expect(err?.error).toContain("node 'blk__spin' is a loop node");
+        expect(result.workflows.some(w => w.workflow.name === 'looping-block')).toBe(true);
+      });
+
+      it('loads a budgeted workflow of ordinary nodes, gates, waits and halts', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-ordinary.yaml',
+          budgeted(
+            [
+              '  - id: plan',
+              '    prompt: p',
+              '  - id: check',
+              '    bash: echo ok',
+              '    depends_on: [plan]',
+              '  - id: tool',
+              '    script: console.log(1)',
+              '    runtime: bun',
+              '    depends_on: [plan]',
+              '  - id: review',
+              '    approval:',
+              '      message: ok?',
+              '      on_reject:',
+              '        prompt: fix it',
+              '    depends_on: [check, tool]',
+              '  - id: pause',
+              '    wait:',
+              '      duration_ms: 1000',
+              '    depends_on: [review]',
+              '  - id: stop',
+              '    cancel: done',
+              '    depends_on: [pause]',
+              '',
+            ].join('\n')
+          )
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect(result.workflows[0].workflow.budget).toEqual({ max_spend_usd: 2.5 });
+      });
+    });
+
     it('should omit container block when not present', async () => {
       const yaml = `name: plain\ndescription: none\nnodes:\n  - id: n\n    prompt: p\n`;
       await writeWorkflowFile(testDir, 'plain.yaml', yaml);
@@ -4702,29 +4814,30 @@ nodes:
       expect(result.errors[0].error).toContain('unknown node');
     });
 
-    // --- gate placement inside a loop_group body (#2707 step 3, #4043) ------------
-    // A gate pauses the loop only as the body's sole terminal sink; anywhere else it
-    // is a load error, like a misplaced wait.
+    // --- pause placement inside a loop_group body (#2707 step 3, #4043) -----------
+    // A gate or wait pauses the loop only as the body's sole terminal sink; anywhere
+    // else it is a load error.
 
-    it('should accept the canonical Design A gate-terminated loop_group, with no warning', async () => {
+    it('should accept an attention-terminated loop_group whose completion reads the answer, with no warning', async () => {
       await writeWorkflowFile(
         testDir,
-        'loop-group-gate-terminal.yaml',
+        'loop-group-attention-terminal.yaml',
         `
-name: loop-group-gate-terminal
-description: A gate as the body's sole terminal sink, completion reading its decision
+name: loop-group-attention-terminal
+description: An attention wait as the body's sole terminal sink, completion reading its decision
 nodes:
   - id: grp
     loop_group:
-      until_bash: '[ "$check.output.decision" = "approve" ]'
+      until_bash: 'decision=$check.output.decision; [ "$decision" = "approve" ]'
       max_iterations: 3
       nodes:
         - id: work
-          prompt: "do work"
+          prompt: "do work. Feedback: $LOOP_PREV.check.output.text"
         - id: check
           depends_on: [work]
-          approval:
-            message: "Continue?"
+          wait:
+            attention: "Continue?"
+            form: approval
 `
       );
 
@@ -4734,12 +4847,12 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it('does not ask until_bash to read a terminal gate that its own when: can skip', async () => {
+    it('does not ask until_bash to read a terminal pause that its own when: can skip', async () => {
       await writeWorkflowFile(
         testDir,
-        'loop-group-conditional-gate.yaml',
+        'loop-group-conditional-attention.yaml',
         `
-name: loop-group-conditional-gate
+name: loop-group-conditional-attention
 description: Ask only when blocked
 nodes:
   - id: grp
@@ -4752,8 +4865,8 @@ nodes:
         - id: ask
           depends_on: [work]
           when: "$work.output == 'blocked'"
-          approval:
-            message: "Unblock?"
+          wait:
+            attention: "Unblock?"
 `
       );
 
@@ -4762,13 +4875,18 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it("warns when a gate-terminated loop_group's until_bash does not reference the gate", async () => {
-      await writeWorkflowFile(
-        testDir,
-        'loop-group-gate-completion-not-referenced.yaml',
-        `
-name: loop-group-gate-completion-not-referenced
-description: A gate-terminated body whose completion channel ignores the gate
+    it.each([
+      ['an attention wait', 'wait:\n            attention: "Continue?"'],
+      ['a legacy gate', 'approval:\n            message: "Continue?"'],
+    ])(
+      "warns when until_bash does not reference the loop_group's terminal %s",
+      async (_, pause) => {
+        await writeWorkflowFile(
+          testDir,
+          'loop-group-pause-completion-not-referenced.yaml',
+          `
+name: loop-group-pause-completion-not-referenced
+description: A pause-terminated body whose completion channel ignores the answer
 nodes:
   - id: grp
     loop_group:
@@ -4779,19 +4897,20 @@ nodes:
           prompt: "do work"
         - id: check
           depends_on: [work]
-          approval:
-            message: "Continue?"
+          ${pause}
 `
-      );
+        );
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('does not reference');
-      expect(pw[0]).toContain('$check.output');
-    });
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toHaveLength(0);
+        const pw = (result.workflows[0].parseWarnings ?? []).filter(w =>
+          w.includes('does not reference')
+        );
+        expect(pw).toHaveLength(1);
+        expect(pw[0]).toContain("Node 'check'");
+        expect(pw[0]).toContain('$check.output');
+      }
+    );
 
     it('rejects a mid-body gate even when a later gate is the sole terminal sink', async () => {
       await writeWorkflowFile(
@@ -5236,7 +5355,7 @@ nodes:
       mockLogger.warn.mockClear();
       const yaml = `
 name: parse-warnings
-description: Deprecated interactive declaration, a legacy loop, and a typo
+description: Deprecated interactive declaration, a legacy gate, a legacy loop, and a typo
 interactive: true
 nodes:
   - id: gate
@@ -5254,7 +5373,7 @@ nodes:
       for (let parse = 0; parse < 2; parse++) {
         const result = parseWorkflow(yaml, 'parse-warnings.yaml');
         expect(result.error).toBeNull();
-        expect(result.warnings).toHaveLength(3);
+        expect(result.warnings).toHaveLength(4);
       }
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -7242,12 +7361,9 @@ nodes:
       const pw = result.workflows[0].parseWarnings ?? [];
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("'interactive'");
-      // The hint must name BOTH loop fields: the executor gates on
-      // `loop.interactive && loop.gate_message`, so an author who follows a
-      // gate_message-only hint gets a loop with a message and no gate.
-      expect(pw[0]).toContain('loop.interactive: true');
-      expect(pw[0]).toContain('gate_message');
-      expect(pw[0]).toContain('approval:');
+      // The hint names the attention wait, never a deprecated channel.
+      expect(pw[0]).toContain('wait: { attention: <message> }');
+      expect(pw[0]).not.toContain('approval:');
     });
 
     it('should warn when the workflow itself has an unknown key', async () => {
@@ -7344,9 +7460,10 @@ nodes:
         '      message: ok?',
         '      capture_reponse: true', // typo for capture_response
       ]);
-      expect(pw.length).toBe(1);
-      expect(pw[0]).toContain("Node 'gate'");
-      expect(pw[0]).toContain("unknown key 'approval.capture_reponse'");
+      const unknownKeyWarnings = pw.filter(w => w.includes('unknown key'));
+      expect(unknownKeyWarnings.length).toBe(1);
+      expect(unknownKeyWarnings[0]).toContain("Node 'gate'");
+      expect(unknownKeyWarnings[0]).toContain("unknown key 'approval.capture_reponse'");
     });
 
     it('should warn on an unknown key inside approval.on_reject (two levels down)', async () => {
@@ -7361,12 +7478,12 @@ nodes:
         '        prompt: try again',
         '        max_retries: 2', // real field is max_attempts
       ]);
-      // Also carries the #2707 step-1 on_reject deprecation warning now — the
-      // unknown-key warning under test is asserted independently of it.
+      // Also carries the on_reject deprecation warning — the unknown-key warning
+      // under test is asserted independently of it.
       const unknownKeyWarnings = pw.filter(w => w.includes('unknown key'));
       expect(unknownKeyWarnings.length).toBe(1);
       expect(unknownKeyWarnings[0]).toContain("unknown key 'approval.on_reject.max_retries'");
-      expect(pw.some(w => w.includes("'approval.on_reject' is deprecated"))).toBe(true);
+      expect(pw.some(w => w.includes("'approval.on_reject' and '$REJECTION_REASON'"))).toBe(true);
     });
 
     it('should warn on an unknown key inside retry:', async () => {
@@ -7464,7 +7581,7 @@ nodes:
       expect(pw[0]).toContain("Node 'refine' → loop_group node 'check'");
       expect(pw[0]).toContain("unknown key 'interactive'");
       // The body node gets the same actionable guidance as a top-level node.
-      expect(pw[0]).toContain('loop.interactive: true');
+      expect(pw[0]).toContain('wait: { attention: <message> }');
     });
 
     it('should warn on an unknown key inside the loop_group control block', async () => {
@@ -7530,17 +7647,16 @@ nodes:
         '        max_attempts: 2',
       ]);
       // Every key used here IS valid — none should trip the unknown-key check
-      // this describe block covers. `loop.interactive`/`on_reject`/the prose
-      // `until:` channel are also deliberately deprecated (#2707 steps 1 and 3),
-      // so this fixture now legitimately produces THOSE warnings too — asserted
-      // separately below, not conflated with "unknown key" false positives.
-      // `capture_response` combined with `on_reject` (no `decisions:` authored)
-      // is still fully functional (R4 fix), so it does NOT warn here.
+      // this describe block covers. The interactive loop, `on_reject`,
+      // `capture_response` and the prose `until:` channel are deliberately
+      // deprecated, so this fixture legitimately produces THOSE warnings too,
+      // asserted in their own describe block below.
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
-        "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
-        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test \"$value\" = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
-        "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
+        expect.stringContaining("Node 'refine': the prose 'loop_group.until' completion signal"),
+        expect.stringContaining("Node 'refine': loop 'interactive:'"),
+        expect.stringContaining("Node 'gate': 'approval.on_reject'"),
+        expect.stringContaining("Node 'gate': 'approval.capture_response'"),
       ]);
     });
 
@@ -7782,7 +7898,7 @@ nodes:
     });
   });
 
-  describe('#2707 step 1 gate/loop deprecation warnings', () => {
+  describe('legacy pause and loop deprecation warnings', () => {
     /** Write a single workflow and return its parse warnings. */
     const warningsFor = async (lines: string[]): Promise<string[]> => {
       await writeWorkflowFile(testDir, 'test.yaml', lines.join('\n'));
@@ -7797,66 +7913,167 @@ nodes:
       return result.errors[0]?.error;
     };
 
-    it('warns on approval.capture_response combined with explicitly authored decisions (R4 fix — only truly ignored there)', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      capture_response: true',
-        '      decisions:',
-        '        - id: approve',
-        '        - id: reject',
-      ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'gate': 'approval.capture_response' is deprecated");
+    // Each legacy answerable pause warns once per file, naming its attention-form
+    // replacement (#4042). The runtime is unchanged, so every shape still loads.
+    it.each([
+      [
+        'a plain approval gate',
+        ['  - id: gate', '    approval:', '      message: ok?'],
+        [
+          "Node 'gate': 'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting should end the run. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.decisions',
+        [
+          '  - id: gate',
+          '    approval:',
+          '      message: ok?',
+          '      decisions:',
+          '        - id: approve',
+          '        - id: needs-work',
+        ],
+        [
+          "Node 'gate': 'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, options: <the same decisions> }' instead; the output is the same {decision, text}. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.capture_response',
+        ['  - id: gate', '    approval:', '      message: ok?', '      capture_response: false'],
+        [
+          expect.stringContaining("Node 'gate': 'approval:' is deprecated."),
+          "Node 'gate': 'approval.capture_response' is deprecated. An attention wait always records the answer; the next node reads '$<id>.output.text'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.on_reject',
+        [
+          '  - id: gate',
+          '    approval:',
+          '      message: ok?',
+          '      on_reject:',
+          '        prompt: fix it',
+        ],
+        [
+          "Node 'gate': 'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat the rework, write a 'loop_group' whose body ends in the wait; the rework node comes first and reads '$LOOP_PREV.<id>.output.text'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'an interactive loop',
+        [
+          '  - id: iterate',
+          '    loop:',
+          '      prompt: work',
+          '      until_bash: "exit 0"',
+          '      max_iterations: 5',
+          '      interactive: true',
+          '      gate_message: continue?',
+        ],
+        [
+          "Node 'iterate': loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'an interactive loop_group',
+        [
+          '  - id: iterate',
+          '    loop_group:',
+          '      until_bash: "exit 0"',
+          '      max_iterations: 5',
+          '      interactive: true',
+          '      gate_message: continue?',
+          '      nodes:',
+          '        - id: work',
+          '          prompt: work',
+        ],
+        [expect.stringContaining("Node 'iterate': loop 'interactive:' with 'gate_message'")],
+      ],
+    ])('warns on %s with its attention-form replacement', async (_, nodeLines, expected) => {
+      const pw = await warningsFor(['name: test', 'description: test', 'nodes:', ...nodeLines]);
+      expect(pw).toEqual(expected);
     });
 
-    it('does NOT warn on approval.capture_response without decisions: authored — still fully functional (R4 fix)', async () => {
+    it('warns once per file per shape, naming every node that uses it, loop_group bodies included', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
         'nodes:',
-        '  - id: gate',
+        '  - id: first',
         '    approval:',
         '      message: ok?',
-        '      capture_response: true',
+        '  - id: grp',
+        '    depends_on: [first]',
+        '    loop_group:',
+        '      until_bash: \'decision=$second.output.decision; test "$decision" = approve\'',
+        '      max_iterations: 2',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: work',
+        '        - id: second',
+        '          depends_on: [work]',
+        '          approval:',
+        '            message: again?',
+      ]);
+      expect(pw).toEqual([
+        expect.stringContaining("Nodes 'first', 'second': 'approval:' is deprecated."),
+      ]);
+    });
+
+    it("the on_reject replacement repeats rework by reading $LOOP_PREV, keeping the wait as the body's sink", async () => {
+      const groupLines = (bodyLines: string[]): string[] => [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until_bash: \'decision=$review.output.decision; test "$decision" = approve\'',
+        '      max_iterations: 3',
+        '      nodes:',
+        ...bodyLines,
+      ];
+      const pw = await warningsFor(
+        groupLines([
+          '        - id: rework',
+          '          prompt: "Revise. Feedback, if any: $LOOP_PREV.review.output.text"',
+          '        - id: review',
+          '          depends_on: [rework]',
+          '          wait: { attention: ok?, form: approval }',
+        ])
+      );
+      expect(pw).toEqual([]);
+
+      // A rework node after the wait, as a one-shot replacement writes it, cannot repeat.
+      const error = await loadErrorFor(
+        groupLines([
+          '        - id: review',
+          '          wait: { attention: ok?, form: approval }',
+          '        - id: rework',
+          '          depends_on: [review]',
+          '          when: "$review.output.decision == \'reject\'"',
+          '          prompt: "Revise: $review.output.text"',
+        ])
+      );
+      expect(error).toContain("wait node 'review' must be the body's sole terminal sink");
+    });
+
+    it('does not warn on attention waits, the replacement', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: ask',
+        '    wait:',
+        '      attention: Which base?',
+        '      form: select',
+        '      options:',
+        '        - id: use-main',
+        '        - id: use-dev',
+        '  - id: stop',
+        '    depends_on: [ask]',
+        '    when: "$ask.output.decision == \'use-dev\'"',
+        '    cancel: not supported yet',
       ]);
       expect(pw).toEqual([]);
-    });
-
-    it('warns on approval.on_reject', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      on_reject:',
-        '        prompt: fix it',
-      ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'gate': 'approval.on_reject' is deprecated");
-    });
-
-    it('warns on node-level loop.interactive', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: iterate',
-        '    loop:',
-        '      prompt: work',
-        '      until_bash: "exit 0"',
-        '      max_iterations: 5',
-        '      interactive: true',
-        '      gate_message: continue?',
-      ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'iterate': node-level loop 'interactive:' is deprecated");
     });
 
     it('does not warn about nested group pauses when an enclosing group owns a named session', async () => {
@@ -7943,10 +8160,10 @@ nodes:
         '                approval:',
         '                  message: ok?',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'outer'");
-      expect(pw[0]).toContain("'inner'");
-      expect(pw[0]).toContain('#2753');
+      const escalation = pw.filter(w => w.includes('#2753'));
+      expect(escalation).toHaveLength(1);
+      expect(escalation[0]).toContain("Node 'outer'");
+      expect(escalation[0]).toContain("'inner'");
     });
 
     it('warns at every level of a 3-deep nested loop_group chain (#2753)', async () => {
@@ -7973,10 +8190,12 @@ nodes:
         '                      approval:',
         '                        message: ok?',
       ]);
-      expect(pw).toHaveLength(2);
-      expect(pw.every(w => w.includes('#2753'))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'grandparent'") && w.includes("'middle'"))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'middle'") && w.includes("'inner'"))).toBe(true);
+      const escalation = pw.filter(w => w.includes('#2753'));
+      expect(escalation).toHaveLength(2);
+      expect(escalation.some(w => w.includes("Node 'grandparent'") && w.includes("'middle'"))).toBe(
+        true
+      );
+      expect(escalation.some(w => w.includes("Node 'middle'") && w.includes("'inner'"))).toBe(true);
     });
 
     it('does not warn when a nested loop_group has nothing interactive to escalate (#2753)', async () => {
@@ -8279,22 +8498,6 @@ nodes:
         '          lable: Needs work', // typo for 'label'
       ]);
       expect(pw.some(w => w.includes("unknown key 'approval.decisions.1.lable'"))).toBe(true);
-    });
-
-    it('produces no deprecation warnings for a new-mode gate with no deprecated fields', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      decisions:',
-        '        - id: approve',
-        '        - id: reject',
-        '          label: Needs work',
-      ]);
-      expect(pw).toEqual([]);
     });
   });
 });
@@ -8738,6 +8941,10 @@ describe('workflow-level field parity (#2457)', () => {
     evidence_policy: {
       yaml: 'evidence_policy:\n  required: true',
       present: w => w.evidence_policy?.required === true,
+    },
+    budget: {
+      yaml: 'budget:\n  max_work_units: 3',
+      present: w => w.budget?.max_work_units === 3,
     },
     mutates_checkout: {
       yaml: 'mutates_checkout: false',

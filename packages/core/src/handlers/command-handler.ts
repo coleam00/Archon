@@ -26,6 +26,7 @@ import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
+  getLiveRunBlocker,
   getWorktreeStatusBreakdown,
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
@@ -462,13 +463,11 @@ async function handleWorktreeCommand(
       const forceFlag = args[1] === '--force';
 
       try {
-        const liveRun = await isolationEnvDb.getLiveRunOwningEnv(isolationEnvId);
+        const liveRun = await getLiveRunBlocker(isolationEnvId);
         if (liveRun) {
           return {
             success: false,
-            message:
-              `Worktree is still owned by workflow run ${liveRun.id.slice(0, 8)} ` +
-              `(${liveRun.status}). Resume or abandon it before removing the worktree.`,
+            message: `Worktree kept: ${liveRun.display}. Resume or abandon the run before removing the worktree.`,
           };
         }
 
@@ -601,6 +600,9 @@ async function handleWorktreeCommand(
           msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
           for (const branch of result.removed) {
             msg += `  • ${branch}\n`;
+          }
+          for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+            msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
           }
         } else {
           msg += `No ${cleanupType} worktrees to clean up.\n`;

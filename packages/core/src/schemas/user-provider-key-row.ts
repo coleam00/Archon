@@ -11,6 +11,7 @@
  * blocks basenames ending in `key(s).ts` / `token(s).ts`; the DB table is
  * `remote_agent_user_provider_keys`.)
  */
+import { STORED_CREDENTIAL_KINDS } from '@archon/provider-contract';
 import { z } from '@hono/zod-openapi';
 
 // Timestamps are read back as `Date` on PostgreSQL (node-postgres hydrates
@@ -22,7 +23,7 @@ export const userProviderKeyRowSchema = z.object({
   id: z.string(),
   user_id: z.string(),
   provider: z.string(),
-  kind: z.enum(['api_key', 'oauth']),
+  kind: z.enum(STORED_CREDENTIAL_KINDS),
   api_key_encrypted: z.string().nullable(),
   oauth_creds_encrypted: z.string().nullable(),
   label: z.string().nullable(),

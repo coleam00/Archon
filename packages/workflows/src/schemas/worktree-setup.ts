@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 export const WORKTREE_SETUP_EVENT_TYPES = [
   'worktree_setup_started',

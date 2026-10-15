@@ -108,7 +108,8 @@
     ],
     [
       "src/boot/claude-auth-posture.test.ts",
-      "src/boot/codex-auth-posture.test.ts"
+      "src/boot/codex-auth-posture.test.ts",
+      "src/boot/cleanup-env.test.ts"
     ],
     [
       "src/github-auth-bootstrap.test.ts"

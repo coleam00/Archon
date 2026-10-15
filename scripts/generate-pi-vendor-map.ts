@@ -46,8 +46,8 @@ const CHECK_ONLY = process.argv.includes('--check');
 
 /** Vendors handled by explicit branches in pi-ai's getApiKeyEnvVars (not the envMap). */
 const SPECIAL_ENV_VENDORS: Record<string, string> = {
-  // ANTHROPIC_OAUTH_TOKEN takes precedence upstream, but the api_key delivery
-  // path sets the plain key var; subscriptions reach Pi via auth.json instead.
+  // ANTHROPIC_OAUTH_TOKEN takes precedence upstream, but Pi consumes only an
+  // Anthropic API key from Archon (see SUBSCRIPTION_VENDORS).
   anthropic: 'ANTHROPIC_API_KEY',
   'github-copilot': 'COPILOT_GITHUB_TOKEN',
 };
@@ -63,8 +63,12 @@ const AMBIENT_VENDORS = new Set(['amazon-bedrock', 'google-vertex']);
  */
 const COVERED_ELSEWHERE = new Set(['openai-codex']);
 
-/** Subscription capability specs; core owns all three OAuth flows. */
-const SUBSCRIPTION_VENDORS = new Set(['anthropic', 'openai', 'github-copilot']);
+/**
+ * The subscriptions Pi consumes from Archon. Core owns an Anthropic OAuth flow too, but a
+ * Claude subscription runs only on the native Claude provider (AGENTS.md: provider
+ * authentication), so Pi never declares it.
+ */
+const SUBSCRIPTION_VENDORS = new Set(['openai', 'github-copilot']);
 
 /** Human display names. Fallback: title-case each dash token. */
 const DISPLAY_NAMES: Record<string, string> = {

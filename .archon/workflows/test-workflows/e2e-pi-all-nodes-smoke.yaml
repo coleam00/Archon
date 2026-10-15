@@ -2,7 +2,7 @@
 # Covers: prompt, command, loop (AI node types) + bash, script bun/uv
 #   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
 #   (DAG features).
-# Skipped: `approval:` — pauses for human input, incompatible with CI.
+# Skipped: `wait: attention` — pauses until answered, incompatible with CI.
 # Auth: ANTHROPIC_API_KEY (CI) or your local `pi /login` OAuth.
 # Expected runtime: ~10s on haiku (3 AI round-trips + deterministic nodes).
 name: e2e-pi-all-nodes-smoke
