@@ -32,8 +32,9 @@ function checkGh(): void {
         '`/archon connect github` in Slack, or the Web UI Settings page'
     );
   }
-  // A bare `gh auth status` fails when any account on any host is stale, so each host a
-  // remote names is checked on its own and one working host is enough, as on the forge path.
+  // A bare `gh auth status` fails when any account on any host is stale, so only the active
+  // account of each host a remote names is checked, and one working host is enough, as on the
+  // forge path.
   const hosts = [...new Set(remoteRepos().map(repo => repo.host))];
   if (hosts.length === 0) {
     throw new Error('this checkout has no git remote that names a forge repository');
@@ -42,7 +43,7 @@ function checkGh(): void {
   for (const host of hosts) {
     let result: ReturnType<typeof Bun.spawnSync>;
     try {
-      result = Bun.spawnSync(['gh', 'auth', 'status', '--hostname', host], { stdout: 'pipe', stderr: 'pipe' });
+      result = Bun.spawnSync(['gh', 'auth', 'status', '--active', '--hostname', host], { stdout: 'pipe', stderr: 'pipe' });
     } catch (error) {
       throw new Error(
         `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +

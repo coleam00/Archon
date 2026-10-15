@@ -93,7 +93,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     const passed = check({ source: 'gh' });
     expect({ code: passed.code, stderr: passed.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(passed.stdout)).toEqual({ source: 'gh' });
-    expect(passed.gh).toEqual(['auth status --hostname ghe.example.com']);
+    expect(passed.gh).toEqual(['auth status --active --hostname ghe.example.com']);
     expect(passed.forge).toEqual([]);
 
     const refused = check({ source: 'gh', gh: { authFail: 'You are not logged into any GitHub hosts.' } });
@@ -105,7 +105,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
   it('passes gh when one remote host is authenticated and another is not', () => {
     const run = check({ source: 'gh', mirror: true, gh: { authFail: { 'ghe.example.com': 'token expired' } } });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(run.gh).toEqual(['auth status --hostname ghe.example.com', 'auth status --hostname mirror.example.com']);
+    expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com', 'auth status --active --hostname mirror.example.com']);
   });
 
   it('refuses gh when GH_TOKEN is empty, rather than using the host login', () => {

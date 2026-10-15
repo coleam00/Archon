@@ -55,7 +55,7 @@ export interface GhFake {
   readonly issues?: readonly GhIssue[];
   /** The issue `gh api repos/<path>/issues/<n>` reads; number 7 by default. Labels come from `issueLabels`. */
   readonly issue?: GhApiIssue;
-  /** stderr for a failed `gh auth status --hostname`, for every host or per host; omit for an authenticated gh. */
+  /** stderr for a failed `gh auth status --active --hostname`, for every host or per host; omit for an authenticated gh. */
   readonly authFail?: string | Readonly<Record<string, string>>;
 }
 
@@ -154,8 +154,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
-  if (text.startsWith('auth status --hostname ')) {
-    const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[4]];
+  if (text.startsWith('auth status --active --hostname ')) {
+    const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
     return failure === undefined ? result(0) : result(1, '', failure);
   }
   if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
