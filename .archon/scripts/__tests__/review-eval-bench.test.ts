@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
@@ -408,10 +408,11 @@ describe('collectItem', () => {
 
 describe('bench run', () => {
   const script = join(import.meta.dir, '../../workflows/sdlc/review-eval/scripts/bench.ts');
+  const FAKE_ARCHON = join(import.meta.dir, 'fake-archon-cli.ts');
 
   /**
-   * `bench.ts run` over a case with an `archon` stub first on PATH: `run` records its
-   * arguments and acknowledges numbered runs, `wait` answers with `wait`, and `get`
+   * `bench.ts run` over a case with a fake `archon` (./fake-archon-cli.ts): `run` records
+   * its arguments and acknowledges numbered runs, `wait` answers with `wait`, and `get`
    * returns `detail`, or a run detail missing every field but id and status.
    */
   function benchCase(wait: unknown, detail?: (out: string) => unknown) {
@@ -422,31 +423,20 @@ describe('bench run', () => {
     const tier = { provider: 'claude', model: 'opus' };
     writeFileSync(join(out, 'v.yaml'), JSON.stringify({ label: 'v', pack_sha: packSha, tiers: { small: tier, medium: tier, large: tier } }));
 
-    const bin = track(mkdtempSync(join(tmpdir(), 'archon-bench-bin-')));
-    const count = join(bin, 'count');
-    if (detail !== undefined) writeFileSync(join(bin, 'detail.json'), JSON.stringify(detail(out)));
-    writeFileSync(
-      join(bin, 'archon'),
-      [
-        '#!/bin/sh',
-        'case "$2" in',
-        `  run) n=$(($(cat '${count}' 2>/dev/null || echo 0) + 1)); echo "$n" > '${count}'; printf '%s\\0' "$@" > '${bin}/argv-'$n; echo "{\\"runId\\":\\"run-$n\\"}" ;;`,
-        `  wait) echo '${JSON.stringify(wait)}' ;;`,
-        `  get) cat '${bin}/detail.json' 2>/dev/null || echo "{\\"id\\":\\"$3\\",\\"status\\":\\"completed\\"}" ;;`,
-        'esac',
-        '',
-      ].join('\n')
-    );
-    chmodSync(join(bin, 'archon'), 0o755);
+    const cli = track(mkdtempSync(join(tmpdir(), 'archon-bench-cli-')));
+    writeFileSync(join(cli, 'wait.json'), JSON.stringify(wait));
+    if (detail !== undefined) writeFileSync(join(cli, 'detail.json'), JSON.stringify(detail(out)));
+    const preload = join(cli, 'preload.ts');
+    writeFileSync(preload, `import { install } from ${JSON.stringify(FAKE_ARCHON)};\ninstall(${JSON.stringify(cli)});\n`);
     const run = (...args: string[]) => {
       const result = spawnSync(
         process.execPath,
-        [script, 'run', '--set', set, '--batch', 'counting', '--version', join(out, 'v.yaml'), '--out', out, ...args],
-        { cwd: repo, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }
+        ['--preload', preload, script, 'run', '--set', set, '--batch', 'counting', '--version', join(out, 'v.yaml'), '--out', out, ...args],
+        { cwd: repo, encoding: 'utf8' }
       );
       return { status: result.status, stderr: result.stderr, lines: readLines(join(out, 'samples.jsonl')) };
     };
-    const argv = (n: number) => readFileSync(join(bin, `argv-${n}`), 'utf8').split('\0').slice(0, -1);
+    const argv = (n: number): unknown => JSON.parse(readFileSync(join(cli, `argv-${n}.json`), 'utf8'));
     return { out, run, argv, packSha };
   }
 
