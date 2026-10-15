@@ -254,6 +254,10 @@ test('a typed answer is authorized, names its occurrence, records the surface an
       sender: { platformUserId },
     });
   expect(await answer('other', 'w1', ['use-main'])).toMatchObject({ status: 'forbidden' });
+  // A stale occurrence is still forbidden, so the refusal never names the live one.
+  const forbiddenStale = await answer('other', 'w0', ['use-main']);
+  expect(forbiddenStale).toMatchObject({ status: 'forbidden' });
+  expect(JSON.stringify(forbiddenStale)).not.toContain('w1');
   expect(await answer('starter', 'w0', ['use-main'])).toEqual({
     status: 'refused',
     message: expect.stringContaining("It is now awaiting occurrence 'w1'"),

@@ -128,7 +128,10 @@ export class AttentionRouter {
         });
         this.log.info('attention.notice_sent');
       } catch (err) {
-        this.log.error({ err }, 'attention.notice_failed');
+        this.log.error(
+          { err, destination: destination.id, runId: notice.run.id },
+          'attention.notice_failed'
+        );
       }
     }
   }

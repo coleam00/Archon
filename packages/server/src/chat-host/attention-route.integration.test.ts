@@ -204,6 +204,20 @@ test(
         },
       });
       expect((await listAttentionNotices([gated])).length).toBe(3);
+
+      // A restart re-activates the route; once it has ledger rows, a gate opened while the
+      // server was down is sent, not baselined.
+      const openedWhileDown = await pause(gate('while-down'));
+      await route.activate();
+      await router.scan();
+      expect(received().length).toBe(5);
+      expect((await listAttentionNotices([openedWhileDown])).map(row => row.data)).toEqual([
+        {
+          destination: 'fixture-chat:ops',
+          key: 'review:while-down',
+          conversationId: expect.any(String),
+        },
+      ]);
       expect(await missing.state()).toBe('misconfigured');
     } finally {
       await host.stop();

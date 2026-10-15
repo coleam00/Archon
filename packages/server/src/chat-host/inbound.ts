@@ -127,8 +127,8 @@ export function registerChatInbound(
         actor.kind === 'user' ? actor.userId : undefined,
         target
       );
-    } catch {
-      getLog().warn({ plugin: descriptor.id, action }, 'chat.run_resume_failed');
+    } catch (err) {
+      getLog().warn({ err, runId, plugin: descriptor.id, action }, 'chat.run_resume_failed');
       return false;
     }
   };
