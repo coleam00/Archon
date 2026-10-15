@@ -174,6 +174,7 @@ export async function wakeDueWorkflowContinuations(
       const state = structuralFailures.get(run.id);
       if (state && !resumeCursorMatches(run, state.cursor)) {
         structuralFailures.delete(run.id);
+        warnedRuns.delete(run.id);
         return true;
       }
       return (state?.count ?? 0) < MAX_SOURCE_FAILURES;
@@ -219,6 +220,7 @@ export async function wakeDueWorkflowContinuations(
         }
       } else if (outcome.kind === 'accepted') {
         structuralFailures.delete(run.id);
+        warnedRuns.delete(run.id);
       }
       if (outcome.kind !== 'accepted') {
         try {
