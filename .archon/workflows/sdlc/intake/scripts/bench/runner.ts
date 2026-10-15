@@ -446,7 +446,7 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
   const data = isObject(answer) && isObject(answer.data) ? answer.data : {};
   const issue = isObject(data.repository) && isObject(data.repository.issue) ? data.repository.issue : {};
   const { id, url, createdAt, author, labelEvents, refs } = issue;
-  if (typeof id !== 'string' || typeof url !== 'string' || typeof createdAt !== 'string') {
+  if (typeof id !== 'string' || typeof url !== 'string' || typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) {
     throw new Error(`${where} answered without its id, url and creation time`);
   }
   if (isObject(labelEvents) && isObject(labelEvents.pageInfo) && labelEvents.pageInfo.hasNextPage === true) {
@@ -461,14 +461,21 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
     }
     return connection.nodes;
   };
+  const loginOf = (identity: unknown, name: string): string | null => {
+    if (identity === null) return null;
+    if (!isObject(identity) || typeof identity.login !== 'string' || identity.login.length === 0) {
+      throw new Error(`${where} answered with an incomplete ${name} identity`);
+    }
+    return identity.login;
+  };
   const events = nodes('labelEvents', labelEvents).map((event): LabelEvent => {
-    if (!isObject(event) || (event.__typename !== 'LabeledEvent' && event.__typename !== 'UnlabeledEvent') || typeof event.createdAt !== 'string' || !isObject(event.label) || typeof event.label.name !== 'string') {
+    if (!isObject(event) || (event.__typename !== 'LabeledEvent' && event.__typename !== 'UnlabeledEvent') || typeof event.createdAt !== 'string' || !Number.isFinite(Date.parse(event.createdAt)) || !isObject(event.label) || typeof event.label.name !== 'string') {
       throw new Error(`${where} answered with an incomplete label event`);
     }
-    const actor = isObject(event.actor) && typeof event.actor.login === 'string' ? event.actor.login : null;
+    const actor = loginOf(event.actor, 'label event actor');
     return { createdAt: event.createdAt, actor, label: event.label.name, removed: event.__typename === 'UnlabeledEvent' };
   });
-  const login = isObject(author) && typeof author.login === 'string' ? author.login : null;
+  const login = loginOf(author, 'author');
   const merged = new Set<string>();
   for (const node of nodes('refs', refs)) {
     const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;

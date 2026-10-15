@@ -74,6 +74,7 @@ export interface FakeConfig {
   readonly lookupLiteral?: true;
   readonly lookupFailure?: 'throw' | 'http' | 'graphql' | 'partial';
   readonly cleanupFails?: true;
+  readonly batchIssueWithoutAuthor?: true;
   readonly batchIssueOverrides?: Record<string, unknown>;
   readonly batchErrors?: readonly { message: string }[];
 }
@@ -327,7 +328,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
             id: `I_${String(number)}`,
             url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
             createdAt: issue.createdAt ?? '2026-01-01T00:00:00Z',
-            author: { login: issue.author ?? 'someone' },
+            ...(config.batchIssueWithoutAuthor ? {} : { author: { login: issue.author ?? 'someone' } }),
             labelEvents: { ...(/labelEvents:[^{]+\{\s*pageInfo\s*\{\s*hasNextPage\s*\}/.test(query) ? { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 } } : {}), nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
             refs: {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },

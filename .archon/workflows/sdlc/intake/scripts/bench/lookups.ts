@@ -378,8 +378,9 @@ export function atCreation(
 ): { value: unknown; answered: Set<number>; unresolved: Set<number> } {
   const answered = new Set<number>();
   const unresolved = new Set<number>();
-  const visit = (node: unknown, selections: Selections, number?: number): unknown => {
-    if (Array.isArray(node)) return node.map(inner => visit(inner, selections, number));
+  const visit = (node: unknown, selections: Selections, numbers: readonly (number | undefined)[] = []): unknown => {
+    if (Array.isArray(node)) return node.map((inner, index) => visit(inner, selections, [numbers[index]]));
+    const number = numbers[0];
     if (!isObject(node)) return node;
     const fields = graphql === undefined ? [] : selectedFields(selections, graphql);
     const identity = graphql?.identity ?? ISSUE_ID;
@@ -413,7 +414,9 @@ export function atCreation(
     }
     return mergeEntries(Object.entries(original).map(([key, inner]) => {
       const field = fields.find(field => field.wireKey === key);
-      return [field?.key ?? key, visit(inner, field?.children ?? [], field?.number)] as const;
+      return [field?.key ?? key, visit(inner, field?.children ?? [], field?.ids?.length
+        ? field.ids.map(id => [...views.values()].find(view => view.id === id)?.number)
+        : [field?.number])] as const;
     }));
   };
   return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', wireKey: 'data', name: 'data', children: graphql.fields }]), answered, unresolved };
@@ -483,7 +486,7 @@ export async function answerLookup(
   try {
     parsed = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    return unchanged;
+    return { ...unchanged, ...(sameHost ? { problem: 'lookup server: response contained invalid JSON' } : {}) };
   }
   const failed = isObject(parsed) && 'errors' in parsed && (!Array.isArray(parsed.errors) || parsed.errors.length > 0);
   const refused = failed && isObject(parsed) && parsed.data == null;
@@ -493,7 +496,7 @@ export async function answerLookup(
   if (rewritten.answered.size === 0 && body === originalBody) return { ...unchanged, problem, ...(refused ? { live: [] } : {}) };
   const answered = [...rewritten.answered];
   // A different identity proves an unrelated issue or PR; a missing identity
-  // leaves the selected batch number unproven even if a sibling was rewritten.
+  // leaves the selected batch issue unproven even if a sibling was rewritten.
   const namedNodes = [...views.values()].filter(view => graphql?.ids.includes(view.id)).map(view => view.number);
   const live = refused ? [] : [...new Set([
     ...(body !== originalBody ? [] : named).filter(number => !answered.includes(number)),

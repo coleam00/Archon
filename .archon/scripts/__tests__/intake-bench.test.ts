@@ -607,6 +607,28 @@ describe('bench run', () => {
     expect(valid).toEqual(Array(11).fill(true));
   });
 
+  it('rejects incomplete creation-label identities and timestamps while accepting explicit null identities', () => {
+    const event = { __typename: 'LabeledEvent', createdAt: '2026-01-01T00:00:01Z', actor: { login: 'someone' }, label: { name: 'bug' } };
+    const labels = (node: unknown) => ({ nodes: [node], pageInfo: { hasNextPage: false } });
+    const invalid = [
+      { author: {} }, { author: { login: '' } },
+      { createdAt: 'invalid' },
+      ...[undefined, {}, { login: '' }].map(actor => ({ labelEvents: labels({ ...event, actor }) })),
+      { labelEvents: labels({ ...event, createdAt: 'invalid' }) },
+    ];
+    const rejected = invalid.map(batchIssueOverrides => {
+      const { run } = bench({ batchIssueOverrides });
+      return run('base').lines.every(line => line.status === 'not_started' && line.problems.length > 0);
+    });
+    const { run } = bench({ batchIssueWithoutAuthor: true });
+    rejected.push(run('base').lines.every(line => line.status === 'not_started' && line.problems.length > 0));
+    expect(rejected).toEqual(Array(invalid.length + 1).fill(true));
+    for (const batchIssueOverrides of [{ author: null }, { labelEvents: labels({ ...event, actor: null }) }]) {
+      const { run } = bench({ batchIssueOverrides });
+      expect(run('base').lines.every(line => line.status === 'completed')).toBe(true);
+    }
+  });
+
   it('refuses unrecoverable creation bodies in eval', () => {
     const { runWith, out } = bench();
     const file = join(out, 'set.json');
@@ -1036,6 +1058,35 @@ describe('lookups', () => {
     }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_other', state: 'CLOSED' } } } }));
     expect(await other.response.json()).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
     expect([other.answered, other.live]).toEqual([[], []]);
+  });
+
+  for (const root of ['node', 'nodes']) {
+    for (const identified of [false, true]) {
+      it(`accounts for each ${root} lookup beside a successful same-issue sibling (identified=${String(identified)})`, async () => {
+        const selection = root === 'node' ? 'node(id: "I_4")' : 'nodes(ids: ["I_4"])';
+        const issue = { body: 'Fixed live', ...(identified ? { _archonBenchIssueId: 'I_4' } : {}) };
+        const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+          method: 'POST', body: JSON.stringify({ query: `{ unresolved: ${selection} { ... on Issue { body } } other: node(id: "I_4") { ... on Issue { body } } }` }),
+        }), REPO, views, async () => Response.json({ data: {
+          unresolved: root === 'node' ? issue : [issue],
+          other: { _archonBenchIssueId: 'I_4', body: 'Fixed live' },
+        } }));
+        expect(answer.answered).toEqual([4]);
+        expect(answer.live).toEqual(identified ? [] : [4]);
+        const expected = { body: identified ? 'As opened.' : 'Fixed live' };
+        expect(await answer.response.json()).toEqual({ data: { unresolved: root === 'node' ? expected : [expected], other: { body: 'As opened.' } } });
+      });
+    }
+  }
+
+  it('reports malformed successful JSON lookup responses on the configured forge', async () => {
+    const body = JSON.stringify({ query: '{ search(query: "repo:o/r", type: ISSUE, first: 5) { nodes { ... on Issue { body } } } }' });
+    for (const host of ['api.github.com', 'other.example']) {
+      const answer = await answerLookup(new Request(`http://${host}/graphql`, { method: 'POST', body }), REPO, views,
+        async () => new Response('{invalid', { headers: { 'content-type': 'application/json' } }));
+      expect(answer.problem).toBe(host === 'api.github.com' ? 'lookup server: response contained invalid JSON' : undefined);
+      expect(await answer.response.text()).toBe('{invalid');
+    }
   });
 
   it('identifies interface-only node lookups before returning a creation snapshot', async () => {
@@ -1655,9 +1706,12 @@ describe('score', () => {
     expect(renderPage(set, out, 1)).toContain('A merged pull request on the base references this issue: <a href="https://github.com/o/r/pull/40">');
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'partly', note: '' });
     expect(score(set, out).versions[1].pending_closes).toEqual(['2']);
+    expect(renderPage(set, out, 1)).toContain('the close bar stays pending');
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'wrong', note: '' });
     expect(score(set, out).versions[1].false_closes).toEqual(['2']);
+    expect(renderPage(set, out, 1)).not.toContain('the close bar stays pending');
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: 'verified fix' });
+    expect(renderPage(set, out, 1)).not.toContain('the close bar stays pending');
     expect(renderScore(score(set, out))).toContain('| false closes (none allowed) | 0: pass | 0: pass |');
   });
 
