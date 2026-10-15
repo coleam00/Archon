@@ -156,6 +156,17 @@ export function resumeCursorMatches(
   }
 }
 
+export function deadlineWaitCursor(
+  wait: NonNullable<ReturnType<typeof pendingWorkflowWaitDeadline>>
+): Extract<WorkflowResumeCursor, { kind: 'wait' }> {
+  return {
+    kind: 'wait',
+    nodeId: wait.nodeId,
+    resumeAt: wait.resumeAt,
+    ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
+  };
+}
+
 /** A pause the engine continues by itself, named exactly (`continuablePauseCursor`). */
 export type PauseCursor =
   | Extract<WorkflowResumeCursor, { kind: 'wait' }>
@@ -174,13 +185,7 @@ export function continuablePauseCursor(
 ): PauseCursor | undefined {
   if (isContainerRun(run)) return undefined;
   const wait = pendingWorkflowWaitDeadline(run);
-  if (wait)
-    return {
-      kind: 'wait',
-      nodeId: wait.nodeId,
-      resumeAt: wait.resumeAt,
-      ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
-    };
+  if (wait) return deadlineWaitCursor(wait);
   const pause = continuablePause(run);
   return pause && { kind: 'pause', nodeId: pause.nodeId, pauseId: pause.pauseId };
 }

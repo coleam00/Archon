@@ -272,9 +272,10 @@ const commandHelp: HelpEntry[] = [
     description: 'Signal and wake one exact event wait occurrence',
     scopedFlags: [
       { spec: '--event <name>', description: 'Required event name' },
+      { spec: '--occurrence <id>', description: 'Exact occurrence from metadata.wait.pauseId' },
       {
         spec: '--resume-at <ISO timestamp>',
-        description: 'Required occurrence deadline from the run',
+        description: 'Legacy deadline selector; cannot distinguish equal-deadline occurrences',
       },
       { spec: '--data <JSON>', description: 'Optional signal payload' },
       { spec: '--json', description: 'Report signal and execution separately' },

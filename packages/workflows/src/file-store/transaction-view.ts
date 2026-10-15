@@ -268,6 +268,7 @@ export function createTransactionView(
         wait.event !== expected.event ||
         wait.nodeId !== expected.nodeId ||
         wait.resumeAt !== expected.resumeAt ||
+        wait.pauseId !== expected.pauseId ||
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };

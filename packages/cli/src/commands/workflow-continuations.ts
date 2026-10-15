@@ -13,7 +13,7 @@ import {
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { writeStdout } from '../utils/stdout';
@@ -258,16 +258,16 @@ async function signalEvent(
   values: Values,
   json: boolean
 ): Promise<number> {
-  validateFlags(values, ['event', 'resume-at', 'data']);
+  validateFlags(values, ['event', 'occurrence', 'resume-at', 'data']);
   const runId = args[0];
   if (
     !runId ||
     args.length !== 1 ||
     values.event === undefined ||
-    values['resume-at'] === undefined
+    (values.occurrence === undefined && values['resume-at'] === undefined)
   ) {
     throw new Error(
-      'Usage: archon workflow signal <full-run-id> --event <name> --resume-at <ISO timestamp> [--data <JSON>] [--json]'
+      'Usage: archon workflow signal <full-run-id> --event <name> (--occurrence <id> | --resume-at <ISO timestamp>) [--data <JSON>] [--json]'
     );
   }
   let data: unknown;
@@ -278,19 +278,27 @@ async function signalEvent(
       throw new Error('--data must be valid JSON');
     }
   }
-  const { event, resumeAt, payload } = signalWorkflowWaitRequestSchema.parse({
+  const request = signalWorkflowWaitRequestSchema.parse({
+    occurrence: values.occurrence,
     event: values.event,
     resumeAt: values['resume-at'],
     payload: data,
   });
+  const { event, occurrence, resumeAt } = request;
   const run = await host.deps.store.getWorkflowRun(runId);
   const wait = run && isWorkflowWaitContext(run.metadata.wait) ? run.metadata.wait : undefined;
-  if (!run || wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
+  if (
+    !run ||
+    wait?.kind !== 'event' ||
+    wait.event !== event ||
+    (occurrence !== undefined && wait.pauseId !== occurrence) ||
+    (resumeAt !== undefined && wait.resumeAt !== resumeAt)
+  ) {
     throw new Error(
-      'Run is not waiting on that event occurrence; use its full run id and current resumeAt'
+      'Run is not waiting on that event occurrence; use its full run id and current pauseId (or resumeAt for legacy waits)'
     );
   }
-  const { signaled } = await host.operations.signalWorkflowWait(runId, event, resumeAt, payload, {
+  const { signaled } = await host.operations.signalWorkflowWait(runId, request, {
     kind: 'operator',
   });
   if (!signaled)
@@ -299,12 +307,7 @@ async function signalEvent(
   try {
     outcome = {
       runId,
-      ...(await admit(host, run, {
-        kind: 'wait',
-        nodeId: wait.nodeId,
-        resumeAt,
-        ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
-      })),
+      ...(await admit(host, run, deadlineWaitCursor(wait))),
     };
   } catch (error) {
     outcome = { runId, kind: 'failed', error };

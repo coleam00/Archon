@@ -1514,6 +1514,46 @@ export function describeWorkflowStoreConformance(
         await watch.close();
       }
     });
+    test.each([undefined, { value: 'signal' }])(
+      'a stale signal cannot satisfy a later event occurrence with the same deadline (payload %j)',
+      async payload => {
+        const first: Extract<WorkflowWaitContext, { kind: 'event' }> = {
+          owner: 'node',
+          nodeId: 'gate',
+          kind: 'event',
+          event: 'ready',
+          waitingSince: new Date().toISOString(),
+          resumeAt: new Date(Date.now() + 86_400_000).toISOString(),
+          pauseId: 'first',
+        };
+        const run = await running(store);
+        await store.pauseWorkflowRunForWait(run.id, first, { kind: 'started', stepName: 'gate' });
+        expect(await store.signalWorkflowWait(run.id, first, payload)).toEqual({ signaled: true });
+        await store.resumeWorkflowRun(run.id);
+        await store.clearWorkflowWaitContext(run.id, first, {
+          stepName: 'gate',
+          result: { status: 'satisfied', waited_ms: 0 },
+        });
+        const second = { ...first, pauseId: 'second' };
+        await store.pauseWorkflowRunForWait(run.id, second, { kind: 'started', stepName: 'gate' });
+        const before = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        expect(
+          await store.signalWorkflowWait(run.id, { ...first, pauseId: undefined }, payload)
+        ).toEqual({ signaled: false });
+        expect(await store.signalWorkflowWait(run.id, first, payload)).toEqual({ signaled: false });
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+        expect(
+          (await store.listDueWorkflowContinuations(new Date(), 10)).map(row => row.id)
+        ).not.toContain(run.id);
+        expect(await store.signalWorkflowWait(run.id, second, payload)).toEqual({ signaled: true });
+        expect((await store.getWorkflowRun(run.id))?.metadata.wait).toMatchObject({
+          pauseId: 'second',
+          ...(payload === undefined ? {} : { payload }),
+        });
+      }
+    );
     test('continuation scans honor exact-cursor deferral and an event signal has one winner', async () => {
       const due = async (now: Date): Promise<string[]> =>
         (await store.listDueWorkflowContinuations(now, 10)).map(run => run.id);
@@ -1553,6 +1593,9 @@ export function describeWorkflowStoreConformance(
       expect(await due(new Date())).not.toContain(signaled.id);
       expect(
         await store.signalWorkflowWait(signaled.id, { ...event, event: 'other' }, { n: -1 })
+      ).toEqual({ signaled: false });
+      expect(
+        await store.signalWorkflowWait(signaled.id, { ...event, pauseId: 'not-legacy' })
       ).toEqual({ signaled: false });
       const results = await eight(index =>
         store.signalWorkflowWait(signaled.id, event, { n: index })

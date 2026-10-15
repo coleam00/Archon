@@ -2122,12 +2122,21 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': {
-            event: string;
-            /** Format: date-time */
-            resumeAt: string;
-            payload?: unknown;
-          };
+          'application/json':
+            | {
+                event: string;
+                occurrence: string;
+                /** Format: date-time */
+                resumeAt?: string;
+                payload?: unknown;
+              }
+            | {
+                event: string;
+                occurrence?: string;
+                /** Format: date-time */
+                resumeAt: string;
+                payload?: unknown;
+              };
         };
       };
       responses: {

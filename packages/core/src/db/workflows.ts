@@ -2078,6 +2078,12 @@ export async function signalWorkflowWait(
   const nodeExpr = dialect.jsonText('metadata', 'wait.nodeId');
   const signaledExpr = dialect.jsonText('metadata', 'wait.signaledAt');
   const resumeAtExpr = dialect.jsonText('metadata', 'wait.resumeAt');
+  const pauseIdExpr = dialect.jsonText('metadata', 'wait.pauseId');
+  const pauseIdParam = payload === undefined ? 6 : 7;
+  const occurrenceMatch =
+    parsedWaitContext.pauseId === undefined
+      ? `${pauseIdExpr} IS NULL`
+      : `${pauseIdExpr} = $${String(pauseIdParam)}`;
   const signaledAt = new Date().toISOString();
   const metadataWrite =
     payload === undefined
@@ -2094,6 +2100,7 @@ export async function signalWorkflowWait(
          SET metadata = ${metadataWrite}
          WHERE id = $1 AND status = 'paused' AND ${eventExpr} = $2
            AND ${nodeExpr} = $3 AND ${resumeAtExpr} = $4
+           AND ${occurrenceMatch}
            AND ${signaledExpr} IS NULL AND ${resumeAtExpr} > $5`,
         payload === undefined
           ? [
@@ -2102,6 +2109,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.nodeId,
               parsedWaitContext.resumeAt,
               signaledAt,
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
           : [
               id,
@@ -2110,6 +2118,7 @@ export async function signalWorkflowWait(
               parsedWaitContext.resumeAt,
               signaledAt,
               JSON.stringify(payload),
+              ...(parsedWaitContext.pauseId === undefined ? [] : [parsedWaitContext.pauseId]),
             ]
       );
       const signaled = (result.rowCount ?? 0) > 0;
