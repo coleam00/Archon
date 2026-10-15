@@ -3,6 +3,7 @@ import {
   getIsolationProvider,
   worktreeRegistrationMetadata,
   type IIsolationStore,
+  type IsolationEnvironmentRow,
   type TaskIsolationRequest,
   type WorktreeCreationEnvironment,
   type WorktreeSetupExecutor,
@@ -48,17 +49,32 @@ export async function createRegisteredWorktree(
     const error = err instanceof Error ? err : new Error(String(err));
     throw new Error(classifyIsolationError(error), { cause: error });
   }
-  const record = await isolation.create({
-    codebase_id: input.request.codebaseId,
-    workflow_type: 'task',
-    workflow_id: input.workflowId ?? input.request.identifier,
-    provider: 'worktree',
-    working_path: env.workingPath,
-    branch_name: env.branchName,
-    created_by_platform: input.createdByPlatform,
-    ...(input.createdByUserId ? { created_by_user_id: input.createdByUserId } : {}),
-    metadata: { ...input.metadata, ...worktreeRegistrationMetadata(env.metadata) },
-  });
+  let record: IsolationEnvironmentRow;
+  try {
+    record = await isolation.create({
+      codebase_id: input.request.codebaseId,
+      workflow_type: 'task',
+      workflow_id: input.workflowId ?? input.request.identifier,
+      provider: 'worktree',
+      working_path: env.workingPath,
+      branch_name: env.branchName,
+      created_by_platform: input.createdByPlatform,
+      ...(input.createdByUserId ? { created_by_user_id: input.createdByUserId } : {}),
+      metadata: { ...input.metadata, ...worktreeRegistrationMetadata(env.metadata) },
+    });
+  } catch (error) {
+    const proof =
+      env.metadata.provenance === 'created'
+        ? ` creation ID: ${env.metadata.creationId}; branch created: ${String(env.metadata.branchCreated)}.`
+        : '';
+    throw new Error(
+      `Worktree registration failed: ${error instanceof Error ? error.message : String(error)}. ` +
+        `The ${env.metadata.provenance} checkout remains unregistered at ${env.workingPath} ` +
+        `(branch: ${env.branchName}; repository: ${input.request.canonicalRepoPath}).${proof} ` +
+        'Recover this checkout before retrying; record-based cleanup cannot find it.',
+      { cause: error }
+    );
+  }
   const created = env.metadata.provenance === 'created' ? env.metadata : undefined;
   return {
     env,

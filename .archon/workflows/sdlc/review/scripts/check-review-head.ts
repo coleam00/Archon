@@ -29,7 +29,7 @@ function retry(pr: PrRecord): string {
     diagnostic = `Remote discovery failed; the fetch uses the base repository URL: ${error instanceof Error ? error.message : String(error)}\n`;
   }
   const ref =
-    new URL(pr.url).pathname.split('/').at(-2) === 'merge_requests'
+    new URL(pr.url).pathname.split('/').filter(Boolean).at(-2) === 'merge_requests'
       ? `refs/merge-requests/${String(pr.number)}/head`
       : `refs/pull/${String(pr.number)}/head`;
   return (

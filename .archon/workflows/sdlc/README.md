@@ -28,14 +28,17 @@ Prove a guard with executed code. Topology fixtures may stub it, but a focused
 script or graph test must exercise its deciding inputs and failure path. Composed
 review tests must execute the check with the caller's actual `with:` bindings.
 
-PR review has two checks at different times. After the scope agent interprets the trigger message and returns the effective
-selector and qualified PR, `head-check` independently resolves that selector, rejects a
-missing or different declaration, and compares the live PR head with the commit fixed by `mode`, before
-routing or lenses. A mismatch stops with a branch retry and a fetch plus pinned
-`--from` retry (also usable for forks). It never changes the checkout. Keep other
-non-default review inputs when retrying. Publication checks again before its write,
-because the PR can move while the lenses run. Working-diff reviews need no forge
-head comparison after discovery confirms no open PR.
+PR review has two checks at different times. After the scope agent interprets the
+trigger message and returns a selector and qualified PR, `head-check` resolves the
+explicit nonempty `scope` input first, using the agent's selector only when that
+input is empty. It rejects a missing or different PR declaration and compares the
+live PR head with the commit fixed by `mode`, before routing or lenses. A mismatch
+stops with a retained-ref fetch and pinned `--from` retry, including for forks and
+closed or merged PRs. An open same-repository PR also gets a branch retry. The check
+never changes the checkout. Keep other non-default review inputs when retrying.
+Publication binds the target to the explicit scope and checks again before its
+write, because the PR can move while the lenses run. Working-diff reviews need no
+forge head comparison after discovery confirms no open PR.
 
 ### Why this rule exists
 
