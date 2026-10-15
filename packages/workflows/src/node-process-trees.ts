@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 
 export interface NodeProcessRecorder {
-  /** In-flight roots and their termination/owner-watcher responsibilities. */
+  /** Roots with live or unproved cleanup and their termination/owner-watcher responsibilities. */
   roots: Map<number, { end(): Promise<void>; disarm(): void }>;
   ended: boolean;
   recordLegacyNodes: boolean;

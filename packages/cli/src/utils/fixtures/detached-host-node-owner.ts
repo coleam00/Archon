@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { runSubprocess, endRecordedNodeProcessTrees } from '@archon/workflows/subprocess';
 import { registerOwnedRunTermination } from '../owned-run-termination';
@@ -26,19 +27,26 @@ function ready(pids) {
   fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)});
 }`;
 const body =
-  mode === 'survivor'
+  mode !== 'normal'
     ? `${publishReady} const { spawn } = require('node:child_process');
      const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); console.log('ready');"], { stdio: ['ignore', 'pipe', 'ignore'] });
-     child.stdout.once('data', () => ready({ node: process.pid, descendant: child.pid }));
+     child.stdout.once('data', () => {
+       ready({ node: process.pid, descendant: child.pid });
+       ${mode === 'max-buffer' ? "process.stdout.write('x'.repeat(1024 * 1024 + 1));" : ''}
+     });
      process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`
     : `${publishReady} ready({ node: process.pid }); setInterval(() => {}, 1000);`;
 void runSubprocess({ kind: 'host' }, process.execPath, ['-e', body], {
   cwd: import.meta.dir,
-  timeout: 60_000,
+  timeout: mode === 'timeout' ? 1000 : 60_000,
   env: process.env,
   killTreeOnTimeout: true,
   retention: { standalone: true },
 })
-  .catch(() => undefined)
-  .finally(release);
+  .catch(() => {
+    writeFileSync(`${readyPath}.failed`, '');
+  })
+  .finally(() => {
+    if (mode === 'normal' || mode === 'survivor') release();
+  });
 setInterval(() => undefined, 1000);

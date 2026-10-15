@@ -17,9 +17,9 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
-for (const mode of ['normal', 'survivor'] as const) {
+for (const mode of ['normal', 'survivor', 'timeout', 'max-buffer'] as const) {
   posixTest(
-    `detached host node stop ${mode === 'normal' ? 'ends the node before success' : 'refuses success when cleanup cannot be proved'}`,
+    `detached host node stop ${mode === 'normal' ? 'ends the node before success' : `refuses success when cleanup cannot be proved (${mode})`}`,
     async () => {
       const runId = crypto.randomUUID();
       const readyPath = join(
@@ -43,6 +43,13 @@ for (const mode of ['normal', 'survivor'] as const) {
         }
         pids = JSON.parse(readFileSync(readyPath, 'utf8'));
         if (!pids) throw new Error('Missing node pid');
+        if (mode === 'timeout' || mode === 'max-buffer') {
+          const failedDeadline = Date.now() + 10_000;
+          while (!existsSync(`${readyPath}.failed`)) {
+            if (Date.now() >= failedDeadline) throw new Error('Node cleanup did not fail');
+            await Bun.sleep(25);
+          }
+        }
         const target = await requestDetachedRunStop(runId);
         if (mode === 'normal') {
           await target.stop();
@@ -63,6 +70,6 @@ for (const mode of ['normal', 'survivor'] as const) {
         await exited;
       }
     },
-    15_000
+    20_000
   );
 }

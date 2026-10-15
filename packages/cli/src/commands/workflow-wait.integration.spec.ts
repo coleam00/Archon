@@ -32,17 +32,21 @@ const activeRunIds = new Set<string>();
 const foregroundOwners = new Set<ForegroundOwner>();
 const observedDetachedOwners = new Set<number>();
 
+function killFixtureProcess(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
 // One explicit hook, not `trackTempRoots()`: a still-running owner has to be stopped
 // before its tree can go, and two hooks would leave registration order as the only
 // thing keeping that correct.
 afterEach(async () => {
   await stopForegroundOwners();
   for (const pid of observedDetachedOwners) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    }
+    killFixtureProcess(pid);
     await waitFor(
       `detached owner ${String(pid)} to stop before fixture cleanup`,
       () => {
@@ -921,43 +925,92 @@ describe('archon workflow wait against a detached run', () => {
     // `cancelled` is the transition that never arrives on its own — someone else
     // causes it, in another process, which is exactly the shape a waiting host
     // cannot observe without this command.
+    const command = `exec "${process.execPath.replaceAll('\\', '/')}" cancel-tree.cjs`;
     const fixture = makeFixture('archon-wait-cancel-', {
       'wait-slow':
         'name: wait-slow\ndescription: Long detached fixture.\n' +
-        'nodes:\n  - id: hold\n    bash: "sleep 60; echo done"\n',
+        `nodes:\n  - id: hold\n    bash: ${JSON.stringify(command)}\n`,
     });
-    const { runId } = await launchDetached(fixture, 'wait-slow');
-
-    // `cancel` stops LIVE work: it refuses a run that is still 'pending' outright, and
-    // the tree it terminates has to exist. The forked owner starts its control endpoint
-    // before it executes anything, so the row reaching 'running' is one observation
-    // that covers both. Guessing 1.5s here instead is what failed on Windows — as
-    // "Cannot actively cancel run with status 'pending'" and as a taskkill walking a
-    // tree that was still spawning (#2982).
-    await waitForRunBoot('the detached owner to start running', () =>
-      readRunStatus(fixture.archonHome, runId) === 'running' ? true : undefined
+    const readyPath = join(fixture.projectRoot, 'tree-ready.json');
+    writeFileSync(
+      join(fixture.projectRoot, 'cancel-tree.cjs'),
+      `
+      const { spawn } = require('node:child_process');
+      const fs = require('node:fs');
+      const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); console.log('ready');"], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      child.stdout.once('data', () => {
+        fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, JSON.stringify({ node: process.pid, descendant: child.pid }));
+        fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)});
+      });
+      process.on('SIGTERM', () => {});
+      setInterval(() => {}, 1000);
+    `
     );
+    let pids: { node: number; descendant: number } | undefined;
+    try {
+      const { runId } = await launchDetached(fixture, 'wait-slow');
 
-    const waiter = startWait(fixture, runId, 90);
-    // The wait announces itself once it has read the row and found nothing to report,
-    // so cancelling after this line is a WAKE and not a durable read of an
-    // already-cancelled row. The status it announces is the proof it attached to a run
-    // that was still live.
-    expect(await waiter.attached()).toEqual({ observedStatus: 'running' });
+      // `cancel` stops LIVE work: it refuses a run that is still 'pending' outright, and
+      // the tree it terminates has to exist. The forked owner starts its control endpoint
+      // before it executes anything, so the row reaching 'running' is one observation
+      // that covers both. Guessing 1.5s here instead is what failed on Windows — as
+      // "Cannot actively cancel run with status 'pending'" and as a taskkill walking a
+      // tree that was still spawning (#2982).
+      await waitForRunBoot('the detached owner to start running', () =>
+        readRunStatus(fixture.archonHome, runId) === 'running' ? true : undefined
+      );
 
-    const cancelled = await runCli(fixture, ['workflow', 'cancel', runId]);
-    if (cancelled.exitCode !== 0) {
-      throw new Error(`cancel failed: ${cancelled.stderr || cancelled.stdout}`);
+      pids = await waitForRunBoot('the host grandchild to start', () =>
+        existsSync(readyPath)
+          ? (JSON.parse(readFileSync(readyPath, 'utf8')) as { node: number; descendant: number })
+          : undefined
+      );
+
+      const waiter = startWait(fixture, runId, 90);
+      // The wait announces itself once it has read the row and found nothing to report,
+      // so cancelling after this line is a WAKE and not a durable read of an
+      // already-cancelled row. The status it announces is the proof it attached to a run
+      // that was still live.
+      expect(await waiter.attached()).toEqual({ observedStatus: 'running' });
+
+      const cancelled = await runCli(fixture, ['workflow', 'cancel', runId]);
+      if (cancelled.exitCode !== 0) {
+        throw new Error(`cancel failed: ${cancelled.stderr || cancelled.stdout}`);
+      }
+      const stoppedPids = [pids.node, pids.descendant];
+      await waitFor(
+        'the host node and grandchild to exit',
+        () => {
+          for (const pid of stoppedPids) {
+            try {
+              process.kill(pid, 0);
+              return undefined;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+            }
+          }
+          return true;
+        },
+        5000
+      );
+      const settled = await waiter.settled();
+      activeRunIds.delete(runId);
+
+      expectWaitExit(settled, 0);
+      const { payload } = settled;
+      expect(payload).toMatchObject({
+        result: 'attention',
+        attention: { kind: 'terminal', runId, status: 'cancelled' },
+      });
+    } finally {
+      if (!pids && existsSync(readyPath)) pids = JSON.parse(readFileSync(readyPath, 'utf8'));
+      for (const pid of [pids?.descendant, pids?.node]) {
+        if (pid === undefined) continue;
+        killFixtureProcess(pid);
+      }
     }
-    const settled = await waiter.settled();
-    activeRunIds.delete(runId);
-
-    expectWaitExit(settled, 0);
-    const { payload } = settled;
-    expect(payload).toMatchObject({
-      result: 'attention',
-      attention: { kind: 'terminal', runId, status: 'cancelled' },
-    });
   }, 120_000);
 
   test('reports owner_lost after abrupt process death and leaves lifecycle operator-owned', async () => {

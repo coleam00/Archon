@@ -477,9 +477,12 @@ Then reference it by name from any repo's workflow:
   reads can wait until timeout. Do not depend on interactive input. Container
   scripts receive no stdin through `docker exec`.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
-- **Cancelling mid-execution** — script subprocesses are killed on workflow
-  cancel, but there's no cooperative cancellation signal. Design scripts to
-  complete quickly or fail fast.
+- **Portable cooperative cancellation** — workflow cancellation sends SIGTERM to
+  host POSIX script process groups. Scripts can handle it to flush or roll back;
+  cleanup has up to five seconds before SIGKILL, and escalation requires a live
+  group leader. Windows uses forced process-tree termination; container execution
+  follows its backend's stop behavior. Do not rely on a cooperative signal across
+  all backends. See [process-tree cleanup](/guides/authoring-workflows#node-fields).
 
 ## See Also
 

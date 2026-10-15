@@ -117,7 +117,7 @@ async function execNodeBody(
   await Promise.race([closed, stopCompleted]);
   clearTimeout(timer);
   await termination;
-  if (pid !== undefined) recorder?.roots.delete(pid);
+  if (pid !== undefined && !cleanupError) recorder?.roots.delete(pid);
   child.stdout?.destroy();
   child.stderr?.destroy();
   if (cleanupError) child.unref();
