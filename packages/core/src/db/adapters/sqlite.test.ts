@@ -6,7 +6,7 @@ import {
   startBindingPreparationStatusSchema,
   sourceReceiptOutcomeSchema,
 } from '@archon/workflows/schemas/resource-start';
-import { SqliteAdapter } from './sqlite';
+import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { webPushSubscriptionRowSchema } from '../../schemas/web-push';
@@ -1714,5 +1714,23 @@ await new SqliteAdapter(${JSON.stringify(path)}).close();`;
     } finally {
       await reopened.close();
     }
+  });
+});
+
+describe('sqliteDialect', () => {
+  test('jsonText reads a dotted path with json_extract', () => {
+    expect(sqliteDialect.jsonText('w.metadata', 'approval.attempt')).toBe(
+      "json_extract(w.metadata, '$.approval.attempt')"
+    );
+  });
+
+  test('jsonRemove removes every key in one json_remove', () => {
+    expect(sqliteDialect.jsonRemove('metadata', 'approval', 'wait')).toBe(
+      "json_remove(metadata, '$.approval', '$.wait')"
+    );
+  });
+
+  test('rowLock is empty because SQLite has no row locks', () => {
+    expect(sqliteDialect.rowLock('w')).toBe('');
   });
 });

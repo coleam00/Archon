@@ -11666,9 +11666,8 @@ describe('workflowRejectCommand', () => {
       // what was recorded before that point.
     }
 
-    // No `reason` argument at all — the CLI must default it to 'Rejected'
-    // before it reaches rejectWorkflow, otherwise the new-mode structured
-    // output (#2707) records an empty string instead (#2740).
+    // No `reason` argument at all — rejectWorkflow records the 'Rejected'
+    // default on the new-mode structured output (#2740).
     const structuredOutput = { decision: 'reject', text: 'Rejected' };
     expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
       'run-new-mode',
@@ -15362,14 +15361,17 @@ describe('workflow run credential launch refusal', () => {
     const createDeps = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original(),
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async (_userId, vendor) =>
-        adopt && vendor === 'anthropic'
-          ? { state: 'usable', source: 'archon' }
-          : {
-              state: 'unusable',
-              source: 'archon',
-              evidence: 'stored credential unreadable',
-            },
+      getUserProviderCredentialStatus: async (_userId, vendor) => ({
+        kind: 'api_key',
+        status:
+          adopt && vendor === 'anthropic'
+            ? { state: 'usable', source: 'archon' }
+            : {
+                state: 'unusable',
+                source: 'archon',
+                evidence: 'stored credential unreadable',
+              },
+      }),
     }));
     const isolation = await import('@archon/isolation');
     const core = await import('@archon/core');

@@ -312,7 +312,7 @@ describe("deliver's round", () => {
 describe('review lens gating', () => {
   // The route agent's schema, the mode node's rerun selection and the lens nodes must
   // name the same lenses; this holds the three in step.
-  it('gates every lens node on the route or rerun boolean of the same name', async () => {
+  it('gates every lens node on the route or recorded boolean of the same name', async () => {
     const source = await Bun.file(
       join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
     ).text();
@@ -330,9 +330,11 @@ describe('review lens gating', () => {
     expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual([...ids, 'reason'].sort());
     const mode = Object.keys(workflow.nodes.find(node => node.id === 'mode')?.output_format?.properties ?? {});
     expect(mode).toEqual(expect.arrayContaining(ids));
+    // Only a light round skips route; every other round unions its selection.
+    expect(route?.when).toBe('$mode.output.light == false');
     for (const lens of lenses) {
       expect(lens.when).toBe(
-        `$mode.output.continuation == false && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
+        `$mode.output.light == false && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
       );
     }
   });

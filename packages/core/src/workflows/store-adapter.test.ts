@@ -552,9 +552,12 @@ describe('required workflow credential delivery', () => {
     const status = db.getStoredCredentialStatus as ReturnType<typeof mock>;
     status.mockClear();
     mockListDecryptedUserProviderCredentials.mockResolvedValue([
-      { provider: 'codex', cred: { kind: 'api_key', apiKey: 'legacy' } },
+      { provider: 'codex', cred: { kind: 'oauth', oauthApiKey: 'legacy', rawCreds: {} } },
     ]);
-    await createWorkflowDeps().getUserProviderCredentialStatus?.('u', 'openai');
+    expect(await createWorkflowDeps().getUserProviderCredentialStatus?.('u', 'openai')).toEqual({
+      kind: 'oauth',
+      status: { state: 'usable', source: 'archon' },
+    });
     expect(status).toHaveBeenCalledWith('u', 'codex');
   });
 
@@ -564,7 +567,8 @@ describe('required workflow credential delivery', () => {
     ]);
     const deps = createWorkflowDeps();
     expect(await deps.getUserProviderCredentialStatus?.('u', 'anthropic')).toMatchObject({
-      state: 'usable',
+      kind: 'api_key',
+      status: { state: 'usable' },
     });
     mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
     await expect(
