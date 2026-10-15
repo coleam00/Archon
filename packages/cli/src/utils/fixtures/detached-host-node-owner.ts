@@ -5,6 +5,9 @@ import { registerOwnedRunTermination } from '../owned-run-termination';
 
 const [runId, readyPath, mode] = process.argv.slice(2);
 if (!runId || !readyPath) throw new Error('Missing run id or ready path');
+if (mode !== 'normal' && mode !== 'survivor' && mode !== 'timeout' && mode !== 'max-buffer') {
+  throw new Error(`Unknown fixture mode: ${mode}`);
+}
 const owner = await startRunLiveOwner(runId, {
   detachedProcessPid: process.pid,
   beforeTerminate: endRecordedNodeProcessTrees,
