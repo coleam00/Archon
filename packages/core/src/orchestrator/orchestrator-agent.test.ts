@@ -6003,6 +6003,37 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     );
   });
 
+  test('a credential check that could not decide asks the user to retry, not reconnect', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        status: { state: 'check_failed', source: 'archon', evidence: 'The vendor timed out.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(sentText(platform)).toContain('The vendor timed out. Try again in a moment');
+  });
+
+  test('skips the title when the title model’s credential failed, and still runs the turn', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    // The chat model is on anthropic; the `small` title model is on openai.
+    mockChatVendor.mockReturnValueOnce('anthropic').mockReturnValueOnce('openai');
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
   test('runs on the host login when the user connected nothing for the turn vendor', async () => {
     mockStoredProviderCredentials.mockResolvedValue([
       {

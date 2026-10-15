@@ -353,8 +353,8 @@ async function resolveUserGithubEnvForWorkflow(
     }
   }
   const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
-  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_* entries locate config; they are not
-  // secrets. Protecting them would redact values such as `1` from every node's output.
+  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config; they are not
+  // secrets. Protecting them would redact their values from every node's output.
   const protectedKeys = Object.keys(env).filter(key => GITHUB_TOKEN_KEYS.includes(key));
   if (userId && deps.getUserGithubAuthor) {
     const author = await deps.getUserGithubAuthor(userId);

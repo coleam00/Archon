@@ -116,10 +116,22 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   const authority = parsed.host.toLowerCase();
 
   // 1. Exact known-host match
+  // A withheld token is logged, because the clone then fails as an auth error that
+  // does not say why. Host and scheme only; never the token or the full URL.
+  const withhold = (token: string | undefined, expected: string): undefined => {
+    if (token) {
+      getLog().warn(
+        { host: authority, scheme: parsed.protocol, expectedScheme: expected },
+        'clone.forge_token_withheld_insecure_scheme'
+      );
+    }
+    return undefined;
+  };
+
   for (const entry of FORGE_AUTH) {
     if (hostname === entry.hostPattern) {
-      if (parsed.protocol !== 'https:') return undefined;
       const token = entry.resolveToken();
+      if (parsed.protocol !== 'https:') return withhold(token, 'https:');
       return token ? entry.buildCredentials(token) : undefined;
     }
   }
@@ -152,11 +164,12 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     const forgeUrl = process.env[entry.urlEnvVar];
     if (forgeUrl) {
       const forgeParsed = safeParseUrl(forgeUrl);
-      if (
-        forgeParsed?.protocol === parsed.protocol &&
-        forgeParsed.host.toLowerCase() === authority
-      ) {
+      if (forgeParsed?.host.toLowerCase() === authority) {
         const token = process.env[entry.tokenEnvVar];
+        if (forgeParsed.protocol !== parsed.protocol) {
+          withhold(token, forgeParsed.protocol);
+          continue;
+        }
         if (token) return entry.buildCredentials(token);
       }
     }

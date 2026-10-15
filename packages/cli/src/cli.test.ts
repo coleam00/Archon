@@ -5,7 +5,7 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
+import { RUN_GITHUB_IDENTITY_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -80,10 +80,11 @@ describe('forge user trust boundary', () => {
     }
   });
 
-  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
-  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
-  // process: a CLI subprocess per scenario is too slow on Windows runners.
-  for (const key of GITHUB_TOKEN_KEYS) {
+  // The engine expresses a run's GitHub identity by setting the key (a token, '' to
+  // scrub, or a stored-login redirect). An absent key is no opinion, so Archon's env
+  // files supply it. Exercised in process: a CLI subprocess per scenario is too slow on
+  // Windows runners.
+  for (const key of RUN_GITHUB_IDENTITY_KEYS) {
     it(`${key}: a run's credential state wins over Archon env files`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
       const home = join(root, 'home');

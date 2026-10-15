@@ -4173,6 +4173,8 @@ describe('executeWorkflow', () => {
       expect(configArg?.envVars).toMatchObject({
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
+        GH_ENTERPRISE_TOKEN: '',
+        GITHUB_ENTERPRISE_TOKEN: '',
         COPILOT_GITHUB_TOKEN: '',
         GIT_AUTHOR_NAME: 'connected-author',
         GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
@@ -4181,6 +4183,8 @@ describe('executeWorkflow', () => {
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
+        'GH_ENTERPRISE_TOKEN',
+        'GITHUB_ENTERPRISE_TOKEN',
         'COPILOT_GITHUB_TOKEN',
         'GIT_AUTHOR_NAME',
         'GIT_AUTHOR_EMAIL',
@@ -4356,12 +4360,14 @@ describe('executeWorkflow', () => {
           {}
         );
         expect(environment.envVars?.GH_CONFIG_DIR).toContain('archon-gh-scrubbed-');
-        expect(environment.envVars?.GIT_CONFIG_KEY_0).toBe('credential.helper');
-        // Only secrets are protected: a protected `GIT_CONFIG_COUNT=1` would redact every
-        // `1` in node output.
+        expect(environment.envVars?.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        // Only secrets are protected: protecting the scrub's config values would redact
+        // them, and every `credential.helper` mention, from node output.
         expect(environment.protectedEnvKeys).toEqual([
           'GH_TOKEN',
           'GITHUB_TOKEN',
+          'GH_ENTERPRISE_TOKEN',
+          'GITHUB_ENTERPRISE_TOKEN',
           'COPILOT_GITHUB_TOKEN',
         ]);
       });

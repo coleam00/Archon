@@ -7,8 +7,9 @@
  * env is rewritten so:
  *
  *   - User has a personal token → inject it as GH_TOKEN / GITHUB_TOKEN.
- *     COPILOT_GITHUB_TOKEN is always cleared (Copilot is a paid SaaS; an OAuth
- *     token does not grant equivalent access).
+ *     COPILOT_GITHUB_TOKEN and the GitHub Enterprise token keys are always
+ *     cleared (Copilot is a paid SaaS; an OAuth token does not grant equivalent
+ *     access, and the host's GHES token is not the user's).
  *   - User has NO personal token:
  *       - ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true → keep the org token
  *         (legacy behavior — opt-in).
@@ -27,7 +28,23 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const SENSITIVE_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN', 'COPILOT_GITHUB_TOKEN'] as const;
+/**
+ * Every env var gh reads a token from: github.com, GitHub Enterprise Server, and
+ * Copilot. A per-user run sets each one itself, so none of the host's reaches it.
+ */
+const SENSITIVE_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'COPILOT_GITHUB_TOKEN',
+] as const;
+
+/** Where the scrub sends gh and git instead of the host's stored logins. */
+const STORED_LOGIN_KEYS = ['GH_CONFIG_DIR', 'GIT_CONFIG_PARAMETERS'] as const;
+
+const clearedTokens = (): Record<string, string> =>
+  Object.fromEntries(SENSITIVE_KEYS.map(key => [key, '']));
 
 export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
@@ -46,21 +63,24 @@ export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env):
  *     login and does not create the directory on read. The path is unique per
  *     resolution, so a run that logs in there cannot hand that login to another
  *     user's run.
- *   - appends `credential.helper=` through GIT_CONFIG_COUNT. An empty helper
- *     resets the helper list built from git's config files (osxkeychain, store,
- *     `gh auth git-credential`). Entries already in GIT_CONFIG_COUNT are kept.
+ *   - appends `credential.helper=` to GIT_CONFIG_PARAMETERS, the variable git
+ *     itself uses to pass `-c` settings to child processes. An empty helper resets
+ *     the helper list built from git's config files (osxkeychain, store,
+ *     `gh auth git-credential`). Settings already in it are kept. GIT_CONFIG_COUNT
+ *     would also work for git, but Codex drops env vars whose names contain `KEY`
+ *     from its shells, which would leave a count with no `GIT_CONFIG_KEY_0` and
+ *     break every git command there.
+ *
+ * An existing GIT_CONFIG_PARAMETERS in the host environment (`env`) is kept. A
+ * codebase env entry for it is replaced: it is git's internal channel, not
+ * project configuration.
  */
 function scrubbedGithubEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  const gitConfigCount = Number.parseInt(env.GIT_CONFIG_COUNT ?? '', 10);
-  const helperIndex = Number.isInteger(gitConfigCount) && gitConfigCount > 0 ? gitConfigCount : 0;
+  const gitParameters = env.GIT_CONFIG_PARAMETERS?.trim();
   return {
-    GH_TOKEN: '',
-    GITHUB_TOKEN: '',
-    COPILOT_GITHUB_TOKEN: '',
+    ...clearedTokens(),
     GH_CONFIG_DIR: join(tmpdir(), `archon-gh-scrubbed-${randomUUID()}`),
-    GIT_CONFIG_COUNT: String(helperIndex + 1),
-    [`GIT_CONFIG_KEY_${String(helperIndex)}`]: 'credential.helper',
-    [`GIT_CONFIG_VALUE_${String(helperIndex)}`]: '',
+    GIT_CONFIG_PARAMETERS: `${gitParameters ? `${gitParameters} ` : ''}'credential.helper='`,
   };
 }
 
@@ -86,11 +106,7 @@ export function resolveGithubTokenOverrides(
   if (!userId) return {}; // server-initiated trusted run
 
   if (userToken) {
-    return {
-      GH_TOKEN: userToken,
-      GITHUB_TOKEN: userToken,
-      COPILOT_GITHUB_TOKEN: '',
-    };
+    return { ...clearedTokens(), GH_TOKEN: userToken, GITHUB_TOKEN: userToken };
   }
 
   if (isOrgTokenFallbackAllowed(env)) return {};
@@ -100,3 +116,13 @@ export function resolveGithubTokenOverrides(
 
 /** Exported for tests + audit logging — never inject these as user data. */
 export const GITHUB_TOKEN_KEYS: readonly string[] = SENSITIVE_KEYS;
+
+/**
+ * Every key that carries a run's GitHub identity: the tokens and the scrub's
+ * stored-login redirects. Inside a run, Archon's env files must not replace any of
+ * them (see `loadCliEnv`). Only the token keys are secrets.
+ */
+export const RUN_GITHUB_IDENTITY_KEYS: readonly string[] = [
+  ...SENSITIVE_KEYS,
+  ...STORED_LOGIN_KEYS,
+];

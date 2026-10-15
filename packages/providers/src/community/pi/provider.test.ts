@@ -316,6 +316,8 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   ModelRuntime: {
     create: mockModelRuntimeCreate,
   },
+  // The provider asks whether a delivered per-run auth file covers the turn's provider.
+  readStoredCredential: (providerId: string) => fileCreds[providerId],
   ModelRegistry: mockModelRegistryConstruct,
   SessionManager: {
     create: mockSessionCreate,

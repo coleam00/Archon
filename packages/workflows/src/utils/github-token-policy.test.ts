@@ -20,24 +20,26 @@ describe('resolveGithubTokenOverrides', () => {
     expect(resolveGithubTokenOverrides(true, undefined, 'ghu_x', {})).toEqual({});
   });
 
-  test('injects the user token and clears Copilot when the user is connected', () => {
+  test('injects the user token and clears Copilot and the host enterprise tokens', () => {
     expect(resolveGithubTokenOverrides(true, 'user-1', 'ghu_user', {})).toEqual({
       GH_TOKEN: 'ghu_user',
       GITHUB_TOKEN: 'ghu_user',
+      GH_ENTERPRISE_TOKEN: '',
+      GITHUB_ENTERPRISE_TOKEN: '',
       COPILOT_GITHUB_TOKEN: '',
     });
   });
 
-  test('scrubs the tokens and hides stored logins when the user is not connected', () => {
+  test('scrubs every token and hides stored logins when the user is not connected', () => {
     const env = resolveGithubTokenOverrides(true, 'user-1', null, {});
     expect(env).toEqual({
       GH_TOKEN: '',
       GITHUB_TOKEN: '',
+      GH_ENTERPRISE_TOKEN: '',
+      GITHUB_ENTERPRISE_TOKEN: '',
       COPILOT_GITHUB_TOKEN: '',
       GH_CONFIG_DIR: expect.stringContaining('archon-gh-scrubbed-'),
-      GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'credential.helper',
-      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_PARAMETERS: "'credential.helper='",
     });
     // Unique per resolution: a login written into one run's dir never reaches another.
     expect(resolveGithubTokenOverrides(true, 'user-1', null, {}).GH_CONFIG_DIR).not.toBe(
@@ -45,15 +47,11 @@ describe('resolveGithubTokenOverrides', () => {
     );
   });
 
-  test('appends the helper reset after git config entries already in the environment', () => {
+  test('appends the helper reset after git settings already in the environment', () => {
     const env = resolveGithubTokenOverrides(true, 'user-1', null, {
-      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_PARAMETERS: "'core.autocrlf=false'",
     } as NodeJS.ProcessEnv);
-    expect(env).toMatchObject({
-      GIT_CONFIG_COUNT: '3',
-      GIT_CONFIG_KEY_2: 'credential.helper',
-      GIT_CONFIG_VALUE_2: '',
-    });
+    expect(env.GIT_CONFIG_PARAMETERS).toBe("'core.autocrlf=false' 'credential.helper='");
   });
 
   test('keeps the org token when fallback is explicitly enabled', () => {
@@ -114,6 +112,27 @@ describe('a scrubbed run against stored logins', () => {
     const result = spawnSync('gh', ['auth', 'status'], { env: scrubbed(host), encoding: 'utf8' });
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain('not logged in');
+  });
+
+  test.skipIf(!hasGh)('gh does not use a host GitHub Enterprise token', () => {
+    const host = {
+      ...hostWithStoredLogins(),
+      GH_HOST: 'ghe.example.invalid',
+      GH_ENTERPRISE_TOKEN: 'ghe_host_token',
+    };
+    // Without the scrub gh would send the host's enterprise token.
+    const unscrubbed = spawnSync('gh', ['auth', 'token', '--hostname', 'ghe.example.invalid'], {
+      env: host,
+      encoding: 'utf8',
+    });
+    expect(unscrubbed.stdout.trim()).toBe('ghe_host_token');
+
+    const result = spawnSync('gh', ['auth', 'token', '--hostname', 'ghe.example.invalid'], {
+      env: scrubbed(host),
+      encoding: 'utf8',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout.trim()).toBe('');
   });
 
   test('git credential helpers return no password', () => {

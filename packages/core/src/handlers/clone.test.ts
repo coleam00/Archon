@@ -1068,9 +1068,16 @@ describe('cloneRepository', () => {
       ['GITLAB_TOKEN', 'http://gitlab.com/owner/repo'],
     ])('does not send %s to a known forge over a non-HTTPS URL: %s', (envVar, url) => {
       process.env[envVar] = 'tok-shouldnotleak';
+      mockLogger.warn.mockClear();
       const result = resolveForgeAuth(url);
       delete process.env[envVar];
       expect(result).toBeUndefined();
+      // The withheld token is visible in logs, without the token itself.
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedScheme: 'https:' }),
+        'clone.forge_token_withheld_insecure_scheme'
+      );
+      expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('tok-shouldnotleak');
     });
 
     test('sends a self-hosted token only over the configured scheme', () => {

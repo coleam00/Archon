@@ -114,7 +114,10 @@ import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { deliverCredential, normalizeCredentialVendor } from '../credentials/delivery';
-import { ConnectedCredentialUnavailableError } from '../credentials/unavailable-error';
+import {
+  ConnectedCredentialUnavailableError,
+  type CredentialFailure,
+} from '../credentials/unavailable-error';
 import {
   getDecryptedProviderCredential,
   listUserProviderKeys,
@@ -487,9 +490,9 @@ function isCommandFullyParsed(accumulated: string): boolean {
  */
 async function resolveUserProviderEnvForChat(
   userId: string
-): Promise<{ env: Record<string, string>; failed: Map<string, string> }> {
+): Promise<{ env: Record<string, string>; failed: Map<string, CredentialFailure> }> {
   const env: Record<string, string> = {};
-  const failed = new Map<string, string>();
+  const failed = new Map<string, CredentialFailure>();
   for (const { provider } of await listUserProviderKeys(userId)) {
     const vendor = normalizeCredentialVendor(provider);
     const stored = await getDecryptedProviderCredential(userId, provider);
@@ -501,12 +504,15 @@ async function resolveUserProviderEnvForChat(
           { err: err as Error, userId, provider },
           'orchestrator.provider_creds_deliver_failed'
         );
-        failed.set(vendor, (err as Error).message);
+        failed.set(vendor, { reason: (err as Error).message, retryable: false });
       }
     } else if (stored.state !== 'not_connected') {
       // `not_connected` here means the row was deleted after the listing: the user has
       // no credential for this vendor, so the host login is theirs to use, as before.
-      failed.set(vendor, stored.evidence);
+      failed.set(vendor, {
+        reason: stored.evidence,
+        retryable: stored.state === 'check_failed',
+      });
     }
   }
   return { env, failed };
@@ -2633,14 +2639,26 @@ export async function handleMessage(
     // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
     // so a connected user's keys win over file/db env. No-op when the feature is
     // disabled or no execution identity resolved (sender, else creator).
+    //
+    // A request whose vendor has a connected credential that failed must not run: it
+    // would authenticate with the host's login. A provider whose credentials have no
+    // static vendor for the model (OpenCode, an unparsed Pi model) consumes no stored
+    // credential, so it is not checked, as in workflow preflight.
     let userProviderEnv: Record<string, string> = {};
+    let failedVendors = new Map<string, CredentialFailure>();
+    const failedVendorFor = (
+      provider: string,
+      model: string | undefined
+    ): { vendor: string; failure: CredentialFailure } | undefined => {
+      const vendor = getRegistration(provider).credentials.vendorFor(model);
+      const failure = vendor !== undefined ? failedVendors.get(vendor) : undefined;
+      return vendor !== undefined && failure !== undefined ? { vendor, failure } : undefined;
+    };
     if (isPerUserProviderKeysEnabled() && executionUserId) {
       const delivery = await resolveUserProviderEnvForChat(executionUserId);
-      const vendor = getRegistration(providerKey).credentials.vendorFor(chatRequest.model);
-      const reason = vendor !== undefined ? delivery.failed.get(vendor) : undefined;
-      if (vendor !== undefined && reason !== undefined) {
-        throw new ConnectedCredentialUnavailableError(vendor, reason);
-      }
+      failedVendors = delivery.failed;
+      const failed = failedVendorFor(providerKey, chatRequest.model);
+      if (failed) throw new ConnectedCredentialUnavailableError(failed.vendor, failed.failure);
       userProviderEnv = delivery.env;
     }
     const protectedEnvKeys = Object.keys(userProviderEnv);
@@ -2685,8 +2703,21 @@ export async function handleMessage(
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
     }
 
-    if (!conversation.title && !trimmedMessage.startsWith('/')) {
-      const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+    const titleRequest =
+      !conversation.title && !trimmedMessage.startsWith('/')
+        ? resolveModelRequest(aiProfile, 'small', configuredProviderKey)
+        : undefined;
+    const failedTitleVendor =
+      titleRequest && failedVendorFor(titleRequest.provider, titleRequest.model);
+    if (failedTitleVendor) {
+      // The turn itself is fine; only the title model's credential failed. The
+      // conversation keeps its placeholder title rather than sending the message out
+      // on the host's login.
+      getLog().warn(
+        { conversationId, vendor: failedTitleVendor.vendor },
+        'orchestrator.title_skipped_credential_unavailable'
+      );
+    } else if (titleRequest) {
       const titleOptions: SendQueryOptions = {
         model: titleRequest.model,
         assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },

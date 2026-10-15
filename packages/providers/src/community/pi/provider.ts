@@ -491,7 +491,9 @@ function piNotConnectedMessage(providerId: string): string {
  *
  * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
- * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
+ * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The file is
+ * used only for a provider it holds an entry for; any other provider reads the user's own
+ * auth.json, so the login check and the turn pick the same store. The path rides
  * the per-call env (the executor's per-user injection never writes to process.env), which
  * `piAuthEnv` layers over process.env for a shell-level override.
  *
@@ -508,9 +510,19 @@ async function createPiModelRuntime(
   authEnv: PiAuthEnv,
   signal?: AbortSignal
 ): Promise<RequestModelRuntime> {
+  // Pi reads exactly one auth store. The per-run file holds only Archon's delivered
+  // credentials, so it is used only when it holds one for this provider; otherwise Pi
+  // reads the user's own auth.json, with its own locking and refresh write-back, so a
+  // `pi /login` for this backend keeps working beside a credential delivered for another.
+  const deliveredAuthPath = authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined;
+  const authPath =
+    deliveredAuthPath !== undefined &&
+    piCodingAgent.readStoredCredential(provider, deliveredAuthPath) !== undefined
+      ? deliveredAuthPath
+      : undefined;
   return createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
-    authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
+    authPath,
     PI_PROVIDER_ENV_VARS[provider]
       ? undefined
       : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }

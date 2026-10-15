@@ -117,9 +117,11 @@ function resolveModelReasoningEffort(
 }
 
 /**
- * Why an auth failure happened on a managed ChatGPT login. Codex asks the client for a new
- * token when its access token is rejected, and Archon answers that it has none (see
- * `AppServerConnection`): the token is minted when a run starts or resumes, or per chat turn.
+ * Why an auth failure happened on a managed ChatGPT login. Codex's protocol lets it ask
+ * the client for a new token when its access token is rejected; `AppServerConnection`
+ * declines that request, because Archon mints the token only when a run starts or
+ * resumes, or per chat turn. Shown on any `auth` failure of a managed login, whether or
+ * not Codex sent the request.
  */
 const MANAGED_CHATGPT_TOKEN_REJECTED =
   'The ChatGPT access token Archon delivered from the connected subscription was rejected ' +
