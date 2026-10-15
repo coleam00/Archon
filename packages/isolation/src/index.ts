@@ -70,6 +70,7 @@ export {
   IsolationBlockedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
+  WorktreeUncommittedChangesError,
   classifyIsolationError,
 } from './errors';
 

@@ -1,3 +1,4 @@
+import { WorktreeUncommittedChangesError } from '../errors';
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { basename, join, resolve } from 'node:path';
 
@@ -2431,6 +2432,47 @@ describe('WorktreeProvider', () => {
 
   describe('destroy', () => {
     beforeEach(prepareDestroy);
+    test('dirty status refuses removal and branch cleanup', async () => {
+      execSpy.mockResolvedValueOnce({ stdout: '?? new-file\0', stderr: '' });
+      await expect(
+        provider.destroy('/workspace/wt', {
+          ...ownedDestroyOptions,
+          branchName: git.toBranchName('task'),
+        })
+      ).rejects.toBeInstanceOf(WorktreeUncommittedChangesError);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
+          '-C',
+          '/workspace/wt',
+          'status',
+          '--porcelain=v1',
+          '-z',
+          '--untracked-files=all',
+          '--ignore-submodules=none',
+        ],
+        expect.any(Object)
+      );
+      expect(mockRm).not.toHaveBeenCalled();
+    });
+
+    test('status errors propagate unchanged without removal', async () => {
+      const failure = new Error('status could not be modified');
+      execSpy.mockRejectedValueOnce(failure);
+      await expect(provider.destroy('/workspace/wt', ownedDestroyOptions)).rejects.toBe(failure);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+      expect(mockRm).not.toHaveBeenCalled();
+    });
+
+    test.each([{ force: true }, { removeLocked: true }])(
+      'explicit destructive options skip status: %j',
+      async flags => {
+        await provider.destroy('/workspace/wt', { ...ownedDestroyOptions, ...flags });
+        expect(execSpy.mock.calls.some(([, args]) => args.includes('status'))).toBe(false);
+      }
+    );
+
     test('removes worktree', async () => {
       const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/issue-42');
 
@@ -2593,7 +2635,7 @@ describe('WorktreeProvider', () => {
       'propagates a Git removal error mentioning %s without deleting files or branches',
       async message => {
         const failure = new Error(message);
-        execSpy.mockRejectedValueOnce(failure);
+        execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' }).mockRejectedValueOnce(failure);
         await expect(
           provider.destroy('/workspace/wt', {
             ...ownedDestroyOptions,
@@ -2609,10 +2651,9 @@ describe('WorktreeProvider', () => {
       const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/issue-42');
 
       getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
-      // git worktree remove fails with uncommitted changes error
-      execSpy.mockRejectedValueOnce(
-        new Error('fatal: cannot remove: You have local modifications')
-      );
+      execSpy
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockRejectedValueOnce(new Error('fatal: cannot remove: You have local modifications'));
 
       // Should throw the error
       await expect(provider.destroy(worktreePath, ownedDestroyOptions)).rejects.toThrow(

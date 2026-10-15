@@ -1,4 +1,8 @@
 import {
+  signalWorkflowWaitRequestSchema,
+  type SignalWorkflowWaitRequest,
+} from '../schemas/workflow-run';
+import {
   authorizeRunAction,
   RunActionForbiddenError,
   type RunActor,
@@ -1055,9 +1059,7 @@ export interface WorkflowOperations {
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
   signalWorkflowWait: (
     runId: string,
-    event: string,
-    resumeAt: string,
-    payload: unknown,
+    request: SignalWorkflowWaitRequest,
     actor: RunActor
   ) => Promise<{ signaled: boolean }>;
   deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<void>;
@@ -1139,15 +1141,19 @@ export function createWorkflowOperations({
 
   async function signalWorkflowWait(
     runId: string,
-    event: string,
-    resumeAt: string,
-    payload: unknown,
+    request: SignalWorkflowWaitRequest,
     actor: RunActor
   ): Promise<{ signaled: boolean }> {
     const run = await getRunOrThrow(runId, 'operations.workflow_signal_lookup_failed');
     await assertMayAct(run, actor, 'signal');
     const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
-    if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt)
+    const { event, occurrence, resumeAt, payload } = signalWorkflowWaitRequestSchema.parse(request);
+    if (
+      wait?.kind !== 'event' ||
+      wait.event !== event ||
+      (occurrence !== undefined && wait.pauseId !== occurrence) ||
+      (resumeAt !== undefined && wait.resumeAt !== resumeAt)
+    )
       return { signaled: false };
     return store.signalWorkflowWait(runId, wait, payload);
   }

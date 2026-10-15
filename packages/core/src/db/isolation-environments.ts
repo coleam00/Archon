@@ -16,6 +16,10 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
+
+// Adopted worktrees have no creation proof, so identical upserts need a fresh store-owned identity.
+const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -153,6 +157,9 @@ export async function findLatestByCodebaseAndWorkingPath(
  */
 export async function create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow> {
   const dialect = getDialect();
+  const provider = env.provider ?? 'worktree';
+  const metadata = { ...env.metadata };
+  if (provider === 'worktree') metadata[WORKTREE_REGISTRATION_ID] = crypto.randomUUID();
   // Note: created_by_user_id is intentionally NOT in the DO UPDATE SET — on
   // re-creation (upsert) we preserve the original creator's attribution.
   // The first user to spin up an environment owns it; subsequent reactivations
@@ -175,12 +182,12 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
       env.codebase_id,
       env.workflow_type,
       env.workflow_id,
-      env.provider ?? 'worktree',
+      provider,
       env.working_path,
       env.branch_name,
       env.created_by_platform ?? null,
       env.created_by_user_id ?? null,
-      JSON.stringify(env.metadata ?? {}),
+      JSON.stringify(metadata),
     ]
   );
 
@@ -210,6 +217,22 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
     );
   }
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');
+}
+
+/** Mark only the observed worktree resource destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(
+  env: Pick<IsolationEnvironmentRow, 'id' | 'working_path' | 'branch_name' | 'metadata'>
+): Promise<void> {
+  const registrationId = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
+  const result = await pool.query(
+    `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
+     WHERE id = $1 AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${registrationId}, '') = $2`,
+    [env.id, env.metadata[WORKTREE_REGISTRATION_ID] ?? '']
+  );
+  if (result.rowCount !== 1) {
+    throw new Error(`Worktree ${env.id} changed during cleanup; inspect it and retry deletion`);
+  }
 }
 
 /**
@@ -454,7 +477,7 @@ export async function listActiveContainerEnvironments(): Promise<
     `SELECT e.*, c.name as codebase_name, ${dialect.daysSince('e.created_at')} as days_since_created
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
-     WHERE e.status = 'active' AND e.provider = 'container'
+     WHERE ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
      ORDER BY e.created_at DESC`
   );
   return result.rows.map(normalizeEnvironmentRow);

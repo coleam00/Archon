@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  hasUncommittedChangesStrict,
   addSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
@@ -44,6 +45,7 @@ import {
   ExistingBranchDivergedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
+  WorktreeUncommittedChangesError,
   recordCleanupFailure,
 } from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
@@ -430,6 +432,13 @@ export class WorktreeProvider implements IIsolationProvider {
 
     // Only attempt worktree removal if path exists
     if (pathExists) {
+      if (
+        !options?.force &&
+        !options?.removeLocked &&
+        (await hasUncommittedChangesStrict(toWorktreePath(worktreePath)))
+      ) {
+        throw new WorktreeUncommittedChangesError(worktreePath);
+      }
       const gitArgs = ['-C', repoPath, 'worktree', 'remove'];
       // Git refuses a locked worktree even with one `--force`; the second one is
       // its own opt-in for that, so a lock still protects every other caller.

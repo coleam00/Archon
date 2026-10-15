@@ -96,8 +96,10 @@ describe('parsePiConfig', () => {
     ).toEqual({ extensionFlags: { plan: true } });
   });
 
-  test('drops extensionFlags when all entries are invalid', () => {
-    expect(parsePiConfig({ extensionFlags: { bogus: 42, nested: {} } })).toEqual({});
+  test('drops every invalid extensionFlags entry', () => {
+    expect(parsePiConfig({ extensionFlags: { bogus: 42, nested: {} } })).toEqual({
+      extensionFlags: {},
+    });
   });
 
   test('drops non-object extensionFlags silently', () => {
@@ -134,8 +136,8 @@ describe('parsePiConfig', () => {
     ).toEqual({ env: { GOOD: 'yes' } });
   });
 
-  test('drops env when all entries are invalid', () => {
-    expect(parsePiConfig({ env: { NUM: 42, NESTED: {} } })).toEqual({});
+  test('drops every invalid env entry', () => {
+    expect(parsePiConfig({ env: { NUM: 42, NESTED: {} } })).toEqual({ env: {} });
   });
 
   test('drops non-object env silently', () => {
@@ -221,7 +223,7 @@ describe('parsePiConfig', () => {
     ).toEqual({ nodes: { implement: { extensionFlags: { plan: false } } } });
   });
 
-  test('drops node entries with nothing valid and non-object entries', () => {
+  test('drops invalid node fields and non-object node entries', () => {
     expect(
       parsePiConfig({
         nodes: {
@@ -232,7 +234,7 @@ describe('parsePiConfig', () => {
           nullish: null,
         },
       })
-    ).toEqual({});
+    ).toEqual({ nodes: { empty: {}, allInvalid: {} } });
   });
 
   test('drops non-object nodes silently', () => {

@@ -38,6 +38,7 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     created_by_platform: 'cli',
     metadata: { key: 'value' },
   });
+  expect(env.metadata).toMatchObject({ key: 'value' });
   await db.query('UPDATE remote_agent_isolation_environments SET created_at = $1 WHERE id = $2', [
     '2000-01-01 00:00:00',
     env.id,
@@ -89,9 +90,9 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     probe: { path: 'probe.md', description: 'Probe' },
   });
   expect((await environments.findStaleEnvironments(7))[0]?.codebase_name).toBe(project.name);
-  expect((await environments.findActiveByBranchName('path-contract'))?.metadata).toEqual({
-    key: 'value',
-  });
+  expect((await environments.findActiveByBranchName('path-contract'))?.metadata).toEqual(
+    env.metadata
+  );
   expect((await environments.listAllActiveWithCodebase())[0]?.codebase_default_cwd).toBe(
     absolutePath
   );

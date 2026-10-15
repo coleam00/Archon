@@ -11,6 +11,7 @@ import type { ProviderChunk } from '../events';
 import type { ProviderSettled } from '../settled';
 import { PluginProtocolError, PluginRpc, type PluginIO } from './rpc';
 import {
+  PROVIDER_PLUGIN_PROTOCOL,
   diagnoseRequestSchema,
   listModelsRequestSchema,
   chunkNotificationSchema,
@@ -122,7 +123,7 @@ export async function connectProvider(
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
-          _meta: { archon: { protocol: 1 } },
+          _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } },
         },
       })
     );

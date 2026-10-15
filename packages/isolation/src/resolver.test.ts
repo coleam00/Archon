@@ -225,6 +225,33 @@ describe('IsolationResolver', () => {
     }
   });
 
+  test.each(['existing', 'workflow', 'linked'] as const)(
+    'refuses a container from %s lookup before missing-path reconciliation',
+    async lookup => {
+      const env = makeEnvRow({ provider: 'container', branch_name: '' });
+      const updateStatus = mock(async () => {});
+      const resolver = createResolver({
+        store: makeMockStore({
+          getById: async () => env,
+          findActiveByWorkflow: async (_id, type) =>
+            lookup === 'workflow' || type === 'issue' ? env : null,
+          updateStatus,
+        }),
+      });
+      worktreeExistsSpy.mockResolvedValue(false);
+      await expect(
+        resolver.resolve({
+          existingEnvId: lookup === 'existing' ? env.id : null,
+          codebase: defaultCodebase,
+          platformType: 'web',
+          hints: { workflowType: 'pr', workflowId: '42', linkedIssues: [10] },
+        })
+      ).rejects.toThrow('not a worktree');
+      expect(worktreeExistsSpy).not.toHaveBeenCalled();
+      expect(updateStatus).not.toHaveBeenCalled();
+    }
+  );
+
   test('existing env stale (not on disk) — returns stale_cleaned', async () => {
     const env = makeEnvRow();
     worktreeExistsSpy.mockResolvedValue(false);

@@ -52,7 +52,11 @@ import {
 } from './schemas';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from './loader';
 import { evaluateCondition } from './condition-evaluator';
-import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
+import {
+  readHomeMcpDirectory,
+  COMPILED_LOOP_COMMAND,
+  type LoopWithCompiledCommand,
+} from './compiled-command';
 import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
@@ -60,6 +64,8 @@ import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
+import { validateWorkflowResources } from './validator';
+import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
 
 function discoverWorkflows(
   cwd: string | null,
@@ -179,6 +185,114 @@ describe('Workflow Loader', () => {
     } else {
       process.env.ARCHON_DOCKER = originalArchonDocker;
     }
+  });
+
+  describe('MCP declaration provenance', () => {
+    it.each(['', 'nested', 'pack/flow'])(
+      'keeps the actual home YAML directory: %s',
+      async subdir => {
+        const yamlDir = join(testDir, 'home', 'workflows', subdir);
+        await mkdir(yamlDir, { recursive: true });
+        await writeFile(
+          join(yamlDir, 'home.yaml'),
+          `name: portable
+description: Home MCP
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+        );
+        await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+        const catalog = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(catalog.errors).toEqual([]);
+        const entry = catalog.workflows.find(e => e.source === 'global');
+        if (!entry) throw new Error('Missing home workflow');
+        expect(readHomeMcpDirectory(entry.workflow.nodes[0])).toBe(yamlDir);
+        expect(
+          (await validateWorkflowResources(entry.workflow, testDir, providerRegistry)).filter(
+            i => i.field === 'mcp'
+          )
+        ).toEqual([]);
+      }
+    );
+
+    it('preserves declaration ownership across mixed scopes, nested includes and loop bodies', async () => {
+      const homeDir = join(testDir, 'home', 'workflows', 'nested');
+      const projectDir = join(testDir, '.archon', 'workflows');
+      await mkdir(homeDir, { recursive: true });
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(homeDir, 'home.yaml'),
+        `name: home-block
+description: Home declaration
+nodes:
+  - id: group
+    loop_group:
+      until: done
+      max_iterations: 1
+      nodes:
+        - id: check
+          prompt: Check
+          mcp: servers.json
+`
+      );
+      await writeFile(
+        join(projectDir, 'project.yaml'),
+        `name: project-block
+description: Project declaration
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+      );
+      await writeFile(
+        join(testDir, 'home', 'workflows', 'middle.yaml'),
+        `name: middle
+description: Mixed includes
+nodes:
+  - id: home
+    include: home-block
+  - id: project
+    include: project-block
+`
+      );
+      await writeFile(
+        join(projectDir, 'parent.yaml'),
+        `name: parent
+description: Second level
+nodes:
+  - id: outer
+    include: middle
+`
+      );
+      await writeFile(join(homeDir, 'servers.json'), '{"home":{}}');
+      const catalog = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(catalog.errors).toEqual([]);
+      const parent = catalog.workflows.find(e => e.workflow.name === 'parent')?.workflow;
+      if (!parent) throw new Error('Missing parent');
+      const group = parent.nodes.find(n => n.id === 'outer__home__group');
+      const project = parent.nodes.find(n => n.id === 'outer__project__check');
+      if (!group || isIncludeDirective(group) || !isLoopGroupNode(group) || !project)
+        throw new Error('Missing composed nodes');
+      expect(readHomeMcpDirectory(project)).toBeUndefined();
+      expect(readHomeMcpDirectory(group.loop_group.nodes[0])).toBe(homeDir);
+      for (const clone of [
+        mapNodeTemplateSlots(group, slot => slot.value),
+        mapNodeTemplateValueSlots(group, slot => slot.value),
+      ]) {
+        if (!isLoopGroupNode(clone)) throw new Error('Lost group');
+        expect(readHomeMcpDirectory(clone.loop_group.nodes[0])).toBe(homeDir);
+      }
+      const issues = (await validateWorkflowResources(parent, testDir, providerRegistry)).filter(
+        i => i.field === 'mcp'
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0].nodeId).toBe('outer__project__check');
+      expect(issues[0].message).toContain(join(testDir, 'servers.json'));
+      expect(issues[0].message).not.toContain(homeDir);
+    });
   });
 
   describe('packaged workflow folders (#2527)', () => {

@@ -308,6 +308,22 @@ describe('ContainerBackend.destroy', () => {
     expect(store.rows.get(prepared.envId as string)?.status).toBe('destroyed');
   });
 
+  test('propagates a status write failure after removing both resources', async () => {
+    const store = fakeStore();
+    const docker = fakeDocker(args => ({ stdout: args[0] === 'run' ? 'cid\n' : '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.prepare({ codebase: FOLDER });
+    const failure = new Error('status write failed');
+    spyOn(store, 'updateStatus').mockRejectedValueOnce(failure);
+    docker.calls.length = 0;
+
+    await expect(backend.destroy(prepared.envId!)).rejects.toBe(failure);
+
+    expect(docker.calls.some(args => args[0] === 'rm')).toBe(true);
+    expect(docker.calls.some(args => args[0] === 'volume' && args[1] === 'rm')).toBe(true);
+    expect(store.rows.get(prepared.envId!)?.status).toBe('active');
+  });
+
   test('is a no-op warning when the env row is missing (idempotent)', async () => {
     const store = fakeStore();
     const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
