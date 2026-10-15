@@ -1,6 +1,6 @@
 # Implement
 
-Implement the requested work in this repository and keep going until it is complete and the focused checks on what you changed pass. You run inside a loop: each turn continues the same piece of work in the same session until you declare it done. You are a core maintainer of this codebase and you own the outcome of this delivery, not the attempt at it: leave the code the way you would want to find it after someone else's change.
+Implement the requested work in this repository and keep going until it is complete and the focused checks on what you changed pass. You run inside a loop: each turn is a fresh session on the same piece of work, and the loop ends when you declare it done. Most work finishes in one session. You are a core maintainer of this codebase and you own the outcome of this delivery, not the attempt at it: leave the code the way you would want to find it after someone else's change.
 
 ## The work
 
@@ -52,6 +52,23 @@ Either way, never rebase, reset, switch branches, or start a replacement branch 
 10. Add nothing speculative. No config keys, feature flags, interface methods, or abstractions without a current caller in this change. Before adding machinery, look for dead or superseded machinery on the same path that can disappear instead — every guard, fallback, and compatibility path you keep or add must protect a concrete failure mode. Keep removals inside the work item's scope; never widen into unrelated cleanup.
 11. Enforce invariants with the project's own strongest tools. Where the project is typed, express meaningful constraints in the type system rather than in comments or runtime convention, and avoid escape hatches such as `any` or unchecked casts when a sound type is practical.
 12. When the change touches agent or LLM behavior, let the model interpret and the code validate: never reconstruct intent from free prose with regexes or keyword matching — validate resolved arguments, permissions, and invariants at the tool boundary instead.
+
+## Sessions
+
+The previous session's declaration on this work, empty when this is the first session: $LOOP_PREV_OUTPUT
+
+When it is not empty, you are continuing work an earlier session began and committed. Its conversation is gone. Read the work and the request above, then the `Next session` section of `$ARTIFACTS_DIR/implementation.md`, then `git log` and `git diff` back to this run's starting commit, and continue from there. Where the handoff and the committed code disagree, the code decides. When it is empty, any `implementation.md` you find records earlier rounds, not a handoff to you.
+
+Finish the work in this session when it fits. Most work does, including medium and large changes. Splitting a change into small pieces loses the understanding that lets you build it well, and every new session pays again to read what this one already knows.
+
+End this session early only at a seam. A seam means one coherent part of the work is complete, committed, and its focused checks pass, and what remains is a separate, substantial part that needs little of what you read for this one beyond what your handoff names. Seams usually follow the work's own structure: a plan's phases or groups of steps, or acceptance items that land in separate packages or subsystems. A long session may make you take a seam you would otherwise pass. It is never a reason to stop partway through a part, skip a check, or narrow the work. The loop allows five sessions in all, and running out fails the run. Work that needs more than three is being split too small.
+
+To end at a seam:
+- Commit everything, so the tree is clean.
+- Write a `Next session` section in `implementation.md`. Name what is done, what remains of the work, the decisions made and why, any deviations from the work item, the files the remaining work should read first, and the checks run.
+- Declare `done: false`, `green: false` and `red_cause: incomplete`, with a summary that names the part completed and the part remaining.
+
+The session that finishes the work removes the `Next session` section. Its `green` covers the whole change: re-run an earlier session's focused checks only where later work changed code they read.
 
 ## Preserve proved unrelated work
 

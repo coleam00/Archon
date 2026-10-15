@@ -28,11 +28,14 @@ nodes:
   # certifies the work. Consumers read $implement.output.green; compositions gate on
   # it deterministically before spending or shipping (deliver's pr step does), and the
   # workflow's outcome_field records it as the run's authored outcome.
+  # Each turn is a fresh session: work that continues past a seam is carried by its
+  # commits and implementation.md, never by a conversation that grows with the work.
   - id: implement
     loop:
       command: implement
       until_field: done
       max_iterations: 5
+      fresh_context: true
     output_type: implementation
     output_format:
       type: object
