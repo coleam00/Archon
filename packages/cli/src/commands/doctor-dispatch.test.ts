@@ -11,6 +11,7 @@ mock.module('@archon/core', () => ({
   pool: { query: async () => [] },
   getDatabaseType: () => 'sqlite',
   getSchemaVersion: async () => null,
+  loadGitHubAppConfig: () => null,
 }));
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: async () => null,

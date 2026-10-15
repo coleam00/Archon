@@ -167,6 +167,17 @@ describe('installCredentialHelper', () => {
     }
   );
 
+  test('overlapping installs on one repository all succeed', async () => {
+    execSpy.mockRestore();
+    const repoPath = join(archonHome, 'shared-repo');
+    await git.execFileAsync('git', ['init', repoPath]);
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => installCredentialHelper(repoPath))
+    );
+    expect(results.filter(result => result.kind === 'failed')).toEqual([]);
+  });
+
   test('simultaneous installs configure each distinct repository', async () => {
     execSpy.mockRestore();
     const repoPaths = [join(archonHome, 'first-repo'), join(archonHome, 'second-repo')];
@@ -208,6 +219,15 @@ describe('installCredentialHelper', () => {
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') throw new Error('unreachable');
     expect(result.error.message).toContain('not a git repository');
+  });
+
+  test('an unusable ARCHON_HOME fails each queued install instead of rejecting', async () => {
+    process.env.ARCHON_HOME = 'undefined';
+    const failed = installCredentialHelper('/tmp/some-worktree');
+    const queued = installCredentialHelper('/tmp/some-worktree');
+
+    expect((await failed).kind).toBe('failed');
+    expect((await queued).kind).toBe('failed');
   });
 
   test('returns failed when the path configuration write fails', async () => {
