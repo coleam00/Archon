@@ -1,6 +1,8 @@
 // @archon-test-isolated
 import { describe, expect, it, spyOn } from 'bun:test';
+import { testTimeout } from '@archon/paths/test-utils';
 import {
+  listWindowsProcesses,
   parseWindowsProcessListing,
   terminateWindowsProcessTree,
   windowsProcessCommands,
@@ -8,11 +10,6 @@ import {
   type WindowsProcessListing,
   type WindowsProcessRow,
 } from './windows-process-tree';
-
-/*
- * The tree logic is pure, so it runs on every platform. The Windows integration spec
- * (`detached-run-control.integration.spec.ts`) proves the real listing and kill.
- */
 
 function row(pid: number, parentPid: number, created: number): WindowsProcessRow {
   return { pid, parentPid, created: BigInt(created) };
@@ -98,6 +95,21 @@ describe('WindowsProcessTree', () => {
     expect(tree.observe(listing(200, [row(1, 0, 1), row(10, 1, 150)]))).toEqual([]);
   });
 });
+
+it.skipIf(process.platform !== 'win32')(
+  'parses the real encoded PowerShell listing and finds this process',
+  async () => {
+    const listing = await listWindowsProcesses();
+    expect(listing.takenAt).toBeGreaterThan(0n);
+    const current = listing.rows.find(row => row.pid === process.pid);
+    expect(current).toBeDefined();
+    if (!current) throw new Error('Current process missing from Windows listing');
+    expect(current.parentPid).toBe(process.ppid);
+    expect(current.created).toBeGreaterThan(0n);
+    expect(current.created).toBeLessThanOrEqual(listing.takenAt);
+  },
+  testTimeout(35_000)
+);
 
 describe('parseWindowsProcessListing', () => {
   it('reads the listing script output, keeping tick precision beyond 2^53', () => {

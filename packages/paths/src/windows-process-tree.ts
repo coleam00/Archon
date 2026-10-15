@@ -182,7 +182,7 @@ export function parseWindowsProcessListing(json: string): WindowsProcessListing 
   };
 }
 
-async function listWindowsProcesses(): Promise<WindowsProcessListing> {
+export async function listWindowsProcesses(): Promise<WindowsProcessListing> {
   const { stdout } = await windowsProcessCommands.execFile(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', LIST_PROCESSES_ENCODED],
