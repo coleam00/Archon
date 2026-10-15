@@ -56,8 +56,7 @@ describe('validateStructural', () => {
   // Channel-verdict matrix (#2563) — this package's half. The cross-package guard
   // that actually ENFORCES agreement is `scripts/node-ref-parity.test.ts`, which runs
   // both encodings over one corpus and compares verdicts in CI; this matrix stays as
-  // the builder's own regression coverage. `schemas.test.ts` in @archon/workflows
-  // mirrors these case names. Change one, change both.
+  // the builder's own regression coverage.
   describe('channel verdict matrix (twin: workflows schemas.test.ts)', () => {
     const cases: Array<
       [string, { until?: string; until_bash?: string; until_field?: string }, boolean]
@@ -74,8 +73,6 @@ describe('validateStructural', () => {
       ['until_bash empty string', { until_bash: '' }, false],
       ['padded until (legit)', { until: ' COMPLETE ' }, true],
       ['multiline until_bash (legit)', { until_bash: '  set -e\n  test -f x\n' }, true],
-      // Third channel (#2563 Part B). The engine additionally checks the name
-      // against output_format; the builder only mirrors the channel rules.
       ['until_field only, real', { until_field: 'done' }, true],
       ['until_field blank', { until_field: '  ' }, false],
     ];
@@ -87,7 +84,9 @@ describe('validateStructural', () => {
             {
               id: 'l',
               variant: 'loop',
-              base: {},
+              base: {
+                output_format: { properties: { done: { type: 'boolean' } }, required: ['done'] },
+              },
               data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
             },
           ])
