@@ -161,6 +161,11 @@ export function setLogLevel(level: string): void {
   levelSetByCode = true;
 }
 
+/** Test hook: forget that `setLogLevel` ran, so tests do not depend on file order. */
+export function resetLogLevelOverride(): void {
+  levelSetByCode = false;
+}
+
 /**
  * The root logger reads LOG_LEVEL when this module loads, which is before the Archon
  * env files do. The env loader calls this after loading them so a `LOG_LEVEL` in

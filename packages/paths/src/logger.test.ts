@@ -20,6 +20,7 @@ mock.module('./logger', () => ({
   },
   getLogLevel: () => realRootLogger.level,
   applyEnvLogLevel: () => {},
+  resetLogLevelOverride: () => {},
 }));
 
 const { createLogger, setLogLevel, getLogLevel, rootLogger } = await import('./logger');

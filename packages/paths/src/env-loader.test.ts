@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
-import { getLogLevel, rootLogger } from './logger';
+import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel } from './logger';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -313,6 +313,7 @@ describe('LOG_LEVEL from an Archon env file', () => {
   let levelBefore: string;
   beforeEach(() => {
     levelBefore = rootLogger.level;
+    resetLogLevelOverride();
   });
   afterEach(() => {
     rootLogger.level = levelBefore;
@@ -325,6 +326,15 @@ describe('LOG_LEVEL from an Archon env file', () => {
     loadArchonEnv(repoDir);
 
     expect(getLogLevel()).toBe('debug');
+  });
+
+  it('keeps a level the caller already chose with setLogLevel', () => {
+    setLogLevel('warn');
+    writeFileSync(join(archonHomeDir, '.env'), 'LOG_LEVEL=debug\n');
+
+    loadArchonEnv(repoDir);
+
+    expect(getLogLevel()).toBe('warn');
   });
 
   it('lets the repo-scope value win over the user scope', () => {
