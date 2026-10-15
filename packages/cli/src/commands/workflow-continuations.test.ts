@@ -2,7 +2,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 import type {
   ContinuationWakeOutcome,
   ContinuationAdmission,
-} from '@archon/core/workflows/continuation-host';
+} from '@archon/core/workflows/continuation-resume';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -38,8 +38,10 @@ const signal = mock(async () => ({ signaled: true }));
 const install = mock(async (_config: NativeScheduleConfig) => 'installed');
 const remove = mock(async (_id: string) => true);
 mock.module('@archon/core/workflows/continuation-host', () => ({
-  wakeDueWorkflowContinuations: scan,
   resumeWorkflowContinuation: resume,
+}));
+mock.module('@archon/core/workflows/continuation-resume', () => ({
+  wakeDueWorkflowContinuations: scan,
 }));
 const host = {
   deps: { store: { getWorkflowRun: getRun } },

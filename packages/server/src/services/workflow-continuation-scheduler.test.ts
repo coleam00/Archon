@@ -1,17 +1,17 @@
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
-import type {
-  wakeDueWorkflowContinuations,
-  resumeWorkflowContinuation,
-} from '@archon/core/workflows/continuation-host';
+import type { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
+import type { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-resume';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 const scan = mock<typeof wakeDueWorkflowContinuations>(async () => []);
 const resume = mock<typeof resumeWorkflowContinuation>(async () => ({ kind: 'not-accepted' }));
 mock.module('@archon/core/workflows/continuation-host', () => ({
-  wakeDueWorkflowContinuations: scan,
   resumeWorkflowContinuation: resume,
+}));
+mock.module('@archon/core/workflows/continuation-resume', () => ({
+  wakeDueWorkflowContinuations: scan,
 }));
 import {
   startWorkflowContinuationScheduler,
