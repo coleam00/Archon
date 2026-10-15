@@ -224,6 +224,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // SIGTERM handlers could record a failure in metadata and nowhere else), NOT
   // a general "a resume happened" marker: its absence never means the run wasn't resumed.
   'workflow_resumed',
+  // The resume CAS moved a paused run back to running, with or without an answer. Every
+  // resume of a paused run writes it, so a pause that closes reaches the event feed.
+  'workflow_unpaused',
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
@@ -245,6 +248,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // attention queue is where it is answered. `data` carries `nodeId` and `platform`.
   'pause_notice_undelivered',
   'wait_started',
+  // A resumed run paused again at the same wait, which has not fired or been answered:
+  // `data.kind` is the wait kind. Without it a resume that re-pauses would reach no reader.
+  'wait_continued',
   'wait_signaled',
   // An attention wait's answer: `data` carries the surface (`via`), the occurrence it
   // answered and the answer itself; the row's timestamp is when.
@@ -352,6 +358,30 @@ export function waitAnsweredEvent(
     data: { via: wait.answeredVia, occurrence: wait.pauseId, answer: wait.answer },
   };
 }
+
+/** The audit row of a continued wait pause, written in the pause's transaction by every store. */
+export function waitContinuedEvent(
+  workflowRunId: string,
+  wait: WorkflowWaitContext
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'wait_continued',
+    step_name: workflowWaitStepName(wait),
+    data: { kind: wait.kind },
+  };
+}
+
+/** The row every store's resume CAS writes when it moves a paused run back to running. */
+export function workflowUnpausedEvent(workflowRunId: string): ObservabilityEventInput {
+  return { workflow_run_id: workflowRunId, event_type: 'workflow_unpaused', data: {} };
+}
+
+/**
+ * The event a gate pause commits with its write, so the pause reaches the event feed: the
+ * gate node's `node_suspended`, or the container write-back gate's `writeback_requested`.
+ */
+export type GatePauseEventInput = NodeStateEventInput | WorkflowEventInput<'writeback_requested'>;
 
 /** One answer to an open attention wait, checked against the occurrence it names. */
 export type AttentionAnswerWrite = Required<
@@ -765,16 +795,20 @@ export interface IWorkflowStore
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
    * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window. The optional suspension is committed with the
-   * pause so a decision cannot be followed by a stale node_suspended row.
+   * paused-without-marker window. `event` is committed with the pause, so a decision
+   * cannot be followed by a stale node_suspended row and the pause reaches the event
+   * feed; every executor gate pause supplies one.
    */
   pauseWorkflowRun(
     id: string,
     approvalContext: ApprovalContext,
     extraMetadata?: Record<string, unknown>,
-    suspension?: NodeStateEventInput
+    event?: GatePauseEventInput
   ): Promise<void>;
-  /** Pause a running run and record its engine-owned wait start atomically. */
+  /**
+   * Pause a running run on a wait, committing `wait_started` for a new wait or
+   * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.
+   */
   pauseWorkflowRunForWait(
     id: string,
     waitContext: WorkflowWaitContext,

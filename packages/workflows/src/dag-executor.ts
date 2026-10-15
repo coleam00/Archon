@@ -166,7 +166,12 @@ import {
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
 } from './store';
-import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
+import type {
+  DagResumeSnapshot,
+  FanOutCancelReason,
+  GatePauseEventInput,
+  PersistedNodeOutput,
+} from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -5288,7 +5293,7 @@ async function executeLoopGroupBody(
         deps,
         workflowRun.id,
         approvalContext,
-        { suspension: serializeNodeStateRecord(suspended) }
+        { event: serializeNodeStateRecord(suspended) }
       );
       if (!paused)
         return {
@@ -6867,7 +6872,7 @@ async function executeLoopNode(
         deps,
         workflowRun.id,
         approvalContext,
-        { suspension: serializeNodeStateRecord(suspended) }
+        { event: serializeNodeStateRecord(suspended) }
       );
       if (!paused) {
         if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined || loopTokensUnknown) {
@@ -6965,23 +6970,24 @@ async function sendPauseNotice(
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
- * Returns the persisted context, including its minted `pauseId`; undefined when the gate
- * did not pause.
+ * `event` commits with the pause, so every gate pause reaches the event feed the
+ * attention watch follows. Returns the persisted context, including its minted
+ * `pauseId`; undefined when the gate did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext,
   options: {
+    event: GatePauseEventInput;
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
-    suspension?: ReturnType<typeof serializeNodeStateRecord>;
-  } = {}
+  }
 ): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
   approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.suspension);
+    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
     let status: WorkflowRunStatus | null;
@@ -7545,7 +7551,7 @@ async function executeApprovalNode(
     deps,
     workflowRun.id,
     approvalContext,
-    { suspension: serializeNodeStateRecord(suspended) }
+    { event: serializeNodeStateRecord(suspended) }
   );
   if (!paused) return serializeNodeOutput(execution);
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -7783,33 +7789,26 @@ async function executeWorkflowNode(
     // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
-    const paused = await pauseGateRespectingExternalTransition(deps, parentRun.id, {
-      message: approveChild({}),
-      nodeId: executionNodeId,
-      type: 'child_workflow',
-      childRunId,
-    });
-    if (paused) {
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
-        msgContext
-      );
-    } else {
-      return serializeNodeOutput(execution);
-    }
-    return recordNodeState(
-      { store: deps.store, logDir: ctx.logDir },
-      finishNodeExecution(
-        execution,
-        { status: 'suspended', point: 'child_workflow' },
-        {
-          output: { text: '' },
-          diagnostics: { childRunId },
-        }
-      )
+    const suspended = finishNodeExecution(
+      execution,
+      { status: 'suspended', point: 'child_workflow' },
+      { output: { text: '' }, diagnostics: { childRunId } }
     );
+    const paused = await pauseGateRespectingExternalTransition(
+      deps,
+      parentRun.id,
+      { message: approveChild({}), nodeId: executionNodeId, type: 'child_workflow', childRunId },
+      { event: serializeNodeStateRecord(suspended) }
+    );
+    if (!paused) return serializeNodeOutput(execution);
+    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+      msgContext
+    );
+    return serializeNodeOutput(suspended);
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
@@ -8567,7 +8566,7 @@ async function executeFanOutWorkflowNode(
         childRunIds: held.map(([, id]) => id),
         unspawnedItems,
       },
-      { suspension: serializeNodeStateRecord(suspended) }
+      { event: serializeNodeStateRecord(suspended) }
     );
     if (!paused) return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -11128,13 +11127,15 @@ type ContainerLifecyclePhase =
   | 'writeback_applied'
   | 'writeback_discarded';
 
-/** DB `workflow_events.event_type` values for container lifecycle. */
+/**
+ * DB `workflow_events.event_type` values written best-effort beside the lifecycle signal.
+ * `writeback_requested` is not one: it commits with the write-back pause.
+ */
 type ContainerLifecycleDbEvent =
   | 'container_created'
   | 'container_stopped'
   | 'container_resumed'
   | 'container_destroyed'
-  | 'writeback_requested'
   | 'writeback_applied'
   | 'writeback_discarded';
 
@@ -11439,30 +11440,31 @@ async function raiseWriteBackGate(
   // teardown-preserve logic keeps the overlay volume for a retry), so it rethrows
   // instead of tolerating the CAS miss the way the other four gate types do. This also
   // emits the `approval_pending` live pause signal on success (same event the approval
-  // node emits, so the existing pause UI shows approve/reject) — the lifecycle event
-  // below now fires just after it instead of just before; both are best-effort,
-  // fire-and-forget emits with no ordering contract.
+  // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
+  // row commits with the pause, so the pause reaches the event feed; only the live
+  // container-lifecycle signal follows it.
   await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
     {
+      event: {
+        workflow_run_id: runId,
+        event_type: 'writeback_requested',
+        step_name: 'container',
+        data: { total_count: summary?.totalCount ?? 0 },
+      },
       extraMetadata: {
         pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) },
       },
       failClosed: true,
     }
   );
-  emitContainerLifecycleEvent(
-    deps,
+  getWorkflowEventEmitter().emit({
+    type: 'container_lifecycle',
     runId,
-    'writeback_requested',
-    'writeback_requested',
-    undefined,
-    {
-      total_count: summary?.totalCount ?? 0,
-    }
-  );
+    phase: 'writeback_requested',
+  });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
   await safeSendMessage(platform, conversationId, message, { workflowId: runId });
 }

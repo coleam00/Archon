@@ -13,6 +13,8 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
+  waitContinuedEvent,
+  workflowUnpausedEvent,
   type GateResolutionEvent,
 } from '@archon/workflows/store';
 export {
@@ -80,6 +82,7 @@ import type {
   WorkflowWaitCompletion,
   WorkflowWaitPause,
   NodeStateEventInput,
+  GatePauseEventInput,
   AttentionAnswerWrite,
   AttentionLabelWrite,
 } from '@archon/workflows/store';
@@ -1150,6 +1153,9 @@ export async function resumeWorkflowRun(
           data: { error: clearedError },
         });
       }
+      if (rowCount > 0 && prior?.status === 'paused') {
+        await insertWorkflowEvent(query, workflowUnpausedEvent(id));
+      }
       if (rowCount > 0 && scheduled !== null && triggeredAt !== null) {
         await insertWorkflowEvent(query, {
           workflow_run_id: id,
@@ -1669,7 +1675,7 @@ export async function pauseWorkflowRun(
   id: string,
   approvalContext: ApprovalContext,
   extraMetadata?: Record<string, unknown>,
-  suspension?: NodeStateEventInput
+  event?: GatePauseEventInput
 ): Promise<void> {
   try {
     await getDatabase().withTransaction(async query => {
@@ -1692,7 +1698,7 @@ export async function pauseWorkflowRun(
         getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
         throw new WorkflowRunPauseConflictError(id);
       }
-      if (suspension) await insertWorkflowEvent(query, suspension);
+      if (event) await insertWorkflowEvent(query, event);
     });
   } catch (error) {
     if (error instanceof WorkflowRunPauseConflictError) throw error;
@@ -1733,6 +1739,8 @@ export async function pauseWorkflowRunForWait(
             ...(parsedWaitContext.kind === 'event' ? { event: parsedWaitContext.event } : {}),
           },
         });
+      } else {
+        await insertWorkflowEvent(query, waitContinuedEvent(id, parsedWaitContext));
       }
     });
   } catch (error) {
