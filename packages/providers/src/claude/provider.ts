@@ -28,7 +28,6 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
-import type { SETTING_SOURCES } from '@archon/paths/skills';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -93,9 +92,11 @@ import {
 } from './plugins';
 import { clampEffort, declaredSkillRoots, type AssertNever } from '@archon/provider-contract';
 import {
+  DEFAULT_SETTING_SOURCES,
   findInstalledSkillNames,
   resolveSkillDirectoriesFromRoots,
   skillSearchRoots,
+  type SETTING_SOURCES,
 } from '@archon/paths/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -949,7 +950,7 @@ function buildBaseClaudeOptions(
         : {}),
     },
     // Per-node override wins over the assistant-level default; the final
-    // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
+    // fallback is DEFAULT_SETTING_SOURCES (the SDK-loading default Archon ships).
     settingSources,
     // Opt into the SDK's hook lifecycle frames so that tool-scoped hooks
     // (PreToolUse / PostToolUse / Stop / etc.) reach the workflow audit
@@ -1675,7 +1676,7 @@ export class ClaudeProvider implements IAgentProvider {
       const settingSources =
         requestOptions?.nodeConfig?.settingSources ??
         assistantDefaults.settingSources ??
-        (['project', 'user'] as const);
+        DEFAULT_SETTING_SOURCES;
 
       const toolResultQueue: ToolResultEntry[] = [];
       const options = buildBaseClaudeOptions(

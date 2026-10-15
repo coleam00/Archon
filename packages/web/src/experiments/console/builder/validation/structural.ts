@@ -9,9 +9,10 @@ import { makeIssue } from './make-issue';
 
 const waitTimestampPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?Z$/;
 const wholeInputsRefPattern = /^\$INPUTS\.[a-zA-Z_][a-zA-Z0-9_-]*$/;
-// @archon/web cannot import workflow runtime values. Keep aligned with
-// MAX_DURABLE_WAIT_MS in @archon/workflows/schemas/dag-node.
-const MAX_DURABLE_WAIT_MS = 1_000 * 365 * 24 * 60 * 60 * 1_000;
+// @archon/web cannot import workflow runtime values, so this copies
+// MAX_DURABLE_WAIT_MS from @archon/workflows/schemas/durable-wait;
+// scripts/node-ref-parity.test.ts fails when the two differ.
+export const MAX_DURABLE_WAIT_MS = 1_000 * 365 * 24 * 60 * 60 * 1_000;
 
 function isValidWaitTimestamp(value: string): boolean {
   if (new RegExp(OUTPUT_REF_SOURCE).test(value) || wholeInputsRefPattern.test(value.trim())) {

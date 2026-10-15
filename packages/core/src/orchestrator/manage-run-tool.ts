@@ -34,6 +34,7 @@ export interface ManageRunContext {
     | 'approveWorkflow'
     | 'rejectWorkflow'
     | 'respondToWorkflow'
+    | 'answerWorkflow'
     | 'labelAttentionWait'
     | 'resumeWorkflow'
     | 'listWorkflowRuns'
@@ -122,6 +123,11 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       description:
         "Required for action=respond: the decision id the paused gate declared, or the option id of a paused attention wait (call action=get to see them — the run detail lists 'gate: decisions: ...' or the wait's options when applicable). 'approve'/'reject' work here too, but prefer the dedicated approve/reject actions for those — respond is for a gate whose declared decisions include something else (e.g. 'revise', 'escalate'). An id the gate did not declare fails with the actual options.",
     },
+    decisions: {
+      kind: 'string',
+      description:
+        'For action=respond at a multi_select attention wait, instead of decision: a JSON array of the option ids to choose, e.g. ["lint","tests"]. Each id must be one of the wait\'s options and appear once.',
+    },
     message: {
       kind: 'string',
       description:
@@ -172,7 +178,7 @@ const HELP_OVERVIEW = [
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
   '  approve  — approve a paused gate or attention wait. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused gate or attention wait. Params: runId, message=reason, confirm=true.',
-  '  respond  — answer a paused gate or attention wait with any declared decision or option (get shows them). Params: runId, decision, confirm=true, optional message.',
+  '  respond  — answer a paused gate or attention wait with any declared decision or option (get shows them). Params: runId, decision (or decisions for a multi_select wait), confirm=true, optional message.',
   '  label    — set or remove labels on a paused attention wait. Params: runId, occurrence, set and/or unset.',
   '',
   'Destructive actions (cancel/abandon/approve/reject/respond) need confirm=true; call once',
@@ -195,7 +201,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   label:
     'label — set or remove labels on the attention wait a run is paused at, without answering it. Required: runId, occurrence (as action=get reports it), and set (a JSON object of string labels) and/or unset (a JSON array of keys). A set key replaces the same key; other labels stay. Refused when the run has moved to another pause. Labels are plain data the engine never interprets; they let the user’s own handlers find their items.',
   respond:
-    "respond — answer a paused gate with any decision it declared, or an attention wait with one of its options, not just approve/reject. Required: runId, decision, confirm=true. Optional: message (text recorded alongside the decision). Call action=get first — the run detail lists the gate’s declared decisions when it has more than the default pair. decision='approve'/'reject' also works here, but prefer the dedicated approve/reject actions for those; use respond for anything else the gate declared (e.g. 'revise', 'escalate'). An id the gate did not declare fails and names the actual options — nothing is silently cancelled.",
+    "respond — answer a paused gate with any decision it declared, or an attention wait with one of its options, not just approve/reject. Required: runId, confirm=true, and decision (or, at a multi_select attention wait, decisions: a JSON array of option ids). Optional: message (text recorded alongside the decision). Call action=get first — the run detail lists the gate’s declared decisions when it has more than the default pair. decision='approve'/'reject' also works here, but prefer the dedicated approve/reject actions for those; use respond for anything else the gate declared (e.g. 'revise', 'escalate'). An id the gate did not declare fails and names the actual options — nothing is silently cancelled.",
 };
 
 /**
@@ -275,7 +281,7 @@ function attentionAnswerAdvice(attention: Extract<RunAttention, { kind: 'attenti
     case 'select':
       return 'answer with action=respond, decision=<one of the options>, optionally with message=<text>.';
     case 'multi_select':
-      return `this tool cannot choose several options; the user answers with \`archon workflow answer ${attention.runId} --occurrence ${attention.occurrence} --choose <id>…\`.`;
+      return 'answer with action=respond, decisions=<JSON array of the option ids to choose, each at most once>, optionally with message=<text>.';
   }
 }
 
@@ -400,8 +406,13 @@ async function handleWrite(
   if (typeof run === 'string') return run; // not found / wrong project
 
   const decision = typeof input.decision === 'string' ? input.decision.trim() : '';
-  if (action === 'respond' && decision === '') {
+  const decisions = parseDecisions(input);
+  if (typeof decisions === 'string') return decisions;
+  if (action === 'respond' && decision === '' && decisions === undefined) {
     return 'manage_run: action=respond requires a decision (call action=get to see the declared decisions or options).';
+  }
+  if (decision !== '' && decisions !== undefined) {
+    return 'manage_run: pass either decision or decisions, not both.';
   }
 
   const message = typeof input.message === 'string' ? input.message.trim() : '';
@@ -524,6 +535,18 @@ async function handleWrite(
       return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
     }
     case 'respond': {
+      if (decisions !== undefined) {
+        // Several options for a multi_select wait. The operation validates them against the
+        // wait's declared options and refuses an unknown or repeated id, naming the valid ones.
+        await ctx.operations.answerWorkflow(
+          id,
+          { choose: decisions, ...(message !== '' ? { text: message } : {}) },
+          ctx.actor,
+          origin
+        );
+        const continues = await signalGateResolved(ctx, run, 'respond');
+        return `Responded ${decisions.map(option => `'${option}'`).join(', ')} to ${run.workflow_name} (${id.slice(0, 8)}).${continues}`;
+      }
       // Any decision the gate declared, not just approve/reject (#2707 step 2).
       // respondToWorkflow validates `decision` itself and throws a clear error
       // naming the gate's actual options on a mismatch — caught by the tool's
@@ -548,6 +571,25 @@ async function handleWrite(
       return `Responded '${decision}' to ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
     }
   }
+}
+
+const decisionsSchema = z.array(z.string().min(1)).min(1);
+
+/** The `decisions` parameter: undefined when absent, the option ids, or a message naming the problem. */
+function parseDecisions(input: Record<string, unknown>): string[] | string | undefined {
+  const raw = input.decisions;
+  if (raw === undefined) return undefined;
+  const problem =
+    'manage_run: decisions must be a JSON array of option ids, e.g. ["lint","tests"].';
+  if (typeof raw !== 'string') return problem;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return problem;
+  }
+  const parsed = decisionsSchema.safeParse(value);
+  return parsed.success ? parsed.data : problem;
 }
 
 const labelKeysSchema = z.array(attentionLabelKeySchema);

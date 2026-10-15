@@ -1,3 +1,4 @@
+import { removeTempTree } from '@archon/paths/test-utils';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
@@ -21,9 +22,10 @@ import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn }
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
-import { join, sep } from 'path';
+import { join, sep, dirname } from 'path';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import type { ConversationLockManager, RunActor, User } from '@archon/core';
+import type { RunActor, User } from '@archon/core';
+import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
@@ -397,6 +399,8 @@ mock.module('@archon/git', () => ({
 
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
+  getConversationByPlatformId: (_platform: string, id: string) =>
+    mockFindConversationByPlatformId(id),
   listConversations: mock(async () => []),
   getOrCreateConversation: mock(async () => ({
     id: 'internal-uuid-123',
@@ -659,7 +663,10 @@ const MOCK_CONV = {
   codebase_id: null,
 };
 
-function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(lockManager?: ConversationLockManager): {
+  app: OpenAPIHono;
+  mockWebAdapter: WebAdapter;
+} {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
@@ -673,7 +680,7 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager);
   return { app, mockWebAdapter };
 }
 
@@ -816,6 +823,207 @@ describe('POST /api/workflows/:name/run', () => {
       undefined
     );
   });
+
+  test.each([
+    ['message', 'message'],
+    ['message', 'workflow'],
+    ['workflow', 'message'],
+    ['workflow', 'workflow'],
+  ])(
+    'cleanup of %s preserves a concurrent %s upload before its first write',
+    async (firstIngress, secondIngress) => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-prewrite-uploads-'));
+      mockArchonHome = home;
+      const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
+      const lockManager = new ConversationLockManager();
+      const releaseFirst = Promise.withResolvers<void>();
+      const secondBeforeWrite = Promise.withResolvers<void>();
+      const allowWrite = Promise.withResolvers<void>();
+      const waitForIdle = async () => {
+        const deadline = Date.now() + 5000;
+        while (lockManager.getStats().active > 0 && Date.now() < deadline) {
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        expect(lockManager.getStats().active).toBe(0);
+      };
+      const originalWriteFile = fsPromises.writeFile;
+      let calls = 0;
+      const write = spyOn(fsPromises, 'writeFile').mockImplementation(async (...args) => {
+        if (dirname(String(args[0])) === uploadDir && ++calls === 2) {
+          secondBeforeWrite.resolve();
+          await allowWrite.promise;
+        }
+        return originalWriteFile(...args);
+      });
+      mockFindConversationByPlatformId.mockResolvedValue(MOCK_CONV);
+      mockHandleMessage.mockImplementation(async (_adapter, _id, message) => {
+        if (message === 'first') await releaseFirst.promise;
+      });
+      try {
+        const { app } = makeApp(lockManager);
+        const send = (ingress: string, message: string) => {
+          const form = new FormData();
+          form.set('conversationId', 'web-test-abc');
+          form.set('message', message);
+          form.set('files', new File([message], 'request.txt', { type: 'text/plain' }));
+          return app.request(
+            ingress === 'message'
+              ? '/api/conversations/web-test-abc/message'
+              : '/api/workflows/deploy/run',
+            { method: 'POST', body: form }
+          );
+        };
+        expect((await send(firstIngress, 'first')).status).toBe(200);
+        const second = send(secondIngress, 'second');
+        await secondBeforeWrite.promise;
+        releaseFirst.resolve();
+        await waitForIdle();
+        allowWrite.resolve();
+        const response = await second;
+        expect(response.status).toBe(200);
+      } finally {
+        releaseFirst.resolve();
+        allowWrite.resolve();
+        await waitForIdle();
+        write.mockRestore();
+        mockArchonHome = originalHome;
+        await removeTempTree(home);
+      }
+    }
+  );
+
+  test('refuses launch when the chat request cannot be persisted', async () => {
+    mockFindConversationByPlatformId.mockResolvedValueOnce(MOCK_CONV);
+    mockAddMessage.mockRejectedValueOnce(new Error('history database unavailable'));
+    const { app, mockWebAdapter } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy' }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to save workflow request to history' });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    expect(mockWebAdapter.setConversationDbId).not.toHaveBeenCalled();
+  });
+
+  test.each(['message', 'workflow'])(
+    '%s rolls back only this request uploads when history persistence fails',
+    async ingress => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-history-failure-'));
+      mockArchonHome = home;
+      try {
+        const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
+        await mkdir(uploadDir, { recursive: true });
+        await writeFile(join(uploadDir, 'existing.txt'), 'another request');
+        mockFindConversationByPlatformId.mockResolvedValueOnce(MOCK_CONV);
+        mockAddMessage.mockRejectedValueOnce(new Error('history database unavailable'));
+        const form = new FormData();
+        form.set('conversationId', 'web-test-abc');
+        form.set('message', 'Deploy with attachment');
+        form.set('files', new File(['details'], 'request.txt', { type: 'text/plain' }));
+        const { app } = makeApp();
+        const response = await app.request(
+          ingress === 'message'
+            ? '/api/conversations/web-test-abc/message'
+            : '/api/workflows/deploy/run',
+          {
+            method: 'POST',
+            body: form,
+          }
+        );
+        expect(response.status).toBe(500);
+        expect(mockAddMessage).toHaveBeenCalledWith(
+          MOCK_CONV.id,
+          'user',
+          'Deploy with attachment',
+          { files: [{ name: 'request.txt', mimeType: 'text/plain', size: 7 }] },
+          undefined
+        );
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        expect(await fsPromises.readdir(uploadDir)).toEqual(['existing.txt']);
+      } finally {
+        mockArchonHome = originalHome;
+        await removeTempTree(home);
+      }
+    }
+  );
+
+  for (const firstIngress of ['message', 'workflow'] as const) {
+    for (const queuedIngress of ['message', 'workflow'] as const) {
+      test(`preserves queued ${queuedIngress} uploads after ${firstIngress} cleanup`, async () => {
+        const originalHome = mockArchonHome;
+        const home = await mkdtemp(join(tmpdir(), 'archon-queued-uploads-'));
+        mockArchonHome = home;
+        const lockManager = new ConversationLockManager();
+        const waitForIdle = async () => {
+          const deadline = Date.now() + 5000;
+          while (lockManager.getStats().active > 0 && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+          }
+          expect(lockManager.getStats().active).toBe(0);
+        };
+        const releaseFirst = Promise.withResolvers<void>();
+        const releaseQueued = Promise.withResolvers<void>();
+        const queuedRead = Promise.withResolvers<string>();
+        const paths: string[] = [];
+        mockFindConversationByPlatformId.mockResolvedValue(MOCK_CONV);
+        mockHandleMessage.mockImplementation(async (_adapter, _id, message, context) => {
+          const file = context.attachedFiles?.[0];
+          if (!file) throw new Error('Expected an attachment');
+          paths.push(file.path);
+          if (message === 'first') {
+            await releaseFirst.promise;
+          } else {
+            try {
+              queuedRead.resolve(await fsPromises.readFile(file.path, 'utf8'));
+            } catch (error) {
+              queuedRead.reject(error);
+            }
+            await releaseQueued.promise;
+          }
+        });
+        try {
+          const { app } = makeApp(lockManager);
+          const send = (ingress: 'message' | 'workflow', message: string) => {
+            const form = new FormData();
+            form.set('conversationId', 'web-test-abc');
+            form.set('message', message);
+            form.set('files', new File([message], 'request.txt', { type: 'text/plain' }));
+            return app.request(
+              ingress === 'message'
+                ? '/api/conversations/web-test-abc/message'
+                : '/api/workflows/deploy/run',
+              { method: 'POST', body: form }
+            );
+          };
+          const first = await send(firstIngress, 'first');
+          expect(await first.json()).toEqual({ accepted: true, status: 'started' });
+          const queued = await send(queuedIngress, 'queued');
+          expect(await queued.json()).toEqual({ accepted: true, status: 'queued-conversation' });
+          const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
+          expect(await fsPromises.readdir(uploadDir)).toHaveLength(2);
+          releaseFirst.resolve();
+          expect(await queuedRead.promise).toBe('queued');
+          expect(paths).toHaveLength(2);
+          expect(await Bun.file(paths[0] ?? '').exists()).toBe(false);
+          expect(await fsPromises.readdir(uploadDir)).toHaveLength(1);
+          releaseQueued.resolve();
+          await waitForIdle();
+          expect(await fsPromises.readdir(uploadDir)).toEqual([]);
+        } finally {
+          releaseFirst.resolve();
+          releaseQueued.resolve();
+          await waitForIdle();
+          mockArchonHome = originalHome;
+          await removeTempTree(home);
+        }
+      });
+    }
+  }
 
   test('fires title generation for conversations without title', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => ({

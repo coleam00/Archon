@@ -5,17 +5,9 @@ import { K } from '../store/keys';
 import { useHealth } from '../lib/health';
 import { SettingsSection } from './SettingsSection';
 
-/** Coerce a field off the open `concurrency` record to a finite number (0 otherwise). */
-function num(rec: Record<string, unknown>, key: string): number {
-  const n = Number(rec[key]);
-  return Number.isFinite(n) ? n : 0;
-}
-
 /**
  * Read-only system status: server/adapter/db/version, concurrency, running
- * workflows, active platform adapters, and the update-check. `concurrency` is an
- * open record in the generated type, so each field is coerced defensively rather
- * than destructured.
+ * workflows, active platform adapters, and the update-check.
  */
 export function SystemPanel(): ReactElement {
   const { data: health, error: healthError } = useHealth();
@@ -48,7 +40,7 @@ export function SystemPanel(): ReactElement {
         <Row label="version" value={health.version ?? '—'} />
         <Row
           label="concurrency"
-          value={`${num(health.concurrency, 'active')} / ${num(health.concurrency, 'maxConcurrent')} active`}
+          value={`${health.concurrency.active} / ${health.concurrency.maxConcurrent} active`}
         />
         <Row label="running workflows" value={String(health.runningWorkflows)} />
 

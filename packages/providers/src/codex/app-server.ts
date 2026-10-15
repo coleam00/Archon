@@ -16,10 +16,14 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
+import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallResponse';
+import { toolResponse } from './native-tools';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
 import type { ServerRequest } from './protocol/ServerRequest';
 import type { CodexBinary } from './binary-resolver';
+
+const TOOL_CALL_METHOD = 'item/tool/call';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -137,6 +141,19 @@ function pathKey(env: Record<string, string>): string {
 }
 
 export class AppServerConnection {
+  private readonly toolCalls = new Set<Promise<void>>();
+  private toolCallHandler: ((params: unknown) => Promise<DynamicToolCallResponse>) | undefined;
+
+  handleToolCalls(handler: (params: unknown) => Promise<DynamicToolCallResponse>): void {
+    this.toolCallHandler = handler;
+  }
+
+  /** Stop accepting calls and join operations that may already have committed effects. */
+  async finishToolCalls(): Promise<void> {
+    this.toolCallHandler = undefined;
+    await Promise.all(this.toolCalls);
+  }
+
   private nextId = 1;
   private readonly pending = new Map<
     number,
@@ -268,6 +285,7 @@ export class AppServerConnection {
   }
 
   private receive(line: string): void {
+    if (this.endedWith) return;
     let message: Record<string, unknown>;
     try {
       message = JSON.parse(line) as Record<string, unknown>;
@@ -297,6 +315,24 @@ export class AppServerConnection {
     }
     if (typeof method !== 'string') return;
     if (id !== undefined) {
+      if (method === TOOL_CALL_METHOD && this.toolCallHandler) {
+        const handler = this.toolCallHandler;
+        const operation = Promise.resolve()
+          .then(() => handler(message.params))
+          .then(
+            result => this.send({ id, result }),
+            (error: unknown) => {
+              getLog().error({ err: error }, 'codex.tool_call_failed');
+              this.send({
+                id,
+                result: toolResponse('Archon could not execute the tool call.', false),
+              });
+            }
+          );
+        this.toolCalls.add(operation);
+        void operation.then(() => this.toolCalls.delete(operation));
+        return;
+      }
       // A request from Codex: approval, user input, elicitation, token refresh. Archon
       // runs with approvals off and handles none of them, and an unanswered request
       // stalls the turn, so each gets an error reply at once.
