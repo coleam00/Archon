@@ -1,0 +1,35 @@
+# Dry-run fixture: a continuation where a blocking finding is raised a second time,
+# the next member of a class an earlier round's finding named. Synthesis names the
+# class and its shared fix and returns replan instead of another one-instance
+# correction, which ends delivery's rounds.
+policy: { defaults: "fixture-policy-defaults" }
+mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
+route: { seams: false, code: false, tests: false, errors: false, docs: false, reason: "stub: the delta touches only the code lens's finding" }
+head-check:
+  target: { pr: null, base: null, head: fixturehead, merge_base: null }
+scope:
+  target: { pr: null, base: null, head: fixturehead, merge_base: null }
+  selector: ""
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+code: "1 finding: C2, the next pause kind the resume predicate misses"
+review-complete: "settled"
+synthesize:
+  ready: false
+  action: replan
+  findings_summary: "stub: C2 is the second member of C1's class (resume predicates per pause kind); the shared fix is one predicate"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+publish:
+  ready: false
+  action: replan
+  findings_summary: "stub: C2 is the second member of C1's class (resume predicates per pause kind); the shared fix is one predicate"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+fixture:
+  expect: completed
+  reached: [code, synthesize]
+  resolved-text-contains:
+    synthesize: "raised a second time"

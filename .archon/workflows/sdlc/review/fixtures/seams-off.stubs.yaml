@@ -34,6 +34,10 @@ publish:
   discoveries: []
   contract_left: []
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed
   reached: [route, docs, synthesize]
+  # The policy node's output reaches synthesis as the pack's default rulings.
+  resolved-text-contains:
+    synthesize: "the pack's defaults are in `fixture-policy-defaults`"

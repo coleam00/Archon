@@ -2,7 +2,7 @@
 
 Find this class of defect: **after this change, someone following the repository's documentation would form a materially wrong expectation or lack a required step.** Wrong documentation is worse than missing documentation; unnecessary documentation is maintenance debt. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/scratch/docs" && mktemp -d "$ARTIFACTS_DIR/scratch/docs/XXXXXX")" HEAD`; the workflow removes it), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile. Any other scratch file you write — a probe script, a note, captured output — goes under `$ARTIFACTS_DIR`, never in this checkout.
 
-Read `$ARTIFACTS_DIR/review/scope.md` first, and, where the project has them, its `architecture.md` and its `engineering.md` — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a preference one of them states is a finding you cite, and one none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and apply the supplied full-review policy: **$mode.output.risks**. In light mode, scope.md names the prior report and the correction delta: read the prior report and `$ARTIFACTS_DIR/implementation.md`, judge each prior finding assigned to this lens as resolved by the delta, validly declined (the implementer's evidence holds), or still open, then examine only the delta.
+Read `$ARTIFACTS_DIR/review/scope.md` first. The project's own values are in its steering documents: open, where the project has one, its `engineering.md` — at the root, in a config directory such as `.archon/`, or wherever its steering files point — only when a finding depends on a value it states, and read the section you cite, not the whole file. A preference it states is a finding you cite, and one it does not state is taste you leave out. Anchor the review on the accepted work order's stated invariants, and apply the supplied full-review policy: **$mode.output.risks**. In light mode, scope.md names the prior report and the correction delta: read the prior report and `$ARTIFACTS_DIR/implementation.md`, judge each prior finding assigned to this lens as resolved by the delta, validly declined (the implementer's evidence holds), or still open, then examine only the delta.
 
 ## A finding needs all four
 
@@ -14,6 +14,8 @@ Read `$ARTIFACTS_DIR/review/scope.md` first, and, where the project has them, it
 ## Always flag
 
 A documented statement, option, default, or example made false; removed behavior still advertised; a required migration or destructive step omitted; a public change users cannot discover; stale generated docs whose generation step was missed. When workflows, prompts, skills, or plugins ARE the product, their shipped documentation counts the same as any reference page. Before reporting either kind: verify the existing text is actually contradicted, not merely worded differently than you would word it, and confirm the reader cannot already discover the requirement through existing help, schema, or reference output.
+
+A finding's correction covers every page that makes the same claim: search the documentation for the claim, not only the page the diff touched.
 
 ## Steering files
 
@@ -31,4 +33,4 @@ A defect that touches the change — on the path it changed, made reachable or v
 
 Verify every cited path is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/docs.md` and the findings count.
 
-The certified reviewed target is `$head-check.output.target`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, review the cursor-to-head delta within that target.
+The certified reviewed target is `$head-check.output.target`. In PR mode, use only its qualified PR identity, `head` and `merge_base` for the full diff (`git diff <merge_base>..<head>`); scope.md must describe that same target. Refuse a contradictory scope rather than reviewing another diff. On a continuation, use the delta commands recorded in scope.md, which rebuild the cursor’s change on the current base to leave out code brought in by a base merge.

@@ -67,8 +67,6 @@ function publish(h: ReturnType<typeof history>, target: string, base = 'dev') {
       INPUTS_REPORT_POINTER: 'null',
       INPUTS_DISCOVERIES: '[]',
       INPUTS_CONTRACT_LEFT: '[]',
-      INPUTS_ROUTE: 'null',
-      INPUTS_MODE: '{}',
     },
     artifacts: { 'review/report.md': 'Reviewed the pinned diff.\n' },
   });

@@ -17,31 +17,17 @@
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
  *   node forwards.
- * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
- *   light continuation skipped it) and review-round's output, whose lens fields
- *   hold the set a continuation reruns. The lenses this round ran, their union,
- *   are recorded beside the report as the next round's lens set.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import { forgeSource, record, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { parseReviewTarget, REVIEWED_TARGET, reviewHead, reviewMergeBase } from '../../.shared/review-target.ts';
-import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
-
-/** The lenses this round ran: the route agent's selection together with review-round's. */
-function lenses(): Record<string, boolean> {
-  const route = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
-  const mode = record(JSON.parse(text(process.env.INPUTS_MODE)));
-  return Object.fromEntries(
-    REVIEW_LENSES.map(lens => [lens, route?.[lens] === true || mode?.[lens] === true])
-  );
-}
 
 function label(pr: QualifiedPr): string {
   return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`;
@@ -91,7 +77,6 @@ try {
   }
   // Continuations carry coverage forward only for this certified target.
   writeFileSync(join(dirname(reportPath), REVIEWED_TARGET), JSON.stringify(target));
-  writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

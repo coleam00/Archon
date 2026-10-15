@@ -6,5 +6,9 @@ plan:
   open_questions: []
   summary: "stub: approach chosen — full plan at plan.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed
+  # The policy node's output reaches the planner as the pack's default rulings.
+  resolved-text-contains:
+    plan: "the pack's defaults are in `fixture-policy-defaults`"

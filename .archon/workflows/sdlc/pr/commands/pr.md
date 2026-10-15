@@ -27,6 +27,7 @@ You do not look up whether this branch already has a pull request. The publishin
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
+- When the plan this work delivers lists contract additions, flag each one in the body as a contract addition: what it adds to the shipped surface, and why every existing value keeps its meaning, so the reviewer can check that claim.
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - Link the issue with a non-closing reference (`Refs #N`), never a closing keyword, even where the template offers a `Closes #` line. A pull request closes its issue only when a review's contract coverage marks the required outcome and every acceptance item met, and no review has judged this work yet; delivery applies the closing keyword after its final review. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.

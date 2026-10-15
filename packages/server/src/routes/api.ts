@@ -4410,6 +4410,12 @@ export function registerApiRoutes(
       case 'awaiting_response':
         // The gate is open and this route may go on to resolve it.
         return null;
+      case 'usage_limit':
+        return {
+          error:
+            `Run is waiting for a provider usage limit to reset at ${attention.resumeAt}; it ` +
+            'has no gate to resolve and continues by itself.',
+        };
       case 'stalled_tool_calls':
       case 'terminal':
         // Unreachable: every route checks `status !== 'paused'` before calling this.

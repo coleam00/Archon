@@ -14,13 +14,11 @@
  * the delta run backwards or cover commits the previous round never read, so the
  * round refuses instead.
  *
- * A first round's lenses are the route agent's call. An ordinary continuation
- * reruns the lenses the previous round ran, which publish-review recorded beside
- * the report, on the delta only, and the route agent adds any the delta needs. The
- * route agent is told to select at least one lens, so a record with no lenses
- * still leaves the round something to certify. A light
+ * A first round's lenses are the route agent's call. A continuation reruns the
+ * general code lens on the delta; the route agent adds every lens whose finding the
+ * previous report leaves open or whose area the delta touches. A light
  * continuation, which follows a correction for CI rather than for review, runs
- * the general code lens alone and does not route.
+ * the code lens alone and does not route.
  *
  * The prior report is a declared input an outside caller can fill with a path
  * from an earlier run, so its existence is checked here too: a continuation that
@@ -36,11 +34,11 @@
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseReviewTarget, REVIEWED_TARGET } from '../../.shared/review-target.ts';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
+import { FULL_REVIEW_RISKS, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
 /**
@@ -55,25 +53,13 @@ function partAssignment(value: string | undefined): unknown {
   }
 }
 
-/** Where publish-review records the lenses that round ran. */
-const REVIEWED_LENSES = 'reviewed-lenses.json';
-type Lenses = Record<ReviewLens, boolean>;
-const NO_LENSES: Lenses = { seams: false, code: false, tests: false, errors: false, docs: false };
-
-/** The lens set publish-review recorded, refused unless it names every lens as a boolean. */
-function recordedLenses(path: string): Lenses {
-  if (!existsSync(path)) {
-    throw new Error(`the previous review report records no lenses (${path} is missing)`);
-  }
-  const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  const lenses = { ...NO_LENSES };
-  for (const lens of REVIEW_LENSES) {
-    const ran: unknown = (value as Record<string, unknown> | null)?.[lens];
-    if (typeof ran !== 'boolean') throw new Error(`${path} does not record lens '${lens}'`);
-    lenses[lens] = ran;
-  }
-  return lenses;
-}
+const NO_LENSES: Record<ReviewLens, boolean> = {
+  seams: false,
+  code: false,
+  tests: false,
+  errors: false,
+  docs: false,
+};
 
 function isFile(path: string): boolean {
   try {
@@ -112,11 +98,7 @@ try {
       );
     }
     const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
-    const lenses =
-      light
-        ? { ...NO_LENSES, code: true }
-        : recordedLenses(join(dirname(prior), REVIEWED_LENSES));
-    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses, part });
+    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, code: true, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

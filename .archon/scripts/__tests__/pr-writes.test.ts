@@ -338,14 +338,6 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
       }),
       INPUTS_DISCOVERIES: '[]',
       INPUTS_CONTRACT_LEFT: '["acceptance: the console shows it"]',
-      INPUTS_ROUTE: 'null',
-      INPUTS_MODE: JSON.stringify({
-        seams: false,
-        code: true,
-        tests: false,
-        errors: false,
-        docs: false,
-      }),
       ...inputs,
     },
     artifacts: { 'review-report.md': REPORT, ...options.artifacts },
@@ -633,6 +625,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.code).toBe(0);
     expect(parseReviewTarget(readFileSync(join(result.artifacts, REVIEWED_TARGET), 'utf8')).head).toBe(REVIEWED);
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'reviewed-lenses.json'))).toBe(false);
   });
 
   it('refuses a round that reviewed a commit the pull request no longer carries', () => {
@@ -648,58 +641,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
     expect(existsSync(join(result.artifacts, REVIEWED_TARGET))).toBe(false);
-  });
-
-  it('records the lenses this round ran beside the report for the next round to rerun', () => {
-    const recorded = (run: ScriptRun): unknown =>
-      JSON.parse(readFileSync(join(run.artifacts, 'reviewed-lenses.json'), 'utf8'));
-    const route = { seams: true, code: true, tests: false, errors: false, docs: true, reason: 'r' };
-    const first = publishReview({ inputs: { ...report, INPUTS_ROUTE: JSON.stringify(route) } });
-    expect(first.code).toBe(0);
-    expect(recorded(first)).toEqual({
-      seams: true,
-      code: true,
-      tests: false,
-      errors: false,
-      docs: true,
-    });
-    // A light continuation skipped route: its own set is what ran.
-    const light = publishReview({ inputs: report });
-    expect(recorded(light)).toEqual({
-      seams: false,
-      code: true,
-      tests: false,
-      errors: false,
-      docs: false,
-    });
-    // An ordinary continuation ran the rerun set and the route agent's additions.
-    const continued = publishReview({
-      inputs: {
-        ...report,
-        INPUTS_ROUTE: JSON.stringify({
-          seams: false,
-          code: false,
-          tests: true,
-          errors: false,
-          docs: false,
-          reason: 'r',
-        }),
-        INPUTS_MODE: JSON.stringify({
-          seams: true,
-          code: true,
-          tests: false,
-          errors: false,
-          docs: false,
-        }),
-      },
-    });
-    expect(recorded(continued)).toEqual({
-      seams: true,
-      code: true,
-      tests: true,
-      errors: false,
-      docs: false,
-    });
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {
