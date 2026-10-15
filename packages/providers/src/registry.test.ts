@@ -249,6 +249,29 @@ describe('registry', () => {
   });
 
   describe('registerProvider', () => {
+    test('rejects a duplicate without replacing the existing registration', () => {
+      const entry = makeMockRegistration('custom');
+      registerProvider(entry);
+      const registered = providerRegistry.get('custom');
+      const before = providerRegistry.list();
+      expect(() => registerProvider(makeMockRegistration('custom'))).toThrow(
+        "Provider 'custom' is already registered"
+      );
+      expect(providerRegistry.get('custom')).toBe(registered);
+      expect(providerRegistry.list()).toEqual(before);
+    });
+
+    test('rejects invalid fork capabilities without inserting the registration', () => {
+      const entry = makeMockRegistration('invalid-fork');
+      entry.capabilities.sessionFork = true;
+      const before = providerRegistry.list();
+      expect(() => registerProvider(entry)).toThrow(
+        "Provider 'invalid-fork' cannot advertise sessionFork without sessionResume"
+      );
+      expect(providerRegistry.get('invalid-fork')).toBeUndefined();
+      expect(providerRegistry.list()).toEqual(before);
+    });
+
     test('registered factories derive instance capabilities from the descriptor', async () => {
       const nativeCapabilities = mock(() => ({
         ...makeMockProvider('custom').getCapabilities(),
@@ -399,27 +422,6 @@ describe('registry', () => {
       expect(isRegisteredProvider('my-llm')).toBe(true);
       const provider = getAgentProvider('my-llm');
       expect(provider.getType()).toBe('my-llm');
-    });
-
-    test('throws on duplicate registration', () => {
-      expect(() => registerProvider(makeMockRegistration('claude'))).toThrow(
-        "Provider 'claude' is already registered"
-      );
-    });
-
-    test('rejects session fork support without session resume support', () => {
-      const entry = makeMockRegistration('invalid-fork', {
-        capabilities: {
-          ...makeMockProvider('invalid-fork').getCapabilities(),
-          sessionFork: true,
-          backgroundWork: 'unobserved' as const,
-          sessionResume: false,
-        },
-      });
-
-      expect(() => registerProvider(entry)).toThrow(
-        "Provider 'invalid-fork' cannot advertise sessionFork without sessionResume"
-      );
     });
   });
 

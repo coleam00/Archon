@@ -10,19 +10,19 @@
  */
 
 /** Workflow subcommands that continue an existing run. */
-const CONTINUE_SUBCOMMANDS = ['resume', 'approve', 'reject', 'respond'] as const;
+const CONTINUE_SUBCOMMANDS: readonly string[] = [
+  'resume',
+  'approve',
+  'reject',
+  'respond',
+  'answer',
+];
 
 /**
- * Whether a `workflow` subcommand continues an existing run rather than starting one.
- *
- * Exported because dispatch needs the same answer these guards do: a continuation reaches
- * `workflowRunCommand` exactly as `run` does, so it needs the same registry set up before
- * it gets there. Asking through this predicate keeps the list in one place — a second copy
- * at the dispatch site is how `resume`/`approve`/`reject`/`respond` came to be treated as
- * ordinary read-only subcommands.
+ * Continuations keep their model bindings and need an execution-capable host.
  */
 export function isContinueSubcommand(subcommand: string | undefined): boolean {
-  return CONTINUE_SUBCOMMANDS.includes(subcommand as (typeof CONTINUE_SUBCOMMANDS)[number]);
+  return subcommand !== undefined && CONTINUE_SUBCOMMANDS.includes(subcommand);
 }
 
 export const RESUME_RUN_CONFIG_CONFLICT =

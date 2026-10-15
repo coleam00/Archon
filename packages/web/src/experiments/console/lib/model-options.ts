@@ -15,7 +15,6 @@ import type {
   PiModelInfo,
   ProviderInfo,
 } from '../skills';
-import { isCredentialUsable } from './agent-status';
 
 /** One suggestion in a model picker dropdown. */
 export interface ModelOption {
@@ -156,7 +155,7 @@ export function usablePiBackends(
 ): ReadonlySet<string> | null {
   const credentials = agents?.find(a => a.id === 'pi')?.credentials;
   if (credentials === undefined || credentials.length === 0) return null;
-  return new Set(credentials.filter(isCredentialUsable).map(c => c.vendor));
+  return new Set(credentials.filter(c => c.usable).map(c => c.vendor));
 }
 
 /** Cost/context/reasoning hint for one Pi catalog model. */
@@ -235,7 +234,7 @@ export function piDisconnectedBackendHint(
   if (backend === null) return null;
   const pi = agents?.find(a => a.id === 'pi');
   const cred = pi?.credentials.find(c => c.vendor === backend);
-  if (!cred || isCredentialUsable(cred)) return null;
+  if (!cred || cred.usable) return null;
   return `No ${cred.displayName} credential connected — saves fine, but runs need one (Settings → Agents).`;
 }
 

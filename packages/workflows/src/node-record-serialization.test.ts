@@ -340,6 +340,26 @@ describe('node record serializers', () => {
     expect(serializeNodeOutput(source)).not.toHaveProperty('tokens');
     expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
   });
+
+  it('marks a partially reported cost as a floor without changing its value', () => {
+    const started = startNodeExecution({
+      runId: 'run',
+      path: 'work',
+      node: { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const partial = finishNodeExecution(
+      started,
+      { status: 'completed' },
+      { costUsd: 0.2, costPartial: true }
+    );
+    expect(partial.spend.costUsd).toEqual({ source: 'provider', value: 0.2, partial: true });
+    expect(serializeNodeOutput(partial)).toMatchObject({ costUsd: 0.2 });
+    // With no reported cost at all there is nothing to mark: the cost stays unavailable.
+    const unreported = finishNodeExecution(started, { status: 'completed' }, { costPartial: true });
+    expect(unreported.spend.costUsd).toEqual(started.spend.costUsd);
+  });
 });
 
 it('persists the path contract beside its legacy root fields and reads either shape', () => {

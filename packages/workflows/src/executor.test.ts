@@ -346,6 +346,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),
@@ -391,7 +392,10 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
+    getUserProviderCredentialStatus: mock(async () => ({
+      kind: 'api_key' as const,
+      status: { state: 'usable' as const, source: 'archon' as const },
+    })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,
@@ -848,6 +852,27 @@ describe('executeWorkflow', () => {
 
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a budgeted workflow whose loop the run budget cannot count before creating a run', async () => {
+    const workflow = resolveWorkflow(
+      workflowDefinitionSchema.parse({
+        name: 'budgeted-loop',
+        description: 'loop under a run budget',
+        budget: { max_work_units: 5 },
+        nodes: [{ id: 'spin', loop: { until: 'done', max_iterations: 2, prompt: 'p' } }],
+      })
+    );
+    const store = makeStore();
+
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp/ops', workflow, 'msg', {
+        conversationId: 'db-conv-1',
+      })
+    ).rejects.toThrow("node 'spin' is a loop node");
+
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -3593,6 +3618,7 @@ describe('executeWorkflow', () => {
           completedNodeOutputs,
           fanOutSnapshots: new Map(),
           unresolvedNodeStarts: new Set<string>(),
+          budget: { workUnits: 0, spendUsd: 0 },
           tokens,
           costUsd,
         })),
@@ -5290,6 +5316,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
       })),
@@ -5314,6 +5341,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
       })),
@@ -5355,6 +5383,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5387,6 +5416,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots,
         unresolvedNodeStarts: new Set(['fan__instance-a']),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5413,6 +5443,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5461,6 +5492,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5501,6 +5533,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5535,6 +5568,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5561,6 +5595,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5590,6 +5625,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -6129,10 +6165,13 @@ describe('credential preflight lifecycle', () => {
       const deps = makeDeps(store);
       deps.isPerUserProviderKeysEnabled = () => true;
       const getStatus = mock(
-        async (): Promise<import('@archon/provider-contract').CredentialStatus> => ({
-          state: 'unusable',
-          source: 'archon',
-          evidence: 'stored credential unreadable',
+        async (): Promise<import('./deps').StoredProviderCredential> => ({
+          kind: 'api_key',
+          status: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'stored credential unreadable',
+          },
         })
       );
       deps.getUserProviderCredentialStatus = getStatus;
@@ -6165,6 +6204,40 @@ describe('credential preflight lifecycle', () => {
     }
   );
 
+  it('a Pi-only run with its own login neither refreshes nor delivers a stored Claude subscription', async () => {
+    const deps = makeDeps(makeStore());
+    deps.isPerUserProviderKeysEnabled = () => true;
+    deps.getUserProviderCredentialStatus = mock(
+      async () =>
+        ({
+          kind: 'oauth',
+          status: { state: 'unusable', source: 'archon', evidence: 'refresh token revoked' },
+        }) as const
+    );
+    deps.getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential: mock(async () => ({ state: 'usable', source: 'native' })),
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    const getUserProviderEnv = mock(async (): Promise<never> => {
+      throw new Error('delivery must not be asked for an unconsumed credential');
+    });
+    deps.getUserProviderEnv = getUserProviderEnv;
+    mockExecuteDagWorkflow.mockClear();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv',
+      '/tmp',
+      makeWorkflow({ provider: 'pi', model: 'anthropic/claude-sonnet-4-5' }),
+      'start',
+      { conversationId: 'db', userId: 'origin' },
+      {}
+    );
+    expect(result.success).toBe(true);
+    expect(getUserProviderEnv).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
@@ -6173,8 +6246,8 @@ describe('credential preflight lifecycle', () => {
     deps.getUserProviderCredentialStatus = mock(
       async () =>
         ({
-          state: 'usable',
-          source: 'archon',
+          kind: 'api_key',
+          status: { state: 'usable', source: 'archon' },
         }) as const
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {

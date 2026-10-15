@@ -135,7 +135,7 @@ Verify your Archon setup. Runs a checklist of common failure points: installed p
 archon doctor
 ```
 
-With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port). OpenCode and Copilot are bundled but [deprecated](/getting-started/ai-assistants/#deprecated-providers): doctor runs their diagnostics only when one is your default assistant or has settings under `assistants`, and does not count them as installed providers. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
+With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon that the assistant can use. Pi cannot use a connected Claude subscription: with no native Anthropic login, the check fails and names `provider: claude`. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port). OpenCode and Copilot are bundled but [deprecated](/getting-started/ai-assistants/#deprecated-providers): doctor runs their diagnostics only when one is your default assistant or has settings under `assistants`, and does not count them as installed providers. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
@@ -346,7 +346,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
 | `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, a missing reachable stub remains an error unless the node declares `trigger_rule: all_done`. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
-| `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+| `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/guides/authoring-workflows/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
 
 Fresh CLI runs do not create a chat conversation, message history, or title. Execution output stays in stdout and the run's transcript, events, and artifacts. Resuming a run with an existing chat origin keeps recording into that conversation.
 
@@ -431,11 +431,11 @@ archon workflow run deliver --cwd /path/to/repo \
 
 The scaffold is derived from the already-expanded workflow, so included top-level nodes use their flattened ids (for example, `review__classify`) — while `loop_group` BODY nodes keep their bare ids even inside an included block (the group node gets the `<includeId>__` prefix; its body does not). Prefer `--stubs-init` over hand-writing keys: the scaffold is the authoritative source for both spellings. Structured `output_format` values are emitted as YAML objects with native booleans, numbers, arrays, and nested required properties. Loop completion fields are generated as `true`. If Archon cannot prove that a generated value satisfies its JSON Schema, scaffold generation fails before creating the file.
 
-The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. Strict coverage remains the default: a reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`. The one exception is a `trigger_rule: all_done` join — it runs whatever its upstream did, so a real run reaches it regardless of stub data. It gets a generated placeholder and is listed in both `missingStubs` and `toleratedMissingStubs`, and the absent stub alone never fails the simulation or a `workflow test` fixture. It is only listed in `toleratedMissingStubs` once that placeholder exists: a node whose `output_format` cannot produce one still fails, and stays out of the tolerated list. A `loop:` node carrying the same trigger rule is tolerated on the same terms, with one addition — the placeholder must also end the loop, which it does by satisfying the node's own completion channel, so a tolerated loop always completes on its first iteration. The one loop shape it cannot end is an `output_format` whose only completion channel is a prose `until:`, because the generated JSON never carries the sentinel; that node still fails and stays out of the tolerated list. Add `--default-stubs` to fill only omitted reachable nodes with the same schema-aware placeholders used by scaffold generation; explicit values always take precedence. A reachable `bash:` or `script:` node that arrived through `include:` must always be stubbed: the simulation does not deliver the caller's `with:` values to it, so a body that reads its inputs fails rather than running. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
+The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. Strict coverage remains the default: a reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`. The one exception is a `trigger_rule: all_done` join — it runs whatever its upstream did, so a real run reaches it regardless of stub data. It gets a generated placeholder and is listed in both `missingStubs` and `toleratedMissingStubs`, and the absent stub alone never fails the simulation or a `workflow test` fixture. It is only listed in `toleratedMissingStubs` once that placeholder exists: a node whose `output_format` cannot produce one still fails, and stays out of the tolerated list. A `loop:` node carrying the same trigger rule is tolerated on the same terms, with one addition — the placeholder must also end the loop, which it does by satisfying the node's own completion channel, so a tolerated loop always completes on its first iteration. The one loop shape it cannot end is an `output_format` whose only completion channel is a prose `until:`, because the generated JSON never carries the sentinel; that node still fails and stays out of the tolerated list. Add `--default-stubs` to fill only omitted reachable nodes with the same schema-aware placeholders used by scaffold generation; explicit values always take precedence. Without `--exec-code`, a reachable `bash:` or `script:` node that arrived through `include:` needs a stub like any other: a stubbed node never runs its body, so the caller's `with:` values are never delivered to it. With `--exec-code` it can run unstubbed and reads those values as described below. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
-A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives — before any trace output. With `--exec-code`, bash and script nodes also receive the run-level inputs as the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers (a composed block's own inputs for named scripts are a real-run-only channel).
+A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives — before any trace output. With `--exec-code`, bash and script nodes also receive the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers: run-level inputs, an included block's own inputs, and a script node's `with:` bindings.
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
 The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the fixture supplies that structured result. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
@@ -1195,11 +1195,11 @@ the option of the same id.
 
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. For a gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a legacy interactive-loop gate.
+Approve a paused workflow run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer). At a deprecated `approval:` gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a deprecated interactive-loop gate.
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id (every listed child for a fan-out).
 
-**Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
+**Deprecated interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
 
 ```bash
 archon workflow approve <run-id>
@@ -1240,7 +1240,7 @@ archon workflow approve <run-id> --detach --json
 **`--detach --json` deliberately differs from bare `--json`.** Bare `--json` records the
 decision and withholds the inline auto-resume (a continuation host continues the run).
 `--detach --json` spawns a child that takes the ordinary inline path, so the run **is**
-driven onward — approve's auto-resume, reject's `on_reject` rework, resume's re-run —
+driven onward — approve's auto-resume, reject's legacy `on_reject` rework, resume's re-run —
 just outside your shell. The ack carries `continues: true` to say so:
 
 ```json
@@ -1264,9 +1264,9 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-For a gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
+For a deprecated `approval:` gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
 
-Reject a paused workflow run at an approval gate. An optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
+Reject a paused workflow run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer); the run continues with `decision: reject` and does not cancel. At a deprecated `approval:` gate an optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
 
 ```bash
 archon workflow reject <run-id>
@@ -1353,15 +1353,15 @@ Groups by codebase, shows branch, workflow type, platform, and days since activi
 
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
 (branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`) — they are tracked and cleaned
-up exactly like top-level run worktrees. Avoid `cleanup`/`complete` on one while its run tree
-is still resumable: a resume reuses the child's recorded worktree and fails if it has been
-removed.
+up exactly like top-level run worktrees. Avoid `complete` on one while its run tree is still
+resumable: a resume reuses the child's recorded worktree and fails if it has been removed.
+`cleanup` removes it only under the run-lock rule below.
 
 ### `isolation cleanup [days]`
 
 To explicitly discard a resumable run and remove the worktree it created, use
-`archon workflow abandon <run-id>`. Ordinary cleanup keeps resumable runs protected.
-Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
+`archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
+of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
@@ -1428,13 +1428,24 @@ as `merge state unverifiable` rather than removed on an unverified guess.
 By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
 those up as well. Branches with an **OPEN** PR are always skipped.
 
-An environment a workflow run can still claim is never removed by either mode,
-regardless of age or merge state — the same live-run lock the scheduled sweep applies.
-That covers running, pending and paused runs, and also **failed** runs: a failed run
-stays resumable, and removing its environment deletes the local branch that
-`workflow run --resume` and `--adopt` need. Stale environments with quiet
-conversations still pass the activity filter; the live-run lock is what keeps them on
-disk until no run can claim them.
+A running, pending, or paused run keeps its environment in both modes, regardless of
+age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the same
+run lock. Stale environments with quiet conversations still pass the activity filter;
+the run lock is what keeps them on disk.
+
+A **failed** run keeps its environment only until its outcome is settled:
+
+- `--merged` (and the server's scheduled cleanup) removes it once its branch is merged
+  or its PR is merged. `--include-closed` also removes it once its PR is closed.
+- The stale sweep removes it once the run has been inactive since it failed for longer
+  than the stale window (`[days]` here; `STALE_THRESHOLD_DAYS` for the server and chat).
+  An environment whose worktree HEAD or branch holds a commit on no remote is kept and
+  reported as `failed run <id> has <n> unpushed commit(s)`.
+
+The output names each failed run whose environment it removed, with the reason:
+`merged`, `PR closed`, or `stale`. Removal leaves the run's status unchanged. Resuming
+it afterwards fails with `the working path from the run no longer exists`; start a
+fresh run. To discard a failed run sooner, use `workflow abandon`.
 
 ### `validate workflows [name]`
 
@@ -1480,14 +1491,20 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+
+Without `--force`, completion refuses an environment a workflow run can still claim, the
+same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
+failed run that can still be resumed. Unlike `isolation cleanup`, completion never
+releases a failed run's lock by merge state or age. If that lookup fails, completion
+refuses rather than skipping the check.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

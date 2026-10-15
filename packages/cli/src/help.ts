@@ -752,6 +752,11 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--container',
+    description: 'Run a folder project in container isolation',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--input <name>=<value>',
     description:
       'Supply a declared workflow input; repeat per input (mutually exclusive with --resume)',

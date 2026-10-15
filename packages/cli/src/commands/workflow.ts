@@ -18,6 +18,10 @@ import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
+  createRegisteredWorktree,
+  type RegisteredWorktree,
+} from '@archon/core/workflows/registered-worktree';
+import {
   prepareRunAiConfiguration,
   assertRunCredentials,
   type PreparedRunAiConfiguration,
@@ -32,7 +36,7 @@ import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import { registerRepository, registerFolder } from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
@@ -72,14 +76,8 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
-  worktreeRegistrationMetadata,
 } from '@archon/isolation';
-import type {
-  ExecutionContext,
-  ContainerBackend,
-  ContainerBackendConfig,
-  WorktreeCreationEnvironment,
-} from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
   createLogger,
@@ -1705,6 +1703,24 @@ async function resolveRunCodebase(
 }
 
 /**
+ * A resume continues in the run's own checkout. Cleanup removes a failed run's
+ * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
+ */
+function assertResumeWorkingPathExists(workingPath: string): void {
+  try {
+    statSync(workingPath);
+  } catch (error) {
+    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    throw new Error(
+      `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
+        'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
+    );
+  }
+}
+
+/**
  * Run a specific workflow
  */
 async function runWorkflowWithOwnedSource(
@@ -1755,6 +1771,12 @@ async function runWorkflowWithOwnedSource(
       // answer, and reports the codebase failure first. Nothing executes before it.
       resumeLookupError = error as Error;
     }
+  }
+
+  // Before anything reads the run's checkout: codebase resolution on a removed
+  // worktree fails with a raw git error that reads as a database fault.
+  if (options.resume === true && continuationRun?.working_path) {
+    assertResumeWorkingPathExists(continuationRun.working_path);
   }
 
   let continuation: ResolvedContinuation | undefined;
@@ -2838,15 +2860,8 @@ async function runWorkflowWithOwnedSource(
     // which calls backend.resumeEnv when `resumable.metadata.isolation` is
     // 'container'). Nothing to reject here anymore.
 
-    // Reuse the working path from the resumable run (verify it still exists)
+    // Reuse the working path from the resumable run (checked to exist above).
     if (resumable.working_path) {
-      const { existsSync } = await import('fs');
-      if (!existsSync(resumable.working_path)) {
-        throw new Error(
-          `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
-            'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-        );
-      }
       workingCwd = resumable.working_path;
     }
 
@@ -3077,12 +3092,10 @@ async function runWorkflowWithOwnedSource(
       // Configure isolation with repo config loader (same as orchestrator)
       configureWorktreeIsolation();
 
-      const provider = getIsolationProvider();
-
       // Check for existing worktree (only when explicit --branch)
       const existingEnv = existingBranchEnv;
 
-      if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+      if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
         if (options.fromBranch) {
           getLog().warn(
             { path: existingEnv.working_path, fromBranch: options.fromBranch },
@@ -3146,7 +3159,7 @@ async function runWorkflowWithOwnedSource(
           'worktree_creating'
         );
 
-        let isolatedEnv: WorktreeCreationEnvironment;
+        let created: RegisteredWorktree;
         try {
           if (!preparedSource)
             throw new Error('Worktree setup requires a captured workflow source');
@@ -3192,8 +3205,8 @@ async function runWorkflowWithOwnedSource(
             codebase.default_cwd,
             codebase.id
           );
-          isolatedEnv = await provider.create(
-            {
+          created = await createRegisteredWorktree(host.records.isolation, {
+            request: {
               workflowType: 'task',
               identifier: branchIdentifier,
               taskBranch: adoptedTaskBranch
@@ -3220,34 +3233,22 @@ async function runWorkflowWithOwnedSource(
               canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
               description: `CLI workflow: ${workflowName}`,
             },
-            createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
-          );
+            setupExecutor: createRunWorktreeSetupExecutor(
+              host.deps,
+              setupRun,
+              preparedAiConfiguration.config
+            ),
+            createdByPlatform: 'cli',
+          });
         } catch (createError) {
-          // Same translation the container branches above apply. The classified
-          // message also carries the note a failed cleanup records outside
-          // `err.message`, which the raw error would drop on this path.
-          const err = createError as Error;
-          getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
-          throw new Error(classifyIsolationError(err), { cause: err });
+          getLog().error({ err: createError, branch: branchIdentifier }, 'worktree.create_failed');
+          throw createError;
         }
 
-        // Track in database
-        const envRecord = await host.records.isolation.create({
-          codebase_id: codebase.id,
-          workflow_type: 'task',
-          workflow_id: branchIdentifier,
-          provider: 'worktree',
-          working_path: isolatedEnv.workingPath,
-          branch_name: isolatedEnv.branchName,
-          created_by_platform: 'cli',
-          metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
-        });
-
-        workingCwd = isolatedEnv.workingPath;
-        isolationEnvId = envRecord.id;
-        if (isolatedEnv.metadata.provenance === 'created')
-          ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
-        if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
+        workingCwd = created.env.workingPath;
+        isolationEnvId = created.envId;
+        ownedWorktree = created.ownedWorktree;
+        cutFromCommit = created.cutFromCommit;
         getLog().info({ path: workingCwd }, 'worktree_created');
       }
     } else if (options.noWorktree) {
@@ -6007,15 +6008,17 @@ export async function workflowResumeCommand(
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
     await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
-      // The inline path below refuses a run with no recorded working path. Check it
-      // here too, on the run the precheck already holds (message copied verbatim):
-      // otherwise the parent acks success and the child throws where nobody reads it.
+      // The inline path below refuses a run with no recorded working path, or one
+      // whose checkout is gone. Check both here too, on the run the precheck already
+      // holds: otherwise the parent acks success and the child throws where nobody
+      // reads it.
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +
             'Cannot determine where to resume. The run may be too old.'
         );
       }
+      assertResumeWorkingPathExists(run.working_path);
       return run;
     });
     return;
@@ -6354,7 +6357,7 @@ export async function workflowAnswerCommand(
   text: string | undefined,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const request = { choose, ...(text !== undefined ? { text } : {}) };
   if (json) {
     try {
@@ -6373,10 +6376,11 @@ export async function workflowAnswerCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'answer', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6403,6 +6407,7 @@ export async function workflowAnswerCommand(
     failurePrefix: 'Answer recorded but',
     recorded: 'answer',
   });
+  return 0;
 }
 
 /**
@@ -6551,11 +6556,6 @@ export async function workflowRejectCommand(
     return;
   }
 
-  // An empty or omitted reason still needs a meaningful value on the new-mode
-  // structured-output path (#2740) — rejectWorkflow's own internal default
-  // only covers the audit event and legacy rework/cancel path.
-  const rejectText = reason && reason.length > 0 ? reason : 'Rejected';
-
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
@@ -6566,7 +6566,7 @@ export async function workflowRejectCommand(
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
       const result = await rejectWorkflow(
         resolvedId,
-        rejectText,
+        reason,
         { kind: 'operator' },
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
@@ -6589,7 +6589,7 @@ export async function workflowRejectCommand(
   const result = await spelledForCli(async () =>
     rejectWorkflow(
       resolvedId,
-      rejectText,
+      reason,
       { kind: 'operator' },
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )

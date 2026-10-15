@@ -2,7 +2,7 @@
  * Core Zod schemas and derived types.
  *
  * All data-shape types are derived from schemas via `z.infer<typeof schema>`.
- * Import `z` from `@hono/zod-openapi` in all schema files (project convention).
+ * Schemas may import plain `zod`; OpenAPI annotations use `@hono/zod-openapi`.
  */
 
 // Conversation

@@ -10,6 +10,7 @@
 import type { AgentCredentialStatus, AgentCredentialMatrixEntry } from '@archon/core';
 import { z } from '@hono/zod-openapi';
 import { CREDENTIAL_KINDS } from '@archon/providers';
+import { STORED_CREDENTIAL_KINDS } from '@archon/provider-contract';
 
 // Exact equality catches additional optional fields that structural assignment permits.
 type Shape<T> = { [K in keyof T]: T[K] };
@@ -23,7 +24,7 @@ type Assert<T extends true> = T;
 export const providerKeyConnectionSchema = z
   .object({
     provider: z.string(),
-    kind: z.enum(['api_key', 'oauth']),
+    kind: z.enum(STORED_CREDENTIAL_KINDS),
     label: z.string().nullable(),
   })
   .openapi('ProviderKeyConnection');
@@ -37,10 +38,12 @@ export const agentCredentialStatusSchema = z
     vendor: z.string(),
     displayName: z.string(),
     kinds: z.array(z.enum(CREDENTIAL_KINDS)),
-    connected: z.enum(['api_key', 'oauth']).nullable(),
+    connected: z.enum(STORED_CREDENTIAL_KINDS).nullable(),
+    connectionConsumed: z.boolean(),
     subscriptionAvailable: z.boolean(),
     installEnv: z.boolean(),
     ambientConfigured: z.boolean().optional(),
+    usable: z.boolean(),
   })
   .openapi('AgentCredentialStatus');
 

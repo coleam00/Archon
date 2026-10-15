@@ -414,8 +414,8 @@ describe('isolation-environments', () => {
     // Only the parameters are asserted here. This file hardcodes the Postgres
     // dialect, so asserting SQL text would pin one branch of a dialect-parallel
     // query; the real-SQLite and real-Postgres integration tests prove behavior
-    // on both. 'failed' must NOT appear: it is terminal but resumable, so a failed
-    // run keeps its environment (see UNCLAIMABLE_WORKFLOW_STATUSES).
+    // on both. Without a release 'failed' must NOT appear: it is terminal but
+    // resumable, so a failed run keeps its environment until a sweep settles it.
     test('excludes only the statuses no run can claim back', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ id: 'run-1', status: 'running' }]));
 
@@ -424,6 +424,20 @@ describe('isolation-environments', () => {
       expect(result).toEqual({ id: 'run-1', status: 'running' });
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(params).toEqual(['env-123', 'completed', 'cancelled']);
+    });
+
+    test('a release adds the settleable statuses, and the stale window after them', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getLiveRunOwningEnv('env-123', { kind: 'settled' });
+      await getLiveRunOwningEnv('env-123', { kind: 'stale', staleDays: 7 });
+
+      const params = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[1]);
+      expect(params).toEqual([
+        ['env-123', 'completed', 'cancelled', 'failed'],
+        ['env-123', 'completed', 'cancelled', 'failed', 7],
+      ]);
     });
 
     test('returns null when the env has no live run', async () => {

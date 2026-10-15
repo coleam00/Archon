@@ -1282,4 +1282,16 @@ export const sqliteDialect: SqlDialect = {
   daysSince(column: string): string {
     return `(julianday('now') - julianday(${column}))`;
   },
+
+  jsonText(column: string, path: string): string {
+    return `json_extract(${column}, '$.${path}')`;
+  },
+
+  jsonRemove(column: string, ...keys: string[]): string {
+    return `json_remove(${[column, ...keys.map(key => `'$.${key}'`)].join(', ')})`;
+  },
+
+  rowLock(): string {
+    return '';
+  },
 };

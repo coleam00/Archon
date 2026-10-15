@@ -1,6 +1,7 @@
 import type { QueryResult, QueryResultRow } from 'pg';
 import { mock, type Mock } from 'bun:test';
 import type { SqlDialect } from '../../db/adapters/types';
+import { postgresDialect } from '../../db/adapters/postgres';
 
 export interface MockPool {
   query: Mock<(...args: unknown[]) => Promise<QueryResult<QueryResultRow>>>;
@@ -55,4 +56,7 @@ export const mockPostgresDialect: SqlDialect = {
   daysSince(column: string): string {
     return `EXTRACT(EPOCH FROM (NOW() - ${column})) / 86400`;
   },
+  jsonText: postgresDialect.jsonText,
+  jsonRemove: postgresDialect.jsonRemove,
+  rowLock: postgresDialect.rowLock,
 };

@@ -613,4 +613,34 @@ describe('postgresDialect', () => {
       );
     });
   });
+
+  describe('jsonText()', () => {
+    test('reads a top-level key as text', () => {
+      expect(postgresDialect.jsonText('metadata', 'phase')).toBe("metadata->>'phase'");
+    });
+
+    test('walks a dotted path as jsonb and reads only the last key as text', () => {
+      expect(postgresDialect.jsonText('w.metadata', 'approval.attempt')).toBe(
+        "w.metadata->'approval'->>'attempt'"
+      );
+    });
+  });
+
+  describe('jsonRemove()', () => {
+    test('subtracts every key from the column', () => {
+      expect(postgresDialect.jsonRemove('metadata', 'approval', 'wait')).toBe(
+        "metadata - 'approval' - 'wait'"
+      );
+    });
+  });
+
+  describe('rowLock()', () => {
+    test('locks the selected row', () => {
+      expect(postgresDialect.rowLock()).toBe(' FOR UPDATE');
+    });
+
+    test('locks only the named table in a join', () => {
+      expect(postgresDialect.rowLock('w')).toBe(' FOR UPDATE OF w');
+    });
+  });
 });

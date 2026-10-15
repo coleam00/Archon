@@ -186,6 +186,21 @@ describe('answering an attention wait', () => {
     ).rejects.toThrow("does not declare option 'c'");
   });
 
+  test('whitespace-only approve and reject text answers an attention wait with no text', async () => {
+    await setup();
+    const rejected = await paused('approval');
+    await operations.rejectWorkflow(rejected, '   ', operator, cli);
+    expect(await storedWait(rejected)).toMatchObject({
+      answer: { decision: 'reject', text: '' },
+    });
+
+    const approved = await paused('approval');
+    await operations.approveWorkflow(approved, '   ', operator, cli);
+    expect(await storedWait(approved)).toMatchObject({
+      answer: { decision: 'approve', text: '' },
+    });
+  });
+
   test('a wait from before answers resumes; an unanswered form wait refuses resume', async () => {
     await setup();
     const legacy = await paused(undefined, null);
