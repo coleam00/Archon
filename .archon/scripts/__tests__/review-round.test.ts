@@ -63,7 +63,7 @@ function round(
   cwd: string,
   head: string,
   cursor?: string,
-  extra: { light?: boolean; lenses?: object; part?: string } = {}
+  extra: { light?: boolean; part?: string } = {}
 ): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
@@ -79,7 +79,6 @@ function round(
         : {
             'review/report.md': 'Round 1',
             'review/reviewed-head': `${cursor}\n`,
-            ...(extra.lenses ? { 'review/reviewed-lenses.json': JSON.stringify(extra.lenses) } : {}),
           },
   });
 }
@@ -101,11 +100,12 @@ describe('review-round', () => {
     });
   });
 
-  it("continues from the previous round's reviewed commit with the lenses it ran", () => {
+  // The route agent adds every other lens a continuation earns; the code lens is
+  // the one this round always reruns, whatever an earlier round ran.
+  it("continues from the previous round's reviewed commit with the code lens alone", () => {
     const { cwd, older, newer } = history();
-    const recorded = { seams: true, code: true, tests: false, errors: true, docs: false };
     const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
-    const run = round(cwd, newer, older, { lenses: recorded, part: JSON.stringify(part) });
+    const run = round(cwd, newer, older, { part: JSON.stringify(part) });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
@@ -114,7 +114,7 @@ describe('review-round', () => {
       cursor: older,
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
-      ...recorded,
+      seams: false, code: true, tests: false, errors: false, docs: false,
       part,
     });
   });
@@ -130,8 +130,7 @@ describe('review-round', () => {
 
   it('runs the code lens alone on a light continuation', () => {
     const { cwd, older, newer } = history();
-    const recorded = { seams: true, code: false, tests: true, errors: true, docs: true };
-    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, light: true }).stdout)).toMatchObject({
+    expect(JSON.parse(round(cwd, newer, older, { light: true }).stdout)).toMatchObject({
       light: true,
       seams: false,
       code: true,
@@ -139,23 +138,6 @@ describe('review-round', () => {
       errors: false,
       docs: false,
     });
-  });
-
-  // The route agent adds what the delta needs beside this set, so an empty record
-  // still leaves the round lenses to run.
-  it('continues from a record in which the previous round ran no lens', () => {
-    const { cwd, older, newer } = history();
-    const none = { seams: false, code: false, tests: false, errors: false, docs: false };
-    const run = round(cwd, newer, older, { lenses: none });
-    expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject({ continuation: true, light: false, ...none });
-  });
-
-  it('refuses a continuation whose report recorded no lenses', () => {
-    const { cwd, older, newer } = history();
-    const run = round(cwd, newer, older);
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('records no lenses');
   });
 
   it('refuses a head that is an ancestor of the commit the previous round reviewed', () => {

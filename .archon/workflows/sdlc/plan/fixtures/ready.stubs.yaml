@@ -6,5 +6,6 @@ plan:
   open_questions: []
   summary: "stub: approach chosen — full plan at plan.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed

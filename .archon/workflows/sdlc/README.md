@@ -60,6 +60,13 @@ CI runs again. A flake or infrastructure failure outside the change gets one re-
 of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
 the run not ready, and a defect outside the change becomes a discovery.
 
+A pull request counts as ready only at the commit its review comment stamps. CI never
+marks ready a head carrying commits the round's review did not cover. Commits pushed
+after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
+that pull request, whose first round reviews the whole change before CI marks it
+ready again, or by `archon-review` given the earlier round's `review/report.md` as
+`prior_report`.
+
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
 whether the guard is protecting *this node's own action*, or restating something
@@ -179,13 +186,16 @@ engineering conventions in an `engineering.md`, and its product direction in a
 direction document, at the root, in a config directory such as `.archon/`, or
 wherever its steering files point. The steering files themselves (`AGENTS.md` or
 its equivalent) reach every node through the provider's own context, so no
-prompt tells a node to read them. Each prompt that judges reads the sidecar
-documents its judgment needs, in one shared sentence; the direction document
-only where the node decides or judges scope. They are the project's
+prompt tells a node to read them. Each prompt that judges names the sidecar
+documents its decision can depend on, and opens one only when a finding or
+decision depends on it, reading the section it cites rather than the whole file.
+Implement reads the short `engineering.md` up front. `architecture.md` is named
+only where a decision is structural: seams, simplify, plan, investigate, implement,
+and triage when fit with the codebase is in question. They are the project's
 own values, so a taste finding cites one of them or is left out, and an owner
 declines a finding by the same standard. Each read is conditional on the file
 existing, so the pack stays portable: a repository without one loses nothing. A
-new pack prompt that writes or judges code carries the same sentence.
+new pack prompt that writes or judges code follows the same rule.
 
 A project's policy for a decision the pack makes, such as what triage accepts, is
 one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
@@ -196,13 +206,15 @@ to `.archon/sdlc/policy/` and reword it. A policy document may be only a pointer
 documents the project already has, and the agent reads what it points to. A prompt
 names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
-falling back to the pack's defaults"; triage names `triage.md`. Agents interpret
+falling back to the pack's defaults"; triage names `triage.md`, and plan and review
+synthesis name `rulings.md`, the answers a project's maintainers have already given,
+read before either stops for a person. Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
 A node reaches the defaults through its workflow's `policy` script node. A run
 captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
-[`triage/scripts/policy.ts`](triage/scripts/policy.ts) finds `.shared/policy/`
+[`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
 from its own location and the node binds that directory into the prompt with `with:`. The script hands over
 the directory only; the agent chooses between the project's file and the default,
 and no script opens either. The default is a file rather than text in the prompt

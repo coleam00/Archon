@@ -7,5 +7,6 @@ plan:
     - "stub: no project document rules on the new persisted field; keep it or derive it?"
   summary: "stub: stopped on one open question — the plan names it"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed

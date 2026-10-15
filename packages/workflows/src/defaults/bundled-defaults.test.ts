@@ -187,38 +187,127 @@ describe('bundled-defaults', () => {
 
     // A reusable pack must not hardcode one project's context paths (AGENTS.md,
     // "Project guidance should be available, not sprayed everywhere"). Every prompt that
-    // judges reads the project's conventional sidecar documents in one shared sentence,
-    // each only where it exists, and only the documents its judgment needs: direction
-    // where the node decides or judges scope. Project guidance arrives through the
-    // provider's own context mechanism, which is why no prompt instructs reading
-    // AGENTS.md. The rules the prompts used to delegate to a project file are stated in
-    // the prompts themselves.
-    it('every judging prompt reads the sidecar documents it needs, and no project path', () => {
-      const sentence = (docs: string): string =>
-        `where the project has them, its ${docs} — at the root, in a config directory such as \`.archon/\`, or wherever its steering files point`;
-      const all = sentence('`architecture.md`, its `engineering.md`, and its direction document');
-      const lens = sentence('`architecture.md` and its `engineering.md`');
-      const reads: Record<string, string> = {
-        '__archon_pack__bundled:sdlc:triage::triage': sentence(
-          '`architecture.md` and its direction document'
-        ),
-        '__archon_pack__bundled:sdlc:plan::plan': all,
-        '__archon_pack__bundled:sdlc:investigate::investigate': all,
-        '__archon_pack__bundled:sdlc:implement::implement': all,
-        '__archon_pack__bundled:sdlc:review::review-code': all,
-        '__archon_pack__bundled:sdlc:simplify::simplify': all,
-        '__archon_pack__bundled:sdlc:review::review-synthesize': all,
-        '__archon_pack__bundled:sdlc:review::review-seams': all,
-        '__archon_pack__bundled:sdlc:review::review-tests': lens,
-        '__archon_pack__bundled:sdlc:review::review-errors': lens,
-        '__archon_pack__bundled:sdlc:review::review-docs': lens,
+    // judges names the project's conventional sidecar documents, each only where it
+    // exists, and opens one only when a decision depends on it, reading the section that
+    // rules on it rather than the whole file. `architecture.md`, a long page in many
+    // projects, is named only where a decision is structural. Project guidance arrives
+    // through the provider's own context mechanism, which is why no prompt instructs
+    // reading AGENTS.md. The rules the prompts used to delegate to a project file are
+    // stated in the prompts themselves.
+    it('every judging prompt names the sidecar documents it needs, and no project path', () => {
+      const where = (docs: string, has: 'one' | 'them' = 'them'): string =>
+        `where the project has ${has}, its ${docs} — at the root, in a config directory such as \`.archon/\`, or wherever its steering files point`;
+      const all = where('`architecture.md`, its `engineering.md`, and its direction document');
+      const values = where('`engineering.md` and its direction document');
+      const engineering = where('`engineering.md`', 'one');
+      const decides = 'read the section that rules on it';
+      const cites = 'read the section you cite, not the whole file';
+      const reads: Record<string, { read: string; section: string; architecture: boolean }> = {
+        '__archon_pack__bundled:sdlc:triage::triage': {
+          read: where('direction document', 'one'),
+          section: decides,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:plan::plan': {
+          read: all,
+          section: decides,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:investigate::investigate': {
+          read: all,
+          section: decides,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:implement::implement': {
+          read: engineering,
+          section: decides,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:simplify::simplify': {
+          read: all,
+          section: cites,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:review::review-seams': {
+          read: all,
+          section: cites,
+          architecture: true,
+        },
+        '__archon_pack__bundled:sdlc:review::review-code': {
+          read: values,
+          section: cites,
+          architecture: false,
+        },
+        '__archon_pack__bundled:sdlc:review::review-synthesize': {
+          read: values,
+          section: cites,
+          architecture: false,
+        },
+        '__archon_pack__bundled:sdlc:review::review-tests': {
+          read: engineering,
+          section: cites,
+          architecture: false,
+        },
+        '__archon_pack__bundled:sdlc:review::review-errors': {
+          read: engineering,
+          section: cites,
+          architecture: false,
+        },
+        '__archon_pack__bundled:sdlc:review::review-docs': {
+          read: engineering,
+          section: cites,
+          architecture: false,
+        },
       };
-      for (const [key, read] of Object.entries(reads)) {
+      for (const [key, expected] of Object.entries(reads)) {
         const content = BUNDLED_COMMANDS[key];
         expect(content).toBeDefined();
         expect(content).not.toContain('.archon/engineering.md');
         expect(content).not.toContain('Read `AGENTS.md`');
-        expect({ key, read: content.includes(read) }).toEqual({ key, read: true });
+        expect({
+          key,
+          read: content.includes(expected.read),
+          section: content.includes(expected.section),
+          architecture: content.includes('`architecture.md`'),
+        }).toEqual({ key, read: true, section: true, architecture: expected.architecture });
+      }
+    });
+
+    // The pack's measured misses each became one stated line; losing one silently
+    // reopens the miss it closed.
+    it('lens checklists and the implement, synthesis and plan rules are stated', () => {
+      const lines: Record<string, string[]> = {
+        '__archon_pack__bundled:sdlc:review::review-code': ['write their predicates side by side'],
+        '__archon_pack__bundled:sdlc:review::review-errors': [
+          'Secrets in error text',
+          'Before the `try`',
+          'Failure result contract',
+        ],
+        '__archon_pack__bundled:sdlc:review::review-seams': [
+          'credentials only over HTTPS',
+          'resolve the composition first',
+        ],
+        '__archon_pack__bundled:sdlc:implement::implement': [
+          "Never run the project's full validation or the whole repository's suite",
+          'Never wait for, poll, or re-run CI',
+        ],
+        '__archon_pack__bundled:sdlc:review::review-synthesize': [
+          'raised a second time',
+          'deferred to an operator check',
+        ],
+        '__archon_pack__bundled:sdlc:review::review-scope': ['git merge-tree --write-tree'],
+        '__archon_pack__bundled:sdlc:plan::plan': ['This decision names `rulings.md`'],
+      };
+      for (const [key, fragments] of Object.entries(lines)) {
+        const content = BUNDLED_COMMANDS[key];
+        expect(content).toBeDefined();
+        for (const fragment of fragments) {
+          expect({ key, fragment, stated: content.includes(fragment) }).toEqual({
+            key,
+            fragment,
+            stated: true,
+          });
+        }
       }
     });
 
@@ -340,8 +429,8 @@ describe('bundled-defaults', () => {
     });
 
     // Every implementation pass before CI is reviewed: the first by the full routed
-    // review, later ones by delta (the previous round's lenses plus any the delta needs
-    // after review findings, the general code reviewer after a CI fix). One named exception: the post-review reshape,
+    // review, later ones by delta (the code lens plus the lenses route selects after
+    // review findings, the general code reviewer alone after a CI fix). One named exception: the post-review reshape,
     // which adopts or declines the structure pass's findings and goes straight to CI.
     it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
@@ -482,8 +571,8 @@ describe('bundled-defaults', () => {
       expect(ship).toEqual(expect.arrayContaining(delivered));
     });
 
-    // Reviewers create scratch trees under the run, where the workflow removes them;
-    // a tree outside it would outlive a lens that died.
+    // Agents create scratch trees under the run, where a reviewer's is removed by the
+    // workflow; a tree outside it would outlive the node that died.
     it('every SDLC scratch worktree lives under the run and is removed by the workflow', () => {
       for (const [key, content] of Object.entries(BUNDLED_COMMANDS)) {
         if (!key.includes(':sdlc:') || !content.includes('git worktree add --detach')) continue;
@@ -605,7 +694,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['policy', 'scope', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {

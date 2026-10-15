@@ -8,9 +8,9 @@ import * as defaults from '../packages/workflows/src/defaults/bundled-defaults';
 import { captureWorkflowSource } from '../packages/workflows/src/workflow-source';
 
 /**
- * A run's triage node finds the SDLC pack's default policy inside the run's own captured
- * source, whether the bundle came from a source checkout or from a binary's embedded
- * constants. Importing the captured script gives the same `import.meta.dir` the
+ * A run's policy node finds the SDLC pack's default policy documents inside the run's own
+ * captured source, whether the bundle came from a source checkout or from a binary's
+ * embedded constants. Importing the captured script gives the same `import.meta.dir` the
  * `policy` script node runs with.
  */
 const track = trackTempRoots();
@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 for (const binary of [true, false]) {
-  test(`a ${binary ? 'binary' : 'source'} capture carries the default triage policy`, async () => {
+  test(`a ${binary ? 'binary' : 'source'} capture carries the default policy documents`, async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'archon-sdlc-policy-')));
     process.env.ARCHON_HOME = join(root, 'home');
     const mode = spyOn(defaults, 'isBinaryBuild').mockReturnValue(binary);
@@ -38,14 +38,16 @@ for (const binary of [true, false]) {
       const emitted: { defaults: string } = JSON.parse(String(output.mock.calls[0]?.[0]));
       const directory = realpathSync(emitted.defaults);
       expect(directory.startsWith(realpathSync(anchor.root) + sep)).toBe(true);
-      // The bundle stores LF; a Windows checkout of the authored file is CRLF.
-      const authored = await readFile(
-        join(import.meta.dir, '../.archon/workflows/sdlc/.shared/policy/triage.md'),
-        'utf8'
-      );
-      expect(await readFile(join(directory, 'triage.md'), 'utf8')).toBe(
-        authored.replace(/\r\n/g, '\n')
-      );
+      for (const document of ['triage.md', 'rulings.md']) {
+        // The bundle stores LF; a Windows checkout of the authored file is CRLF.
+        const authored = await readFile(
+          join(import.meta.dir, '../.archon/workflows/sdlc/.shared/policy', document),
+          'utf8'
+        );
+        expect(await readFile(join(directory, document), 'utf8')).toBe(
+          authored.replace(/\r\n/g, '\n')
+        );
+      }
     } finally {
       output.mockRestore();
       mode.mockRestore();
