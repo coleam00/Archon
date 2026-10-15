@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isId } from '../../../.shared/bench.ts';
 import type { QualifiedPr } from '../../../.shared/forge.ts';
-import { issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
+import { type IssueAtCreation, issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
 import { type Contract, type Route, ROUTE_LABEL, STATE_LABEL, TYPE_LABEL, type WorkType } from '../../../.shared/labels.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { readMaintainers } from '../../../.shared/workitem.ts';
@@ -75,7 +75,7 @@ export interface Row {
   readonly author: string | null;
   readonly title: string;
   readonly body: string;
-  readonly body_from: 'creation' | 'current';
+  readonly body_from: IssueAtCreation['body_from'];
   readonly known: Known;
 }
 
