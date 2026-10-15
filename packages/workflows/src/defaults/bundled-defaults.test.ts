@@ -540,8 +540,9 @@ describe('bundled-defaults', () => {
           selector: '$scope.output.selector',
           target: { from: '$scope.output.target' },
         },
-        output_format: scopeSchema.properties?.target,
       });
+      if (headCheck?.kind !== 'exec') throw new Error('head-check is not an exec node');
+      expect(scopeSchema.properties).toMatchObject({ target: headCheck.output_format });
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
