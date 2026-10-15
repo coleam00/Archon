@@ -1,5 +1,5 @@
-import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 // @archon-test-isolated
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import * as paths from '@archon/paths';
 import { clearRegistry, providerRegistry } from '@archon/providers';
 import { requireProvider } from '@archon/provider-contract';
