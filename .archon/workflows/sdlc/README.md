@@ -363,14 +363,17 @@ are the operator's and stay outside the pack and the repository.
 - **Versions.** A version file is `{label, pack_sha}` for the baseline, the model
   triage's tier resolves to today, plus `provider` and `model` for any other. Every
   version runs with a config layer pinning that tier, with the baseline's effort, so
-  versions differ only in the model. A version that cannot be resolved refuses the
-  batch before any run.
+  versions differ only in the model. The binding is resolved by a dry run on the
+  pack's own `triage/fixtures/deliver.stubs.yaml` at `pack_sha`. A version that
+  cannot be resolved refuses the batch before any run.
 - **Batches.** `run` takes the set's n-th five rows and runs every version on them,
-  one ordinary run each, in a shared clone per version at one base commit. Every run
+  one ordinary run each at one base commit. Each run has its own worktree of the
+  checkout, so `--concurrency` never puts two runs on one checkout. Every run
   appends one line, labelled with its version, to `samples.jsonl`. The batch then
   fails if any batch issue or state document of the repository changed, if a
-  `trust: outside` row ran an agent node, if any comment was posted, or if a run did
-  not finish; a failed batch is reported before anyone evaluates it. A `trust: auto`
+  `trust: outside` row ran an agent node, if any comment was posted, or if a run was
+  cancelled or did not finish; a failed batch is reported before anyone evaluates it.
+  A run that failed on its own is the version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
@@ -386,10 +389,12 @@ are the operator's and stay outside the pack and the repository.
 - **Score.** `score` prints one column per version from each version's latest line
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
-  the operator's marks), the `type` confusion matrix with `enhancement` read as
-  `feature`, leaks (a tool call that looked up the judged issue, left out of the
-  accuracy numbers), cost and wall time, and which versions got each disagreement
-  right. It does not choose a winner.
+  the operator's marks), false closes (a close proposal on an issue that was still
+  open, unless the operator dispositioned it closed), the `type` confusion matrix
+  with `enhancement` read as `feature`, leaks (a command, fetch or search that looked
+  up the judged issue, left out of the accuracy numbers), cost over the runs in
+  which an agent ran (`unreported` when no provider reported one) and wall time, and
+  which versions got each disagreement right. It does not choose a winner.
 
 ## Composition validation
 

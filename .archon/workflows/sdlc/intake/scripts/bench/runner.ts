@@ -15,7 +15,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import {
   type NodeBinding,
   type ResolvedVersion,
@@ -38,6 +38,7 @@ import {
   spendOf,
   waitRun,
 } from '../../../.shared/bench.ts';
+import type { Closure } from '../../../.shared/close.ts';
 import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../../.shared/git.ts';
 import type { Contract, Route } from '../../../.shared/labels.ts';
@@ -74,47 +75,23 @@ interface Binding {
 /** The message every run starts with; the target, not the message, carries the issue. */
 export const BENCH_MESSAGE = 'Triage the target.';
 
-// A dry run stops at a node it cannot simulate; these stand in for every node of
-// archon-triage so the simulation completes and reports the agent node's binding.
-const TRIAGE_STUBS = {
-  policy: { defaults: 'unused' },
-  triage: {
-    decision: { contract: 'NO_ACTION' },
-    type: { value: 'bug', reason: 'stub' },
-    size: { value: 's', reason: 'stub' },
-    complexity: { value: 'low', reason: 'stub' },
-    importance: { value: 'low', reason: 'stub' },
-    urgency: { value: 'none', reason: 'stub' },
-    item: { repo: { host: '', path: '' }, number: 0 },
-    area_labels: [],
-    summary: 'stub',
-    report: { type: 'archon_artifact', run_id: 'stub', path: 'triage.md' },
-  },
-  verdict: {
-    contract: 'NO_ACTION',
-    route: 'no_action',
-    pull_request: null,
-    ready: false,
-    type: { value: 'bug', reason: 'stub' },
-    size: { value: 's', reason: 'stub' },
-    complexity: { value: 'low', reason: 'stub' },
-    importance: { value: 'low', reason: 'stub' },
-    urgency: { value: 'none', reason: 'stub' },
-    labels: [],
-    published: false,
-    proposed_edits: { title: '', body: '' },
-    blocked_reason: '',
-    blocked_by: [],
-    summary: 'stub',
-    report: { type: 'archon_artifact', run_id: 'stub', path: 'triage.md' },
-  },
-};
+/**
+ * The stand-ins a dry run of archon-triage reads to reach its agent node: the pack's
+ * own fixture of a completed triage at the version's commit, its policy and verdict
+ * scripts run for real. The fixture moves with the pack's schemas, so a version at
+ * any commit is resolved against stand-ins that commit accepts.
+ */
+export function bindingStubs(source: string, workflowPath: string): Record<string, unknown> {
+  const file = join(source, dirname(workflowPath), 'fixtures', 'deliver.stubs.yaml');
+  if (!existsSync(file)) throw new Error(`${relative(source, file)} does not exist, so the triage node's binding cannot be resolved`);
+  const fixture: unknown = Bun.YAML.parse(readFileSync(file, 'utf8'));
+  if (!isObject(fixture)) throw new Error(`${relative(source, file)} is not a mapping`);
+  const { fixture: _expected, 'exec-code': _execCode, ...stubs } = fixture;
+  return stubs;
+}
 
 /** The binding archon-triage's agent node resolves to in `cwd`, with an optional config layer. */
-async function dryRunBinding(cwd: string, source: string, outDir: string, config?: string): Promise<Binding> {
-  const stubs = join(outDir, 'versions', 'triage.stubs.yaml');
-  mkdirSync(join(outDir, 'versions'), { recursive: true });
-  writeFileSync(stubs, Bun.YAML.stringify(TRIAGE_STUBS, null, 2));
+async function dryRunBinding(cwd: string, source: string, stubs: string, config?: string): Promise<Binding> {
   const trace = await archonJson(
     [
       'workflow',
@@ -126,6 +103,7 @@ async function dryRunBinding(cwd: string, source: string, outDir: string, config
       source,
       ...(config === undefined ? [] : ['--config', config]),
       '--dry-run',
+      '--exec-code',
       '--stubs',
       stubs,
       '--json',
@@ -189,7 +167,10 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
   if (prompt.code !== 0) return refuse(`${promptPath} does not exist at ${packSha}`);
 
   const source = snapshotSource(repoRoot, packSha, outDir);
-  const baseline = await dryRunBinding(checkout, source, outDir);
+  mkdirSync(join(outDir, 'versions'), { recursive: true });
+  const stubs = join(outDir, 'versions', `${label}.stubs.yaml`);
+  writeFileSync(stubs, Bun.YAML.stringify(bindingStubs(source, workflowPath), null, 2));
+  const baseline = await dryRunBinding(checkout, source, stubs);
   // Only the model moves; the baseline's effort stays, so effort is not a second variable.
   const wanted: Binding =
     typeof provider === 'string' && typeof model === 'string'
@@ -197,7 +178,7 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
       : baseline;
   const config = join(outDir, 'versions', `${label}.config.yaml`);
   writeFileSync(config, Bun.YAML.stringify({ tiers: { [tier as Tier]: wanted } }, null, 2));
-  const pinned = await dryRunBinding(checkout, source, outDir, config);
+  const pinned = await dryRunBinding(checkout, source, stubs, config);
   if (canonical(pinned) !== canonical(wanted)) {
     return refuse(`the pinned tier resolved to ${JSON.stringify(pinned)}, not ${JSON.stringify(wanted)}`);
   }
@@ -215,16 +196,21 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
 }
 
 /**
- * The version's eval checkout of the set's repository at `base`: a shared clone whose
- * remote is the repository itself, so triage reads the code and the tracker as a run
- * in the operator's checkout would, and no run touches the operator's checkout.
+ * One eval run's checkout of the set's repository at `base`: a worktree of the
+ * operator's checkout, so Archon resolves it to the project already registered there
+ * and triage reads the code and the tracker as a run in the operator's checkout
+ * would. Each run gets its own, because Archon lets one run at a time hold a
+ * checkout, and no run touches the operator's checkout.
  */
 export function evalCheckout(repoRoot: string, repo: Repo, base: string, path: string): string {
   if (!existsSync(path)) {
-    const url = gitOrThrow('-C', repoRoot, 'remote', 'get-url', remoteFor(repo));
-    gitOrThrow('clone', '--quiet', '--shared', '--no-checkout', repoRoot, path);
-    gitOrThrow('-C', path, 'remote', 'set-url', 'origin', url);
-  } else if (gitOrThrow('-C', path, 'status', '--porcelain') !== '') {
+    // Refuses an operator checkout with no remote for the set's repository.
+    remoteFor(repo);
+    mkdirSync(dirname(path), { recursive: true });
+    gitOrThrow('-C', repoRoot, 'worktree', 'add', '--quiet', '--detach', path, base);
+    return path;
+  }
+  if (gitOrThrow('-C', path, 'status', '--porcelain') !== '') {
     throw new Error(`${path} has changes a run left behind; inspect it, then remove it to start clean`);
   }
   gitOrThrow('-C', path, 'checkout', '--quiet', '--detach', base);
@@ -419,6 +405,8 @@ export interface Verdict {
   readonly proposed_edits?: { readonly title: string; readonly body: string } | null;
   readonly blocked_reason?: string | null;
   readonly blocked_by?: readonly string[];
+  /** What a close proposal links to: the issue it duplicates or the change that delivered it. */
+  readonly closure?: Closure | null;
 }
 
 interface Field {
@@ -452,7 +440,7 @@ export interface Line {
   readonly verdict: Verdict | null;
   readonly cost_usd: number | null;
   readonly duration_ms: number | null;
-  /** Tool calls that looked up the issue being judged. */
+  /** Commands, fetches and searches that looked up the issue being judged. */
   readonly leak: readonly string[];
   /** The run's triage report, copied under the output directory. */
   readonly report: string | null;
@@ -479,8 +467,8 @@ export function runCost(nodes: readonly RunNode[]): number | null {
 }
 
 /**
- * The machine tokens by which a tool call names one issue: its URL, its REST path,
- * and `gh issue view <n>`. A match is a reporting flag that moves the row out of the
+ * The machine tokens by which a lookup names one issue: its URL, its REST path, and
+ * `gh issue view <n>`. A match is a reporting flag that moves the row out of the
  * accuracy numbers; it never changes how a run is launched or retried.
  */
 export function issueTokens(repo: Repo, number: number): RegExp[] {
@@ -494,9 +482,28 @@ export function issueTokens(repo: Repo, number: number): RegExp[] {
   ];
 }
 
-/** Each tool call in a run's transcript that names the issue, by its title. */
+/**
+ * What a recorded provider event looked up: the command it ran, the URL it fetched or
+ * the query it searched. A tool call carries these as its input; Codex records a
+ * shell command it runs through unified exec as a `command_execution` subtask, whose
+ * start and end both name it. A file write is no lookup, though the report it writes
+ * may cite the issue.
+ */
+function lookupOf(event: Record<string, unknown>): { id: string; text: string } | undefined {
+  if (event.type === 'tool_call' && isObject(event.rawInput)) {
+    const { command, url, query } = event.rawInput;
+    const text = [command, url, query].filter(value => typeof value === 'string').join('\n');
+    return text === '' ? undefined : { id: String(event.toolCallId), text };
+  }
+  if (event.type === 'subtask' && event.taskType === 'command_execution' && typeof event.description === 'string') {
+    return { id: String(event.taskId), text: event.description };
+  }
+  return undefined;
+}
+
+/** Each lookup in a run's transcript that names the issue, once, by what it ran. */
 export function findLeaks(transcript: string, tokens: readonly RegExp[]): string[] {
-  const leaks: string[] = [];
+  const leaks = new Map<string, string>();
   for (const text of transcript.split('\n')) {
     if (text.trim() === '') continue;
     let line: unknown;
@@ -505,11 +512,11 @@ export function findLeaks(transcript: string, tokens: readonly RegExp[]): string
     } catch {
       continue;
     }
-    if (!isObject(line) || line.type !== 'provider_event' || !isObject(line.event) || line.event.type !== 'tool_call') continue;
-    const call = JSON.stringify({ title: line.event.title, input: line.event.rawInput });
-    if (tokens.some(token => token.test(call))) leaks.push(`${String(line.step)}: ${String(line.event.title ?? line.event.name)}`);
+    if (!isObject(line) || line.type !== 'provider_event' || !isObject(line.event)) continue;
+    const lookup = lookupOf(line.event);
+    if (lookup !== undefined && tokens.some(token => token.test(lookup.text))) leaks.set(lookup.id, `${String(line.step)}: ${lookup.text}`);
   }
-  return leaks;
+  return [...leaks.values()];
 }
 
 const nonEmpty = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
@@ -532,6 +539,7 @@ export function toVerdict(value: unknown): Verdict {
     proposed_edits: edits === null ? null : { title: String(edits.title), body: String(edits.body) },
     blocked_reason: nonEmpty(value.blocked_reason),
     blocked_by: Array.isArray(value.blocked_by) ? (value.blocked_by as string[]) : [],
+    closure: isObject(value.closure) ? (value.closure as unknown as Closure) : null,
   };
 }
 
@@ -731,7 +739,7 @@ export interface BatchChecks {
     readonly outside_agent: Check;
     /** No comment was posted on any batch issue or copy; intake builds none. */
     readonly posted_text: Check;
-    /** Every run finished and was read, so the after-read came after its last write. */
+    /** Every run completed or failed on its own and was read, so the after-read came after its last write. */
     readonly finished: Check;
   };
   readonly passed: boolean;
@@ -753,7 +761,11 @@ export function batchChecks(
       ...line.agent_nodes.map(node => `${line.version.label} ${line.row}: ${node} ran`),
       ...(line.status === 'completed' && line.path !== 'outside' ? [`${line.version.label} ${line.row}: intake took the ${String(line.path)} path`] : []),
     ]);
-  const finished = lines.filter(line => line.status === 'unknown' || line.status === 'not_started').map(line => `${line.version.label} ${line.row}: ${line.problems.join('; ')}`);
+  // A failed run is the version's own result and counts against its bars; a cancelled
+  // or unread one says nothing about the version, so the batch cannot be evaluated.
+  const finished = lines
+    .filter(line => line.status !== 'completed' && line.status !== 'failed')
+    .map(line => `${line.version.label} ${line.row}: ${line.problems.join('; ')}`);
   const checks = { writes: check(writes), outside_agent: check(outside), posted_text: check(posted), finished: check(finished) };
   return {
     at: new Date().toISOString(),
@@ -787,7 +799,8 @@ export interface BatchOptions {
   readonly base: string;
   readonly outDir: string;
   readonly repoRoot: string;
-  readonly versions: readonly { readonly resolved: ResolvedVersion<Version>; readonly cwd: string }[];
+  /** Each version and the checkout a row runs in: the row's own in eval, the version's scratch checkout live. */
+  readonly versions: readonly { readonly resolved: ResolvedVersion<Version>; readonly checkout: (row: Row) => string }[];
   /** Present for a live batch: each label's scratch repository and its copies of the rows. */
   readonly live?: ReadonlyMap<string, { readonly scratch: Scratch; readonly copies: Readonly<Record<string, number>> }>;
   readonly concurrency?: number;
@@ -802,8 +815,9 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const { set, rows, outDir, live } = options;
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
   const context: BatchContext = { set, batch: options.batch, batchRun: `${String(options.batch)}-${stamp}`, base: options.base, outDir };
-  const runs = options.versions.map(({ resolved, cwd }) =>
+  const runs = options.versions.map(({ resolved, checkout }) =>
     rows.map((row): RowRun => {
+      const cwd = checkout(row);
       const scratch = live?.get(resolved.version.label);
       if (scratch === undefined) return { row, resolved, cwd };
       const number = scratch.copies[row.id];
@@ -817,7 +831,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   ];
   // The state documents of the set's project, from the operator's checkout and from
   // each eval checkout; a live batch writes its scratch projects by design.
-  const stateDirs = [options.repoRoot, ...(live === undefined ? options.versions.map(version => version.cwd) : [])];
+  const stateDirs = [options.repoRoot, ...(live === undefined ? runs.flat().map(run => run.cwd) : [])];
   const before = await snapshot(watched, stateDirs);
 
   const lines =

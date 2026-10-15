@@ -48,6 +48,8 @@ export interface FakeConfig {
   readonly autoPath?: 'quiet' | 'closed';
   /** The project key `archon state list` names. */
   readonly projectKey: string;
+  /** Every launched run ends with this status, as a run another run's checkout lock cancelled would. */
+  readonly runStatus?: 'cancelled';
   /** Issue numbers a tracker search answers, by a fragment of its query. */
   readonly searches?: Record<string, number[]>;
 }
@@ -186,7 +188,7 @@ function answer(dir: string, args: readonly string[]): string {
       : [config.unboundTriage === true ? { id: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)];
     const detail = {
       id: `run-${n}`,
-      status: 'completed',
+      status: config.runStatus ?? 'completed',
       output_root: join(dir, 'root'),
       started_at: '2026-10-15T10:00:00Z',
       completed_at: '2026-10-15T10:01:00Z',
@@ -207,7 +209,7 @@ function answer(dir: string, args: readonly string[]): string {
     writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(detail));
     return JSON.stringify({ runId: `run-${n}` });
   }
-  if (args[1] === 'wait') return JSON.stringify({ attention: { kind: 'terminal', status: 'completed' } });
+  if (args[1] === 'wait') return JSON.stringify({ attention: { kind: 'terminal', status: config.runStatus ?? 'completed' } });
   if (args[1] === 'get') return readFileSync(join(dir, `detail-${args[2]}.json`), 'utf8');
   throw new Error(`fake archon: unexpected command ${args.join(' ')}`);
 }

@@ -11,6 +11,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { isId } from '../../../.shared/bench.ts';
 import type { QualifiedPr } from '../../../.shared/forge.ts';
 import { issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
 import { type Contract, type Route, ROUTE_LABEL, STATE_LABEL, TYPE_LABEL, type WorkType } from '../../../.shared/labels.ts';
@@ -104,7 +105,7 @@ export function loadSet(file: string): BenchSet {
   }
   const ids = new Set<string>();
   for (const row of set.rows as unknown[]) {
-    if (!isObject(row) || typeof row.id !== 'string' || ids.has(row.id)) return refuse('has a row without a unique id');
+    if (!isObject(row) || !isId(row.id) || ids.has(row.id)) return refuse('has a row without a unique id');
     ids.add(row.id);
     if (!(row.workflow === 'intake' || row.workflow === 'triage')) return refuse(`row ${row.id} names no workflow`);
     if (row.trust === 'outside' && row.workflow !== 'intake') return refuse(`row ${row.id} is trust: outside outside intake`);

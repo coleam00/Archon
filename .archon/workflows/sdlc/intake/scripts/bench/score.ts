@@ -87,9 +87,20 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
   return isScored(line, checks) && line.passed;
 }
 
-/** Whether the triage policy lets this row close without a person, by its known outcome. */
-export function closable(row: Row): boolean {
-  return row.group === 'duplicate' || row.group === 'fixed' || row.known.disposition?.contract === 'NO_ACTION';
+/**
+ * Whether proposing to close this row is a false close: the issue was still open when
+ * the set was pinned, and no disposition of the operator's says it should close. On a
+ * closed row, a close proposal is what the duplicate, fixed and not-planned bars reward.
+ */
+export function falseClose(row: Row, verdict: Line['verdict']): boolean {
+  const open = row.group === 'typed' || row.group === 'dispositioned';
+  return verdict?.contract === 'NO_ACTION' && open && row.known.disposition?.contract !== 'NO_ACTION';
+}
+
+/** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
+function citesCanonical(verdict: Line['verdict'], canonical: string): boolean {
+  const links = [...(verdict?.closure?.kind === 'duplicate' ? [verdict.closure.url] : []), ...(verdict?.blocked_by ?? [])];
+  return links.some(url => url.toLowerCase() === canonical.toLowerCase());
 }
 
 const BARS = [
@@ -110,7 +121,7 @@ export interface MarkedBar {
   readonly unmarked: number;
   /** Rows whose verdict proposes a close or recommends one to a maintainer. */
   readonly closing: number;
-  /** Duplicates whose maintainer recommendation links the canonical issue; null where links are not recorded (live). */
+  /** Duplicates whose close proposal or maintainer recommendation links the canonical issue; null where links are not recorded (live). */
   readonly cites_canonical: number | null;
   readonly status: BarStatus;
 }
@@ -130,6 +141,7 @@ export interface VersionScore {
   readonly marks: Readonly<Record<MarkValue | 'unmarked', number>>;
   readonly leaks: readonly string[];
   readonly unscored: readonly string[];
+  /** Over runs in which an agent ran; a mean of null means no provider reported a cost. */
   readonly cost: { readonly runs: number; readonly unreported: number; readonly total: number; readonly mean: number | null };
   readonly median_ms: number | null;
 }
@@ -178,7 +190,7 @@ function scoreVersion(
       cites_canonical: linksRecorded
         ? inGroup.filter(line => {
             const canonical = rows.get(line.row)?.known.canonical;
-            return canonical !== undefined && (line.verdict?.blocked_by ?? []).some(url => url.toLowerCase() === canonical.toLowerCase());
+            return canonical !== undefined && citesCanonical(line.verdict, canonical);
           }).length
         : null,
       status,
@@ -194,13 +206,15 @@ function scoreVersion(
     if (predicted === human) agree++;
     matrix[human] = { ...matrix[human], [predicted]: (matrix[human]?.[predicted] ?? 0) + 1 };
   }
-  const dispositioned = judged.filter(line => line.group === 'dispositioned');
+  // A dispositioned run that did not pass counts in the denominator, never as a match.
+  const dispositioned = scored.filter(line => line.group === 'dispositioned');
   const dispositionAgree = dispositioned.filter(line => {
     const expected = rows.get(line.row)?.known.disposition;
-    return expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
+    return line.passed && expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
   }).length;
 
-  const costs = lines.filter(line => line.run_id !== null);
+  // A run in which no agent ran spent nothing on the version, so it would only pull the mean down.
+  const costs = lines.filter(line => line.run_id !== null && line.agent_nodes.length > 0);
   const reported = costs.flatMap(line => (line.cost_usd === null ? [] : [line.cost_usd]));
   const total = reported.reduce((sum, cost) => sum + cost, 0);
   const workflows: Record<string, number> = {};
@@ -212,9 +226,7 @@ function scoreVersion(
     failed_batches: batchRuns.filter(batchRun => checks.get(batchRun)?.passed !== true),
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
     bars: Object.fromEntries(BARS.map(entry => [entry.group, bar(entry.group, entry.at_least)])) as VersionScore['bars'],
-    false_closes: judged
-      .filter(line => line.verdict?.contract === 'NO_ACTION' && !closable(rows.get(line.row) as Row))
-      .map(line => line.row),
+    false_closes: judged.filter(line => falseClose(rows.get(line.row) as Row, line.verdict)).map(line => line.row),
     type: { rows: typed.length, agree, matrix },
     dispositions: { rows: dispositioned.length, agree: dispositionAgree },
     marks: {
@@ -322,7 +334,7 @@ export function renderScore(result: Score): string {
     row('marks: right / wrong / partly / unmarked', each(version => `${String(version.marks.right)} / ${String(version.marks.wrong)} / ${String(version.marks.partly)} / ${String(version.marks.unmarked)}`)),
     row('leaked rows (excluded)', each(version => `${String(version.leaks.length)}${version.leaks.length > 0 ? ` (${version.leaks.join(', ')})` : ''}`)),
     row('runs that did not pass (counted as not right)', each(version => `${String(version.unscored.length)}${version.unscored.length > 0 ? ` (${version.unscored.join(', ')})` : ''}`)),
-    row('cost total', each(version => `$${version.cost.total.toFixed(4)}${version.cost.unreported > 0 ? ` (${String(version.cost.unreported)} unreported)` : ''}`)),
+    row('cost total', each(version => (version.cost.mean === null ? 'unreported' : `$${version.cost.total.toFixed(4)}${version.cost.unreported > 0 ? ` (${String(version.cost.unreported)} unreported)` : ''}`))),
     row('wall time per item, median', each(version => (version.median_ms === null ? '-' : `${(version.median_ms / 1000).toFixed(0)} s`))),
   ];
   for (const version of versions) {

@@ -34,7 +34,7 @@ import {
   runBatch,
 } from './runner.ts';
 import { renderScore, score } from './score.ts';
-import { batchRows, loadSet, parseDispositions, selectSet } from './set.ts';
+import { batchRows, loadSet, parseDispositions, type Row, selectSet } from './set.ts';
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -138,20 +138,29 @@ async function main(): Promise<void> {
     const versionFiles = values.version ?? [];
     if (versionFiles.length === 0) throw new Error('name at least one --version');
     const base = gitOrThrow('rev-parse', '--verify', `${values.base ?? 'HEAD'}^{commit}`);
-    const versions: { label: string; file: string; cwd: string }[] = [];
+    const versions: { label: string; file: string; checkout: (row: Row) => string }[] = [];
     for (const file of versionFiles.map(entry => resolve(entry))) {
       const label = (Bun.YAML.parse(await Bun.file(file).text()) as { label?: unknown } | null)?.label;
       // The label names this version's checkout directory, so it is checked before any path is built from it.
       if (!isId(label)) throw new Error(`${file}: \`label\` must be letters, digits, \`.\`, \`_\` or \`-\``);
       const scratch = live?.get(label);
       if (live !== undefined && scratch === undefined) throw new Error(`${label} has no scratch repository in --live`);
-      if (scratch !== undefined) checkScratch(label, scratch, base);
-      versions.push({ label, file, cwd: scratch?.checkout ?? evalCheckout(repoRoot, set.repo, base, join(outDir, 'checkouts', label)) });
+      if (scratch !== undefined) {
+        checkScratch(label, scratch, base);
+        versions.push({ label, file, checkout: () => scratch.checkout });
+        continue;
+      }
+      const checkout = (row: Row): string => join(outDir, 'checkouts', label, row.id);
+      for (const row of rows) evalCheckout(repoRoot, set.repo, base, checkout(row));
+      versions.push({ label, file, checkout });
     }
     if (new Set(versions.map(version => version.label)).size !== versions.length) throw new Error('two version files share a label');
     // Every version resolves before any run starts, so a bad one refuses the whole batch.
     const resolved = await Promise.all(
-      versions.map(async version => ({ resolved: await resolveVersion(version.file, repoRoot, version.cwd, outDir), cwd: version.cwd }))
+      versions.map(async version => ({
+        resolved: await resolveVersion(version.file, repoRoot, version.checkout(rows[0]), outDir),
+        checkout: version.checkout,
+      }))
     );
     const options: BatchOptions = {
       set,

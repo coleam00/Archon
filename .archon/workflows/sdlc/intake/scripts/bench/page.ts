@@ -48,7 +48,11 @@ function verdictCell(line: Line, outDir: string): string {
     parts.push('<div><i>triage did not run</i></div>');
   } else {
     parts.push(`<div class="verdict">${escape(verdict.contract)}${verdict.route === null ? '' : ` → ${escape(verdict.route)}`}${verdict.pull_request === null ? '' : ` (PR ${String(verdict.pull_request)})`}</div>`);
-    if (verdict.contract === 'NO_ACTION') parts.push('<div><b>Proposes close</b> without a person</div>');
+    if (verdict.contract === 'NO_ACTION') {
+      const { closure } = verdict;
+      const target = closure == null ? '' : `: ${closure.kind === 'duplicate' ? 'duplicate of' : 'delivered by'} ${link(closure.url)}`;
+      parts.push(`<div><b>Proposes close</b> without a person${target}</div>`);
+    }
     if (verdict.blocked_reason != null) parts.push(`<div><b>Maintainer recommendation:</b> ${escape(verdict.blocked_reason)}</div>`);
     if ((verdict.blocked_by ?? []).length > 0) parts.push(`<div>waits on ${(verdict.blocked_by ?? []).map(link).join(', ')}</div>`);
     if (verdict.proposed_edits != null) parts.push(`<div><b>Proposed contract:</b> ${escape(verdict.proposed_edits.title)}</div>`);

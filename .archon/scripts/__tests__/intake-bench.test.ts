@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -15,12 +15,14 @@ import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { expandWorkflowIncludes } from '../../../packages/workflows/src/include-expander';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
+import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
 import { type RunDetail, SAMPLES_FILE, appendLine, readLines, returnedValue } from '../../workflows/sdlc/.shared/bench';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
   batchChecks,
+  bindingStubs,
   CHECKS_FILE,
   checkScratch,
   loadLive,
@@ -31,6 +33,7 @@ import {
   runCost,
   type Snapshot,
   snapshotChanges,
+  toVerdict,
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
@@ -133,6 +136,11 @@ describe('bench run', () => {
     ok(repo, 'remote', 'add', 'origin', 'https://github.com/o/r.git');
     write(repo, '.archon/workflows/sdlc/triage/archon-triage.yaml', 'name: archon-triage\nmodel: medium\n');
     write(repo, '.archon/workflows/sdlc/triage/commands/triage.md', 'Triage.\n');
+    write(
+      repo,
+      '.archon/workflows/sdlc/triage/fixtures/deliver.stubs.yaml',
+      'triage:\n  decision: { contract: READY, route: deliver }\nfixture:\n  expect: completed\nexec-code: true\n'
+    );
     write(repo, '.archon/workflows/sdlc/intake/archon-intake.yaml', 'name: archon-intake\n');
     ok(repo, 'add', '-A');
     ok(repo, 'commit', '-q', '-m', 'pack');
@@ -231,6 +239,39 @@ describe('bench run', () => {
     expect(lines.find(line => line.row === '12-outside')).toMatchObject({ agent_nodes: [], binding: null, verdict: null, cost_usd: 0 });
     expect(checks).toHaveLength(1);
     expect(checks[0].passed).toBe(true);
+  });
+
+  it('resolves each version on its own pack fixture, with the fixture keys left out', () => {
+    const { run, out } = bench();
+    expect(run('base').status).toBe(0);
+    expect(Bun.YAML.parse(readFileSync(join(out, 'bench', 'versions', 'base.stubs.yaml'), 'utf8'))).toEqual({
+      triage: { decision: { contract: 'READY', route: 'deliver' } },
+    });
+  });
+
+  it('gives every run its own worktree of the operator checkout, so concurrent runs share none', () => {
+    const { runWith, argv, repo } = bench();
+    const { status, stderr } = runWith(['--concurrency', '4'], 'base', 'haiku');
+    expect([status, stderr]).toEqual([0, '']);
+    const cwds = [1, 2, 3, 4].map(n => {
+      const args = argv(n);
+      return args[args.indexOf('--cwd') + 1];
+    });
+    expect(new Set(cwds).size).toBe(4);
+    // A worktree resolves to the project registered for the operator checkout; a clone would be a second one.
+    const worktrees = ok(repo, 'worktree', 'list', '--porcelain');
+    for (const cwd of cwds) expect(worktrees).toContain(`worktree ${realpathSync(cwd)}`);
+  });
+
+  it('fails the batch when a run is cancelled', () => {
+    const { status, stderr, lines, checks } = bench({ runStatus: 'cancelled' }).run('base');
+    expect(status).toBe(1);
+    expect(stderr).toContain('FAILED its hard checks');
+    expect(lines.map(line => line.status)).toEqual(['cancelled', 'cancelled']);
+    expect(checks[0].checks.finished).toEqual({
+      ok: false,
+      problems: ['base 11: the run is cancelled', 'base 12-outside: the run is cancelled'],
+    });
   });
 
   it('refuses before any run when a version cannot be resolved', () => {
@@ -534,17 +575,47 @@ describe('engine names the bench copies', () => {
   });
 });
 
+describe('dry-run stand-ins', () => {
+  it('satisfy archon-triage as the pack declares it at this commit', () => {
+    registerBuiltinProviders();
+    const root = join(import.meta.dir, '../../..');
+    const workflowPath = '.archon/workflows/sdlc/triage/archon-triage.yaml';
+    const parsed = parseWorkflow(readFileSync(join(root, workflowPath), 'utf8'), workflowPath, providerRegistry);
+    if (parsed.workflow === null) throw new Error(parsed.error.error);
+    const stubs = bindingStubs(root, workflowPath);
+    for (const [id, stub] of Object.entries(stubs)) {
+      const node = parsed.workflow.nodes.find(entry => entry.id === id);
+      if (node === undefined || !('output_format' in node) || node.output_format === undefined) throw new Error(`${id} declares no output_format`);
+      expect(validateStructuredOutput(stub, node.output_format)).toEqual({ valid: true });
+    }
+    // The policy and verdict scripts run for real.
+    expect(Object.keys(stubs)).toEqual(['triage']);
+  });
+});
+
 describe('leaks', () => {
-  it('flag a tool call that names the judged issue, and nothing else', () => {
-    const call = (title: string, rawInput: unknown) =>
-      JSON.stringify({ type: 'provider_event', step: 'triage', event: { type: 'tool_call', toolCallId: 'a', name: 'Bash', title, rawInput } });
+  it('flag a lookup that names the judged issue, whatever records it, and nothing else', () => {
+    const event = (body: Record<string, unknown>) => JSON.stringify({ type: 'provider_event', step: 'triage', event: body });
+    const call = (id: string, name: string, rawInput: unknown) => event({ type: 'tool_call', toolCallId: id, name, rawInput });
+    // Codex runs a shell command through unified exec as a subtask; its start and end both name it.
+    const exec = (status: string) =>
+      event({ type: 'subtask', taskId: 'command:t:1', taskType: 'command_execution', status, description: "/bin/zsh -lc 'gh issue view 4 --repo o/r'" });
     const transcript = [
-      call('gh issue view 41', { command: 'gh issue view 41' }),
-      call('gh issue view 4', { command: 'gh issue view 4 --repo o/r' }),
-      call('Read', { url: 'https://github.com/o/r/issues/4#issuecomment-1' }),
-      JSON.stringify({ type: 'provider_event', step: 'triage', event: { type: 'text', text: 'issues/4' } }),
+      call('a', 'Bash', { command: 'gh issue view 41' }),
+      call('b', 'Bash', { command: 'gh issue view 4 --repo o/r' }),
+      call('c', 'WebFetch', { url: 'https://github.com/o/r/issues/4#issuecomment-1' }),
+      exec('started'),
+      exec('completed'),
+      // Writing the report that cites the issue is no lookup.
+      call('d', 'file_change', { changes: [{ path: 'triage.md', diff: '+ https://github.com/o/r/issues/4' }] }),
+      call('e', 'Write', { file_path: 'triage.md', content: 'See https://github.com/o/r/issues/4' }),
+      event({ type: 'text', text: 'issues/4' }),
     ].join('\n');
-    expect(findLeaks(transcript, issueTokens(REPO, 4))).toEqual(['triage: gh issue view 4', 'triage: Read']);
+    expect(findLeaks(transcript, issueTokens(REPO, 4))).toEqual([
+      'triage: gh issue view 4 --repo o/r',
+      'triage: https://github.com/o/r/issues/4#issuecomment-1',
+      "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'",
+    ]);
   });
 });
 
@@ -677,12 +748,50 @@ describe('score', () => {
     const crashed = row(9, { group: 'fixed' });
     appendLine(join(out, SAMPLES_FILE), line('a', crashed, '2-y', failed));
     appendLine(join(out, SAMPLES_FILE), line('a', leaked, '2-y', { ...failed, leak: ['triage: gh issue view 7'] }));
-    const [a] = score({ ...set, rows: [...set.rows, crashed] }, out).versions;
+    // No human type, so only the dispositions count it.
+    const dispositioned = row(10, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
+    appendLine(join(out, SAMPLES_FILE), line('a', dispositioned, '2-y', failed));
+    const [a] = score({ ...set, rows: [...set.rows, crashed, dispositioned] }, out).versions;
     expect(a.bars.duplicate).toMatchObject({ rows: 1, right: 0, failed: 1, unmarked: 0, status: 'fail' });
     expect(a.bars.fixed).toMatchObject({ rows: 2, right: 1, failed: 1, status: 'fail' });
     expect(a.type).toEqual({ rows: 2, agree: 0, matrix: { feature: { failed: 1 }, bug: { failed: 1 } } });
+    expect(a.dispositions).toEqual({ rows: 1, agree: 0 });
     expect(a.leaks).toEqual(['7']);
-    expect(a.unscored).toEqual(['2', '1', '9']);
+    expect(a.unscored).toEqual(['2', '1', '9', '10']);
+  });
+
+  it('counts a close proposal only on a row that was open, unless its disposition closes it', () => {
+    const out = benchOut();
+    const proposeClose = { verdict: line('a', dup, '1-x').verdict };
+    const notPlanned = row(20, { group: 'not_planned' });
+    const closeDisposed = row(21, { group: 'dispositioned', known: { disposition: { contract: 'NO_ACTION' } } });
+    const blockDisposed = row(22, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
+    for (const entry of [notPlanned, closeDisposed, blockDisposed]) appendLine(join(out, SAMPLES_FILE), line('a', entry, '2-y', proposeClose));
+    const [a, b] = score({ ...set, rows: [...set.rows, notPlanned, closeDisposed, blockDisposed] }, out).versions;
+    // a proposes a close on the closed duplicate, fixed and not-planned rows too.
+    expect([a.false_closes, b.false_closes]).toEqual([['22'], ['2']]);
+  });
+
+  it('counts a close proposal that links the canonical issue, and shows its link', () => {
+    const out = benchOut();
+    const closure = { kind: 'duplicate' as const, url: 'https://github.com/o/r/issues/9', original: { repo: REPO, number: 9 } };
+    appendLine(join(out, SAMPLES_FILE), line('a', dup, '1-x', { verdict: { ...line('a', dup, '1-x').verdict!, closure } }));
+    expect(score(set, out).versions[0].bars.duplicate.cites_canonical).toBe(1);
+    expect(renderPage(set, out, 1)).toContain('<b>Proposes close</b> without a person: duplicate of <a href="https://github.com/o/r/issues/9">');
+    const triaged = { contract: 'NO_ACTION', route: 'no_action', type: field('bug'), size: field('s'), complexity: field('low'), importance: field('low'), urgency: field('none'), closure };
+    expect(toVerdict(triaged).closure).toEqual(closure);
+  });
+
+  it('leaves runs in which no agent ran out of the cost, and shows a cost no provider reported as unreported', () => {
+    const out = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
+    const outside = row(1, { id: '1-outside', workflow: 'intake', trust: 'outside' });
+    appendLine(join(out, SAMPLES_FILE), line('a', dup, '1-x', { cost_usd: null }));
+    appendLine(join(out, SAMPLES_FILE), line('a', outside, '1-x', { workflow: 'intake', agent_nodes: [], verdict: null, cost_usd: 0 }));
+    appendLine(join(out, CHECKS_FILE), checks('1-x', true));
+    const result = score({ ...set, rows: [...set.rows, outside] }, out);
+    expect(result.versions[0].cost).toEqual({ runs: 1, unreported: 1, total: 0, mean: null });
+    expect(renderScore(result)).toContain('| cost per item, mean (no bar) | unreported |');
+    expect(renderScore(result)).toContain('| cost total | unreported |');
   });
 
   it('labels which workflow judged each row', () => {
