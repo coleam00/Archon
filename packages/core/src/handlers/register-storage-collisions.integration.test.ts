@@ -30,6 +30,7 @@ const { registerFolder, registerRepository, ProjectRegistrationError } =
 const { createCodebase, createManagedCodebase, findCodebaseByRepoUrl, getCodebase, listCodebases } =
   await import('../db/codebases');
 const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
+const { getWorktreeBase, toRepoPath } = await import('@archon/git');
 
 const trackTempRoot = trackTempRoots();
 const initialArchonHome = process.env.ARCHON_HOME;
@@ -99,12 +100,18 @@ describe('project storage collisions', () => {
       );
     }
     expect(new Set(projects.map(project => project.default_cwd)).size).toBe(2);
-    expect(projects[0].name).toBe('org/team/subteam/project');
+    expect(projects[0].name).toBe('org/team-subteam-project');
     expect(projects[0].default_cwd).toBe(
-      join(root, '.archon/workspaces/org/team/subteam/project/source')
+      join(root, '.archon/workspaces/org/team-subteam-project/source')
     );
     expect(await storageRoot(projects[1].id)).not.toBe(await storageRoot(projects[0].id));
-    expect(projects[1].default_cwd).toBe(join(await storageRoot(projects[1].id), 'source'));
+    for (const project of projects) {
+      const projectRoot = await storageRoot(project.id);
+      expect(project.default_cwd).toBe(join(projectRoot, 'source'));
+      expect(getWorktreeBase(toRepoPath(project.default_cwd), project.name).base).toBe(
+        join(projectRoot, 'worktrees')
+      );
+    }
   });
 
   test.each(['github.com', 'gitlab.example', 'gitea.example'])(
@@ -159,6 +166,25 @@ describe('project storage collisions', () => {
     }
   });
 
+  test('a persisted match does not hide a readable legacy duplicate', async () => {
+    const root = await makeHome();
+    const known = await createCodebase({
+      name: 'acme/api',
+      default_cwd: join(root, 'known'),
+      repository_url: 'https://github.com/acme/api',
+    });
+    const legacy = await gitCheckout(join(root, 'legacy'), 'git@github.com:acme/api.git');
+    await createCodebase({ name: 'Legacy', default_cwd: legacy });
+    await createCodebase({ name: 'Unavailable', default_cwd: join(root, 'missing') });
+    const error = await findCodebaseByRepoUrl('https://github.com/acme/api').catch(
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(ProjectRegistrationError);
+    expect(error instanceof Error && error.message).toContain('Multiple projects');
+    expect(error instanceof Error && error.message).toContain(known.default_cwd);
+    expect(error instanceof Error && error.message).toContain(legacy);
+  });
+
   test.each(['incoming', 'legacy'])(
     'ambiguous %s remotes cannot clear remote ownership',
     async side => {
@@ -203,6 +229,33 @@ describe('project storage collisions', () => {
       if (side === 'legacy')
         await expect(findCodebaseByRepoUrl('https://github.com/acme/api')).rejects.toThrow();
       expect(await listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test.each(['missing', 'corrupt'])(
+    'known remote lookup survives an unrelated %s legacy checkout',
+    async state => {
+      const root = await makeHome();
+      const legacyPath = join(root, 'legacy');
+      if (state === 'corrupt') {
+        await gitCheckout(legacyPath);
+        await mkdir(join(legacyPath, '.archon'));
+        await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
+      }
+      await createCodebase({ name: 'Legacy', default_cwd: legacyPath });
+      const known = await createCodebase({
+        name: 'acme/api',
+        default_cwd: join(root, 'known'),
+        repository_url: 'https://github.com/acme/api',
+      });
+      expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
+      await expect(
+        createManagedCodebase({
+          name: 'acme/new',
+          default_cwd: join(root, 'new'),
+          repository_url: 'https://github.com/acme/new',
+        })
+      ).rejects.toThrow(legacyPath);
     }
   );
 

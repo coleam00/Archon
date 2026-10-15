@@ -248,7 +248,7 @@ async function findRegisteredRemote(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   remoteUrl: string
 ): Promise<Codebase | null> {
-  return findRemoteOwner(await codebases.listCodebases(), remoteUrl);
+  return findRemoteOwner(await codebases.listCodebases(), remoteUrl, 'registration');
 }
 
 async function validateRegistrationChoice(
@@ -304,13 +304,12 @@ export async function inspectProjectBaseBranch(
     const path = await canonicalizeProjectPath(source.path);
     const repoRoot = await findRepoRoot(path);
     if (!repoRoot) return { kind: 'folder' };
-    const remote = await registrationRemote(path);
+    const { selected: remote, names } = await registrationRemotes(path);
     if (!remote) {
-      const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
       return {
         kind: 'repo',
         defaultBranch: null,
-        reason: stdout.trim() ? 'ambiguous_remote' : 'no_remote',
+        reason: names.length ? 'ambiguous_remote' : 'no_remote',
       };
     }
     result = await inspectRemoteBranches({ kind: 'local', repoPath: toRepoPath(path), remote });

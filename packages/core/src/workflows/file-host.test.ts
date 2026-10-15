@@ -187,3 +187,21 @@ test('file host remote lookup reuses SSH and legacy checkout identities', async 
       ?.id
   ).toBe(project.id);
 });
+
+test('file lookup routes a known owner past an unavailable legacy checkout', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-known-remote-')));
+  process.env.ARCHON_HOME = home;
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  await host.records.codebases.createCodebase({
+    name: 'Legacy',
+    default_cwd: join(home, 'missing'),
+  });
+  const known = await host.records.codebases.createCodebase({
+    name: 'acme/api',
+    default_cwd: join(home, 'known'),
+    repository_url: 'https://github.com/acme/api',
+  });
+  expect(
+    (await host.records.codebases.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id
+  ).toBe(known.id);
+});

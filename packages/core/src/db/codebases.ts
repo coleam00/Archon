@@ -67,12 +67,16 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
     if (managed) {
       const owner =
         project.repository_url &&
-        (await findRegisteredRemote(registered.rows, project.repository_url));
+        (await findRegisteredRemote(registered.rows, project.repository_url, 'registration'));
       if (owner) {
         throw new Error(
           `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
             'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
         );
+      }
+      const segments = project.name.split('/');
+      if (segments.length > 2 && segments.every(segment => parseOwnerRepo(`owner/${segment}`))) {
+        project.name = `${segments[0]}/${segments.slice(1).join('-')}`;
       }
       const name = allocateProjectName(project, registered.rows);
       const identity = parseOwnerRepo(name);

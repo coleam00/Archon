@@ -18,9 +18,18 @@ const vintage = new Database(dbPath);
 vintage.exec(
   await readFile(join(import.meta.dir, '../db/fixtures/sqlite-vintages/v0.11.0.sql'), 'utf8')
 );
-vintage.run(
-  "INSERT INTO remote_agent_codebases (id, name, default_cwd, default_branch) VALUES ('legacy-explicit', 'legacy-explicit', '/legacy-explicit', 'release'), ('legacy-null', 'legacy-null', '/legacy-null', NULL)"
-);
+for (const [id, branch] of [
+  ['legacy-explicit', 'release'],
+  ['legacy-null', null],
+] as const) {
+  const checkout = join(root, id);
+  await mkdir(checkout);
+  execFileSync('git', ['-C', checkout, 'init', '-q']);
+  vintage.run(
+    'INSERT INTO remote_agent_codebases (id, name, default_cwd, default_branch) VALUES (?, ?, ?, ?)',
+    [id, id, checkout, branch]
+  );
+}
 vintage.close();
 const db = new SqliteAdapter(dbPath);
 setPlatformPolicies([]);
@@ -190,6 +199,11 @@ test('prefill distinguishes unavailable remote, unknown HEAD, absent or ambiguou
   git(local, 'remote', 'add', 'upstream', remote);
   git(local, 'remote', 'add', 'other', remote);
   expect(await inspectProjectBaseBranch({ path: local })).toEqual({
+    kind: 'repo',
+    defaultBranch: null,
+    reason: 'ambiguous_remote',
+  });
+  expect(await inspectProjectBaseBranch({ url: local })).toEqual({
     kind: 'repo',
     defaultBranch: null,
     reason: 'ambiguous_remote',

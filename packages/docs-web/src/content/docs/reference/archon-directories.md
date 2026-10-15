@@ -26,8 +26,11 @@ Archon provides a unified directory and configuration system with:
 The workspace entries below show default shapes. Registration allocates a unique,
 readable name when a new project would share another project's name or storage root.
 For example, a repository can use `acme/api-2` or `_local/api-2`, and a folder can
-use `_folder/my-app-2`. The allocated name determines its workspace segment;
-existing projects keep their names and storage.
+use `_folder/my-app-2`. New managed projects with nested namespaces receive a
+safe two-part name: `org/team/subteam/project` starts at `org/team-subteam-project`,
+with a suffix if needed. That allocated identity scopes their checkout, storage,
+and worktrees together. Local repositories with bare names retain the `_local/<basename>`
+layout below. Existing projects keep their names and storage.
 
 ```
 ~/.archon/                          # ARCHON_HOME
