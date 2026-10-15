@@ -33,7 +33,7 @@ import type {
   ResolveRequest,
 } from './types';
 import { worktreeRegistrationMetadata } from './types';
-import type { IIsolationStore } from './store';
+import { recordWorktreeAdoption, type IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
 
@@ -96,7 +96,11 @@ export class IsolationResolver {
 
     // 1. Check existing isolation reference
     if (request.existingEnvId) {
-      const existing = await this.checkExisting(request.existingEnvId, baseBranch);
+      const existing = await this.checkExisting(
+        request.existingEnvId,
+        request.codebase?.defaultCwd,
+        baseBranch
+      );
       if (existing) return existing;
       // Stale — tell caller to clear and retry
       return { status: 'stale_cleaned', previousEnvId: request.existingEnvId };
@@ -270,15 +274,21 @@ export class IsolationResolver {
    */
   private async checkExisting(
     envId: string,
+    repoPath: string | undefined,
     baseBranch?: BranchName
   ): Promise<IsolationResolution | null> {
     const env = await this.store.getById(envId);
     if (env) this.assertWorktreeEnvironment(env);
     if (env && (await worktreeExists(toWorktreePath(env.working_path)))) {
+      let adopted = env;
+      if (env.provider === 'worktree') {
+        if (!repoPath) throw new Error('Cannot reuse isolation without a codebase repository');
+        adopted = await recordWorktreeAdoption(this.store, env, repoPath);
+      }
       const warnings = await this.collectBaseBranchWarnings(env, baseBranch, { envId });
       return {
         status: 'resolved',
-        env,
+        env: adopted,
         cwd: env.working_path,
         method: { type: 'existing' },
         ...(warnings.length > 0 ? { warnings } : {}),
@@ -339,19 +349,14 @@ export class IsolationResolver {
 
     const worktreePath = toWorktreePath(existing.working_path);
     if (await worktreeExists(worktreePath)) {
-      await this.assertWorktreeOwnership(
-        worktreePath,
-        canonicalRepoPath,
-        { codebaseId, workflowType, workflowId },
-        'isolation.reuse_refused_cross_checkout'
-      );
+      const adopted = await recordWorktreeAdoption(this.store, existing, canonicalRepoPath);
 
       getLog().debug({ workflowType, workflowId }, 'isolation_reuse_existing');
       const warnings = await this.collectBaseBranchWarnings(existing, baseBranch, {
         workflowType,
         workflowId,
       });
-      return { env: existing, warnings };
+      return { env: adopted, warnings };
     }
 
     await this.markDestroyedBestEffort(existing.id);
@@ -384,17 +389,12 @@ export class IsolationResolver {
 
       const worktreePath = toWorktreePath(linkedEnv.working_path);
       if (await worktreeExists(worktreePath)) {
-        await this.assertWorktreeOwnership(
-          worktreePath,
-          canonicalRepoPath,
-          { codebaseId, issueNum },
-          'isolation.linked_issue_refused_cross_checkout'
-        );
+        const adopted = await recordWorktreeAdoption(this.store, linkedEnv, canonicalRepoPath);
 
         getLog().debug({ issueNum, codebaseId }, 'isolation_share_linked_issue');
         return {
           status: 'resolved',
-          env: linkedEnv,
+          env: adopted,
           cwd: linkedEnv.working_path,
           method: { type: 'linked_issue_reuse', issueNumber: issueNum },
         };
@@ -433,7 +433,7 @@ export class IsolationResolver {
         'isolation.branch_adoption_refused_cross_checkout'
       );
 
-      getLog().info({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
+      getLog().warn({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
       const env = await this.store.create({
         codebase_id: codebase.id,
         workflow_type: workflowType,
@@ -442,7 +442,10 @@ export class IsolationResolver {
         branch_name: prBranch,
         created_by_platform: platformType,
         created_by_user_id: userId,
-        metadata: { adopted: true, adopted_from: 'skill' },
+        metadata: {
+          ...worktreeRegistrationMetadata({ provenance: 'adopted', adopted: true }),
+          adopted_from: 'skill',
+        },
       });
       return {
         status: 'resolved',

@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -215,7 +216,10 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+} from '@archon/core/operations/workflow-adoption';
 import {
   attentionProjectForCwd,
   attentionQueueSource,
@@ -2492,7 +2496,7 @@ async function runWorkflowWithOwnedSource(
       // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
-          ? detachedAdoptionLane.workingPath
+          ? detachedAdoptionLane.environment.working_path
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
@@ -2796,15 +2800,20 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        workingCwd = lane.workingPath;
-        isolationEnvId = lane.envId;
+        const env = await adoptRegisteredWorktree(
+          host.records.isolation,
+          lane,
+          codebase.default_cwd
+        );
+        workingCwd = env.working_path;
+        isolationEnvId = env.id;
         adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below
         // and silently cut a fresh worktree from base over the inherited one.
         wantsIsolation = false;
         console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'checkout-branch') {
         adoptedTaskBranch = lane.taskBranch;
@@ -2884,6 +2893,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3164,7 +3174,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {

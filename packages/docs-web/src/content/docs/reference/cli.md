@@ -1375,9 +1375,9 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 To explicitly discard a resumable run and remove the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
-of this section. Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
-an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
-how to retry.
+of this section. Abandon removes a checkout only when the run holds its matching creation
+proof, even if the checkout has since been adopted. It deletes uncommitted work there and
+keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,
@@ -1401,8 +1401,10 @@ behavior.
 
 Ordinary removal requires a stored creation proof matching
 Archon's marker and Git registration in the expected repository. Replacement
-repositories, adopted checkouts, and older records without proof are retained for
-operator inspection. If Git removal leaves a directory behind, cleanup reports it
+repositories and checkouts without matching stored proof, including newly registered
+adoptions and older records, are retained for operator inspection. Reusing a registered
+checkout sets `adopted: true` while preserving its creation proof, so that checkout
+can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
 Cleanup deletes an environment's local branch only when Archon created that branch.

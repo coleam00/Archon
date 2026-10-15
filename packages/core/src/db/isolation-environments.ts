@@ -7,6 +7,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
+import { WORKTREE_REGISTRATION_ID } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -18,9 +19,6 @@ import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { WorktreeRegistrationChangedError } from './codebase-delete-error';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
-
-// Adopted worktrees have no creation proof, so identical upserts need a fresh store-owned identity.
-const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -239,16 +237,71 @@ export async function markWorktreeDestroyed(
 /**
  * Update environment metadata (merge with existing)
  */
-export async function updateMetadata(id: string, metadata: Record<string, unknown>): Promise<void> {
+export async function updateMetadata(
+  id: string,
+  metadata: Record<string, unknown>,
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
   const dialect = getDialect();
+  // Older writers do not rotate a token; fence those rows with the observed snapshot.
+  const legacy = observed && typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
      SET metadata = ${dialect.jsonMerge('metadata', 1)}
-     WHERE id = $2`,
-    [JSON.stringify(metadata), id]
+     WHERE id = $2${
+       observed
+         ? ` AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3
+       AND working_path = $4${
+         legacy
+           ? `
+       AND branch_name = $5
+       AND ${getDatabaseType() === 'sqlite' ? 'julianday(created_at) = julianday($6)' : "date_trunc('milliseconds', created_at) = $6::timestamptz"}
+       AND ${
+         getDatabaseType() === 'sqlite'
+           ? `NOT EXISTS (
+         WITH current_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(metadata)
+         ), observed_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree($7)
+         )
+         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
+         UNION ALL
+         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
+       )`
+           : 'metadata = $7::jsonb'
+       }
+       AND codebase_id = $8 AND workflow_type = $9 AND workflow_id = $10
+       AND created_by_platform IS NOT DISTINCT FROM $11 AND created_by_user_id IS NOT DISTINCT FROM $12`
+           : ''
+       }`
+         : ''
+     }`,
+    [
+      JSON.stringify(metadata),
+      id,
+      ...(observed
+        ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? '', observed.working_path]
+        : []),
+      ...(legacy
+        ? [
+            observed.branch_name,
+            observed.created_at.toISOString(),
+            JSON.stringify(observed.metadata),
+            observed.codebase_id,
+            observed.workflow_type,
+            observed.workflow_id,
+            observed.created_by_platform,
+            observed.created_by_user_id,
+          ]
+        : []),
+    ]
   );
 
   if (result.rowCount === 0) {
+    if (observed) throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
     throw new Error(
       `Failed to update isolation environment metadata: no environment found with id '${id}'`
     );
@@ -494,6 +547,7 @@ export function createIsolationStore(): IIsolationStore {
     findActiveByWorkflow,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
+    updateMetadata,
     countActiveByCodebase,
   };
 }
