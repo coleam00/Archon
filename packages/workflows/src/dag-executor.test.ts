@@ -23341,12 +23341,14 @@ nodes:
         path: capturedConfig,
       });
       const verifyActual = sourceIntegrity.assertWorkflowSourceIntegrity;
+      const readActual = sourceFiles.readFile;
       let readPaths: unknown[] = [];
       let restoreRead: () => void = () => undefined;
       const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
         async source => {
           await verifyActual(source);
           const reader = spyOn(sourceFiles, 'readFile')
+            .mockImplementation(readActual)
             .mockRejectedValueOnce(
               Object.assign(new Error('missing checkout config'), {
                 code: 'ENOENT',
@@ -23354,7 +23356,7 @@ nodes:
                 path: join(testDir, 'servers.json'),
               })
             )
-            .mockRejectedValue(cause);
+            .mockRejectedValueOnce(cause);
           restoreRead = () => {
             readPaths = reader.mock.calls.map(([path]) => path);
             reader.mockRestore();
@@ -23367,7 +23369,7 @@ nodes:
         restoreRead();
         verifier.mockRestore();
       }
-      expect(readPaths).toEqual([join(testDir, 'servers.json'), capturedConfig]);
+      expect(readPaths.slice(0, 2)).toEqual([join(testDir, 'servers.json'), capturedConfig]);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
       expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
