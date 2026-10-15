@@ -299,7 +299,12 @@ async function signalEvent(
   try {
     outcome = {
       runId,
-      ...(await admit(host, run, { kind: 'wait', nodeId: wait.nodeId, resumeAt })),
+      ...(await admit(host, run, {
+        kind: 'wait',
+        nodeId: wait.nodeId,
+        resumeAt,
+        ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
+      })),
     };
   } catch (error) {
     outcome = { runId, kind: 'failed', error };

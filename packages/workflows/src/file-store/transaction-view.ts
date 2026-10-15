@@ -768,6 +768,7 @@ export function createTransactionView(
         run.status !== 'running' ||
         !isWorkflowWaitContext(current) ||
         current.nodeId !== wait.nodeId ||
+        current.pauseId !== wait.pauseId ||
         (current.kind === 'attention' ? current.waitingSince : current.resumeAt) !==
           (wait.kind === 'attention' ? wait.waitingSince : wait.resumeAt)
       )

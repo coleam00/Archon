@@ -3718,20 +3718,45 @@ describe('executeWorkflow', () => {
         conversationId: 'db-conv-1',
       });
 
-    it('gives back the resource slot of a pause the host continues', async () => {
-      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
-      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
-        released: true,
-      }));
-      const result = await run(
-        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
-      );
-      expect(result).toMatchObject({ success: true, paused: true });
-      expect(releasePausedRunSlot.mock.calls).toEqual([
-        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
-      ]);
-    });
-
+    for (const kind of ['approval', 'deadline'] as const) {
+      it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {
+        const paused =
+          kind === 'approval'
+            ? pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' })
+            : makeRun({
+                status: 'paused',
+                metadata: {
+                  wait: {
+                    owner: 'node',
+                    nodeId: 'review',
+                    kind: 'time',
+                    pauseId: 'p1',
+                    waitingSince: '2026-01-01T00:00:00.000Z',
+                    resumeAt: '2026-01-02T00:00:00.000Z',
+                  },
+                },
+              });
+        const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+          released: true,
+        }));
+        const result = await run(
+          makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+        );
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(releasePausedRunSlot.mock.calls).toEqual([
+          [
+            paused.id,
+            {
+              nodeId: 'review',
+              pauseId: 'p1',
+              ...(kind === 'deadline'
+                ? { kind: 'wait', resumeAt: '2026-01-02T00:00:00.000Z' }
+                : { kind: 'pause' }),
+            },
+          ],
+        ]);
+      });
+    }
     it('keeps the slot of a parent blocked on its child', async () => {
       const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
         released: true,

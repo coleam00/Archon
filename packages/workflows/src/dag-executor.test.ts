@@ -17623,6 +17623,49 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
+  for (const wait of [
+    { duration_ms: 60_000 },
+    { until: '$INPUTS.resume_at' },
+    { event: 'ready', deadline_ms: 60_000 },
+  ]) {
+    it(`gives repeated deadline waits distinct occurrences even at the same instant (${JSON.stringify(wait)})`, async () => {
+      setSystemTime(new Date('2026-08-24T10:00:00.000Z'));
+      try {
+        const store = createMockStore();
+        const pause = mock<IWorkflowStore['pauseWorkflowRunForWait']>(async () => {});
+        store.pauseWorkflowRunForWait = pause;
+        const options = dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-wait',
+          cwd: testDir,
+          workflow: { name: 'wait-test', nodes: [{ id: 'delay', kind: 'wait', wait }] },
+          workflowRun: makeWorkflowRun('wait-occurrence', {
+            metadata: { inputs: { resume_at: '2026-08-24T10:01:00.000Z' } },
+          }),
+        });
+        await executeDagWorkflow(options);
+        await executeDagWorkflow(options);
+        const calls = pause.mock.calls;
+        const first = calls[0]?.[1];
+        const second = calls[1]?.[1];
+        expect(first?.pauseId).toEqual(expect.any(String));
+        expect(second?.pauseId).toEqual(expect.any(String));
+        expect(second?.pauseId).not.toBe(first?.pauseId);
+        expect(first).toMatchObject({ resumeAt: '2026-08-24T10:01:00.000Z' });
+        expect(second).toMatchObject({ resumeAt: '2026-08-24T10:01:00.000Z' });
+        const persisted = { ...second };
+        await executeDagWorkflow({
+          ...options,
+          workflowRun: { ...options.workflowRun, metadata: { wait: persisted } },
+        });
+        expect(calls[2]?.[1]).toEqual(persisted);
+        expect(calls[2]?.[2]).toEqual({ kind: 'continued' });
+      } finally {
+        setSystemTime();
+      }
+    });
+  }
+
   it('resolves a child workflow input used as an absolute wait timestamp', async () => {
     const store = createMockStore();
     const resumeAt = '2099-08-24T11:00:00.000Z';

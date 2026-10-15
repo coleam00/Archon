@@ -253,6 +253,7 @@ test('signal passes the exact event cursor to the host operation as the local op
     owner: 'node' as const,
     nodeId: 'hold',
     kind: 'event' as const,
+    pauseId: 'event-occurrence',
     event: 'ready',
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2099-08-24T11:00:00.000Z',
@@ -280,6 +281,7 @@ test('signal passes the exact event cursor to the host operation as the local op
   expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);
   expect(resume).toHaveBeenCalledWith(host, 'run', expect.any(Function), {
     kind: 'wait',
+    pauseId: wait.pauseId,
     nodeId: wait.nodeId,
     resumeAt: wait.resumeAt,
   });

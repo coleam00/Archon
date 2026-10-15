@@ -116,7 +116,7 @@ export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 
 
 /** Exact persisted cursor expected by an automatic continuation claim. */
 export type WorkflowResumeCursor =
-  | { kind: 'wait'; nodeId: string; resumeAt: string }
+  | { kind: 'wait'; nodeId: string; resumeAt: string; pauseId?: string }
   | { kind: 'quota'; attempt: number; resumeAt: string }
   /** An answered gate or attention wait (`answeredPauseContinuation`). */
   | { kind: 'answered'; nodeId: string; pauseId: string };
@@ -133,7 +133,11 @@ export function resumeCursorMatches(
   switch (cursor.kind) {
     case 'wait': {
       const wait = pendingWorkflowWaitDeadline(run);
-      return wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt;
+      return (
+        wait?.nodeId === cursor.nodeId &&
+        wait.resumeAt === cursor.resumeAt &&
+        wait.pauseId === cursor.pauseId
+      );
     }
     case 'quota': {
       const scheduled = run.metadata.scheduled_resume;
@@ -170,7 +174,13 @@ export function continuablePauseCursor(
 ): PauseCursor | undefined {
   if (isContainerRun(run)) return undefined;
   const wait = pendingWorkflowWaitDeadline(run);
-  if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  if (wait)
+    return {
+      kind: 'wait',
+      nodeId: wait.nodeId,
+      resumeAt: wait.resumeAt,
+      ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
+    };
   const pause = continuablePause(run);
   return pause && { kind: 'pause', nodeId: pause.nodeId, pauseId: pause.pauseId };
 }
@@ -183,7 +193,9 @@ export function pauseCursorMatches(
   const current = continuablePauseCursor(run);
   if (current?.kind !== cursor.kind || current.nodeId !== cursor.nodeId) return false;
   return current.kind === 'wait'
-    ? cursor.kind === 'wait' && current.resumeAt === cursor.resumeAt
+    ? cursor.kind === 'wait' &&
+        current.resumeAt === cursor.resumeAt &&
+        current.pauseId === cursor.pauseId
     : cursor.kind === 'pause' && current.pauseId === cursor.pauseId;
 }
 

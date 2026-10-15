@@ -5706,6 +5706,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5717,6 +5718,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5786,6 +5788,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5815,6 +5818,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */

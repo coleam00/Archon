@@ -666,6 +666,88 @@ export function describeWorkflowStoreConformance(
       });
       expect((await claimAnswered(waiter)).status).toBe('running');
     });
+    for (const kind of ['time', 'event'] as const) {
+      for (const owner of ['node', 'loop_group'] as const) {
+        for (const legacy of [false, true]) {
+          test(`a delayed deadline release cannot remove a later occurrence with the same deadline (${kind}, ${owner}, legacy=${legacy})`, async () => {
+            const intent = start();
+            expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+            const id = intent.launch.run.id;
+            await store.claimPendingWorkflowRun(id);
+            const owned =
+              owner === 'loop_group'
+                ? {
+                    ...wait,
+                    owner,
+                    bodyWaitId: 'body-wait',
+                    iteration: 1,
+                    sessionId: null,
+                    sessionProvider: null,
+                  }
+                : wait;
+            const context = kind === 'event' ? { ...owned, kind, event: 'ready' } : owned;
+            const first = { ...context, ...(legacy ? {} : { pauseId: 'first-wait' }) };
+            const second = { ...context, pauseId: 'second-wait' };
+            const cursor = {
+              kind: 'wait' as const,
+              nodeId: first.nodeId,
+              resumeAt: first.resumeAt,
+              pauseId: first.pauseId,
+            };
+            await store.pauseWorkflowRunForWait(id, first, { kind: 'started', stepName: 'wait' });
+            expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: true });
+            await store.resumeWorkflowRun(id, cursor);
+            await store.clearWorkflowWaitContext(id, first, {
+              stepName: 'wait',
+              result: { status: 'satisfied', waited_ms: 0 },
+            });
+            await store.pauseWorkflowRunForWait(id, second, { kind: 'started', stepName: 'wait' });
+            expect(await store.releasePausedRunSlot(id, cursor)).toEqual({ released: false });
+            expect(await rejection(store.resumeWorkflowRun(id, cursor))).toBeInstanceOf(
+              WorkflowNotResumableError
+            );
+            const legacyCursor = {
+              kind: 'wait' as const,
+              nodeId: wait.nodeId,
+              resumeAt: wait.resumeAt,
+            };
+            expect(await store.releasePausedRunSlot(id, legacyCursor)).toEqual({ released: false });
+            expect(await rejection(store.resumeWorkflowRun(id, legacyCursor))).toBeInstanceOf(
+              WorkflowNotResumableError
+            );
+            await store.deferWorkflowContinuation(id, schedule.deadlineAt, cursor);
+            expect(
+              (await store.getWorkflowRun(id))?.metadata.continuation_retry_at
+            ).toBeUndefined();
+            expect(await store.admitResourceStart(start())).toMatchObject({
+              status: 'queued',
+              blocker: { kind: 'run', id },
+            });
+            const secondCursor = { ...cursor, pauseId: second.pauseId };
+            await store.deferWorkflowContinuation(id, schedule.deadlineAt, secondCursor);
+            expect((await store.getWorkflowRun(id))?.metadata.continuation_retry_at).toBe(
+              schedule.deadlineAt
+            );
+            await store.resumeWorkflowRun(id, secondCursor);
+            const completion = {
+              stepName: 'wait',
+              result: { status: 'satisfied' as const, waited_ms: 0 },
+            };
+            expect(await store.clearWorkflowWaitContext(id, first, completion)).toEqual({
+              cleared: false,
+            });
+            expect(await store.clearWorkflowWaitContext(id, wait, completion)).toEqual({
+              cleared: false,
+            });
+            expect(await store.clearWorkflowWaitContext(id, second, completion)).toMatchObject({
+              cleared: true,
+            });
+            await store.pauseWorkflowRunForWait(id, second, { kind: 'continued' });
+            expect(await store.releasePausedRunSlot(id, secondCursor)).toEqual({ released: true });
+          });
+        }
+      }
+    }
     test('release refuses another pause and a run that holds no slot', async () => {
       const id = await admitPaused(start());
       for (const cursor of [

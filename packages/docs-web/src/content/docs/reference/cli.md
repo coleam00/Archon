@@ -1056,7 +1056,7 @@ archon workflow signal <full-run-id> --event checks.complete \
   --resume-at '2026-10-04T12:00:00.000Z' --data '{"conclusion":"success"}' --json
 ```
 
-Use the event name and `metadata.wait.resumeAt` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Stale, duplicate, expired, mismatched, and non-event occurrences are rejected without resuming.
+Use the event name and `metadata.wait.resumeAt` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Duplicate, expired, mismatched, and non-event signals are rejected without resuming. A stale signal whose event name and deadline match a later occurrence cannot be distinguished by this interface.
 
 The result reports `signaled` separately from admission and settlement. If the signal succeeds but execution is refused or fails, it remains durable, the command returns 1, and a later `workflow wake` can retry after the problem is resolved. A concurrent resume winner after a successful signal is a normal outcome.
 

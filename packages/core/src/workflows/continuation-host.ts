@@ -157,7 +157,13 @@ export async function resumeWorkflowContinuation(
 
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
   const wait = pendingWorkflowWaitDeadline(run);
-  if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  if (wait)
+    return {
+      kind: 'wait',
+      nodeId: wait.nodeId,
+      resumeAt: wait.resumeAt,
+      ...(wait.pauseId !== undefined ? { pauseId: wait.pauseId } : {}),
+    };
   const answered = answeredPauseContinuation(run);
   if (answered) return { kind: 'answered', ...answered };
   if (run.status === 'failed' && isScheduledWorkflowResume(run.metadata.scheduled_resume)) {
