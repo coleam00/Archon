@@ -41,6 +41,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
       execFileSync('git', args, { env, encoding: 'utf8' }).trim();
     git('config', '--global', '--add', 'safe.directory', '/workspace/other');
     git('config', '--global', '--add', 'safe.directory', repo);
+    git('config', '--global', '--add', 'safe.directory', repo);
     git('config', '--global', '--add', 'safe.directory', '');
 
     // Only container setup and server launch are stubbed; Git edits the scratch config.
