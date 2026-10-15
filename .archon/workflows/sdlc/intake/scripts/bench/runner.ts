@@ -648,6 +648,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   const binding = agentBinding(judge) ?? null;
   if (binding !== null && (binding.provider !== version.provider || binding.requested !== version.model)) {
     problems.push(`triage ran ${String(binding.provider)}/${String(binding.requested)}, not ${version.provider}/${version.model}`);
+  } else if (binding === null && decided.verdict !== null) {
+    problems.push(`${triageNodeId(row.workflow)} recorded no model binding, so its version is unproven`);
   }
   let leak: string[] = [];
   if (detail?.transcript_path != null && existsSync(detail.transcript_path)) {

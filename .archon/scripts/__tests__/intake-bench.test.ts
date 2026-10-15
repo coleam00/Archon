@@ -16,6 +16,8 @@ import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/
 import {
   type BatchChecks,
   CHECKS_FILE,
+  checkScratch,
+  loadLive,
   findLeaks,
   issueTokens,
   type Line,
@@ -151,7 +153,8 @@ describe('bench run', () => {
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
     const preload = join(cli, 'preload.ts');
     writeFileSync(preload, `import { install } from ${JSON.stringify(FAKE)};\ninstall(${JSON.stringify(cli)});\n`);
-    const run = (...versions: string[]) => {
+    const run = (...versions: string[]) => runWith([], ...versions);
+    const runWith = (extra: string[], ...versions: string[]) => {
       const result = spawnSync(
         process.execPath,
         [
@@ -166,6 +169,7 @@ describe('bench run', () => {
           ...versions.flatMap(version => ['--version', join(out, `${version}.yaml`)]),
           '--out',
           join(out, 'bench'),
+          ...extra,
         ],
         { cwd: repo, encoding: 'utf8' }
       );
@@ -179,7 +183,7 @@ describe('bench run', () => {
     const argv = (n: number): string[] => JSON.parse(readFileSync(join(cli, `argv-${n}.json`), 'utf8'));
     const setBaseline = (baseline: FakeConfig['baseline']): void =>
       writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, baseline }));
-    return { run, argv, packSha, setBaseline };
+    return { run, runWith, argv, packSha, setBaseline, repo, out, cli };
   }
 
   it('judges each row on its pinned text with each version, and labels every line', () => {
@@ -234,6 +238,52 @@ describe('bench run', () => {
     expect(status).toBe(1);
     expect(stderr).toContain('label base already names another version');
     expect(lines).toHaveLength(4);
+  });
+
+  it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
+    const { runWith, argv, repo, out, cli } = bench();
+    const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
+    ok(scratch, 'clone', '-q', repo, '.');
+    ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
+    writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
+    mkdirSync(join(out, 'bench', 'live'), { recursive: true });
+    writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102 } }));
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
+    writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
+
+    const { status, stderr, lines, checks } = runWith(['--live', join(out, 'live.yaml')], 'base');
+    expect(stderr).toBe('');
+    expect(status).toBe(0);
+    expect(argv(1)).toEqual(expect.arrayContaining(['archon-intake', scratch, 'repo_path=me/scratch-base', 'number=101', 'mode=live', 'trust=auto']));
+    const live = lines.find(line => line.row === '11');
+    expect([live?.mode, live?.workflow, live?.verdict?.contract, live?.verdict?.route, live?.verdict?.summary]).toEqual(['live', 'intake', 'READY', 'plan', undefined]);
+    expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
+  });
+
+  it('refuses a scratch repository that is the set repository, shared, or not at the base', () => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'intake-bench-live-')));
+    const set: BenchSet = { bench: 'intake', repo: REPO, selected_at: '', rows: [] };
+    const live = (value: unknown) => {
+      writeFileSync(join(dir, 'live.yaml'), JSON.stringify(value));
+      return () => loadLive(join(dir, 'live.yaml'), set);
+    };
+    expect(live({ a: { repo: REPO, checkout: dir } })).toThrow("a's scratch repository is the set's own repository");
+    const shared = { repo: { host: 'github.com', path: 'me/s' }, checkout: dir };
+    expect(live({ a: shared, b: shared })).toThrow('b and a share me/s');
+    ok(dir, 'init', '-q');
+    ok(dir, 'remote', 'add', 'origin', 'https://github.com/me/s.git');
+    ok(dir, 'commit', '-q', '--allow-empty', '-m', 'one');
+    expect(() => checkScratch('a', shared, '0'.repeat(40))).toThrow('is at');
+  });
+
+  it('does not pass a run whose judging node recorded no model binding', () => {
+    const { run } = bench({ unboundTriage: true });
+    const { lines } = run('base');
+    expect(lines.find(line => line.row === '11')).toMatchObject({
+      passed: false,
+      problems: ['triage recorded no model binding, so its version is unproven'],
+    });
   });
 
   it('fails the batch when an eval run writes to an issue', () => {

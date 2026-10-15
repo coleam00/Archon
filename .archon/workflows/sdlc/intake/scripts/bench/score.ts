@@ -50,15 +50,19 @@ export function readChecks(outDir: string): Map<string, BatchChecks> {
   return latestLines(join(outDir, CHECKS_FILE), line => String(line.batch_run)) as unknown as Map<string, BatchChecks>;
 }
 
-/** Each version's latest line per row, versions in the order they first ran. */
+/**
+ * Each version's latest line per row, versions in the order they first ran. A live
+ * line judged a copy, not the issue itself, so it is its version's own column.
+ */
 export function latestByVersion(outDir: string): Map<string, Map<string, Line>> {
   const versions = new Map<string, Map<string, Line>>();
   for (const raw of readLines(join(outDir, SAMPLES_FILE))) {
     const line = raw as unknown as Line;
     if (!isObject(raw.version) || typeof line.row !== 'string') continue;
-    const rows = versions.get(line.version.label) ?? new Map<string, Line>();
+    const column = line.mode === 'live' ? `${line.version.label} (live)` : line.version.label;
+    const rows = versions.get(column) ?? new Map<string, Line>();
     rows.set(line.row, line);
-    versions.set(line.version.label, rows);
+    versions.set(column, rows);
   }
   return versions;
 }

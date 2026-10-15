@@ -29,6 +29,8 @@ export interface FakeConfig {
   readonly writeLabel?: string;
   /** An outside row's included triage agent runs, as a broken trust boundary would. */
   readonly outsideAgentRuns?: boolean;
+  /** archon-triage's agent node records no execution, so no binding. */
+  readonly unboundTriage?: boolean;
   /** The project key `archon state list` names. */
   readonly projectKey: string;
 }
@@ -92,6 +94,11 @@ function answer(dir: string, args: readonly string[]): string {
   if (args[0] === 'state' && args[1] === 'list') {
     return JSON.stringify({ scope: { kind: 'project', key: config.projectKey }, documents: [] });
   }
+  if (args[0] === 'state' && args[1] === 'get') {
+    const field = { value: 'bug', reason: 'r' };
+    const triage = { verdict: { contract: 'READY', route: 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' } };
+    return JSON.stringify({ name: args[2], revision: 2, value: { facts: { triage } } });
+  }
   if (args[0] !== 'workflow') throw new Error(`fake archon: unexpected command ${args.join(' ')}`);
   if (args[1] === 'run' && args.includes('--dry-run')) {
     const resolved = binding(args, config);
@@ -123,7 +130,7 @@ function answer(dir: string, args: readonly string[]): string {
           availability: 'available',
           node_id: intake ? 'outcome' : 'verdict',
           value: intake
-            ? { path: outside ? 'outside' : 'triage', item: Number(given.number), evaluation: { triage: outside ? null : verdict } }
+            ? { path: outside ? 'outside' : 'triage', item: Number(given.number), evaluation: given.mode === 'live' ? null : { triage: outside ? null : verdict } }
             : verdict,
         },
       },
@@ -133,7 +140,7 @@ function answer(dir: string, args: readonly string[]): string {
             agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
             { nodeId: 'outcome', state: 'completed', execution: { node: { kind: 'exec' } } },
           ]
-        : [agent('triage', 'completed', bound)],
+        : [config.unboundTriage === true ? { nodeId: 'triage', state: 'completed' } : agent('triage', 'completed', bound)],
     };
     writeFileSync(join(dir, `detail-run-${n}.json`), JSON.stringify(detail));
     return JSON.stringify({ runId: `run-${n}` });
