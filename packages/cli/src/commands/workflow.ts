@@ -3315,6 +3315,7 @@ async function runWorkflowWithOwnedSource(
         isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
         close: closeRunLiveOwner,
       },
+      endNodeProcessTrees: !detachedProcessOwner,
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
@@ -6364,7 +6365,7 @@ export async function workflowAnswerCommand(
   text: string | undefined,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const request = { choose, ...(text !== undefined ? { text } : {}) };
   if (json) {
     try {
@@ -6383,10 +6384,11 @@ export async function workflowAnswerCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'answer', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6413,6 +6415,7 @@ export async function workflowAnswerCommand(
     failurePrefix: 'Answer recorded but',
     recorded: 'answer',
   });
+  return 0;
 }
 
 /**

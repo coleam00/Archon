@@ -1,5 +1,86 @@
 import { describe, expect, test } from 'bun:test';
-import { consumesStoredCredential, type ProviderCredentialCatalog } from './registration';
+import {
+  assertProviderRegistrationAllowed,
+  consumesStoredCredential,
+  type ProviderCredentialCatalog,
+  type ProviderRegistration,
+} from './index';
+
+function registration(
+  id: string,
+  overrides: Partial<ProviderRegistration> = {}
+): ProviderRegistration {
+  return {
+    id,
+    displayName: id,
+    factory: () => {
+      throw new Error('registration validation must not instantiate providers');
+    },
+    capabilities: {
+      backgroundWork: 'unobserved',
+      sessionResume: false,
+      mcp: false,
+      hooks: false,
+      skills: false,
+      plugins: false,
+      agents: false,
+      toolRestrictions: false,
+      structuredOutput: false,
+      requiresAllPropertiesRequired: false,
+      envInjection: false,
+      costControl: false,
+      costReporting: false,
+      effortControl: false,
+      fallbackModel: false,
+      sandbox: false,
+      nativeTools: false,
+      containerExec: false,
+      settingSources: false,
+    },
+    builtIn: false,
+    credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
+    parseConfig: raw => raw,
+    ...overrides,
+  };
+}
+
+describe('assertProviderRegistrationAllowed', () => {
+  test('accepts distinct providers without instantiating or mutating them', () => {
+    const first = registration('first');
+    const existing = [first];
+    const entry = registration('second');
+    expect(() => assertProviderRegistrationAllowed(entry, existing)).not.toThrow();
+    expect(existing).toEqual([first]);
+  });
+
+  test('rejects duplicate ids from an iterable', () => {
+    const entry = registration('custom');
+    const existing = new Map([[entry.id, entry]]);
+    expect(() => assertProviderRegistrationAllowed(entry, existing.values())).toThrow(
+      "Provider 'custom' is already registered"
+    );
+  });
+
+  test('only one provider can own unprefixed model refs', () => {
+    const owner = registration('first', { ownsUnprefixedModelRefs: true });
+    const entry = registration('second', { ownsUnprefixedModelRefs: true });
+    expect(() => assertProviderRegistrationAllowed(entry, [])).not.toThrow();
+    expect(() => assertProviderRegistrationAllowed(entry, [owner])).toThrow(
+      "Provider 'first' already owns unprefixed model refs"
+    );
+    expect(() => assertProviderRegistrationAllowed(registration('other'), [owner])).not.toThrow();
+  });
+
+  test('rejects session fork support without session resume support', () => {
+    const entry = registration('invalid-fork');
+    entry.capabilities.sessionFork = true;
+    expect(() => assertProviderRegistrationAllowed(entry, [])).toThrow(
+      "Provider 'invalid-fork' cannot advertise sessionFork without sessionResume"
+    );
+    entry.capabilities.sessionResume = true;
+    expect(() => assertProviderRegistrationAllowed(entry, [])).not.toThrow();
+  });
+});
 
 const catalog = (kinds: ['api_key'] | ['api_key', 'subscription']): ProviderCredentialCatalog => ({
   kind: 'static',

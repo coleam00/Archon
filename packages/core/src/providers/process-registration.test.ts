@@ -12,6 +12,18 @@ import { parsePiConfigStrict } from '@archon/providers/pi/config';
 import { descriptor, parseConfig } from './fixtures/process-provider-data';
 const argv = [process.execPath, 'fixture.ts'] as const;
 
+test('session fork requires resume at descriptor conversion', () => {
+  const input = {
+    ...descriptor,
+    capabilities: { ...descriptor.capabilities, sessionFork: true, sessionResume: false },
+  };
+  expect(() => processProviderRegistration(input, argv)).toThrow(
+    `Provider plugin ${descriptor.id}: sessionFork requires sessionResume`
+  );
+  input.capabilities.sessionResume = true;
+  expect(processProviderRegistration(input, argv).capabilities.sessionFork).toBe(true);
+});
+
 test('strict config parser applies equally to install and run', () => {
   const registration = processProviderRegistration(descriptor, argv);
   expect(registration.builtIn).toBe(false);

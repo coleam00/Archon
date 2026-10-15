@@ -47,6 +47,7 @@ import {
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import {
+  assertProviderRegistrationAllowed,
   isMaintainedProvider,
   MAINTAINED_PROVIDER_IDS,
   providerVersionMismatchMessage,
@@ -61,11 +62,7 @@ import {
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 import { removeUnlocked } from './unlocked-file';
-import {
-  assertProviderRegistrationAllowed,
-  getRegisteredProviders,
-  maintainedDescriptors,
-} from '@archon/providers';
+import { getRegisteredProviders, maintainedDescriptors } from '@archon/providers';
 import { registerCopilotProvider } from '@archon/providers/community/copilot';
 import { registerOpencodeProvider } from '@archon/providers/community/opencode';
 

@@ -230,21 +230,25 @@ export interface WorkflowDeps {
   /** Restore a previously sealed run-owned config layer during continuation. */
   unsealRunConfig?: (metadata: WorkflowRunConfigMetadata) => WorkflowRunConfigLayer;
   /**
-   * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
-   * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so
-   * AI-driven `gh` and `git push` operations inside worktrees authenticate
-   * correctly.
-   *
-   *  - App mode (host registered a provider): returns a fresh
-   *    installation access token, refreshed transparently from the cache.
-   *  - PAT mode / not configured: this resolver is absent. The subprocess inherits
-   *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
-   *    behaviour), so solo installs see zero functional change.
-   *
-   * A registered App provider must throw on resolution failure so execution
-   * fails before a node can use another credential.
+   * Optional: GitHub App mode. Absent in PAT mode / when not configured: the
+   * subprocess inherits whatever GITHUB_TOKEN already lives on `process.env`
+   * (the legacy behaviour), so solo installs see zero functional change.
    */
-  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string>;
+  githubApp?: {
+    /**
+     * Resolve an installation token for (owner, repo), refreshed transparently
+     * from the cache. Injected as GH_TOKEN/GITHUB_TOKEN so `gh` and `git push`
+     * inside worktrees authenticate. Must throw on resolution failure so
+     * execution fails before a node can use another credential.
+     */
+    resolveInstallationToken: (owner: string, repo: string) => Promise<string>;
+    /**
+     * Install the `gh` shim that fetches a current installation token per call
+     * from the server's loopback endpoint; returns the directory to put first
+     * on PATH. Throws when installation fails.
+     */
+    installCliShim: () => string;
+  };
   /**
    * Optional: resolve the originating user's personal GitHub token (decrypted,
    * refreshed on read). Used by the per-user token policy to route a run's
