@@ -111,6 +111,9 @@ import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
 export {
+  resolveRunSourceCapture,
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   recordSelectedWorkflow,
   capturedSourceRoots,
   loadWorkflowSource,
@@ -970,14 +973,21 @@ export async function resolveContinuationWorkflow(
     deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    run.workflow_name,
-    workflows.map(w => w.workflow)
-  );
+  const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
+    const readErrors = errors.filter(error => error.errorType === 'read_error');
+    // Incomplete discovery cannot prove that the verified capture lacks the workflow.
+    if (readErrors.length > 0) {
+      throw new Error(
+        `Cannot continue run of '${run.workflow_name}': captured source discovery at ` +
+          `${capture.anchor.root} could not finish reading its workflows.`,
+        { cause: readErrors }
+      );
+    }
     throw new WorkflowSourceIntegrityError(
       `Cannot continue run of '${run.workflow_name}': its captured source at ` +
-        `${capture.anchor.root} no longer contains that workflow.`
+        `${capture.anchor.root} no longer contains that workflow.`,
+      capture.anchor.root
     );
   }
   return { workflow, roots, workflows, errors };

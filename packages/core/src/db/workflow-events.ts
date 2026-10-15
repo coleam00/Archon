@@ -15,7 +15,7 @@ import type { IDatabase } from './adapters/types';
  * writes use `persistWorkflowEvent` and propagate storage failure to their owner.
  * Read operations also throw on error — callers own the degradation policy.
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect } from './connection';
 import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
@@ -169,7 +169,6 @@ export async function persistWorkflowEventIfRunning(
   data: WorkflowEventInput,
   options?: { allowPaused?: boolean }
 ): Promise<{ persisted: boolean }> {
-  const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   const statusPredicate =
     options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
   const result = await inRunOrder(data.workflow_run_id, () =>
@@ -177,7 +176,7 @@ export async function persistWorkflowEventIfRunning(
       `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
      SELECT $1, $2, $3, $4, $5, $6
      FROM remote_agent_workflow_runs
-     WHERE id = $2 AND ${statusPredicate}${lockClause}`,
+     WHERE id = $2 AND ${statusPredicate}${getDialect().rowLock()}`,
       [
         getDialect().generateUuid(),
         data.workflow_run_id,
@@ -378,10 +377,7 @@ export async function hasAnyAttentionNotice(
   destination: string,
   query: IDatabase['query'] = pool.query
 ): Promise<boolean> {
-  const extract =
-    getDatabaseType() === 'postgresql'
-      ? "data->>'destination'"
-      : "json_extract(data, '$.destination')";
+  const extract = getDialect().jsonText('data', 'destination');
   const result = await query(
     `SELECT id FROM remote_agent_workflow_events WHERE event_type = 'attention_notice_sent' AND ${extract} = $1 LIMIT 1`,
     [destination]

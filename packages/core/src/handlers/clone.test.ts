@@ -15,6 +15,9 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
+import * as helperInstaller from '../github-auth/credential-helper-install';
+import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { AppNotInstalledError } from '../github-auth/errors';
 import type * as CodebaseDb from '../db/codebases';
 import type * as Commands from '../utils/commands';
 import { quoteCommandArg } from '../utils/command-args';
@@ -27,6 +30,15 @@ import { createMockLogger } from '../test/mocks/logger';
 // Capture the real functions before the re-export is replaced by the module mock.
 const { findCommandFiles: discoverCommandFiles, isPathInside } =
   await import('@archon/paths/archon-paths');
+
+const appRequest = mock(async () => {
+  throw Object.assign(new Error('Not Found'), { status: 404 });
+});
+mock.module('@octokit/rest', () => ({
+  Octokit: class {
+    request = appRequest;
+  },
+}));
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
 const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
@@ -385,6 +397,174 @@ describe('cloneRepository', () => {
     delete process.env.GH_TOKEN;
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITEA_TOKEN;
+  });
+
+  describe('GitHub App registration', () => {
+    const getInstallationToken = mock(
+      async (_owner: string, _repo: string) => 'installation-secret'
+    );
+    const options = { githubAppAuth: { getInstallationToken } };
+    let helper: ReturnType<typeof spyOn<typeof helperInstaller, 'installCredentialHelper'>>;
+
+    beforeEach(() => {
+      getInstallationToken.mockReset();
+      getInstallationToken.mockResolvedValue('installation-secret');
+      mockCreateCodebase.mockResolvedValue(makeCodebase());
+      helper = spyOn(helperInstaller, 'installCredentialHelper').mockResolvedValue({
+        kind: 'installed',
+        helperPath: '/helper',
+      });
+    });
+    afterEach(() => helper.mockRestore());
+
+    test.each([
+      'https://github.com/owner/repo.git',
+      'github.com/owner/repo',
+      'git@github.com:owner/repo.git',
+    ])('clones %s with installation credentials and sets up before persistence', async url => {
+      helper.mockImplementation(async () => {
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        return { kind: 'installed', helperPath: '/helper' };
+      });
+      const result = await cloneRepository(url, options);
+      expect(getInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+      expect(spyCloneGitRepository).toHaveBeenCalledWith(
+        result.repositoryUrl,
+        gitUtils.toRepoPath(result.defaultCwd),
+        { credentials: { username: 'x-access-token', password: 'installation-secret' } }
+      );
+      expect(helper).toHaveBeenCalledWith(result.defaultCwd);
+      expect(
+        JSON.stringify([result, mockLogger.info.mock.calls, mockLogger.debug.mock.calls])
+      ).not.toContain('installation-secret');
+      process.env.GITHUB_TOKEN = 'pat';
+      await cloneRepository('https://github.com/owner/repo');
+      expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toEqual({
+        credentials: { username: 'x-access-token', password: 'pat' },
+      });
+      await cloneRepository('https://gitlab.com/owner/repo', options);
+      expect(getInstallationToken).toHaveBeenCalledTimes(1);
+      expect(helper).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects HTTP GitHub URLs before token lookup for clone and inspection', async () => {
+      const url = 'http://github.com/owner/repo';
+      await expect(cloneRepository(url, options)).rejects.toThrow('HTTPS');
+      await expect(inspectProjectBaseBranch({ url }, options)).rejects.toThrow('HTTPS');
+      expect(getInstallationToken).not.toHaveBeenCalled();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+    });
+
+    test('restricts App credentials and helper setup to the exact GitHub host', async () => {
+      await cloneRepository('https://github.com/owner/repo', options);
+      await cloneRepository('https://github.com.attacker.test/owner/repo', options);
+      expect(getInstallationToken).toHaveBeenCalledTimes(1);
+      expect(helper).toHaveBeenCalledTimes(1);
+      expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toBeUndefined();
+    });
+
+    test('fixed installation preserves missing-installation guidance for clone and inspection', async () => {
+      appRequest.mockClear();
+      const provider = createGitHubAppAuthProvider({
+        appId: '123',
+        privateKey: 'synthetic-key',
+        slug: 'archon',
+        defaultInstallationId: 555,
+      });
+      const fixedOptions = { githubAppAuth: provider };
+      const url = 'https://github.com/missing/repo';
+      await expect(cloneRepository(url, fixedOptions)).rejects.toThrow('not installed');
+      await expect(inspectProjectBaseBranch({ url }, fixedOptions)).rejects.toThrow(
+        'not installed'
+      );
+      expect(appRequest).toHaveBeenCalledTimes(2);
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+    });
+
+    test('surfaces an unavailable installation before cloning or persistence', async () => {
+      getInstallationToken.mockRejectedValue(new AppNotInstalledError('owner', 'repo', 'archon'));
+      await expect(cloneRepository('https://github.com/owner/repo', options)).rejects.toThrow(
+        'not installed'
+      );
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('removes a fresh checkout when helper setup fails', async () => {
+      helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
+      await expect(cloneRepository('https://github.com/owner/repo', options)).rejects.toThrow(
+        'credential helper'
+      );
+      expect(spyFsRm).toHaveBeenCalledWith('/home/test/.archon/workspaces/owner/repo/source', {
+        recursive: true,
+      });
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    });
+
+    test.each(['https://github.com/owner/repo', 'https://github.com/owner/repo.git'])(
+      'refreshes the helper on an existing registration stored as %s and preserves it on setup failure',
+      async storedUrl => {
+        spyFsAccess.mockResolvedValue(undefined);
+        const existing = makeCodebase({ default_cwd: '/existing/checkout' });
+        mockFindCodebaseByRepoUrl.mockImplementation(async (url: string) =>
+          url === storedUrl ? existing : null
+        );
+        expect((await cloneRepository('github.com/owner/repo', options)).alreadyExisted).toBe(true);
+        expect(mockFindCodebaseByRepoUrl).toHaveBeenCalledWith(storedUrl);
+        expect(helper).toHaveBeenCalledWith('/existing/checkout');
+        helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
+        await expect(cloneRepository('github.com/owner/repo', options)).rejects.toThrow(
+          'credential helper'
+        );
+        expect(getInstallationToken).not.toHaveBeenCalled();
+        expect(spyCloneGitRepository).not.toHaveBeenCalled();
+        expect(spyFsRm).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+      }
+    );
+
+    test('uses App credentials for inspection and installs the helper before explicit branch validation', async () => {
+      const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+      const remote = spyOn(gitUtils, 'getDefaultRemote').mockResolvedValue('origin');
+      const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+        status: 'available',
+        defaultBranch: gitUtils.toBranchName('dev'),
+        branches: [gitUtils.toBranchName('dev')],
+      });
+      try {
+        await inspectProjectBaseBranch({ url: 'https://github.com/owner/repo.git' }, options);
+        expect(inspection).toHaveBeenCalledWith({
+          kind: 'url',
+          url: 'https://github.com/owner/repo.git',
+          credentials: { username: 'x-access-token', password: 'installation-secret' },
+        });
+        expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(helper).not.toHaveBeenCalled();
+        inspection.mockImplementation(async () => {
+          expect(helper).toHaveBeenCalled();
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          return {
+            status: 'available',
+            defaultBranch: gitUtils.toBranchName('dev'),
+            branches: [gitUtils.toBranchName('dev')],
+          };
+        });
+        await cloneRepository('https://github.com/owner/repo', { ...options, baseBranch: 'dev' });
+        getInstallationToken.mockRejectedValue(new AppNotInstalledError('owner', 'repo'));
+        await expect(
+          inspectProjectBaseBranch({ url: 'https://github.com/owner/repo' }, options)
+        ).rejects.toThrow('not installed');
+      } finally {
+        syntax.mockRestore();
+        remote.mockRestore();
+        inspection.mockRestore();
+      }
+    });
   });
 
   test('GitHub remote inspection uses password credentials without changing the URL', async () => {

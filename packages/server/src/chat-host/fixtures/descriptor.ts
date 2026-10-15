@@ -5,7 +5,12 @@ export const descriptor: ChatPluginDescriptor = {
   id: 'fixture-chat',
   displayName: 'Fixture chat',
   version: '1',
-  capabilities: { defaultWorkflowDispatch: 'foreground', runEvents: true, resultFooter: true },
+  capabilities: {
+    attentionNotices: true,
+    defaultWorkflowDispatch: 'foreground',
+    runEvents: true,
+    resultFooter: true,
+  },
   policy: {
     workspaceRetention: 'retain',
     streaming: { envVar: 'FIXTURE_STREAMING', defaultMode: 'batch' },

@@ -4,6 +4,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
@@ -14,6 +15,12 @@ type WorkflowStarted = Extract<ChatRunEvent, { type: 'workflow_started' }>;
 type ProjectedRunEvent =
   | Exclude<ChatRunEvent, WorkflowStarted>
   | Omit<WorkflowStarted, 'conversationId'>;
+
+/** The run's recorded total cost, when it is a usable amount. */
+export function runTotalCostUsd(run: WorkflowRun): number | undefined {
+  const cost = run.metadata.total_cost_usd;
+  return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
+}
 
 export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent | undefined {
   const runId = event.runId;
@@ -126,9 +133,8 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
         if (routed.type === 'approval_pending' || routed.type === 'terminal')
           routed.authoredOutcome = run.outcome ?? undefined;
         if (routed.type === 'terminal') {
-          const cost = run.metadata.total_cost_usd;
-          if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0)
-            routed.totalCostUsd = cost;
+          const cost = runTotalCostUsd(run);
+          if (cost !== undefined) routed.totalCostUsd = cost;
         }
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {

@@ -42,7 +42,11 @@ import type {
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { platformStreamingSchema, workflowContinuationConfigSchema } from './config-types';
+import {
+  attentionNoticeRoutesSchema,
+  platformStreamingSchema,
+  workflowContinuationConfigSchema,
+} from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -380,6 +384,18 @@ function validateStreamingConfig(parsed: unknown, configPath: string): void {
   parsed.streaming = result.data;
 }
 
+function validateAttentionNoticesConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.attentionNotices === undefined) return;
+  const result = attentionNoticeRoutesSchema.safeParse(parsed.attentionNotices);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `attentionNotices.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid attentionNotices config', configPath, issues);
+  }
+  parsed.attentionNotices = result.data;
+}
+
 function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
   if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
@@ -404,7 +420,8 @@ function validateConversationConcurrencyConfig(parsed: unknown, configPath: stri
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
  * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
- * `streaming`, `concurrency` or `workflows` block — is logged and the install falls back to defaults.
+ * `streaming`, `attentionNotices`, `concurrency` or `workflows` block — is logged and the
+ * install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -413,6 +430,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
     validateStreamingConfig(parsed, configPath);
+    validateAttentionNoticesConfig(parsed, configPath);
     validateConversationConcurrencyConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
@@ -547,6 +565,7 @@ function getDefaults(): MergedConfig {
     assistant: installed.length === 1 ? installed[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
+    attentionNotices: [],
     paths: {
       workspaces: getArchonWorkspacesPath(),
       worktrees: getArchonWorktreesPath(),
@@ -665,6 +684,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   if (global.streaming) {
     result.streaming = { ...result.streaming, ...global.streaming };
   }
+
+  if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
 
   // Path preferences
   if (global.paths) {
@@ -947,6 +968,7 @@ export async function updateGlobalConfig(
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateStreamingConfig(merged, configPath);
+    validateAttentionNoticesConfig(merged, configPath);
     validateConversationConcurrencyConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 

@@ -3,6 +3,12 @@ import { PluginRpc, PluginRemoteError, type PluginIO } from '@archon/provider-co
 import { chatPluginDescriptorSchema, type ChatPluginDescriptor } from './descriptor';
 import { chatRunEventSchema, type ChatRunEvent } from './run-events';
 import {
+  chatAttentionNoticeRequestSchema,
+  chatAttentionNoticeResponseSchema,
+  type ChatAttentionNoticeRequest,
+  type ChatAttentionNoticeResponse,
+} from './attention-notices';
+import {
   chatRunActionSchema,
   chatRunActionResponseSchema,
   type ChatRunAction,
@@ -40,6 +46,7 @@ export interface ChatPlugin {
   send(params: ChatSend): Promise<void>;
   resultFooter?(params: ChatResultFooter): Promise<void>;
   onRunEvent?(event: ChatRunEvent): void | Promise<void>;
+  attentionNotice?(params: ChatAttentionNoticeRequest): Promise<ChatAttentionNoticeResponse>;
 }
 
 export async function serveChat(
@@ -52,10 +59,13 @@ export async function serveChat(
   const descriptor = chatPluginDescriptorSchema.parse(plugin.descriptor);
   const resultFooter = plugin.resultFooter?.bind(plugin);
   const onRunEvent = plugin.onRunEvent?.bind(plugin);
+  const attentionNotice = plugin.attentionNotice?.bind(plugin);
   if (Boolean(descriptor.capabilities.resultFooter) !== Boolean(resultFooter))
     throw new Error('resultFooter capability must match its handler');
   if (Boolean(descriptor.capabilities.runEvents) !== Boolean(onRunEvent))
     throw new Error('runEvents capability must match its handler');
+  if (Boolean(descriptor.capabilities.attentionNotices) !== Boolean(attentionNotice))
+    throw new Error('attentionNotices capability must match its handler');
   const rpc = new PluginRpc(io);
   rpc.plugin = descriptor.id;
   let initialized = false;
@@ -106,6 +116,14 @@ export async function serveChat(
       requireInitialized();
       await resultFooter(chatResultFooterSchema.parse(raw));
       return {};
+    });
+  }
+  if (attentionNotice) {
+    rpc.handle('chat/attention_notice', async raw => {
+      requireInitialized();
+      return chatAttentionNoticeResponseSchema.parse(
+        await attentionNotice(chatAttentionNoticeRequestSchema.parse(raw))
+      );
     });
   }
   const rendering = new Set<Promise<void>>();
