@@ -21,6 +21,9 @@ import { SlackAdapter, splitConversationId, type SlackMessageRef } from './adapt
 import { resolutionNote } from './workflow-bridge';
 import { logFailure } from './log';
 
+const UNUSABLE_CONTROL =
+  ':warning: This control could not be read. Answer in the Archon web console.';
+
 type OpenNotice = Exclude<ChatAttentionNotice, { type: 'terminal' }>;
 
 /** Where a notice control was used: the notice message, when Slack names it, and who acted. */
@@ -113,20 +116,29 @@ export class SlackAttentionNotices {
       body.channel && body.message ? { channel: body.channel.id, ts: body.message.ts } : undefined;
     const origin: Origin = { user: body.user.id, notice };
     if (action.action_id === NOTICE_COMPOSE) {
-      if (!parseNoticeAction(action.value, origin.user)) return;
-      await this.adapter
-        .getApp()
-        .client.views.open({
+      if (!parseNoticeAction(action.value, origin.user)) {
+        await this.ephemeral(origin, UNUSABLE_CONTROL);
+        return;
+      }
+      try {
+        await this.adapter.getApp().client.views.open({
           trigger_id: body.trigger_id,
           view: buildComposeView(JSON.stringify({ value: action.value, notice })),
-        })
-        .catch((error: unknown) => {
-          logFailure('attention.compose_open_failed', error);
         });
+      } catch (error) {
+        logFailure('attention.compose_open_failed', error);
+        await this.ephemeral(
+          origin,
+          ':warning: Could not open the answer form. Answer in the Archon web console.'
+        );
+      }
       return;
     }
     const runAction = parseNoticeAction(action.value, origin.user);
-    if (!runAction) return;
+    if (!runAction) {
+      await this.ephemeral(origin, UNUSABLE_CONTROL);
+      return;
+    }
     if (action.action_id === NOTICE_SUBMIT && runAction.action === 'answer') {
       const picked = body.state?.values[NOTICE_PICK]?.[NOTICE_PICK]?.selected_options ?? [];
       runAction.response.choose = picked.map(option => option.value);
@@ -142,7 +154,10 @@ export class SlackAttentionNotices {
     const { value, notice } = parseComposeMetadata(metadata);
     const runAction = parseNoticeAction(value, user);
     const text = values[NOTICE_COMPOSE]?.[NOTICE_COMPOSE]?.value ?? '';
-    if (runAction?.action !== 'answer' && runAction?.action !== 'respond') return;
+    if (runAction?.action !== 'answer' && runAction?.action !== 'respond') {
+      await this.ephemeral({ user, notice }, UNUSABLE_CONTROL);
+      return;
+    }
     runAction.response.text = text;
     await this.dispatch(runAction, { user, notice });
   }

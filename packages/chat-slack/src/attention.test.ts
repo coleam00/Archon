@@ -80,12 +80,12 @@ async function click(
     action: { type: 'button', action_id: control.action_id, value: control.value } as never,
   });
 }
-async function submit(text: string): Promise<void> {
+async function submit(text: string, metadata?: string): Promise<void> {
   const view = slack.opened.at(-1)?.view;
   const handler = slack.views.get('attention:compose');
-  if (!view || !handler) throw new Error('no open answer form');
+  if (!handler || (metadata === undefined && !view)) throw new Error('no open answer form');
   const submitted = {
-    private_metadata: view.private_metadata ?? '',
+    private_metadata: metadata ?? view?.private_metadata ?? '',
     state: { values: { 'attention:compose': { 'attention:compose': { type: 'x', value: text } } } },
   } as never;
   await handler({
@@ -196,6 +196,38 @@ test('a multi-select wait submits every picked option', async () => {
   await click(button('Submit'), { values: { 'attention:pick': { 'attention:pick': picked } } });
   expect(sent()).toMatchObject({ action: 'answer', response: { choose: ['eu', 'ap'] } });
   expect(JSON.stringify(slack.updates.at(-1))).toContain('Chose eu, ap by <@U1>');
+});
+
+test('an answer form that cannot open tells the member', async () => {
+  await notify(wait('message'));
+  slack.failOpen = new Error('expired_trigger_id');
+  await click(button('Answer'));
+  expect(slack.ephemerals).toEqual([
+    expect.objectContaining({ user: 'U1', text: expect.stringContaining('Could not open') }),
+  ]);
+});
+
+test('an unreadable answer form submission tells the member and sends nothing', async () => {
+  await notify(wait('message'));
+  await submit('eu-west-1', JSON.stringify({ notice: { channel: 'C9', ts: 'msg-1' } }));
+  expect(runAction).not.toHaveBeenCalled();
+  expect(slack.ephemerals).toEqual([
+    expect.objectContaining({ user: 'U1', text: expect.stringContaining('could not be read') }),
+  ]);
+});
+
+test('an answer to a notice the plugin no longer remembers still settles it', async () => {
+  await notify(wait('select', [{ id: 'eu' }]));
+  const control = button('eu');
+  await plugin.stop();
+  slack = new StubSlack();
+  plugin = new SlackPlugin(new SlackAdapter(() => slack.asApp()));
+  await plugin.start({ inbound: async () => ({ status: 'accepted' }), runAction });
+  await click(control);
+  expect(slack.updates).toEqual([
+    expect.objectContaining({ ts: 'msg-1', text: expect.stringContaining('Chose eu by <@U1>') }),
+  ]);
+  expect(slack.posts).toEqual([]);
 });
 
 test('a wait without a pause id offers resume', async () => {

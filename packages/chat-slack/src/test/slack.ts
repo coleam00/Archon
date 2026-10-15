@@ -40,6 +40,7 @@ export class StubSlack {
   failUpdate?: Error;
   failUser?: Error;
   failHistory?: Error;
+  failOpen?: Error;
   missingTs = false;
   started = false;
   stopped = false;
@@ -76,6 +77,7 @@ export class StubSlack {
     },
     views: {
       open: async (args: Open) => {
+        if (this.failOpen) throw this.failOpen;
         this.opened.push(args);
         return { ok: true };
       },
