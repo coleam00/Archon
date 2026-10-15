@@ -845,7 +845,8 @@ export class WorktreeProvider implements IIsolationProvider {
       if (exactBranch) {
         const actualBranch = await getCurrentBranchStrict(toWorktreePath(worktreePath));
         if (actualBranch !== exactBranch) {
-          throw new Error(
+          throw new IsolationFailure(
+            'adoption_refused',
             `Cannot adopt worktree at '${worktreePath}': expected branch ` +
               `'${exactBranch}', found '${actualBranch ?? 'detached HEAD'}'.`
           );

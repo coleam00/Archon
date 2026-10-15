@@ -8,6 +8,7 @@ import {
   chmod,
   stat,
   realpath,
+  symlink,
 } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
@@ -806,6 +807,76 @@ describe('git utilities', () => {
       expect(failure.code).toBe(128);
       expect(failure.stderr).toContain('not a git repository');
     });
+
+    test('symlinked subdirectories preserve repository failures across absence consumers', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-symlink-')));
+      const source = join(root, 'source');
+      const subdir = join(source, 'nested');
+      const link = join(root, 'linked');
+      await git.execFileAsync('git', ['init', '-q', source]);
+      await realMkdir(subdir);
+      await symlink(subdir, link, process.platform === 'win32' ? 'junction' : 'dir');
+      await writeFile(join(source, '.git', 'config'), '[invalid');
+      const failure = await git
+        .execFileAsync('git', ['-C', link, 'status'])
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('unclassified');
+      expect(failure.code).toBe(128);
+      expect(failure.stderr).toContain('config');
+      if (failure.stderr === undefined) throw new Error('expected Git stderr');
+      for (const inspect of [
+        () => git.findRepoRoot(link),
+        () => git.listWorktrees(repo(link)),
+        () => git.isBranchMerged(repo(link), branch('topic'), branch('main')),
+        () => git.isPatchEquivalent(repo(link), branch('topic'), 'main'),
+        () => git.isAncestorOf(repo(link), 'main'),
+        () => git.getLastCommitDate(repo(link)),
+      ]) {
+        await expect(inspect()).rejects.toThrow(failure.stderr);
+      }
+      expect(await git.hasUncommittedChanges(repo(link))).toBe(true);
+      const sync = await git.syncRepository(repo(link), branch('main'));
+      expect(sync.ok).toBe(false);
+      if (sync.ok) throw new Error('expected sync failure');
+      expect(sync.error.code).toBe('unknown');
+      if (sync.error.code !== 'unknown') throw new Error('expected unclassified sync failure');
+      expect(sync.error.message).toContain(failure.stderr);
+    });
+
+    test.each(['plain directory', 'damaged repository'])(
+      'remote inspection preserves failure for a %s',
+      async shape => {
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-remote-')));
+        if (shape === 'damaged repository') {
+          await git.execFileAsync('git', ['init', '-q', root]);
+          await git.execFileAsync('git', [
+            '-C',
+            root,
+            'remote',
+            'add',
+            'origin',
+            'https://gitlab.com/acme/widgets.git',
+          ]);
+          await writeFile(join(root, '.git', 'HEAD'), 'invalid HEAD');
+        }
+        const original = await git
+          .execFileAsync('git', ['-C', root, 'remote', 'get-url', 'origin'])
+          .catch((error: unknown) => error);
+        expect(original).toBeInstanceOf(git.GitFailure);
+        if (!(original instanceof git.GitFailure)) throw new Error('expected GitFailure');
+        for (const inspect of [
+          () => git.getRemoteUrl(repo(root)),
+          () => git.detectForge(repo(root)),
+        ]) {
+          const failure = await inspect().catch((error: unknown) => error);
+          expect(failure).toBeInstanceOf(Error);
+          if (!(failure instanceof Error)) throw new Error('expected remote failure');
+          expect(failure.cause).toMatchObject({ code: original.code, stderr: original.stderr });
+        }
+      }
+    );
 
     test('a vendor failure retains stderr and exit code without interpreting colliding text', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-failure-')));

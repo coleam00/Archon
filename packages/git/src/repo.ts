@@ -113,9 +113,13 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
   } catch (error) {
     const err = error as Error & { stderr?: string };
     try {
-      await execFileAsync('git', ['-C', repoPath, 'config', '--get', `remote.${remote}.url`], {
-        timeout: 10000,
-      });
+      await execFileAsync(
+        'git',
+        ['-C', repoPath, 'config', '--local', '--get', `remote.${remote}.url`],
+        {
+          timeout: 10000,
+        }
+      );
     } catch (inspectionError) {
       if (inspectionError instanceof GitFailure && inspectionError.code === 1) return null;
     }

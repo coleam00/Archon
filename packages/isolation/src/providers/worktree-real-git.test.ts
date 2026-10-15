@@ -33,6 +33,7 @@ import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 import { WorktreeProvider } from './worktree';
+import { IsolationResolver } from '../resolver';
 import type { IsolationRequest } from '../types';
 import {
   classifyIsolationError,
@@ -245,6 +246,71 @@ describe('WorktreeProvider against real git', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  test.each(['existing task', 'same-repository PR', 'fork PR'])(
+    'wrong-branch adoption blocks %s without changing its checkout',
+    async kind => {
+      const hints =
+        kind === 'existing task'
+          ? {
+              workflowType: 'task' as const,
+              workflowId: 'login',
+              taskBranch: { kind: 'existing' as const, branch: toBranchName(TASK_BRANCH) },
+            }
+          : {
+              workflowType: 'pr' as const,
+              workflowId: '4271',
+              prBranch: toBranchName(TASK_BRANCH),
+              isForkPR: kind === 'fork PR',
+            };
+      const expectedRequest: IsolationRequest =
+        hints.workflowType === 'task'
+          ? request
+          : {
+              ...request,
+              workflowType: 'pr',
+              identifier: hints.workflowId,
+              prBranch: hints.prBranch,
+              isForkPR: hints.isForkPR,
+            };
+      const target = provider.getWorktreePath(
+        expectedRequest,
+        provider.generateBranchName(expectedRequest)
+      );
+      await mkdir(join(target, '..'), { recursive: true });
+      await git(repoPath, 'worktree', 'add', '--detach', target, 'main');
+      const head = await git(target, 'rev-parse', 'HEAD');
+      const resolver = new IsolationResolver({
+        provider,
+        store: {
+          getById: async () => null,
+          findActiveByWorkflow: async () => null,
+          countActiveByCodebase: async () => 0,
+          create: async () => {
+            throw new Error('refused adoption must not create a row');
+          },
+          updateMetadata: async () => {
+            throw new Error('refused adoption must not update a row');
+          },
+          updateStatus: async () => {
+            throw new Error('refused adoption must not change status');
+          },
+        },
+      });
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: { id: request.codebaseId, name: CODEBASE_NAME, defaultCwd: repoPath },
+        hints,
+        platformType: 'web',
+      });
+      expect(result.status).toBe('blocked');
+      if (result.status !== 'blocked') throw new Error('expected blocked adoption');
+      expect(result.reason).toBe('creation_failed');
+      expect(result.userMessage).toContain('Refused to adopt');
+      expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+      expect((await git(target, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('HEAD');
+    }
+  );
 
   test('new and reused checkouts work when Git requires explicit ownership trust', async () => {
     const config = process.env.GIT_CONFIG_GLOBAL;

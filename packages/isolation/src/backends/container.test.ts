@@ -584,14 +584,29 @@ describe('ContainerBackend.resumeEnv', () => {
     expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-recreated' });
   });
 
+  test('preserves a failed volume query during resume without claiming work loss or recreating', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const failure = new Error('Docker daemon unavailable during volume query');
+    const docker = fakeDocker(args => {
+      if (args[0] === 'volume' && args[1] === 'ls') throw failure;
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const error = await backend.resumeEnv('env-c').catch((error: unknown) => error);
+    expect(error).toBe(failure);
+    expect(failure.message).not.toContain('changes are lost');
+    expect(docker.calls).toEqual([
+      ['container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}\t{{.Names}}\t{{.State}}'],
+      ['volume', 'ls', '--format', '{{.Name}}'],
+    ]);
+  });
+
   test('fails LOUD when both the container and the volume are gone (work lost)', async () => {
     const store = fakeStore();
     seedContainerRow(store);
     const docker = fakeDocker(args => {
       if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
-      if (args[0] === 'volume' && args[1] === 'inspect') {
-        throw new Error('Error: No such volume: archon-res-1-upper');
-      }
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });

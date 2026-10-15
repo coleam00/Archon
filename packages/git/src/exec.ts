@@ -1,5 +1,5 @@
-import { stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { GitFailure } from './errors';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
@@ -68,7 +68,7 @@ export function resolveBashPath(): string {
 }
 
 async function hasRepositoryMarker(path: string): Promise<boolean> {
-  let current = resolve(path);
+  let current = await realpath(path);
   while (true) {
     for (const marker of ['.git', 'HEAD']) {
       try {
