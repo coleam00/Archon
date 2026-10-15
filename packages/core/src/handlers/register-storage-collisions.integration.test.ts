@@ -8,9 +8,9 @@
  * mock.module's ../db/connection with a real adapter, which conflicts with the
  * fakes other files in this package install.
  */
-import { describe, test, expect, mock, afterEach } from 'bun:test';
+import { describe, test, expect, mock, afterEach, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -26,10 +26,14 @@ mock.module('../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
+import * as git from '@archon/git';
+import { cloneRepository } from './clone';
+
 const { registerFolder, registerRepository, ProjectRegistrationError } =
   await import('./sql-registration');
+const codebases = await import('../db/codebases');
 const { createCodebase, createManagedCodebase, findCodebaseByRepoUrl, getCodebase, listCodebases } =
-  await import('../db/codebases');
+  codebases;
 const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 const { getWorktreeBase, toRepoPath } = await import('@archon/git');
 
@@ -287,6 +291,66 @@ describe('project storage collisions', () => {
       })
     ).rejects.toThrow(legacyPath);
   });
+
+  test.each(['remote', 'name'] as const)(
+    'removes a new managed checkout when a concurrent %s claim rejects insertion, then retries',
+    async claim => {
+      const root = await makeHome();
+      const url = 'https://github.com/acme/api.git';
+      const target = join(root, '.archon', 'workspaces', 'acme', 'api', 'source');
+      const ownerPath = join(root, 'other');
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+        await mkdir(join(path, '.git'), { recursive: true });
+        return { ok: true, value: undefined };
+      });
+      const safeDirectory = spyOn(git, 'addSafeDirectory').mockResolvedValue(undefined);
+      let insertionError: unknown;
+      const racingStore = {
+        ...codebases,
+        createCodebase: async (input: Parameters<typeof createCodebase>[0]) => {
+          await createCodebase({
+            name: claim === 'name' ? input.name : 'Remote owner',
+            repository_url: claim === 'remote' ? url : 'https://other.example/acme/api.git',
+            default_cwd: ownerPath,
+          });
+          try {
+            return await createCodebase(input);
+          } catch (error) {
+            insertionError = error;
+            throw error;
+          }
+        },
+      };
+      try {
+        const rejected = await cloneRepository(racingStore, url).catch((error: unknown) => error);
+        expect(insertionError).toBeInstanceOf(Error);
+        expect(rejected).toBe(insertionError);
+        expect(String(rejected)).toContain(claim === 'remote' ? 'worktrees' : 'storage');
+        await expect(access(target)).rejects.toThrow();
+        const [owner] = await listCodebases();
+        expect(owner?.default_cwd).toBe(ownerPath);
+        expect(await listCodebases()).toHaveLength(1);
+
+        if (claim === 'remote') await codebases.deleteCodebase(owner.id);
+        const retried = await cloneRepository(codebases, url);
+        const expectedPath = join(
+          root,
+          '.archon',
+          'workspaces',
+          'acme',
+          claim === 'remote' ? 'api' : 'api-2',
+          'source'
+        );
+        expect(retried.defaultCwd).toBe(expectedPath);
+        expect((await getCodebase(retried.codebaseId))?.default_cwd).toBe(expectedPath);
+        await access(join(expectedPath, '.git'));
+        expect(clone).toHaveBeenCalledTimes(2);
+      } finally {
+        clone.mockRestore();
+        safeDirectory.mockRestore();
+      }
+    }
+  );
 
   test('concurrent folder claims cannot insert two owners of one storage root', async () => {
     const root = await makeHome();

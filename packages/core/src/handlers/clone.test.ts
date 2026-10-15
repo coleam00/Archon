@@ -1242,6 +1242,20 @@ describe('cloneRepository', () => {
 
   // ── Command auto-loading ───────────────────────────────────────────────
   describe('command auto-loading', () => {
+    test('preserves a registered checkout when loading its commands fails', async () => {
+      spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
+        if (String(path).endsWith('.git')) throw new Error('missing checkout');
+      });
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
+      mockFindCommandFiles.mockResolvedValue([{ commandName: 'build', relativePath: 'build.md' }]);
+      const error = new Error('command store unavailable');
+      mockGetCodebaseCommands.mockRejectedValueOnce(error);
+
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toBe(error);
+      expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
+      expect(spyFsRm).not.toHaveBeenCalled();
+    });
+
     test('loads commands when .archon/commands directory exists with markdown files', async () => {
       // access(): .git → ENOENT (proceed to clone), everything else → success (commands)
       spyFsAccess.mockImplementation((path: string) => {

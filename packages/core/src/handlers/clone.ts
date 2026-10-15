@@ -325,26 +325,13 @@ export async function inspectProjectBaseBranch(
   };
 }
 
-/** Register a new repository or reload an existing project's commands. */
-async function registerRepoAtPath(
+async function loadRepositoryCommands(
   codebases: IWorkflowHostStore['codebases'],
+  codebase: Codebase,
   targetPath: string,
-  name: string,
   repositoryUrl: string | null,
-  existing: Codebase | null,
-  options: RegistrationOptions
+  alreadyExisted: boolean
 ): Promise<RegisterResult> {
-  if (existing) rejectExistingChoice(options);
-  const codebase =
-    existing ??
-    (await codebases.createCodebase({
-      name,
-      repository_url: repositoryUrl ?? undefined,
-      default_cwd: targetPath,
-      default_branch: options.baseBranch ?? null,
-    }));
-  targetPath = existing?.default_cwd ?? targetPath;
-
   // Auto-load commands if found
   let commandsLoaded = 0;
   for (const folder of getCommandFolderSearchPaths()) {
@@ -373,11 +360,11 @@ async function registerRepoAtPath(
   return {
     codebaseId: codebase.id,
     name: codebase.name,
-    repositoryUrl: existing ? existing.repository_url : repositoryUrl,
+    repositoryUrl,
     defaultCwd: targetPath,
     defaultBranch: codebase.default_branch ?? null,
     commandCount: commandsLoaded,
-    alreadyExisted: existing !== null,
+    alreadyExisted,
   };
 }
 
@@ -432,13 +419,12 @@ export async function cloneRepository(
   if (existing) {
     rejectExistingChoice(options);
     if (appSource) await setupAppRepository(existing.default_cwd);
-    return registerRepoAtPath(
+    return loadRepositoryCommands(
       codebases,
-      existing.default_cwd,
-      existing.name,
-      workingUrl,
       existing,
-      options
+      existing.default_cwd,
+      existing.repository_url,
+      true
     );
   }
 
@@ -508,17 +494,24 @@ export async function cloneRepository(
     throw new Error(`Failed to clone repository: ${detail}`);
   }
 
+  let codebase: Codebase;
   try {
     getLog().debug({ path: targetPath }, 'safe_directory_added');
     if (appSource) await setupAppRepository(targetPath);
     await validateRegistrationChoice(targetPath, options);
+    codebase = await codebases.createCodebase({
+      name,
+      repository_url: workingUrl,
+      default_cwd: targetPath,
+      default_branch: options.baseBranch ?? null,
+    });
   } catch (error) {
     // Any failure here leaves a clone with no registration, which would block a retry.
     await rm(targetPath, { recursive: true });
     throw error;
   }
 
-  const result = await registerRepoAtPath(codebases, targetPath, name, workingUrl, null, options);
+  const result = await loadRepositoryCommands(codebases, codebase, targetPath, workingUrl, false);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
@@ -623,7 +616,13 @@ export async function registerRepository(
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(codebases, localPath, name, remoteUrl, null, options);
+  const codebase = await codebases.createCodebase({
+    name,
+    repository_url: remoteUrl ?? undefined,
+    default_cwd: localPath,
+    default_branch: options.baseBranch ?? null,
+  });
+  return loadRepositoryCommands(codebases, codebase, localPath, remoteUrl, false);
 }
 
 /**
