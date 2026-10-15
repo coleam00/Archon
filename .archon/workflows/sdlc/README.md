@@ -275,8 +275,8 @@ request, never the state.
   duplicate's original gets a comment linking back. Each comment is one marked
   comment, so a repeated run edits it rather than adding another. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
-  finishes without writing; one closed for another reason fails the run before any
-  comment. A demoted item, an eval run and every other verdict close nothing.
+  still records the work item and its labels, but posts no comment and doesn't close
+  it again; one closed for another reason fails the run before any comment. A demoted item, an eval run and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer
