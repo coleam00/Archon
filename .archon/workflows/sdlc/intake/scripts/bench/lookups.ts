@@ -85,9 +85,10 @@ const KEPT = new Set([
   'created_at',
 ]);
 const CLEARED = new Set(['stateReason', 'state_reason', 'closedAt', 'closed_at', 'closed_by']);
-const EMPTY_CONNECTION = { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
+const PAGE_INFO = { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null };
+const EMPTY_CONNECTION = { nodes: [], edges: [], totalCount: 0, pageInfo: PAGE_INFO };
 
-const isConnection = (value: unknown): boolean => isObject(value) && ('nodes' in value || 'edges' in value || 'totalCount' in value);
+const isConnection = (value: unknown): boolean => isObject(value) && ('nodes' in value || 'edges' in value || 'totalCount' in value || 'pageInfo' in value);
 
 /**
  * The creation view of one issue object, in the shape it arrived in. Only the keys
@@ -104,8 +105,10 @@ function creationObject(original: Readonly<Record<string, unknown>>, view: Creat
     else if (key === 'closed') result[key] = false;
     else if (key === 'updatedAt' || key === 'updated_at') result[key] = view.created_at;
     else if (key === 'labels' && Array.isArray(value)) result[key] = view.labels.map(name => ({ name }));
-    else if (key === 'labels' && isConnection(value)) result[key] = { nodes: view.labels.map(name => ({ name })), totalCount: view.labels.length };
-    else if (key === 'comments' && typeof value === 'number') result[key] = 0;
+    else if (key === 'labels' && isConnection(value) && isObject(value)) {
+      const labels = { nodes: view.labels.map(name => ({ name })), edges: view.labels.map(name => ({ node: { name }, cursor: null })), totalCount: view.labels.length, pageInfo: PAGE_INFO };
+      result[key] = Object.fromEntries(Object.entries(labels).filter(([name]) => name in value));
+    } else if (key === 'comments' && typeof value === 'number') result[key] = 0;
     else if (isConnection(value)) result[key] = EMPTY_CONNECTION;
   }
   return result;
@@ -120,6 +123,7 @@ interface Selection {
   readonly key: string;
   readonly wireKey: string;
   readonly children: Selections;
+  readonly number?: number;
 }
 type Selections = readonly (Selection | string)[];
 interface Graphql {
@@ -146,7 +150,6 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
   let identity = ISSUE_ID;
   while (tokens.some(token => token[0] === identity)) identity += '_';
   const variables = isObject(request.variables) ? request.variables : {};
-  const numbers: number[] = [];
   const insertions: number[] = [];
   const aliases: { at: number; end: number; text: string }[] = [];
   const aliasNames = new Map<string, string>();
@@ -211,22 +214,23 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
         }
       }
       const issueField = name === 'issue' || name === 'issueOrPullRequest';
+      let issueNumber: number | undefined;
       if (issueField && token() === '(') {
         for (let j = i + 1; j < tokens.length && tokens[j][0] !== ')'; j++) {
           if (tokens[j][0] !== 'number' || tokens[j + 1]?.[0] !== ':') continue;
           const value = tokens[j + 2]?.[0];
           const number = value === '$' ? variables[tokens[j + 3]?.[0] ?? ''] : Number(value);
-          if (typeof number === 'number') numbers.push(number);
+          if (typeof number === 'number') issueNumber = number;
         }
       }
       skipGroup('(', ')');
       directives();
-      fields.push({ key, wireKey, name, children: selectionSet(issueField, inFragment) });
+      fields.push({ key, wireKey, name, number: issueNumber, children: selectionSet(issueField, inFragment) });
     }
     i++;
     return fields;
   };
-  const fields: (Selection | string)[] = [];
+  const operations = new Map<string, Selections>();
   while (i < tokens.length) {
     if (token() === 'fragment') {
       const name = tokens[i + 1]?.[0] ?? '';
@@ -234,17 +238,33 @@ function identifyIssues(body: string | undefined): Graphql | undefined {
       i += 4;
       directives();
       fragments.set(name, selectionSet(type === 'Issue', true));
-    } else if (token() === '{') fields.push(...selectionSet());
-    else if (token() === '(') skipGroup('(', ')');
-    else i++;
+    } else {
+      let name = '';
+      if (token() !== '{') {
+        i++;
+        if (token() !== '(' && token() !== '{' && token() !== '@') {
+          name = token() ?? '';
+          i++;
+        }
+        skipGroup('(', ')');
+        directives();
+      }
+      operations.set(name, selectionSet());
+    }
   }
   let identified = query;
   const edits = [...aliases, ...insertions.map(at => ({ at, end: at, text: ` ... on Issue { ${identity}: id } ` }))];
   for (const edit of edits.sort((a, b) => b.at - a.at)) identified = `${identified.slice(0, edit.at)}${edit.text}${identified.slice(edit.end)}`;
-  return { body: edits.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers };
+  const fields = typeof request.operationName === 'string'
+    ? operations.get(request.operationName) ?? []
+    : operations.size === 1 ? [...operations.values()][0] : [];
+  const numbers = (selections: Selections): number[] => selectedFields(selections, { fragments }).flatMap(field => [
+    ...(field.number === undefined ? [] : [field.number]), ...numbers(field.children),
+  ]);
+  return { body: edits.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers: numbers(fields) };
 }
 
-function selectedFields(fields: Selections, graphql: Graphql): Selection[] {
+function selectedFields(fields: Selections, graphql: Pick<Graphql, 'fragments'>): Selection[] {
   const merged = new Map<string, Selection>();
   for (const field of fields.flatMap(field => typeof field === 'string' ? selectedFields(graphql.fragments.get(field) ?? [], graphql) : [field])) {
     const previous = merged.get(field.wireKey);
@@ -253,12 +273,24 @@ function selectedFields(fields: Selections, graphql: Graphql): Selection[] {
   return [...merged.values()];
 }
 
+function mergeResponse(left: unknown, right: unknown): unknown {
+  if (Array.isArray(left) && Array.isArray(right)) return right.map((value, index) => mergeResponse(left[index], value));
+  if (isObject(left) && isObject(right)) return mergeEntries([...Object.entries(left), ...Object.entries(right)]);
+  return right;
+}
+
+function mergeEntries(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
+  const result = new Map<string, unknown>();
+  for (const [key, value] of entries) result.set(key, result.has(key) ? mergeResponse(result.get(key), value) : value);
+  return Object.fromEntries(result);
+}
+
 function projectSelection(value: unknown, fields: Selections, graphql: Graphql): unknown {
   if (Array.isArray(value)) return value.map(inner => projectSelection(inner, fields, graphql));
   if (!isObject(value)) return value;
-  return Object.fromEntries(selectedFields(fields, graphql)
+  return mergeEntries(selectedFields(fields, graphql)
     .filter(field => field.name in value)
-    .map(field => [field.key, projectSelection(value[field.name], field.children, graphql)]));
+    .map(field => [field.key, projectSelection(value[field.name], field.children, graphql)] as const));
 }
 
 /** Replace identified batch issues, preserving every unrelated object and field. */
@@ -275,14 +307,17 @@ export function atCreation(
     const identity = graphql?.identity ?? ISSUE_ID;
     const original = Object.fromEntries(Object.entries(node).filter(([key]) => key !== identity));
     const view = [...views.values()].find(view =>
-      node[identity] === view.id || (graphql === undefined && (
+      node[identity] === view.id || fields.some(field =>
+        (field.name === 'id' && node[field.wireKey] === view.id) ||
+        (field.name === 'url' && sameText(node[field.wireKey], view.url))
+      ) || (graphql === undefined && (
         node.id === view.id || node.node_id === view.id || sameText(node.url, view.url) || sameText(node.html_url, view.url)
       ))
     );
     if (view !== undefined) {
       answered.add(view.number);
       if (graphql === undefined) return creationObject(original, view);
-      return Object.fromEntries(fields.flatMap(field => {
+      return mergeEntries(fields.flatMap(field => {
         if (!(field.wireKey in original)) return [];
         const inner = original[field.wireKey];
         const canonical = isObject(inner) ? Object.fromEntries(Object.entries(inner).map(([key, value]) => [
@@ -291,12 +326,12 @@ export function atCreation(
         const rewritten = creationObject({ [field.name]: canonical }, view);
         if (!(field.name in rewritten)) return [];
         const value = KEPT.has(field.name) ? visit(original[field.wireKey], field.children) : projectSelection(rewritten[field.name], field.children, graphql);
-        return [[field.key, value]];
+        return [[field.key, value] as const];
       }));
     }
-    return Object.fromEntries(Object.entries(original).map(([key, inner]) => {
+    return mergeEntries(Object.entries(original).map(([key, inner]) => {
       const field = fields.find(field => field.wireKey === key);
-      return [field?.key ?? key, visit(inner, field?.children ?? [])];
+      return [field?.key ?? key, visit(inner, field?.children ?? [])] as const;
     }));
   };
   return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', wireKey: 'data', name: 'data', children: graphql.fields }]), answered };

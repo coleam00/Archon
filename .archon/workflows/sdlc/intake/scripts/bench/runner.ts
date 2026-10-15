@@ -656,7 +656,15 @@ export function findLookups(transcript: string, tokens: readonly RegExp[]): stri
 function singleGhLookup(lookup: string): boolean {
   let command = lookup.slice(lookup.indexOf(': ') + 2);
   const wrapped = /^(?:\S*sh)\s+-[a-z]*c\s+(['"])([\s\S]*)\1$/.exec(command);
-  if (wrapped !== null) command = wrapped[2];
+  if (wrapped !== null) {
+    if (wrapped[1] === '"') {
+      for (let i = 0; i < wrapped[2].length; i++) {
+        if (wrapped[2][i] === '\\') i++;
+        else if (wrapped[2][i] === '$' || wrapped[2][i] === '`') return false;
+      }
+    }
+    command = wrapped[2];
+  }
   if (!/^gh\s+(?:issue\s+view|api)\s+/.test(command)) return false;
   let quote: "'" | '"' | undefined;
   for (let i = 0; i < command.length; i++) {

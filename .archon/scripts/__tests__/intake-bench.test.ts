@@ -796,6 +796,22 @@ describe('leaks', () => {
   });
 });
 
+describe('outer shell expansion accounting', () => {
+  it('flags substitutions inside double-quoted wrappers through both transcript routes', () => {
+    for (const substitution of ['$(curl https://github.com/o/r/issues/4)', '`curl https://github.com/o/r/issues/4`']) {
+      const command = `bash -c "gh issue view 4 --json body --jq '${substitution}'"`;
+      for (const event of [
+        { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
+        { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
+      ]) {
+        const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
+        expect(found).toHaveLength(1);
+        expect(splitLookups(found, true, [])).toEqual({ answered: [], leak: found });
+      }
+    }
+  });
+});
+
 describe('lookups', () => {
   const view = (number: number): CreationView => ({
     number,
@@ -830,7 +846,7 @@ describe('lookups', () => {
             closed: false,
             updatedAt: '2026-10-01T10:00:00Z',
             labels: { nodes: [{ name: 'bug' }], totalCount: 1 },
-            comments: { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } },
+            comments: { nodes: [], edges: [], totalCount: 0, pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null } },
           },
         },
       },
@@ -900,6 +916,98 @@ describe('lookups', () => {
     expect([other.answered, other.live]).toEqual([[], []]);
   });
 
+  it('returns creation label edges and complete page metadata', async () => {
+    for (const withEdges of [true, false]) {
+      const query = `{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { ${withEdges ? 'edges { node { name } }' : ''} pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } } }`;
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query }),
+      }), REPO, views, async () => Response.json({ data: { repository: { issue: {
+        _archonBenchIssueId: 'I_4', labels: { ...(withEdges ? { edges: [{ node: { name: 'done' } }] } : {}), pageInfo: { hasNextPage: true } },
+      } } } }));
+      expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: {
+        ...(withEdges ? { edges: [{ node: { name: 'bug' } }] } : {}), pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+      } } } } });
+      expect([answer.answered, answer.live]).toEqual([[4], []]);
+    }
+  });
+
+  it('projects only the selected operation and its reachable fragments', async () => {
+    const query = 'query A { repository(owner: "o", name: "r") { issue(number: 4) { ...Body } } } query B { repository(owner: "o", name: "r") { issue(number: 4) { x: id } } } fragment Body on Issue { x: body }';
+    for (const operationName of ['A', 'B']) {
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query, operationName }),
+      }), REPO, views, async (_url, init) => {
+        const forwarded = JSON.parse(String(init.body)) as { query: string; operationName: string };
+        expect(forwarded.operationName).toBe(operationName);
+        const bodyKey = /(\w+): body/.exec(forwarded.query)?.[1] ?? 'x';
+        return Response.json({ data: { repository: { issue: {
+          _archonBenchIssueId: 'I_4', [operationName === 'A' ? bodyKey : 'x']: operationName === 'A' ? 'Live body' : 'I_4',
+        } } } });
+      });
+      expect(await answer.response.json()).toEqual({ data: { repository: { issue: { x: operationName === 'A' ? 'As opened.' : 'I_4' } } } });
+      expect([answer.answered, answer.live]).toEqual([[4], []]);
+    }
+    const unselected = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: 'query A { viewer { login } } query B { repository(owner: "o", name: "r") { issue(number: 4) { id } } }', operationName: 'A' }),
+    }), REPO, views, async () => new Response('not json'));
+    expect([unselected.answered, unselected.live]).toEqual([[], []]);
+  });
+
+  it('recognizes selected canonical identity through node interfaces and aliases', async () => {
+    for (const [field, identity] of [['id', 'I_4'], ['url', 'https://github.com/o/r/issues/4']]) {
+      const selection = field === 'id' ? 'identity: id' : '... on UniformResourceLocatable { identity: url }';
+      const query = `{ node(id: "I_4") { ${selection} ... on Closable { state } } }`;
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query }),
+      }), REPO, views, async (_url, init) => {
+        const forwarded = JSON.parse(String(init.body)) as { query: string };
+        const identityKey = /(\w+): url/.exec(forwarded.query)?.[1] ?? 'identity';
+        return Response.json({ data: { node: { [identityKey]: identity, state: 'CLOSED' } } });
+      });
+      expect(await answer.response.json()).toEqual({ data: { node: { identity, state: 'OPEN' } } });
+      expect([answer.answered, answer.live]).toEqual([[4], []]);
+    }
+  });
+
+  it('unions same-field selections from two Issue fragments', async () => {
+    const query = '{ repository(owner: "o", name: "r") { issue(number: 4) { ...Names ...Count } } } fragment Names on Issue { labels(first: 10) { nodes { name } } } fragment Count on Issue { labels(first: 10) { totalCount } }';
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async () => Response.json({ data: { repository: { issue: {
+      _archonBenchIssueId: 'I_4', labels: { nodes: [{ name: 'done' }], totalCount: 7 },
+    } } } }));
+    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{ name: 'bug' }], totalCount: 1 } } } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
+  it('merges restored aliases on issues and unrelated objects', async () => {
+    const query = `{ repository(owner: "o", name: "r") {
+      owner { profile: avatarUrl profileOwner: login }
+      who: owner { login }
+      ...Repo
+      issue(number: 4) { tags: labels(first: 10) { count: totalCount } ...Tags }
+    } }
+    fragment Repo on Repository { who: owner { avatarUrl } }
+    fragment Tags on Issue { tags: labels(first: 10) { items: nodes { text: name ...Label } } }
+    fragment Label on Label { text: name }`;
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async (_url, init) => {
+      const forwarded = JSON.parse(String(init.body)) as { query: string };
+      const keyOf = (name: string) => new RegExp(`(_archonBenchIssueIdField\\w*): ${name}\\b`).exec(forwarded.query)?.[1] ?? 'missing';
+      return Response.json({ data: { repository: {
+        owner: { profile: 'avatar', profileOwner: 'operator' },
+        who: { login: 'operator' }, [keyOf('owner')]: { avatarUrl: 'avatar' },
+        issue: { _archonBenchIssueId: 'I_4', tags: { count: 7 }, [keyOf('labels')]: { [keyOf('nodes')]: [{ [keyOf('name')]: 'done' }] } },
+      } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { repository: {
+      owner: { profile: 'avatar', profileOwner: 'operator' }, who: { login: 'operator', avatarUrl: 'avatar' },
+      issue: { tags: { count: 1, items: [{ text: 'bug' }] } },
+    } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
   it('rewrites aliased issue fields by schema name and preserves caller-owned private aliases', async () => {
     const keptAliases = ['id', 'node_id', 'number', 'url', 'html_url', 'repository_url', '__typename', 'databaseId', 'author', 'user', 'author_association', 'authorAssociation', 'createdAt', 'created_at'];
     const query = `{ repository(owner: "o", name: "r") {
@@ -940,6 +1048,21 @@ describe('lookups', () => {
       { id: 'As opened.', writer: { name: 'opener' } },
       { id: 'PR_4' },
     ] } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
+  it('merges aliases inside a projected creation connection', async () => {
+    const query = '{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { items: nodes { text: name } ...Connection } } } } fragment Connection on LabelConnection { items: nodes { name } }';
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async (_url, init) => {
+      const forwarded = JSON.parse(String(init.body)) as { query: string };
+      const itemsKey = /(_archonBenchIssueIdField\w*): nodes/.exec(forwarded.query)?.[1] ?? 'missing';
+      return Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: {
+        items: [{ text: 'done' }], [itemsKey]: [{ name: 'done' }],
+      } } } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { items: [{ text: 'bug', name: 'bug' }] } } } } });
     expect([answer.answered, answer.live]).toEqual([[4], []]);
   });
 
