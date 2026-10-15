@@ -43,7 +43,8 @@ import {
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
-import { resolveGitHubTokenFromEnv } from '../github-auth/config';
+import { loadGitHubAppConfig, resolveGitHubTokenFromEnv } from '../github-auth/config';
+import { createGitHubAppAuthProvider } from '../github-auth/auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -81,11 +82,6 @@ interface ForgeAuthEntry {
 /** Known exact-hostname → credential source + clone credential mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
   {
-    hostPattern: 'github.com',
-    resolveToken: resolveGitHubTokenFromEnv,
-    buildCredentials: githubTokenCredentials,
-  },
-  {
     hostPattern: 'gitlab.com',
     resolveToken: () => process.env.GITLAB_TOKEN,
     buildCredentials: tokenAsOAuth2Password,
@@ -98,7 +94,7 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
 ];
 
 /** Resolve forge-specific credentials without adding them to the repository URL. */
-export function resolveForgeAuth(url: string): CloneCredentials | undefined {
+export async function resolveForgeAuth(url: string): Promise<CloneCredentials | undefined> {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
   let hostname: string;
   const parsed = safeParseUrl(url);
@@ -109,6 +105,29 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     hostname = url.split('/')[0].toLowerCase();
   }
   const authority = parsed?.host.toLowerCase() ?? hostname;
+
+  if (hostname === 'github.com') {
+    const config = loadGitHubAppConfig();
+    let token: string | undefined;
+    if (config) {
+      const path = parsed?.pathname ?? url.slice(hostname.length);
+      const repository = parseOwnerRepo(
+        path
+          .replace(/^\//, '')
+          .replace(/\.git\/?$/, '')
+          .replace(/\/$/, '')
+      );
+      if (!repository)
+        throw new ProjectRegistrationError('GitHub URL must identify an owner/repository.');
+      token = await createGitHubAppAuthProvider(config).getInstallationToken(
+        repository.owner,
+        repository.repo
+      );
+    } else {
+      token = resolveGitHubTokenFromEnv();
+    }
+    return token ? githubTokenCredentials(token) : undefined;
+  }
 
   // 1. Exact known-host match
   for (const entry of FORGE_AUTH) {
@@ -235,7 +254,7 @@ export async function inspectProjectBaseBranch(
     result = await inspectRemoteBranches({
       kind: 'url',
       url: validated.url,
-      credentials: resolveForgeAuth(validated.url),
+      credentials: await resolveForgeAuth(validated.url),
     });
   } else {
     const path = await canonicalizeProjectPath(source.path);
@@ -463,7 +482,7 @@ export async function cloneRepository(
   await ensureProjectStructure(ownerName, repoName);
 
   // Resolve authentication without putting it into the repository URL.
-  const credentials = resolveForgeAuth(workingUrl);
+  const credentials = await resolveForgeAuth(workingUrl);
 
   const cloneResult = await cloneGitRepository(
     workingUrl,

@@ -10,6 +10,7 @@
  */
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { join, resolve } from 'path';
+import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
@@ -27,6 +28,20 @@ import { createMockLogger } from '../test/mocks/logger';
 // Capture the real functions before the re-export is replaced by the module mock.
 const { findCommandFiles: discoverCommandFiles, isPathInside } =
   await import('@archon/paths/archon-paths');
+
+const appRequest = mock(async (route: string) => ({
+  data: route.startsWith('GET ')
+    ? { id: 42 }
+    : { token: 'ghs_app_clone', expires_at: new Date(Date.now() + 3600000).toISOString() },
+}));
+mock.module('@octokit/rest', () => ({
+  Octokit: class {
+    request = appRequest;
+  },
+}));
+const appPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs8', format: 'pem' })
+  .toString();
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
 const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
@@ -131,6 +146,7 @@ import {
   registerRepository,
   registerFolder,
   inspectProjectBaseBranch,
+  resolveForgeAuth,
 } from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
@@ -588,6 +604,52 @@ describe('cloneRepository', () => {
       });
     });
 
+    test.each([false, true])(
+      'uses the App installation for clone and inspection beside ambient GH_TOKEN (reject=%j)',
+      async reject => {
+        process.env.GITHUB_APP_ID = '123';
+        process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
+        const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+          status: 'available',
+          defaultBranch: gitUtils.toBranchName('main'),
+          branches: [gitUtils.toBranchName('main')],
+        });
+        appRequest.mockClear();
+        mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
+        if (reject)
+          appRequest.mockRejectedValueOnce(
+            Object.assign(new Error('installation access denied'), { status: 403 })
+          );
+        try {
+          if (reject) {
+            await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+              'installation access denied'
+            );
+            expect(spyCloneGitRepository).not.toHaveBeenCalled();
+          } else {
+            await cloneRepository('https://github.com/owner/repo');
+            expect(getGitCloneCall()?.[2]).toEqual({
+              credentials: { username: 'x-access-token', password: 'ghs_app_clone' },
+            });
+            await inspectProjectBaseBranch({ url: 'https://github.com/owner/repo.git' });
+            expect(inspection).toHaveBeenCalledWith({
+              kind: 'url',
+              url: 'https://github.com/owner/repo.git',
+              credentials: { username: 'x-access-token', password: 'ghs_app_clone' },
+            });
+            expect(appRequest).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/installation', {
+              owner: 'owner',
+              repo: 'repo',
+            });
+          }
+        } finally {
+          delete process.env.GITHUB_APP_ID;
+          delete process.env.GITHUB_APP_PRIVATE_KEY;
+          inspection.mockRestore();
+        }
+      }
+    );
+
     test('passes GITHUB_TOKEN as request-scoped clone credentials', async () => {
       process.env.GITHUB_TOKEN = 'ghp_github_token_456';
       delete process.env.GH_TOKEN;
@@ -761,43 +823,41 @@ describe('cloneRepository', () => {
 
   // ── resolveForgeAuth unit tests ──────────────────────────────────────────
   describe('resolveForgeAuth', () => {
-    const { resolveForgeAuth } = require('./clone');
-
-    test('returns GH_TOKEN as password credentials for github.com', () => {
+    test('returns GH_TOKEN as password credentials for github.com', async () => {
       process.env.GH_TOKEN = 'ghp_abc';
-      const result = resolveForgeAuth('https://github.com/owner/repo');
+      const result = await resolveForgeAuth('https://github.com/owner/repo');
       expect(result).toEqual({ username: 'x-access-token', password: 'ghp_abc' });
       delete process.env.GH_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN as oauth2 password credentials for gitlab.com', () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials for gitlab.com', async () => {
       process.env.GITLAB_TOKEN = 'glpat-xyz';
-      const result = resolveForgeAuth('https://gitlab.com/owner/repo');
+      const result = await resolveForgeAuth('https://gitlab.com/owner/repo');
       expect(result).toEqual({ username: 'oauth2', password: 'glpat-xyz' });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('returns undefined when the credential env var is not set', () => {
+    test('returns undefined when the credential env var is not set', async () => {
       delete process.env.GH_TOKEN;
-      const result = resolveForgeAuth('https://github.com/owner/repo');
+      const result = await resolveForgeAuth('https://github.com/owner/repo');
       expect(result).toBeUndefined();
     });
 
-    test('returns undefined for unknown forge', () => {
-      const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
+    test('returns undefined for unknown forge', async () => {
+      const result = await resolveForgeAuth('https://bitbucket.org/owner/repo');
       expect(result).toBeUndefined();
     });
 
-    test('resolves GH_TOKEN for bare host/path form without protocol', () => {
+    test('resolves GH_TOKEN for bare host/path form without protocol', async () => {
       process.env.GH_TOKEN = 'ghp_bare';
-      const result = resolveForgeAuth('github.com/owner/repo');
+      const result = await resolveForgeAuth('github.com/owner/repo');
       expect(result).toEqual({ username: 'x-access-token', password: 'ghp_bare' });
       delete process.env.GH_TOKEN;
     });
 
-    test('does not match forge name in URL path (security)', () => {
+    test('does not match forge name in URL path (security)', async () => {
       process.env.GITLAB_TOKEN = 'glpat-leaked';
-      const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
+      const result = await resolveForgeAuth('https://evil.example.com/gitlab/mirror');
       expect(result).toBeUndefined();
       delete process.env.GITLAB_TOKEN;
     });
@@ -806,58 +866,60 @@ describe('cloneRepository', () => {
       ['GITLAB_TOKEN', 'https://gitlab.attacker.example/x.git'],
       ['GITEA_TOKEN', 'https://gitea.attacker.example/x.git'],
       ['GITEA_TOKEN', 'https://forgejo.attacker.example/x.git'],
-    ])('does not send %s to an unconfigured host named like a forge: %s', (envVar, url) => {
+    ])('does not send %s to an unconfigured host named like a forge: %s', async (envVar, url) => {
       process.env[envVar] = 'tok-shouldnotleak';
-      const result = resolveForgeAuth(url);
+      const result = await resolveForgeAuth(url);
       delete process.env[envVar];
       expect(result).toBeUndefined();
     });
 
-    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', () => {
+    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', async () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_123';
-      const result = resolveForgeAuth('https://git.example.com/group/app.git');
+      const result = await resolveForgeAuth('https://git.example.com/group/app.git');
       expect(result).toEqual({ username: 'gitea_tok_123', password: '' });
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN as oauth2 password credentials when GITLAB_URL matches', () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials when GITLAB_URL matches', async () => {
       process.env.GITLAB_URL = 'https://code.mycompany.com';
       process.env.GITLAB_TOKEN = 'glpat-corp';
-      const result = resolveForgeAuth('https://code.mycompany.com/team/project');
+      const result = await resolveForgeAuth('https://code.mycompany.com/team/project');
       expect(result).toEqual({ username: 'oauth2', password: 'glpat-corp' });
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('matches configured forge authentication by explicit authority', () => {
+    test('matches configured forge authentication by explicit authority', async () => {
       process.env.GITLAB_URL = 'https://code.mycompany.com:8443';
       process.env.GITLAB_TOKEN = 'glpat-port';
 
-      expect(resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
+      expect(await resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
         username: 'oauth2',
         password: 'glpat-port',
       });
-      expect(resolveForgeAuth('https://code.mycompany.com:9443/team/project')).toBeUndefined();
+      expect(
+        await resolveForgeAuth('https://code.mycompany.com:9443/team/project')
+      ).toBeUndefined();
 
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', () => {
+    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', async () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_secret';
-      const result = resolveForgeAuth('https://evil.example.com/repo');
+      const result = await resolveForgeAuth('https://evil.example.com/repo');
       expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
 
-    test('URL fallback does not activate when token env var is unset', () => {
+    test('URL fallback does not activate when token env var is unset', async () => {
       process.env.GITEA_URL = 'https://git.example.com';
       delete process.env.GITEA_TOKEN;
-      const result = resolveForgeAuth('https://git.example.com/group/app');
+      const result = await resolveForgeAuth('https://git.example.com/group/app');
       expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
     });
