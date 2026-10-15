@@ -88,15 +88,28 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
     });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const exists = await localBranchExists(repoPath, branchName).catch(
-      (inspectionError: unknown) => {
-        getLog().debug(
-          { err: inspectionError, repoPath, branchName },
-          'checkout_ref_inspection_failed'
-        );
-        return true;
-      }
-    );
+    const exists = await (async () => {
+      if (await localBranchExists(repoPath, branchName)) return true;
+      const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
+        timeout: 10000,
+      });
+      const { stdout: refs } = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'for-each-ref', '--format=%(refname)', 'refs/remotes'],
+        { timeout: 10000 }
+      );
+      const remoteRefs = new Set(refs.trim().split('\n'));
+      return remotes
+        .trim()
+        .split('\n')
+        .some(remote => remoteRefs.has(`refs/remotes/${remote}/${branchName}`));
+    })().catch((inspectionError: unknown) => {
+      getLog().debug(
+        { err: inspectionError, repoPath, branchName },
+        'checkout_ref_inspection_failed'
+      );
+      return true;
+    });
     if (!exists) {
       await execFileAsync('git', ['-C', repoPath, 'checkout', '-b', branchName], {
         timeout: 30000,

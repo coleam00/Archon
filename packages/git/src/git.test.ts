@@ -1037,11 +1037,13 @@ branch refs/heads/feature/auth
           Object.assign(new Error('ref lookup'), { code: 1 })
         )
       );
+      execSpy.mockResolvedValueOnce({ stdout: 'origin\n', stderr: '' });
+      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(3);
+      expect(execSpy).toHaveBeenCalledTimes(5);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -1064,11 +1066,13 @@ branch refs/heads/feature/auth
           Object.assign(new Error('ref lookup'), { code: 1 })
         )
       );
+      execSpy.mockResolvedValueOnce({ stdout: 'origin\n', stderr: '' });
+      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       await git.checkout(repo('/workspace/repo'), branch('new-branch'));
 
-      expect(execSpy).toHaveBeenCalledTimes(3);
+      expect(execSpy).toHaveBeenCalledTimes(5);
       expect(execSpy).toHaveBeenLastCalledWith(
         'git',
         ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
@@ -1076,6 +1080,18 @@ branch refs/heads/feature/auth
           timeout: 30000,
         }
       );
+    });
+
+    test('preserves the checkout failure when remote inspection fails', async () => {
+      const failure = new git.GitFailure('unclassified', 'original checkout failure');
+      execSpy.mockRejectedValueOnce(failure);
+      execSpy.mockRejectedValueOnce(Object.assign(new Error('absent ref'), { code: 1 }));
+      execSpy.mockRejectedValueOnce(new Error('remote inspection failed'));
+      const error = await git
+        .checkout(repo('/workspace/repo'), branch('feature'))
+        .catch((error: unknown) => error);
+      expect(error).toHaveProperty('cause', failure);
+      expect(execSpy).toHaveBeenCalledTimes(3);
     });
 
     test('throws and logs on unexpected error', async () => {
@@ -1095,6 +1111,68 @@ branch refs/heads/feature/auth
         }),
         'checkout_failed'
       );
+    });
+  });
+
+  describe('checkout with real Git refs', () => {
+    let root: git.RepoPath;
+    let base: string;
+    let remoteCommit: string;
+    const run = async (...args: string[]): Promise<string> => {
+      const result = await git.execFileAsync('git', ['-C', root, ...args]);
+      return result.stdout.trim();
+    };
+
+    beforeEach(async () => {
+      root = repo(trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-checkout-'))));
+      await run('init', '-q', '-b', 'main');
+      await run('config', 'user.email', 'test@example.com');
+      await run('config', 'user.name', 'Archon Test');
+      await run('config', 'commit.gpgsign', 'false');
+      await run('config', 'checkout.guess', 'true');
+      await run('commit', '--allow-empty', '-qm', 'base');
+      base = await run('rev-parse', 'HEAD');
+      await writeFile(join(root, 'conflict.txt'), 'remote content');
+      await run('add', 'conflict.txt');
+      await run('commit', '-qm', 'remote change');
+      remoteCommit = await run('rev-parse', 'HEAD');
+      await run('remote', 'add', 'origin', root);
+      await run('update-ref', 'refs/remotes/origin/feature', remoteCommit);
+      await run('reset', '--hard', base);
+    });
+
+    test('preserves a remote checkout conflict without creating a branch at HEAD', async () => {
+      await writeFile(join(root, 'conflict.txt'), 'local untracked content');
+      const error = await git.checkout(root, branch('feature')).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected checkout failure');
+      expect(error.cause).toBeInstanceOf(git.GitFailure);
+      expect(error.cause).toHaveProperty('code', 1);
+      expect(error.cause).toHaveProperty('stderr', expect.stringContaining('conflict.txt'));
+      expect(await run('rev-parse', 'HEAD')).toBe(base);
+      expect(await git.localBranchExists(root, branch('feature'))).toBe(false);
+      expect(await readFile(join(root, 'conflict.txt'), 'utf8')).toBe('local untracked content');
+    });
+
+    test('preserves ambiguous remote checkout failure without creating a branch', async () => {
+      await run('remote', 'add', 'other', root);
+      await run('config', 'checkout.defaultRemote', 'nonexistent');
+      await run('update-ref', 'refs/remotes/other/feature', remoteCommit);
+      await expect(git.checkout(root, branch('feature'))).rejects.toThrow('Failed to checkout');
+      expect(await run('rev-parse', 'HEAD')).toBe(base);
+      expect(await git.localBranchExists(root, branch('feature'))).toBe(false);
+    });
+
+    test('checks out an unambiguous remote branch at its commit', async () => {
+      await git.checkout(root, branch('feature'));
+      expect(await run('rev-parse', 'HEAD')).toBe(remoteCommit);
+      expect(await run('symbolic-ref', '--short', 'HEAD')).toBe('feature');
+    });
+
+    test('creates a genuinely new branch at HEAD', async () => {
+      await git.checkout(root, branch('new-branch'));
+      expect(await run('rev-parse', 'HEAD')).toBe(base);
+      expect(await run('symbolic-ref', '--short', 'HEAD')).toBe('new-branch');
     });
   });
 

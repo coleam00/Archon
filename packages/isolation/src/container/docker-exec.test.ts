@@ -126,3 +126,18 @@ test('version preflight preserves structured permission guidance', async () => {
   expect(error.cause).toBe(cause);
   expect(classifyIsolationError(error)).toContain('Permission denied');
 });
+
+test('image preflight preserves typed timeout without build advice', async () => {
+  const failure = new IsolationFailure('timeout', 'image inspection timed out');
+  const runner: DockerRunner = async args => {
+    if (args[0] === 'version') return { stdout: '28', stderr: '' };
+    throw failure;
+  };
+  const error = await dockerPreflight('image', runner).catch((error: unknown) => error);
+  expect(error).toBe(failure);
+  if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+  expect(error.kind).toBe('timeout');
+  expect(error.message).toBe('image inspection timed out');
+  expect(classifyIsolationError(error)).toContain('Timed out');
+  expect(classifyIsolationError(error)).not.toContain('docker build');
+});

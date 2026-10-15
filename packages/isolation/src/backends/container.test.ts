@@ -506,6 +506,24 @@ describe('ContainerBackend.suspend', () => {
 });
 
 describe('ContainerBackend.resumeEnv', () => {
+  test.each(['paused', 'restarting'])(
+    'rejects a %s container before returning an execution handle',
+    async state => {
+      const store = fakeStore();
+      seedContainerRow(store);
+      const docker = fakeDocker(args => {
+        if (args[0] === 'container')
+          return { stdout: `cid-orig\tarchon-res-1\t${state}\n`, stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      await expect(backend.resumeEnv('env-c')).rejects.toThrow(
+        `container 'archon-res-1' is ${state}`
+      );
+      expect(docker.calls.map(args => args[0])).toEqual(['container']);
+    }
+  );
+
   test('reuses a still-running container', async () => {
     const store = fakeStore();
     seedContainerRow(store);

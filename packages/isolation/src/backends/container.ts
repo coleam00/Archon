@@ -427,6 +427,12 @@ export class ContainerBackend implements IIsolationBackend {
       log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
       return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
     }
+    if (presence === 'paused' || presence === 'restarting') {
+      throw new IsolationFailure(
+        'unclassified',
+        `Cannot resume container env '${envId}': container '${containerName}' is ${presence}.`
+      );
+    }
     if (presence === 'stopped') {
       await this.docker(['start', containerName]);
       const containerId = await this.getContainerId(containerName);
@@ -584,12 +590,14 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Container presence as three outcomes: `running`, `stopped` (exists but not
-   * running), or `missing` (no such container). Distinct from {@link containerState}
+   * Preserve active states that cannot execute work: paused and restarting must
+   * neither resume as ready nor suppress a failed stop. Distinct from {@link containerState}
    * which folds "missing" and "inspect blip" into `unknown` — resume MUST tell
    * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
    */
-  private async describeContainer(nameOrId: string): Promise<'running' | 'stopped' | 'missing'> {
+  private async describeContainer(
+    nameOrId: string
+  ): Promise<'running' | 'paused' | 'restarting' | 'stopped' | 'missing'> {
     const { stdout } = await this.docker([
       'container',
       'ls',
@@ -608,7 +616,7 @@ export class ContainerBackend implements IIsolationBackend {
       case 'running':
       case 'paused':
       case 'restarting':
-        return 'running';
+        return match[2];
       case 'created':
       case 'exited':
       case 'dead':

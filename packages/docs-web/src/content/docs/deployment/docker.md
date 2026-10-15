@@ -561,7 +561,8 @@ socket (`/var/run/docker.sock`).
 **When Archon itself runs inside Docker (this compose stack), `--container` does not work:**
 the app image ships no `docker` CLI and the compose stack deliberately does **not** mount
 `/var/run/docker.sock`. A `--container` run fails fast at preflight with a
-"Cannot connect to the Docker daemon" error (the message calls out the dockerized case).
+`docker version failed` error that retains the CLI failure and explains that the
+`--container` backend is unavailable when Archon runs inside Docker.
 Worktree isolation (the default for git repos) and in-place folder runs are unaffected —
 only the `--container` backend requires the daemon.
 
