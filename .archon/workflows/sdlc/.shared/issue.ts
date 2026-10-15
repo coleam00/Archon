@@ -9,9 +9,6 @@
  * history; the forge source has no history and answers with the current text.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   forgeSource,
   invokeForge,
@@ -143,31 +140,26 @@ export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
     if (before.state_reason === reason) return;
     throw new Error(`${before.html_url} is already closed for another reason`);
   }
-  const directory = mkdtempSync(join(tmpdir(), 'archon-close-'));
-  try {
-    const payload = join(directory, 'close.json');
-    writeFileSync(payload, JSON.stringify({ state: 'closed', state_reason: reason }));
-    const result = Bun.spawnSync(
-      [
-        'gh',
-        'api',
-        '--hostname',
-        item.repo.host,
-        '--method',
-        'PATCH',
-        `repos/${item.repo.path}/issues/${String(item.number)}`,
-        '--input',
-        payload,
-      ],
-      { stdout: 'pipe', stderr: 'pipe' }
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      item.repo.host,
+      '--method',
+      'PATCH',
+      `repos/${item.repo.path}/issues/${String(item.number)}`,
+      '-f',
+      'state=closed',
+      '-f',
+      `state_reason=${reason}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh api close of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
     );
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `gh api close of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
-      );
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
   }
   const after = ghIssue(item);
   if (after.state !== 'closed' || after.state_reason !== reason) {

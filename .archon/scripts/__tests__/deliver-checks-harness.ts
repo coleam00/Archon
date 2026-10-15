@@ -266,7 +266,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (endpoint.endsWith('/issues/' + String(subject.number))) {
       if (method === 'PATCH') {
         if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-        const change = input();
+        const field = (name) => argv.find(part => part.startsWith(name + '='))?.slice(name.length + 1);
+        const change = { state: field('state'), state_reason: field('state_reason') };
         appendFileSync(${JSON.stringify(ghLog)} + '.closes', JSON.stringify({ number: subject.number, ...change }) + '\\n');
         if (!fake.writeLost) { subject.state = change.state; subject.state_reason = change.state_reason; }
       }
