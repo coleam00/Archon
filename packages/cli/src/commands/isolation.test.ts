@@ -865,6 +865,24 @@ describe('isolationCleanupCommand', () => {
     }
   );
 
+  it('counts a failed owning-run lookup as failed and keeps cleaning the rest', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([
+      { ...mockEnv, id: 'env-lookup-fails' },
+      { ...mockEnv, id: 'env-stale-3', working_path: '/test/other' },
+    ]);
+    mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
+
+    await isolationCleanupCommand(7);
+
+    expect(mockDestroyWorktree).toHaveBeenCalledTimes(1);
+    expect(mockDestroyWorktree.mock.calls[0]?.[0]).toBe('/test/other');
+    expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-3', 'destroyed');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  Status: Failed - database is locked');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '\nCleanup complete: 1 cleaned, 0 skipped, 1 failed'
+    );
+  });
+
   it('skips a stale environment owned by a live run without destroying it', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([
       { ...mockEnv, id: 'env-stale-2', branch_name: 'stale-branch' },

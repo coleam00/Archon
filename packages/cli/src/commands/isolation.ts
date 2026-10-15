@@ -137,20 +137,20 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
     console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
     console.log(`  Path: ${env.working_path}`);
 
-    // A run that can still claim the environment blocks removal, even when the
-    // conversation recency filter marks the env stale.
-    const liveRun = await getLiveRunBlocker(env.id);
-    if (liveRun) {
-      getLog().info(
-        { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
-        'skip_stale_live_run'
-      );
-      console.log(`  Status: Skipped — ${liveRun.display}`);
-      skipped++;
-      continue;
-    }
-
     try {
+      // A run that can still claim the environment blocks removal, even when the
+      // conversation recency filter marks the env stale.
+      const liveRun = await getLiveRunBlocker(env.id);
+      if (liveRun) {
+        getLog().info(
+          { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
+          'skip_stale_live_run'
+        );
+        console.log(`  Status: Skipped — ${liveRun.display}`);
+        skipped++;
+        continue;
+      }
+
       const result = await provider.destroy(env.working_path, {
         // A stale environment's branch is deleted only when the environment created it;
         // an existing branch it checked out may hold commits that exist nowhere else.
