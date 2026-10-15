@@ -121,6 +121,9 @@ const isolationStore: IIsolationStore = {
   updateStatus: () => {
     throw new Error('Unexpected isolation update');
   },
+  updateMetadata: () => {
+    throw new Error('unused');
+  },
   countActiveByCodebase: () => {
     throw new Error('Unexpected isolation count');
   },
@@ -1972,6 +1975,26 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
+  test('a usage-limit wait is refused by both verbs', () => {
+    // Rejecting it would cancel the run under an approval audit trail for a gate
+    // that never existed; cancel and abandon are the ways to stop it.
+    const waiting = {
+      wait: {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince: '2026-08-28T10:00:00.000Z',
+        resumeAt: '2026-08-28T15:00:00.000Z',
+      },
+    };
+    for (const assertFn of [assertApprovable, assertRejectable]) {
+      expect(() => assertFn(withMeta(waiting))).toThrow(
+        'Run run-1 is waiting for a provider usage limit to reset at 2026-08-28T15:00:00.000Z'
+      );
+    }
+  });
+
   test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {
@@ -3246,7 +3269,11 @@ describe('run action authorization precedes effects and state validation', () =>
           cancel: () => operations.cancelWorkflow(run.id, actor),
           abandon: () => operations.abandonWorkflow(run.id, actor),
           signal: () =>
-            operations.signalWorkflowWait(run.id, 'event', 'now', 'secret payload', actor),
+            operations.signalWorkflowWait(
+              run.id,
+              { event: 'event', resumeAt: 'now', payload: 'secret payload' },
+              actor
+            ),
           delete: () => operations.deleteWorkflowRun(run.id, actor),
         } satisfies Record<RunAction, () => Promise<unknown>>;
         await expect(calls[action]()).rejects.toBeInstanceOf(RunActionForbiddenError);
@@ -3375,9 +3402,7 @@ describe('starter, admin and operator can act through core', () => {
           signal: () =>
             operations.signalWorkflowWait(
               run.id,
-              'ready',
-              '2026-10-06T00:00:00.000Z',
-              undefined,
+              { event: 'ready', resumeAt: '2026-10-06T00:00:00.000Z' },
               actor
             ),
           delete: () => operations.deleteWorkflowRun(run.id, actor),

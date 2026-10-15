@@ -344,6 +344,8 @@ describe('hard checks decide whether a sample counts', () => {
       completed_at: '2026-10-01T12:10:00Z',
       base_branch: 'dev',
       aliases: tiers,
+      transcript_path: null,
+      returns: null,
       nodes: [
         agent('review__code', { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: provider('claude-opus') } }, 1.5),
         agent('simplify__simplify', { provider: 'claude', tier: 'medium', model: { requested: 'sonnet', resolved: provider('claude-sonnet') } }, 0.25),
@@ -455,7 +457,7 @@ describe('hard checks decide whether a sample counts', () => {
 describe('collectItem', () => {
   it('reads the artifacts directory the engine writes', () => {
     const detail = { id: 'r1', output_root: '/home/me/.archon/workspaces/o/r' } as const;
-    expect(artifactsOf({ ...detail, status: 'completed', started_at: '', completed_at: null, base_branch: 'dev', aliases: {}, nodes: [] })).toBe(
+    expect(artifactsOf({ ...detail, status: 'completed', started_at: '', completed_at: null, base_branch: 'dev', aliases: {}, transcript_path: null, returns: null, nodes: [] })).toBe(
       getRunArtifactsDirForRoot(detail.output_root, detail.id)
     );
   });
@@ -476,6 +478,8 @@ describe('collectItem', () => {
       completed_at: null,
       base_branch: 'dev',
       aliases: {},
+      transcript_path: null,
+      returns: null,
       nodes: [],
     };
     const itemDir = join(root, 'item');
@@ -808,6 +812,20 @@ describe('bench run', () => {
     expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toEqual([
       { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, defect: 'D1', judge: { caught_by: ['code'], finding: null }, mark: null, note: null },
     ]);
+  });
+
+  it('judges a spilled return and records an unavailable return as invalid', () => {
+    const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
+    const spill = join(out, 'judge-return.json');
+    writeFileSync(spill, JSON.stringify({ defects: [{ id: 'D1', caught_by: [], finding: null, excerpt: null, evidence: 'Missed.' }], shape_unmatched: 0 }));
+    const returned = (runId: string, returns: unknown) => writeFileSync(join(cli, `detail-${runId}.json`), JSON.stringify({ terminal_record: { returns } }));
+    returned('run-2', { availability: 'truncated', spill_path: spill });
+    expect(run('--variant', 'v1').status).toBe(0);
+    expect(readLines(join(out, 'judgements.jsonl'))[0]).toMatchObject({ valid: true, defects: [{ id: 'D1' }] });
+
+    returned('run-4', { availability: 'unavailable', reason: 'node_failed' });
+    expect(run('--variant', 'v1').status).toBe(1);
+    expect(readLines(join(out, 'judgements.jsonl'))[1]).toMatchObject({ valid: false, reason: 'run run-4 returned no value: {"availability":"unavailable","reason":"node_failed"}' });
   });
 
   it('re-judges recorded samples without touching a marked entry, and lists a clean finding to mark', () => {

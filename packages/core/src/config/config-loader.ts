@@ -1,7 +1,12 @@
 import { validateWorktreePostCreate } from '@archon/isolation';
 import { installedProviders, missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
-import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
+import type { OpencodeProviderDefaults } from '@archon/providers/types';
+import {
+  DEFAULT_TOOL_CALL_ATTENTION_MS,
+  deprecatedQuotaPolicyWarning,
+  liveWorkflowPolicy,
+} from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
  *
@@ -35,6 +40,10 @@ import type {
   SafeConfig,
   AssistantDefaults,
   AssistantDefaultsConfig,
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  CopilotProviderDefaults,
+  PiProviderDefaults,
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
@@ -140,15 +149,28 @@ function mergeAssistantDefaults(
  * but none of its defaults. Providers whose defaults are safe to surface
  * register their fields here.
  */
-const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
+const SAFE_ASSISTANT_FIELDS: {
+  [P in keyof SafeFieldOwners]: readonly (keyof SafeFieldOwners[P])[];
+} = {
   claude: ['model'],
   codex: ['model', 'modelReasoningEffort', 'webSearchMode'],
   // community providers — list each field we're confident is safe to
   // show in the web UI. Unknown providers fall through with no fields.
-  opencode: ['model', 'agent'],
+  opencode: ['model'],
   pi: ['model'],
   copilot: ['model'],
 };
+
+/** Each listed field must be a key of its provider's schema-derived defaults. */
+interface SafeFieldOwners {
+  claude: ClaudeProviderDefaults;
+  codex: CodexProviderDefaults;
+  opencode: OpencodeProviderDefaults;
+  pi: PiProviderDefaults;
+  copilot: CopilotProviderDefaults;
+}
+
+const safeFieldsByProvider: Partial<Record<string, readonly string[]>> = SAFE_ASSISTANT_FIELDS;
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
   const safeAssistants: SafeConfig['assistants'] = {};
@@ -156,7 +178,7 @@ function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['ass
   for (const [providerId, providerDefaults] of Object.entries(assistants)) {
     if (!providerDefaults || typeof providerDefaults !== 'object') continue;
 
-    const allowed = SAFE_ASSISTANT_FIELDS[providerId] ?? [];
+    const allowed = safeFieldsByProvider[providerId] ?? [];
     const safeDefaults: Record<string, unknown> = {};
     for (const field of allowed) {
       const value = (providerDefaults as Record<string, unknown>)[field];
@@ -290,6 +312,10 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
       .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
       .join('; ');
     throw new InvalidConfigError('Invalid workflows config', configPath, issues);
+  }
+  const warning = deprecatedQuotaPolicyWarning(result.data);
+  if (warning !== undefined) {
+    getLog().warn({ configPath, warning }, 'config.workflows_quota_keys_deprecated');
   }
   config.workflows = result.data;
 }
@@ -567,9 +593,7 @@ function getDefaults(): MergedConfig {
     },
     workflows: {
       toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
-      autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 24 * 60 * 60 * 1000,
+      autoResumeOnQuotaReset: true,
     },
     commands: {
       folder: undefined,
@@ -681,7 +705,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   }
 
   if (global.workflows) {
-    result.workflows = { ...result.workflows, ...global.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(global.workflows) };
   }
 
   // Container backend defaults (folder projects)
@@ -718,7 +742,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   result.tiers = mergeTiers(result.tiers, repo.tiers);
 
   if (repo.workflows) {
-    result.workflows = { ...result.workflows, ...repo.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(repo.workflows) };
   }
 
   // Commands config

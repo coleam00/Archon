@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
@@ -619,6 +620,22 @@ const mockAddMessage = mock<typeof MessageDb.addMessage>((conversationId, role, 
 const mockGetRecentWorkflowResultMessages = mock<typeof MessageDb.getRecentWorkflowResultMessages>(
   () => Promise.resolve([])
 );
+const mockAdoptionMetadata = mock<typeof import('../db/isolation-environments').updateMetadata>(
+  async () => {}
+);
+const mockResumedEnvironment = mock(
+  async (): Promise<ReturnType<typeof makeIsolationEnvironment> | null> => null
+);
+const mockAdoptedEnvironment = mock(
+  async (): Promise<AgentIsolationEnvironment | null> =>
+    makeIsolationEnvironment({ working_path: '/wt/adopted' })
+);
+mock.module('../db/isolation-environments', () => ({
+  getById: mockAdoptedEnvironment,
+  findLatestByCodebaseAndWorkingPath: mockResumedEnvironment,
+  updateMetadata: mockAdoptionMetadata,
+}));
+
 mock.module('../db/messages', () => ({
   addMessage: mockAddMessage,
   listMessages: mock(() => Promise.resolve([])),
@@ -647,6 +664,7 @@ mock.module('../utils/workflow-source-root', () => ({
 }));
 
 mock.module('@archon/git', () => ({
+  verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
   // /register-project probes git-ness via findRepoRoot; a non-null root marks
@@ -1498,8 +1516,6 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
     defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
@@ -1556,7 +1572,7 @@ function makeIsolationEnvironment(
     working_path: '/wt/from-branch',
     branch_name: 'feature/adopted',
     status: 'active',
-    created_at: new Date(),
+    created_at: new Date('2026-01-01'),
     created_by_platform: 'web',
     created_by_user_id: null,
     metadata: {},
@@ -1863,37 +1879,30 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
 
-  test('passes preset systemPrompt for claude provider', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
-    );
+  test.each(['stub-plugin', 'claude'])(
+    'sends the orchestrator instructions as appendSystemPrompt to %s',
+    async provider => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: provider }))
+      );
+      mockLoadConfig.mockResolvedValueOnce(
+        makeConfig({
+          tiers: {
+            small: { provider, model: 'small-model' },
+            large: { provider, model: 'large-model' },
+          },
+        })
+      );
 
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
-    expect(mockSendQuery).toHaveBeenCalled();
-    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    const sp = requestOptions.systemPrompt as Record<string, unknown>;
-    expect(sp).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-      append: 'orchestrator system append',
-    });
-  });
-
-  test('passes plain string systemPrompt for non-claude provider', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
-    );
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
-
-    expect(mockSendQuery).toHaveBeenCalled();
-    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    expect(typeof requestOptions.systemPrompt).toBe('string');
-    expect(requestOptions.systemPrompt).toBe('orchestrator system append');
-  });
+      expect(mockSendQuery).toHaveBeenCalled();
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      expect(requestOptions.appendSystemPrompt).toBe('orchestrator system append');
+      expect(requestOptions).not.toHaveProperty('systemPrompt');
+    }
+  );
 
   test('appends the run-management section (and no native tool) for a project-scoped non-native-tool provider', async () => {
     const providers = await import('@archon/providers');
@@ -1911,8 +1920,7 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      // Codex → plain-string prompt that now carries the CLI pointer section.
-      expect(requestOptions.systemPrompt).toContain('## Managing Workflow Runs');
+      expect(requestOptions.appendSystemPrompt).toContain('## Managing Workflow Runs');
       // Providers without native tools get NO in-process tool — bash CLI only.
       expect(requestOptions.nativeTools).toBeUndefined();
     } finally {
@@ -1936,10 +1944,8 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      // Claude → preset object; the append must NOT carry the CLI pointer
-      // (it gets the in-process tool instead, so the pointer would be redundant).
-      const sp = requestOptions.systemPrompt as { append?: string };
-      expect(sp.append).not.toContain('## Managing Workflow Runs');
+      // The in-process tool replaces the CLI pointer, which would be redundant.
+      expect(requestOptions.appendSystemPrompt).not.toContain('## Managing Workflow Runs');
       // Native-tool provider gets the manage_run tool instead.
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
     } finally {
@@ -2504,8 +2510,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2518,6 +2523,11 @@ describe('workflow dispatch routing', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockAdoptionMetadata).toHaveBeenCalledWith(
+      'env-1',
+      { adopted: true },
+      expect.objectContaining({ id: 'env-1' })
+    );
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     expect(callArgs[3]).toBe('/wt/adopted');
     const opts = callArgs[callArgs.length - 1] as {
@@ -2531,6 +2541,94 @@ describe('workflow dispatch routing', () => {
       isolation_env_id: 'env-1',
     });
   });
+
+  test('background adoption leaves recording to dispatch', async () => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    const lane = {
+      kind: 'reuse-worktree' as const,
+      environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+    };
+    mockResolveWorkflowAdoption.mockResolvedValueOnce({
+      adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+      lane,
+    });
+    mockAdoptionMetadata.mockClear();
+    mockLogger.warn.mockClear();
+    let recordedByDispatcher = false;
+    mockDispatchBackgroundWorkflow.mockImplementationOnce(async ctx => {
+      expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+      const { adoptRegisteredWorktree } = await import('../operations/workflow-adoption');
+      if (ctx.adoptionLane?.kind !== 'reuse-worktree') throw new Error('Missing reuse lane');
+      await adoptRegisteredWorktree(
+        { getById: mockAdoptedEnvironment, updateMetadata: mockAdoptionMetadata },
+        ctx.adoptionLane,
+        '/test/cwd'
+      );
+      recordedByDispatcher = true;
+    });
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowAdoptRunId: 'prior-run',
+    });
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+    expect(recordedByDispatcher).toBe(true);
+    expect(mockAdoptionMetadata).toHaveBeenCalledTimes(1);
+    expect(
+      mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+    ).toHaveLength(1);
+  });
+
+  test.each(['missing', 'mismatched', 'replaced'] as const)(
+    'foreground adoption refuses a %s environment before capture',
+    async reason => {
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane: {
+          kind: 'reuse-worktree',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+        },
+      });
+      mockAdoptedEnvironment.mockResolvedValueOnce(
+        reason === 'missing'
+          ? null
+          : reason === 'replaced'
+            ? makeIsolationEnvironment({
+                working_path: '/wt/adopted',
+                metadata: { worktree_registration_id: 'replacement' },
+              })
+            : makeIsolationEnvironment()
+      );
+      mockPrepareWorkflowSource.mockClear();
+      mockAdoptionMetadata.mockClear();
+      mockLogger.warn.mockClear();
+      const platform = makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowAdoptRunId: 'prior-run',
+      });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining(
+          reason === 'missing'
+            ? 'Isolation environment env-1 not found'
+            : reason === 'replaced'
+              ? 'changed during adoption'
+              : 'does not match'
+        )
+      );
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+      expect(
+        mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+      ).toHaveLength(0);
+    }
+  );
 
   test('adopt with checkout-branch lane materializes the exact adopted branch', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
@@ -2621,8 +2719,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2840,7 +2937,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2871,7 +2968,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -3027,6 +3124,8 @@ describe('workflow dispatch routing', () => {
   });
 
   test('resume request hydrates the requested run without latest-run lookup', async () => {
+    mockAdoptionMetadata.mockClear();
+    mockResumedEnvironment.mockResolvedValueOnce(makeIsolationEnvironment());
     const requestedRun = makeResumableRun({
       id: 'old-run',
       user_message: 'requested prompt',
@@ -3041,6 +3140,9 @@ describe('workflow dispatch routing', () => {
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume old-run', { actor: operator });
 
+    expect(mockAdoptionMetadata.mock.calls).toEqual([
+      ['env-1', { adopted: true }, expect.objectContaining({ id: 'env-1' })],
+    ]);
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),
@@ -5789,19 +5891,26 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(titleOptions?.protectedEnvKeys).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
   });
 
-  test('drops file-based deliveries (Codex OAuth) — no CODEX_HOME in chat env', async () => {
+  test('a ChatGPT subscription reaches chat as the in-memory Codex login env, with no CODEX_HOME', async () => {
     mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
       {
-        provider: 'codex',
-        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok' } },
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok', accountId: 'acct' } },
       },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as
-      | { env?: Record<string, string> }
+      | { env?: Record<string, string>; protectedEnvKeys?: string[] }
       | undefined;
-    // Codex OAuth would write auth.json + set CODEX_HOME — both must be absent in chat.
+    expect(requestOptions?.env).toMatchObject({
+      ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'tok',
+      ARCHON_CODEX_CHATGPT_ACCOUNT_ID: 'acct',
+    });
+    expect(requestOptions?.protectedEnvKeys).toEqual([
+      'ARCHON_CODEX_CHATGPT_ACCESS_TOKEN',
+      'ARCHON_CODEX_CHATGPT_ACCOUNT_ID',
+    ]);
     expect(requestOptions?.env?.CODEX_HOME).toBeUndefined();
   });
 
@@ -7685,6 +7794,22 @@ describe('handleMessage — legacy registration recovery', () => {
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'
     );
+  });
+
+  test('remove-project renders the shared active-container refusal', async () => {
+    mockListCodebases.mockResolvedValue([makeNamedCodebase('my-app')]);
+    mockParseCommand.mockReturnValue({ command: 'remove-project', args: ['my-app'] });
+    mockDeleteCodebase.mockRejectedValueOnce(
+      new ActiveContainerEnvironmentsError(['container-one'])
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/remove-project my-app', { actor: operator });
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => call[1])
+      .join('\n');
+    expect(messages).toContain('container-one');
+    expect(messages).toContain('archon isolation cleanup 0');
+    expect(messages).not.toContain('removed.');
   });
 
   test('update and removal remain available for legacy registrations', async () => {

@@ -790,8 +790,26 @@ export interface paths {
             'application/json': components['schemas']['ConversationListResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -834,8 +852,26 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -879,6 +915,15 @@ export interface paths {
             'application/json': components['schemas']['Conversation'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -890,6 +935,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -922,6 +976,15 @@ export interface paths {
             'application/json': components['schemas']['SuccessResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -933,6 +996,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -978,6 +1050,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -989,6 +1070,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1030,6 +1120,15 @@ export interface paths {
             'application/json': components['schemas']['MessageListResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1041,6 +1140,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1100,8 +1208,35 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1286,6 +1421,15 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Active container environments or newly registered worktrees require cleanup */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -1660,8 +1804,35 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -2110,7 +2281,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Signal the exact external event awaited by a paused workflow run */
+    /** Signal an external event awaited by a paused workflow run; use occurrence for an exact match */
     post: {
       parameters: {
         query?: never;
@@ -2122,12 +2293,21 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': {
-            event: string;
-            /** Format: date-time */
-            resumeAt: string;
-            payload?: unknown;
-          };
+          'application/json':
+            | {
+                event: string;
+                occurrence: string;
+                /** Format: date-time */
+                resumeAt?: string;
+                payload?: unknown;
+              }
+            | {
+                event: string;
+                occurrence?: string;
+                /** Format: date-time */
+                resumeAt: string;
+                payload?: unknown;
+              };
         };
       };
       responses: {
@@ -2773,8 +2953,44 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description All-scopes reset is unavailable while conversations are private */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -4396,6 +4612,14 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          nodeId: string;
+          /** Format: date-time */
+          resumeAt: string;
+        }
+      | {
+          /** @enum {string} */
           kind: 'blocked_on_child';
           runId: string;
           childRunId: string;
@@ -5706,6 +5930,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5717,6 +5942,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5766,6 +5992,18 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          owner: 'node';
+          nodeId: string;
+          pauseId: string;
+          /** @enum {string} */
+          kind: 'quota';
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          resumeAt: string;
+        }
+      | {
+          /** @enum {string} */
           owner: 'loop_group';
           nodeId: string;
           bodyWaitId: string;
@@ -5786,6 +6024,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5815,6 +6054,7 @@ export interface components {
               };
             };
           };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5967,6 +6207,37 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          node: string;
+          /** Format: date-time */
+          resetAt: string;
+        }
+      | {
+          /** @enum {string} */
           kind: 'unreadable';
           runId: string;
           workflow: string;
@@ -6096,6 +6367,37 @@ export interface components {
             node: string;
             occurrence: string;
             message: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'usage_limit';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            /** Format: date-time */
+            resetAt: string;
           }
         | {
             /** @enum {string} */

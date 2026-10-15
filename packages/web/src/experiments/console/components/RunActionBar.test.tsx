@@ -68,3 +68,25 @@ test('the attention banner Resume action dispatches one resume request and no ga
     globalThis.fetch = originalFetch;
   }
 });
+
+test('a usage-limit wait in the banner shows its reset and Abandon, and no gate controls', () => {
+  const resumeAt = '2026-10-12T05:00:00.000Z';
+  const run = toRun({
+    id: 'limited',
+    workflow_name: 'rotate',
+    codebase_id: null,
+    status: 'paused',
+    started_at: '2026-10-12T00:00:00.000Z',
+    attention: { kind: 'usage_limit', runId: 'limited', nodeId: 'implement', resumeAt },
+  });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <PendingInputBanner runs={[run]} showProject={false} onDismiss={() => undefined} />
+    </MemoryRouter>
+  );
+  expect(html).toContain('implement');
+  expect(html).toContain(new Date(resumeAt).toLocaleString());
+  expect(html).toContain('Abandon');
+  expect(html).not.toContain('Continue');
+  expect(html).not.toContain('Resume');
+});

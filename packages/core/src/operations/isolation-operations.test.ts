@@ -98,7 +98,7 @@ describe('listEnvironments', () => {
   beforeEach(() => {
     mockListAllActiveWithCodebase.mockClear();
     mockListByCodebaseWithAge.mockClear();
-    mockLstat.mockClear();
+    mockLstat.mockReset();
     mockLstat.mockImplementation(() => Promise.resolve());
     mockUpdateStatus.mockClear();
     mockGetLiveRunBlocker.mockClear();
@@ -128,6 +128,18 @@ describe('listEnvironments', () => {
     expect(result.codebases[0]?.environments[0]?.cleanupSkipReason).toContain(
       "platform 'removed-chat' is not registered"
     );
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockLstat).not.toHaveBeenCalled();
+  });
+
+  test('keeps containers visible without inspecting their host paths', async () => {
+    const env = makeEnvWithAge({ provider: 'container', working_path: '/missing' });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv({ provider: 'container' })]);
+    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    const result = await listEnvironments();
+    expect(result.ghostsReconciled).toBe(0);
+    expect(result.codebases[0]?.environments).toEqual([env]);
     expect(mockUpdateStatus).not.toHaveBeenCalled();
     expect(mockLstat).not.toHaveBeenCalled();
   });

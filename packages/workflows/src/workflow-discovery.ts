@@ -22,7 +22,7 @@
  */
 import { type ProviderRegistry } from '@archon/provider-contract';
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -71,7 +71,7 @@ import {
   qualifyPackReferences,
   qualifyWorkflowResources,
 } from './packaged-workflow';
-import type { IncludeCommandContent } from './compiled-command';
+import { attachHomeMcpDirectory, type IncludeCommandContent } from './compiled-command';
 import { discoverScriptsForCwd } from './script-discovery';
 import { FIXTURES_DIR } from './fixture-layout';
 import {
@@ -141,6 +141,7 @@ async function maybeWarnLegacyHomePath(): Promise<void> {
  * cannot disagree.
  */
 interface ParsedWorkflowFile {
+  filePath?: string;
   workflow: WorkflowDefinition;
   /** Empty for a clean file. */
   parseWarnings: readonly string[];
@@ -237,7 +238,11 @@ async function loadWorkflowsFromDir(
           const result = parseWorkflow(content, entry, providers, configuredEnvNames);
 
           if (result.workflow) {
-            workflows.set(entry, { workflow: result.workflow, parseWarnings: result.warnings });
+            workflows.set(entry, {
+              workflow: result.workflow,
+              parseWarnings: result.warnings,
+              filePath: resolve(entryPath),
+            });
             getLog().debug({ workflowName: result.workflow.name, dirPath }, 'workflow_loaded');
           } else {
             errors.push(result.error);
@@ -389,7 +394,11 @@ async function loadPackWorkflows(
     files.push({
       folder: workflowFolder,
       filename,
-      parsed: { workflow: parsed.workflow, parseWarnings: parsed.warnings },
+      parsed: {
+        workflow: parsed.workflow,
+        parseWarnings: parsed.warnings,
+        filePath: resolve(workflowPath, filename),
+      },
     });
   }
 
@@ -905,7 +914,18 @@ export async function discoverWorkflows(
     // pure expander) can be reported against the includer's actual file. Duplicate names
     // are excluded from expansion above, so first-seen is unambiguous for the rest.
     const filenameByName = new Map<string, string>();
-    for (const [filename, { workflow }] of files) {
+    for (const [filename, { workflow, source, filePath }] of files) {
+      if (source === 'global' && filePath !== undefined) {
+        const attachDirectory = (nodes: WorkflowDefinition['nodes']): void => {
+          for (const node of nodes) {
+            if ('mcp' in node && node.mcp !== undefined)
+              attachHomeMcpDirectory(node, dirname(filePath));
+            if (!isIncludeDirective(node) && isLoopGroupNode(node))
+              attachDirectory(node.loop_group.nodes);
+          }
+        };
+        attachDirectory(workflow.nodes);
+      }
       if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
       if (!filenameByName.has(workflow.name)) filenameByName.set(workflow.name, filename);

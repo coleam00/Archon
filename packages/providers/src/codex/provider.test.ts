@@ -672,7 +672,10 @@ describe('CodexProvider', () => {
     });
   });
 
-  describe('API key opt-in', () => {
+  describe('Archon-supplied credentials', () => {
+    const TOKEN_ENV = 'ARCHON_CODEX_CHATGPT_ACCESS_TOKEN';
+    const ACCOUNT_ENV = 'ARCHON_CODEX_CHATGPT_ACCOUNT_ID';
+
     test('CODEX_API_KEY logs in with the key, held only by the process', async () => {
       const { provider, server } = providerWith();
       const chunks = await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } });
@@ -680,10 +683,51 @@ describe('CodexProvider', () => {
       const process0 = server.processes[0];
       expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
       expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
       expect(paramsOf(server, 'account/login/start')).toEqual({
         type: 'apiKey',
         apiKey: 'sk-test-key',
       });
+    });
+
+    test('managed ChatGPT tokens log in in memory, held only by the process', async () => {
+      const { provider, server } = providerWith();
+      const chunks = await run(provider, {
+        env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' },
+      });
+      expect(resultOf(chunks).failure).toBeUndefined();
+      const process0 = server.processes[0];
+      expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
+      expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toEqual({
+        experimentalApi: true,
+        requestAttestation: false,
+      });
+      expect(paramsOf(server, 'account/login/start')).toEqual({
+        type: 'chatgptAuthTokens',
+        accessToken: 'chatgpt-access',
+        chatgptAccountId: 'acct-1',
+      });
+    });
+
+    test('managed ChatGPT tokens win over CODEX_API_KEY', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, {
+        env: { CODEX_API_KEY: 'sk-test-key', [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'a' },
+      });
+      expect(paramsOf(server, 'account/login/start')?.type).toBe('chatgptAuthTokens');
+    });
+
+    test('half a managed ChatGPT token pair is misconfigured before any process starts', async () => {
+      const { provider, server } = providerWith();
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access-secret' } })
+      );
+      expect(failure?.class).toBe('misconfigured');
+      expect(failure?.evidence).toContain(TOKEN_ENV);
+      expect(failure?.evidence).toContain(ACCOUNT_ENV);
+      expect(failure?.evidence).not.toContain('chatgpt-access-secret');
+      expect(server.processes).toHaveLength(0);
     });
 
     test('without CODEX_API_KEY Codex uses the user’s own login', async () => {
@@ -965,16 +1009,11 @@ describe('CodexProvider', () => {
       expect(await promptSent(options as SendQueryOptions)).toBe(expected);
     });
 
-    test('a Claude preset object is dropped with a warning', async () => {
+    test('appended instructions are folded in when no system prompt replaces them', async () => {
+      expect(await promptSent({ appendSystemPrompt: 'extra' })).toBe('extra\n\n---\n\ntest prompt');
       expect(
-        await promptSent({
-          systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
-        } as SendQueryOptions)
-      ).toBe('test prompt');
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ systemPromptType: 'object' }),
-        'codex.system_prompt_dropped_preset'
-      );
+        await promptSent({ appendSystemPrompt: 'extra', nodeConfig: { systemPrompt: 'node' } })
+      ).toBe('node\n\n---\n\ntest prompt');
     });
 
     test('a resumed thread gets the prepend too', async () => {

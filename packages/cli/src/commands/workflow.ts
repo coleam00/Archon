@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -55,6 +56,9 @@ import {
   WorkflowResourceBusyError,
   PROVIDER_EVENT_ROW_TYPES,
   workflowEventCursor,
+  deadlineWaitCursor,
+  resumeCursorMatches,
+  type WorkflowResumeCursor,
 } from '@archon/workflows/store';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { Codebase } from '@archon/core/schemas/codebase';
@@ -212,7 +216,10 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+} from '@archon/core/operations/workflow-adoption';
 import {
   attentionProjectForCwd,
   attentionQueueSource,
@@ -393,6 +400,7 @@ export interface WorkflowRunOptions {
    * means live discovery.
    */
   continuationRun?: WorkflowRun;
+  continuationCursor?: WorkflowResumeCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -2488,7 +2496,7 @@ async function runWorkflowWithOwnedSource(
       // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
-          ? detachedAdoptionLane.workingPath
+          ? detachedAdoptionLane.environment.working_path
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
@@ -2792,15 +2800,20 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        workingCwd = lane.workingPath;
-        isolationEnvId = lane.envId;
+        const env = await adoptRegisteredWorktree(
+          host.records.isolation,
+          lane,
+          codebase.default_cwd
+        );
+        workingCwd = env.working_path;
+        isolationEnvId = env.id;
         adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below
         // and silently cut a fresh worktree from base over the inherited one.
         wantsIsolation = false;
         console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'checkout-branch') {
         adoptedTaskBranch = lane.taskBranch;
@@ -2880,6 +2893,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3160,7 +3174,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {
@@ -3459,6 +3473,7 @@ async function runWorkflowWithOwnedSource(
             legacyWorkflow: workflow,
             userMessage,
             run: resumable,
+            cursor: options.continuationCursor,
             options: commonOptions,
           });
         } catch (error) {
@@ -3706,16 +3721,18 @@ async function runWorkflowWithOwnedSource(
 
     // Check result and exit appropriately
     if (result.success && 'paused' in result && result.paused) {
-      // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
-      // `attention` pause has no deadline and stays with whoever resolves it.
-      const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
-      if (pausedRun !== null && wait !== undefined) {
+      // A durable wait with a deadline (time, event or usage limit) is this process's own
+      // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
+      if (result.waitCursor !== undefined) {
+        const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+        if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
+        const wait = pendingDurableWait(pausedRun);
+        if (wait === undefined) return;
         console.log(
-          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
             'this process resumes the run at its deadline.'
         );
-        return { run: pausedRun, wait, destination };
+        return { run: pausedRun, wait: { ...wait, cursor: result.waitCursor }, destination };
       }
       if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
         console.log('\nWorkflow paused — waiting for approval.');
@@ -3765,7 +3782,7 @@ async function runWorkflowWithOwnedSource(
  */
 export interface DurableWaitCursor {
   stepName: string;
-  resumeAt: string;
+  cursor: ReturnType<typeof deadlineWaitCursor>;
   signaled: boolean;
 }
 
@@ -3785,7 +3802,7 @@ export interface PendingWaitContinuation {
 /**
  * Read the wait this process owns off a run row, if any.
  *
- * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * `undefined` means the run is not paused on a time, event or usage-limit wait — a terminal
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
@@ -3793,7 +3810,7 @@ export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefi
   if (!wait) return undefined;
   return {
     stepName: workflowWaitStepName(wait),
-    resumeAt: wait.resumeAt,
+    cursor: deadlineWaitCursor(wait),
     signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
   };
 }
@@ -3815,20 +3832,24 @@ async function awaitDurableWaitDeadline(
   runId: string,
   wait: DurableWaitCursor
 ): Promise<'resume' | 'stop'> {
-  let cursor = wait;
+  if (wait.signaled) return 'resume';
   for (;;) {
-    if (cursor.signaled) return 'resume';
-    const remainingMs = Date.parse(cursor.resumeAt) - Date.now();
+    const remainingMs = Date.parse(wait.cursor.resumeAt) - Date.now();
     if (remainingMs <= 0) return 'resume';
     await new Promise<void>(resolve =>
       setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
     );
     const latest = await host.deps.store.getWorkflowRun(runId);
     const next = latest === null ? undefined : pendingDurableWait(latest);
-    if (next?.stepName !== cursor.stepName || next.resumeAt !== cursor.resumeAt) {
+    if (
+      !latest ||
+      !next ||
+      next.stepName !== wait.stepName ||
+      !resumeCursorMatches(latest, wait.cursor)
+    ) {
       return 'stop';
     }
-    cursor = next;
+    if (next.signaled) return 'resume';
   }
 }
 
@@ -3844,7 +3865,8 @@ interface WaitResumeAttempt {
 async function buildWaitResumeAttempt(
   host: WorkflowHost,
   run: WorkflowRun,
-  destination: RunDestination
+  destination: RunDestination,
+  wait: DurableWaitCursor
 ): Promise<WaitResumeAttempt> {
   if (!run.working_path) {
     throw new Error(
@@ -3861,6 +3883,7 @@ async function buildWaitResumeAttempt(
     userMessage: run.user_message ?? '',
     options: {
       continuationRun: run,
+      continuationCursor: wait.cursor,
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
       ...(destination.kind === 'conversation'
@@ -3965,7 +3988,7 @@ export async function workflowRunCommand(
     }
     if (pending === undefined) return;
     if ((await awaitDurableWaitDeadline(host, pending.run.id, pending.wait)) === 'stop') return;
-    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination);
+    attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination, pending.wait);
   }
 }
 
@@ -4394,6 +4417,8 @@ export async function workflowStatusCommand(
     console.log(`  Status: ${run.status}`);
     const attention = runAttention(run);
     if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
+    if (attention?.kind === 'usage_limit')
+      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
     console.log(`  Age:    ${age}`);
     if (run.active_nodes.length > 0) {
@@ -4412,6 +4437,10 @@ export async function workflowStatusCommand(
 
     console.log('');
   }
+}
+
+function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
+  return `  Wait:   provider usage limit at '${nodeId}' — continues after it resets at ${resumeAt}`;
 }
 
 function formatToolAttention(
@@ -4475,6 +4504,11 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
     case 'blocked_on_children':
       // Unreachable through the waiter, which resolves every child before returning.
       return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
+    case 'usage_limit':
+      return (
+        `Run ${watchedRunId} is waiting for a provider usage limit to reset at ` +
+        `${attention.resumeAt}, then continues by itself.`
+      );
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -4663,6 +4697,12 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       lines.push(
         `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
+      );
+      break;
+    case 'usage_limit':
+      lines.push(
+        `    ${item.node}: provider usage limit reached; continues by itself after it resets at ${item.resetAt}`,
+        `    Stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
       );
       break;
     case 'unreadable':
@@ -5509,7 +5549,9 @@ export async function workflowGetCommand(
       console.log(
         waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
-          : `  Wait:   until ${waitMeta.resumeAt}`
+          : waitMeta.kind === 'quota'
+            ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
+            : `  Wait:   until ${waitMeta.resumeAt}`
       );
     }
   }
@@ -5930,11 +5972,6 @@ async function spelledForCli<T>(op: () => Promise<T>): Promise<T> {
   }
 }
 
-/**
- * Emit the standard `{ ok: false }` error line for a `--json` write command
- * (approve/reject/abandon/resume). Centralizes the envelope so all four stay in
- * lockstep; never throws — in --json mode the JSON line IS the error surface.
- */
 function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
   return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
 }
@@ -6025,7 +6062,7 @@ async function runDetachedControlCommand(
   json: boolean | undefined,
   cwd: string | undefined,
   precheck: () => Promise<WorkflowRun>
-): Promise<void> {
+): Promise<number> {
   try {
     const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
@@ -6061,7 +6098,7 @@ async function runDetachedControlCommand(
         // its output is discarded. Same contract as `run --detach`.
         logPath,
       });
-      return;
+      return 0;
     }
     console.log(`Started '${action}' for run ${runId} in the background.`);
     console.log(`Track it with: archon workflow get ${runId}`);
@@ -6077,10 +6114,11 @@ async function runDetachedControlCommand(
     // standard { ok: false } line; human mode throws like the inline path.
     if (json) {
       await printJsonWriteError(runId, action, error);
-      return;
+      return 1;
     }
     throw error;
   }
+  return 0;
 }
 
 async function resolveDiscoveryCwdForCodebase(
@@ -6131,7 +6169,7 @@ export async function workflowResumeCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean
-): Promise<void> {
+): Promise<number> {
   const { resumeWorkflow: resumeWorkflowOp } = host.operations;
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
@@ -6140,7 +6178,7 @@ export async function workflowResumeCommand(
   // Composes with --json (structured ack; nothing executes here).
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       // The inline path below refuses a run with no recorded working path, or one
       // whose checkout is gone. Check both here too, on the run the precheck already
@@ -6155,7 +6193,6 @@ export async function workflowResumeCommand(
       assertResumeWorkingPathExists(run.working_path);
       return run;
     });
-    return;
   }
 
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
@@ -6182,7 +6219,7 @@ export async function workflowResumeCommand(
     } catch (error) {
       await printJsonWriteError(runId, 'resume', error);
     }
-    return;
+    return 0;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6225,6 +6262,7 @@ export async function workflowResumeCommand(
       cause: err,
     });
   }
+  return 0;
 }
 
 /**
@@ -6464,6 +6502,17 @@ async function continueAnsweredRun(
       discoveryCwd,
     });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.cause instanceof WorkflowResourceBusyError &&
+      error.cause.refusal === 'waiting'
+    ) {
+      console.log(
+        `The answer was recorded. Workflow '${result.workflowName}' is waiting for capacity and continues when a slot frees.\n` +
+          error.cause.message
+      );
+      return;
+    }
     const err = error as Error;
     getLog().error(
       { err, runId: resolvedId, workflowName: result.workflowName },
@@ -6564,7 +6613,7 @@ export async function workflowApproveCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { approveWorkflow } = host.operations;
 
   // --detach: hand the approve AND its inline auto-resume to a detached child
@@ -6573,7 +6622,7 @@ export async function workflowApproveCommand(
   // in the child. Composes with --json (structured ack; nothing executes here).
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'approve', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'approve', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6593,7 +6642,6 @@ export async function workflowApproveCommand(
       }
       return run;
     });
-    return;
   }
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
@@ -6617,10 +6665,11 @@ export async function workflowApproveCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'approve', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6650,6 +6699,7 @@ export async function workflowApproveCommand(
     failurePrefix: 'Approved but',
     recorded: 'approval',
   });
+  return 0;
 }
 
 /**
@@ -6667,7 +6717,7 @@ export async function workflowRejectCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { rejectWorkflow } = host.operations;
 
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
@@ -6676,7 +6726,7 @@ export async function workflowRejectCommand(
   // mid-rework. The parent only validates read-only. Composes with --json.
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'reject', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'reject', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6687,7 +6737,6 @@ export async function workflowRejectCommand(
       assertResponseAccepted(run, 'reject', reason);
       return run;
     });
-    return;
   }
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
@@ -6713,10 +6762,11 @@ export async function workflowRejectCommand(
         workflowName: result.workflowName,
         resumable: !result.cancelled,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'reject', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6732,7 +6782,7 @@ export async function workflowRejectCommand(
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
     console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
-    return;
+    return 0;
   }
 
   // Not cancelled = a legacy on_reject rework, a #2707 step-1 new-mode
@@ -6758,6 +6808,7 @@ export async function workflowRejectCommand(
     failurePrefix: 'Rejected but',
     recorded: 'rejection',
   });
+  return 0;
 }
 
 /**
@@ -6778,7 +6829,7 @@ export async function workflowRespondCommand(
   cwd?: string,
   detach?: boolean,
   occurrence?: string
-): Promise<void> {
+): Promise<number> {
   const { respondToWorkflow } = host.operations;
 
   if (decision === 'approve')
@@ -6791,7 +6842,7 @@ export async function workflowRespondCommand(
   // child. See runDetachedControlCommand's doc comment.
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    await runDetachedControlCommand(resolvedId, 'respond', json, cwd, async () => {
+    return runDetachedControlCommand(resolvedId, 'respond', json, cwd, async () => {
       const run = await host.deps.store.getWorkflowRun(resolvedId);
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
@@ -6806,7 +6857,6 @@ export async function workflowRespondCommand(
       }
       return run;
     });
-    return;
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
@@ -6829,10 +6879,11 @@ export async function workflowRespondCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'respond', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6861,6 +6912,7 @@ export async function workflowRespondCommand(
     failurePrefix: 'Response recorded but',
     recorded: 'response',
   });
+  return 0;
 }
 
 /**

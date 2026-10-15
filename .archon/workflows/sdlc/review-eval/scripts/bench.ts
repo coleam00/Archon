@@ -810,10 +810,7 @@ async function judgeSample(
     if (status !== 'completed') {
       judgement = { valid: false, reason: `the judge run ${judgeRun} is ${status}` };
     } else {
-      const returned = await getReturns(judgeRun);
-      judgement = returned.ok
-        ? validateJudgement(returned.value, item, findings)
-        : { valid: false, reason: `the judge run ${judgeRun} completed, but ${returned.reason}` };
+      judgement = validateJudgement(await getReturns(judgeRun), item, findings);
     }
   } catch (error) {
     judgement = { valid: false, reason: error instanceof Error ? error.message : String(error) };

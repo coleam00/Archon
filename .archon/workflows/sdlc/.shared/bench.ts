@@ -1,17 +1,17 @@
 /**
  * What every bench in this pack shares: the version record and its resolution, the
  * pack source snapshot, launching and waiting on ordinary runs through the `archon`
- * CLI, JSONL lines, and the operator's marks.
+ * CLI, reading a finished run, JSONL lines, and the operator's marks.
  *
  * A bench is a script that launches ordinary top-level runs; the engine knows nothing
  * about it. It uses the `archon` on `PATH`, so pointing `PATH` at a development build
  * benches that build.
  *
  * A version pins what a sample ran: the pack at one commit and the model behind each
- * tier. Its record is `{label, pack_sha, prompt_sha, tiers, workflow, inputs}`, and a
- * label means one record for the life of an output directory: lines of one label are
- * compared as one version, so `resolveVersion` refuses a label that already names
- * another.
+ * tier. Its record is `{label, pack_sha, prompt_sha, tiers, workflow, inputs}`; a bench
+ * that varies less may pin a narrower record of its own. Either way a label means one
+ * record for the life of an output directory: lines of one label are compared as one
+ * version, so `relabelRefusal` names a label that already names another.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,15 +43,15 @@ export interface Version {
   readonly inputs: Readonly<Record<string, string>>;
 }
 
-export interface ResolvedVersion {
-  readonly version: Version;
+export interface ResolvedVersion<V extends { readonly label: string } = Version> {
+  readonly version: V;
   /** The extracted `.archon` snapshot a run reads its workflow from (`--workflow-source`). */
   readonly source: string;
-  /** The run config layer holding only the version's tiers (`--config`). */
+  /** The run config layer holding only the tiers the version pins (`--config`). */
   readonly config: string;
 }
 
-/** A label, case or variant id becomes a path segment and a JSONL key, never anything else. */
+/** A label, case, variant, row or batch id becomes a path segment and a JSONL key, never anything else. */
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function isId(value: unknown): value is string {
@@ -125,16 +125,24 @@ export function resolveVersion(
     workflow,
     inputs: inputs as Record<string, string>,
   };
-  for (const line of readLines(join(outDir, SAMPLES_FILE))) {
-    if (isObject(line.version) && line.version.label === label && canonical(line.version) !== canonical(version)) {
-      return refuse(`label ${label} already names another version in ${join(outDir, SAMPLES_FILE)}; choose a new label`);
-    }
-  }
+  const relabel = relabelRefusal(outDir, version);
+  if (relabel !== undefined) return refuse(relabel);
 
   const config = join(outDir, 'versions', `${label}.config.yaml`);
   mkdirSync(dirname(config), { recursive: true });
   writeFileSync(config, Bun.YAML.stringify({ tiers: version.tiers }, null, 2));
   return { version, source: snapshotSource(repoRoot, packSha, outDir), config };
+}
+
+/** Why `version`'s label cannot be used in `outDir`, when its samples already pin it to another record. */
+export function relabelRefusal(outDir: string, version: { readonly label: string }): string | undefined {
+  const samples = join(outDir, SAMPLES_FILE);
+  for (const line of readLines(samples)) {
+    if (isObject(line.version) && line.version.label === version.label && canonical(line.version) !== canonical(version)) {
+      return `label ${version.label} already names another version in ${samples}; choose a new label`;
+    }
+  }
+  return undefined;
 }
 
 function promptShas(repoRoot: string, sha: string, dirs: readonly string[]): Record<string, string> {
@@ -177,9 +185,9 @@ export function snapshotSource(repoRoot: string, sha: string, outDir: string): s
 /** An `archon ... --json` call that answered `ok: false`: it refused, and no run it started is left working. */
 export class ArchonRefused extends Error {}
 
-/** One `archon ... --json` call: its parsed document, or a throw carrying what it said. */
-async function archonJson(args: readonly string[]): Promise<Record<string, unknown>> {
-  const child = Bun.spawn(['archon', ...args], { stdout: 'pipe', stderr: 'pipe' });
+/** One `archon ... --json` call in `cwd`: its parsed document, or a throw carrying what it said. */
+export async function archonJson(args: readonly string[], cwd?: string): Promise<Record<string, unknown>> {
+  const child = Bun.spawn(['archon', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -255,20 +263,11 @@ export async function waitRun(runId: string): Promise<TerminalStatus> {
   throw new Error(`run ${runId} stopped without finishing: ${JSON.stringify(result)}`);
 }
 
-/** A finished run's returned value, or why its terminal record holds none. */
-export type Returned = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string };
-
-/** What a finished run's `returns:` node produced, from its terminal record. */
-export async function getReturns(runId: string): Promise<Returned> {
+/** What a finished run's `returns:` node produced, including a value spilled to a file. */
+export async function getReturns(runId: string): Promise<unknown> {
   const run = await archonJson(['workflow', 'get', runId, '--json']);
   const record = run.terminal_record;
-  if (!isObject(record) || !isObject(record.returns)) {
-    throw new Error(`archon workflow get ${runId}: the field \`terminal_record.returns\` is missing`);
-  }
-  const { returns } = record;
-  if (returns.availability === 'available') return { ok: true, value: returns.value };
-  const reason = returns.availability === 'unavailable' ? `unavailable (${String(returns.reason)})` : String(returns.availability);
-  return { ok: false, reason: `its returned value is ${reason}` };
+  return returnedValue({ id: runId, returns: isObject(record) && isObject(record.returns) ? record.returns : null });
 }
 
 /** A provider's usage fact: a reported value, or the reason it is not one. */
@@ -375,6 +374,10 @@ export interface RunDetail {
   readonly completed_at: string | null;
   readonly base_branch: string;
   readonly aliases: Readonly<Record<string, unknown>>;
+  /** The run's JSONL transcript; null when its storage can no longer be resolved. */
+  readonly transcript_path: string | null;
+  /** The terminal record's `returns`: the value the workflow declared, or why there is none. */
+  readonly returns: Readonly<Record<string, unknown>> | null;
   readonly nodes: readonly RunNode[];
 }
 
@@ -416,6 +419,8 @@ export async function getRun(runId: string): Promise<RunDetail> {
   const completedAt = field('completed_at');
   const states = field('terminal_record.nodes');
   const events = field('events');
+  const transcript = field('transcript_path');
+  const returns = field('terminal_record.returns');
   if (!Array.isArray(states) || !states.every(node => isObject(node) && typeof node.node_id === 'string' && typeof node.state === 'string')) {
     return missing('terminal_record.nodes');
   }
@@ -445,12 +450,28 @@ export async function getRun(runId: string): Promise<RunDetail> {
     completed_at: typeof completedAt === 'string' ? completedAt : null,
     base_branch: text('metadata.dispatch.base_branch'),
     aliases: isObject(aliases) ? aliases : missing('metadata.model_bindings.effective.aliases'),
+    transcript_path: typeof transcript === 'string' ? transcript : null,
+    returns: isObject(returns) ? returns : null,
     nodes: states.map(node => {
       const nodeId = node.node_id as string;
       const execution = executions.get(nodeId);
       return { nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
     }),
   };
+}
+
+/**
+ * The run's `returns:` value. A value too large for the record was spilled to a file,
+ * which is read back; an unavailable one throws with the engine's reason.
+ */
+export function returnedValue(run: Pick<RunDetail, 'id' | 'returns'>): unknown {
+  const { returns } = run;
+  if (returns === null) throw new Error(`archon workflow get ${run.id}: the field \`terminal_record.returns\` is missing`);
+  if (returns.availability === 'available') return returns.value;
+  if (returns.availability === 'truncated' && typeof returns.spill_path === 'string') {
+    return JSON.parse(readFileSync(returns.spill_path, 'utf8'));
+  }
+  throw new Error(`run ${run.id} returned no value: ${JSON.stringify(returns)}`);
 }
 
 /** The run's artifact directory, as the engine lays it out under the run's output root. */

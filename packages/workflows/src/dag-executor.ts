@@ -46,8 +46,7 @@ import {
   recordNodeState,
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { readFile } from 'fs/promises';
-import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
+import { basename, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
@@ -120,7 +119,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
-  ScheduledWorkflowResume,
+  WorkflowUsageLimitWaitContext,
   NodeMcp,
 } from './schemas';
 import {
@@ -138,7 +137,6 @@ import {
   loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
-  isScheduledWorkflowResume,
   isHaltNode,
   isIncludeDirective,
   isOutputFormatEnforced,
@@ -221,12 +219,14 @@ import {
   type JsonValue,
   type TemplateToken,
 } from './output-ref';
+import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
 import { validateArtifactPointers } from './artifact-pointer';
 import {
   COMPILED_LOOP_COMMAND,
   readComposedBindings,
+  readHomeMcpDirectory,
   resolveIncludeOutputAliases,
   readComposedMeta,
   type LoopWithCompiledCommand,
@@ -661,35 +661,16 @@ function applyPresetOptions(
   return undefined;
 }
 
-/**
- * The server names an MCP config file declares. `missing` is set only for ENOENT. Any
- * other read, parse or shape failure leaves `servers` undefined and is debug-logged:
- * the provider owns full loading and reports a broken file itself.
- */
-async function readMcpServerNames(
-  fullPath: string
-): Promise<{ missing: boolean; servers?: string[] }> {
-  let raw: string;
+/** The provider diagnoses invalid selected JSON; inspection only supplies filtering names. */
+function parseMcpServerNames(raw: string, fullPath: string): string[] | undefined {
   try {
-    raw = await readFile(fullPath, 'utf-8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { missing: true };
-    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
-  }
-  const serverMap = mcpServerMap(parsed);
-  if (!serverMap.ok) {
+    const serverMap = mcpServerMap(JSON.parse(raw));
+    if (serverMap.ok) return Object.keys(serverMap.servers);
     getLog().debug({ error: serverMap.error, fullPath }, 'dag.mcp_config_read_failed');
-    return { missing: false };
+  } catch (err) {
+    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
   }
-  return { missing: false, servers: Object.keys(serverMap.servers) };
+  return undefined;
 }
 
 /** What a node's `mcp:` declaration hands its provider for one attempt. */
@@ -697,8 +678,9 @@ export type NodeMcpResolution =
   | { kind: 'none' }
   /** The provider loads `path`; `servers` are the names the file declares, if readable. */
   | { kind: 'load'; path: string; servers: Set<string> }
+  | { kind: 'missing'; path: string; servers: Set<string>; diagnostic: string }
   /** An optional declaration the node runs without. */
-  | { kind: 'unavailable'; fullPath: string; record: McpUnavailable };
+  | { kind: 'unavailable'; fullPath: string; record: McpUnavailable; diagnostic?: string };
 
 /**
  * Decide whether a node's MCP servers reach its provider. A required declaration
@@ -709,13 +691,16 @@ export type NodeMcpResolution =
 export async function resolveNodeMcp(
   mcp: NodeMcp | undefined,
   capabilities: ProviderCapabilities,
-  cwd: string
+  cwd: string,
+  homeYamlDirectory?: string
 ): Promise<NodeMcpResolution> {
   const declaration = mcpDeclaration(mcp);
   if (declaration === undefined) return { kind: 'none' };
   const { path, optional } = declaration;
-  const fullPath = isAbsolute(path) ? path : resolvePath(cwd, path);
-  const { missing, servers } = await readMcpServerNames(fullPath);
+  const selected = await resolveMcpPath(path, cwd, homeYamlDirectory);
+  const fullPath = selected.kind === 'missing' ? selected.attemptedPaths[0] : selected.path;
+  const servers =
+    selected.kind === 'found' ? parseMcpServerNames(selected.content, fullPath) : undefined;
   if (optional && !capabilities.mcp) {
     return {
       kind: 'unavailable',
@@ -723,10 +708,19 @@ export async function resolveNodeMcp(
       record: { path, reason: 'provider_unsupported', ...(servers ? { servers } : {}) },
     };
   }
-  if (optional && missing) {
-    return { kind: 'unavailable', fullPath, record: { path, reason: 'config_missing' } };
+  if (selected.kind === 'missing') {
+    const diagnostic = missingMcpConfigMessage(path, selected.attemptedPaths);
+    if (optional) {
+      return {
+        kind: 'unavailable',
+        fullPath,
+        record: { path, reason: 'config_missing' },
+        diagnostic,
+      };
+    }
+    return { kind: 'missing', path: fullPath, servers: new Set(), diagnostic };
   }
-  return { kind: 'load', path, servers: new Set(servers) };
+  return { kind: 'load', path: fullPath, servers: new Set(servers) };
 }
 
 /** Workflow-level provider options. The provider options have node-level
@@ -2372,7 +2366,9 @@ async function executeNodeInternal(
     : undefined;
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
-  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd);
+  const homeMcpDirectory = readHomeMcpDirectory(node);
+  if (homeMcpDirectory !== undefined) await assertWorkflowSourceIntegrity(workflowSourceRoots);
+  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2405,7 +2401,7 @@ async function executeNodeInternal(
     const why =
       record.reason === 'provider_unsupported'
         ? `provider '${provider}' cannot load MCP servers`
-        : `config file not found at ${fullPath}`;
+        : (nodeMcp.diagnostic ?? `config file not found at ${fullPath}`);
     await safeSendMessage(
       platform,
       conversationId,
@@ -2557,7 +2553,7 @@ async function executeNodeInternal(
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
-    ...(nodeMcp.kind === 'load'
+    ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
     abortSignal: nodeAbortController.signal,
@@ -3105,7 +3101,11 @@ async function executeNodeInternal(
     const err = error as Error;
 
     const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
-    const failureMessage = cancelled ? 'Cancelled by user' : err.message;
+    const failureMessage = cancelled
+      ? 'Cancelled by user'
+      : nodeMcp.kind === 'missing'
+        ? `${err.message}\n${nodeMcp.diagnostic}`
+        : err.message;
     if (cancelled) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
     } else {
@@ -3347,7 +3347,12 @@ function providerReportedFailure(
       message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
       break;
     case 'quota_exhausted':
-      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      // With a reported reset the run usually waits for it and continues by itself, so the
+      // text gives no resume advice: resuming before the reset spends a provider call.
+      message =
+        failure.resetAt !== undefined
+          ? `${subject} failed: the provider's usage or credit limit is used up until ${failure.resetAt}: ${failure.evidence}`
+          : `${subject} failed: the provider's usage or credit limit is used up. Resume the run once it reopens: ${failure.evidence}`;
       break;
     default:
       message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
@@ -7098,6 +7103,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.durationMs).toISOString(),
     };
@@ -7122,6 +7128,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(resumeAtMs).toISOString(),
     };
@@ -7133,6 +7140,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'event',
+      pauseId: randomUUID(),
       event,
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.deadlineMs).toISOString(),
@@ -11884,74 +11892,79 @@ export async function executeDagWorkflow(
       });
   };
 
-  const scheduleQuotaResume = async (): Promise<ScheduledWorkflowResume | undefined> => {
-    const policy = config.workflows;
-    if (policy?.autoResumeOnQuotaReset !== true) return undefined;
-    if (execContext.kind === 'container') {
+  /**
+   * The wait a failed pass takes instead of failing, when every failed node hit a provider
+   * usage limit whose reset the provider reported and that is still ahead. The run then
+   * cannot progress before the last of those resets, so it waits for it. Any other failure,
+   * a limit without a reported reset, or a container run (the continuation host does not
+   * continue one) leaves the run to fail. Only the typed class says a limit is spent; the
+   * error text never does.
+   */
+  const usageLimitWait = async (): Promise<WorkflowUsageLimitWaitContext | undefined> => {
+    const skip = async (
+      nodeId: string,
+      reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'
+    ): Promise<undefined> => {
       await deps.store.createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'quota_resume_skipped',
-        data: { reason: 'container_unsupported' },
+        step_name: nodeId,
+        data: { reason },
       });
       return undefined;
-    }
-    const prior = isScheduledWorkflowResume(workflowRun.metadata?.scheduled_resume)
-      ? workflowRun.metadata.scheduled_resume
-      : undefined;
-    // Only a provider's typed class says a quota window is spent; the error text never does.
-    const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      (
-        output
-      ): output is Extract<NodeOutput, { state: 'failed' }> & {
-        providerFailure: ProviderFailure;
-      } => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
-    );
-    if (quotaFailure === undefined) return undefined;
-    const quotaResetAt = quotaFailure.providerFailure.resetAt;
-    const now = new Date();
-    const maxAttempts = policy.quotaMaxAttempts;
-    const attempt = (prior?.attempt ?? 0) + 1;
-    const deadlineMs = policy.quotaDeadlineMs;
-    const deadlineAt = prior?.deadlineAt ?? new Date(now.getTime() + deadlineMs).toISOString();
-    if (attempt > maxAttempts) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { attempt, max_attempts: maxAttempts },
-      });
-      return undefined;
-    }
-
-    let resumeAt: Date | null = quotaResetAt !== undefined ? new Date(quotaResetAt) : null;
-    if (resumeAt === null || resumeAt.getTime() <= now.getTime()) {
-      const fallback = policy.quotaFallbackDelayMs;
-      resumeAt = fallback !== undefined ? new Date(now.getTime() + fallback) : null;
-    }
-    if (resumeAt === null) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_skipped',
-        data: { reason: 'reset_unavailable' },
-      });
-      return undefined;
-    }
-    if (resumeAt.getTime() > Date.parse(deadlineAt)) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { reason: 'deadline', deadline_at: deadlineAt },
-      });
-      return undefined;
-    }
-
-    const scheduled: ScheduledWorkflowResume = {
-      reason: 'quota',
-      resumeAt: resumeAt.toISOString(),
-      deadlineAt,
-      attempt,
-      maxAttempts,
     };
-    return scheduled;
+    let latest: { nodeId: string; resetAt: number } | undefined;
+    for (const [nodeId, output] of runCtx.nodeOutputs) {
+      if (output.state !== 'failed') continue;
+      if (output.providerFailure?.class !== 'quota_exhausted') return undefined;
+      const resetAt = output.providerFailure.resetAt;
+      if (resetAt === undefined) return skip(nodeId, 'reset_unavailable');
+      if (latest === undefined || Date.parse(resetAt) > latest.resetAt)
+        latest = { nodeId, resetAt: Date.parse(resetAt) };
+    }
+    if (latest === undefined) return undefined;
+    if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
+    const now = Date.now();
+    if (latest.resetAt <= now) return skip(latest.nodeId, 'reset_passed');
+    if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
+    return {
+      owner: 'node',
+      nodeId: latest.nodeId,
+      kind: 'quota',
+      pauseId: randomUUID(),
+      waitingSince: new Date(now).toISOString(),
+      resumeAt: new Date(latest.resetAt).toISOString(),
+    };
+  };
+
+  /** Pause the run on a usage-limit wait. False when the pass must fail instead. */
+  const pauseForUsageLimit = async (): Promise<boolean> => {
+    const wait = await usageLimitWait();
+    if (wait === undefined) return false;
+    try {
+      await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
+        kind: 'started',
+        stepName: wait.nodeId,
+      });
+    } catch (pauseError) {
+      // A run cancelled or paused meanwhile keeps that status, exactly as the failure
+      // branches below leave it.
+      if ((await deps.store.getWorkflowRunStatus(workflowRun.id)) === 'running') throw pauseError;
+      getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
+      return true;
+    }
+    getLog().info(
+      { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt },
+      'dag.usage_limit_wait_started'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
+        `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
+      { workflowId: workflowRun.id }
+    );
+    return true;
   };
 
   /**
@@ -12122,6 +12135,7 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (anyFailed && (await pauseForUsageLimit())) return;
     const failedNodes: string[] = [];
     for (const [nodeId, o] of nodeOutputs) {
       if (o.state === 'failed') failedNodes.push(nodeId);
@@ -12135,10 +12149,6 @@ export async function executeDagWorkflow(
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe. (Usage IS
     // stored: persistRunUsage wrote it at the run tail, before this branch — #2469.)
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12164,7 +12174,6 @@ export async function executeDagWorkflow(
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
         // A first-node failure completes nothing, but it is still a node failure.
         exitReason: anyFailed ? 'node_error' : 'no_nodes_completed',
       }),
@@ -12178,15 +12187,12 @@ export async function executeDagWorkflow(
 
   if (anyFailed) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (await pauseForUsageLimit()) return;
     const failedNodes = [...nodeOutputs.entries()]
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
     const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12211,10 +12217,7 @@ export async function executeDagWorkflow(
     // or the user's notification. Terminal telemetry is reported by the run store
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
-        exitReason: 'node_error',
-      }),
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
       { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
     );
     // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the

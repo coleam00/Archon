@@ -1,0 +1,31 @@
+diff --git a/packages/cli/src/commands/plugin.ts b/packages/cli/src/commands/plugin.ts
+index 0e42d9766..3781c6f3b 100644
+--- a/packages/cli/src/commands/plugin.ts
++++ b/packages/cli/src/commands/plugin.ts
+@@ -151,6 +151,17 @@ function brokenReceiptNote(broken: BrokenReceipt): string {
+   return `${broken.message}. Repair it: archon plugin update ${broken.id}, or archon plugin remove ${broken.id}`;
+ }
+ 
++/** Whether anything, file, directory or link, already sits at `path`. */
++async function isOccupied(path: string): Promise<boolean> {
++  try {
++    await lstat(path);
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
++    throw error;
++  }
++  return true;
++}
++
+ async function pathExists(path: string): Promise<boolean> {
+   try {
+     await lstat(path);
+@@ -365,7 +376,7 @@ async function installBinaryPlugin(
+       `${target} belongs to ${owner.id}. Remove it first: archon plugin remove ${owner.id}`
+     );
+   }
+-  if (!owner && (await pathExists(target))) {
++  if (!owner && (await isOccupied(target))) {
+     // A broken receipt cannot say which files it owns, so an unclaimed target may be
+     // replaced only by the repair of the one broken receipt there is: no valid receipt
+     // claims it, and no other broken receipt could. The target is always inside

@@ -1,3 +1,5 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -63,7 +65,14 @@ import {
 } from './chat-tools';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
-import { getDefaultRemote, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
+import {
+  getDefaultRemote,
+  syncWorkspace,
+  toBranchName,
+  toRepoPath,
+  toWorktreePath,
+  verifyWorktreeOwnership,
+} from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -110,7 +119,11 @@ import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
 import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
-import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
+import {
+  resolveRegisteredWorktree,
+  resolveWorkflowAdoption,
+  WorkflowAdoptionError,
+} from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -458,11 +471,9 @@ function isCommandFullyParsed(accumulated: string): boolean {
 }
 
 /**
- * Resolve the env-only per-user AI-provider credential bag for a direct-chat
- * turn (Phase 2). Drops deliveries that require file writes (Codex
- * `CODEX_HOME/auth.json` for the ChatGPT subscription path) because chat has
- * no per-call scratch directory — those rely on the workflow inject path that
- * provides an `artifactsDir`.
+ * Resolve the per-user AI-provider credential env for a direct-chat turn
+ * (Phase 2). Every connected credential is delivered as env, the ChatGPT
+ * subscription included, so chat and workflows authenticate the same way.
  *
  * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
  * whatever process-global env was already in place.
@@ -473,9 +484,7 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
     const env: Record<string, string> = {};
     for (const { provider, cred } of creds) {
       try {
-        // artifactsDir intentionally empty: chat doesn't host file deliveries.
-        const result = deliverCredential(provider, cred, { artifactsDir: '' });
-        if (!result.files?.length) Object.assign(env, result.env);
+        Object.assign(env, deliverCredential(provider, cred).env);
       } catch (err) {
         getLog().error(
           { err: err as Error, userId, provider },
@@ -945,7 +954,21 @@ async function dispatchOrchestratorWorkflowOwned(
   // whatever branch that worktree carries, so the frozen source must come from THERE —
   // capturing from the parent checkout would mix vintages exactly as #2660 describes.
   // A checkout-branch lane captures a read-only snapshot before isolation exists.
-  const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
+  const adoptedEnvironment =
+    adoptionLane?.kind === 'reuse-worktree'
+      ? await resolveRegisteredWorktree(sqlIsolation, adoptionLane)
+      : undefined;
+  if (adoptedEnvironment) {
+    if (platform.capabilities.defaultWorkflowDispatch === 'background') {
+      await verifyWorktreeOwnership(
+        toWorktreePath(adoptedEnvironment.working_path),
+        toRepoPath(codebase.default_cwd)
+      );
+    } else {
+      await recordWorktreeAdoption(sqlIsolation, adoptedEnvironment, codebase.default_cwd);
+    }
+  }
+  const captureCwd = adoptedEnvironment?.working_path ?? runCwd;
   let branchPrepared: Awaited<ReturnType<typeof prepareRunAiConfiguration>> | undefined;
   if (!willContinueExistingRun && adoptionLane?.kind !== 'checkout-branch') {
     freshCaptured = await captureFreshSource(
@@ -1118,7 +1141,9 @@ async function dispatchOrchestratorWorkflowOwned(
   // config apply. An adopted worktree stays the estate. The run records the result, and
   // every continuation reuses that record.
   const launchConfigCwd =
-    adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : codebase.default_cwd;
+    adoptionLane?.kind === 'reuse-worktree'
+      ? adoptionLane.environment.working_path
+      : codebase.default_cwd;
   const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
     prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
       codebaseId: codebase.id,
@@ -1222,16 +1247,23 @@ async function dispatchOrchestratorWorkflowOwned(
     let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
     if (willContinueExistingRun && resumableRun?.working_path) {
       cwd = resumableRun.working_path;
-    } else if (adoptionLane?.kind === 'reuse-worktree') {
+      const env = await sqlIsolation.findLatestByCodebaseAndWorkingPath(
+        codebase.id,
+        cwd,
+        new Date()
+      );
+      if (env?.status === 'active')
+        await recordWorktreeAdoption(sqlIsolation, env, codebase.default_cwd);
+    } else if (adoptedEnvironment) {
       // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
       // instead of cutting a fresh one (same shape as the background dispatch in
       // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
       // checkout.
-      cwd = adoptionLane.workingPath;
+      cwd = adoptedEnvironment.working_path;
       await db
         .updateConversation(conversation.id, {
           cwd,
-          ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
+          isolation_env_id: adoptedEnvironment.id,
         })
         .catch((e: unknown) => {
           getLog().warn(
@@ -2585,11 +2617,8 @@ export async function handleMessage(
         );
       }
     }
-    // Per-user AI-provider credentials (Phase 2): env-only delivery in direct
-    // chat — there's no per-call artifacts directory, so deliveries that need
-    // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
-    // path) are dropped here and only apply to workflow runs. Merged LAST so
-    // a connected user's keys win over file/db env. No-op when the feature is
+    // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
+    // so a connected user's keys win over file/db env. No-op when the feature is
     // disabled or no execution identity resolved (sender, else creator).
     const userProviderEnv =
       isPerUserProviderKeysEnabled() && executionUserId
@@ -2609,8 +2638,6 @@ export async function handleMessage(
       }
     }
 
-    // Claude supports the preset object for prompt caching; other providers
-    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
     // Providers with in-process tools launch and register through typed tools; the
     // others still write command lines that the command scan reads from the reply.
     let systemAppend = await buildOrchestratorSystemAppend(
@@ -2628,17 +2655,12 @@ export async function handleMessage(
     if (conversation.codebase_id !== null && !caps.nativeTools) {
       systemAppend += `\n\n${buildRunManagementSection()}`;
     }
-    const systemPrompt =
-      providerKey === 'claude'
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
-        : systemAppend;
-
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
       model: chatRequest.model,
-      systemPrompt,
+      appendSystemPrompt: systemAppend,
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
@@ -2899,8 +2921,7 @@ interface ChatTurn {
  * The chat message for a failed turn's result. The provider's typed failure decides the
  * advice, as it decides retry in the workflow engine. A result without one comes from a
  * provider that does not report `failure` yet; its subtype and SDK detail still go
- * through the text formatter so actionable cases like "Not logged in" keep their advice
- * (#1983).
+ * through credential redaction and are shown as diagnostics without inferred advice.
  */
 function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
   if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
@@ -3693,7 +3714,12 @@ async function handleRemoveProject(message: string): Promise<string> {
     return `Project "${projectName}" not found.`;
   }
 
-  await codebaseDb.deleteCodebase(codebase.id);
+  try {
+    await codebaseDb.deleteCodebase(codebase.id);
+  } catch (error) {
+    if (error instanceof ActiveContainerEnvironmentsError) return error.message;
+    throw error;
+  }
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }

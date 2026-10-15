@@ -29,11 +29,11 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  pausedUsageLimitWait,
   workflowWaitDue,
   isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
-  scheduledWorkflowResumeSchema,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
@@ -268,6 +268,7 @@ export function createTransactionView(
         wait.event !== expected.event ||
         wait.nodeId !== expected.nodeId ||
         wait.resumeAt !== expected.resumeAt ||
+        wait.pauseId !== expected.pauseId ||
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
@@ -348,31 +349,11 @@ export function createTransactionView(
           reason: options.exitReason,
           ...(options.signal ? { signal: options.signal } : {}),
         };
-      const precedingEvents: WorkflowEventInput[] = [];
-      if (options?.scheduledResume) {
-        run.metadata.scheduled_resume = scheduledWorkflowResumeSchema.parse(
-          options.scheduledResume
-        );
-        precedingEvents.push({
-          workflow_run_id: id,
-          event_type: 'quota_resume_scheduled',
-          data: {
-            resume_at: options.scheduledResume.resumeAt,
-            deadline_at: options.scheduledResume.deadlineAt,
-            attempt: options.scheduledResume.attempt,
-            max_attempts: options.scheduledResume.maxAttempts,
-          },
-        });
-      }
-      await terminal(
-        run,
-        {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
-        },
-        precedingEvents
-      );
+      await terminal(run, {
+        workflow_run_id: id,
+        event_type: 'workflow_failed',
+        data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
+      });
     },
     pauseWorkflowRun: async (
       id,
@@ -420,6 +401,8 @@ export function createTransactionView(
           data: { error: run.metadata.error },
         });
       if (run.status === 'paused') record(workflowUnpausedEvent(id));
+      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
+      if (pausedUsageLimitWait(run)) delete run.metadata.wait;
       if (
         run.status === 'failed' &&
         isScheduledWorkflowResume(scheduled) &&
@@ -768,6 +751,7 @@ export function createTransactionView(
         run.status !== 'running' ||
         !isWorkflowWaitContext(current) ||
         current.nodeId !== wait.nodeId ||
+        current.pauseId !== wait.pauseId ||
         (current.kind === 'attention' ? current.waitingSince : current.resumeAt) !==
           (wait.kind === 'attention' ? wait.waitingSince : wait.resumeAt)
       )

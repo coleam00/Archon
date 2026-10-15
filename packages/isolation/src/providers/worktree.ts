@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  hasUncommittedChangesStrict,
   addSafeDirectory,
   getGitCheckoutIdentity,
   isSameWorktreePath,
@@ -44,6 +45,7 @@ import {
   ExistingBranchDivergedError,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
+  WorktreeUncommittedChangesError,
   recordCleanupFailure,
 } from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
@@ -430,6 +432,13 @@ export class WorktreeProvider implements IIsolationProvider {
 
     // Only attempt worktree removal if path exists
     if (pathExists) {
+      if (
+        !options?.force &&
+        !options?.removeLocked &&
+        (await hasUncommittedChangesStrict(toWorktreePath(worktreePath)))
+      ) {
+        throw new WorktreeUncommittedChangesError(worktreePath);
+      }
       const gitArgs = ['-C', repoPath, 'worktree', 'remove'];
       // Git refuses a locked worktree even with one `--force`; the second one is
       // its own opt-in for that, so a lock still protects every other caller.
@@ -707,7 +716,7 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     await this.refuseUnfinishedWorktree(path);
-    getLog().info({ path, branchName: wt.branch }, 'worktree_adopted');
+    getLog().warn({ worktreePath: path, branchName: wt.branch }, 'worktree_adopted');
     return {
       id: path,
       provider: 'worktree',
@@ -895,10 +904,8 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Hand an existing checkout to a run, once it is proven usable.
    *
-   * Every adoption path in `create()` goes through here, and the public
-   * `adopt()` runs the same check, so the setup-completeness check cannot be
-   * reached around: an unfinished worktree is exactly what a run must not be
-   * given (#3448).
+   * An existing checkout may still belong to a setup in progress or a failed
+   * setup attempt. It must pass the same completeness check as public `adopt()`.
    */
   private async adoptWorktree(
     path: string,
@@ -907,7 +914,16 @@ export class WorktreeProvider implements IIsolationProvider {
     adoptedFrom?: 'branch'
   ): Promise<WorktreeCreationEnvironment> {
     await this.refuseUnfinishedWorktree(path);
-    getLog().info({ worktreePath: path, branchName }, 'worktree_adopted');
+    getLog().warn(
+      {
+        worktreePath: path,
+        branchName,
+        codebaseId: request.codebaseId,
+        workflowType: request.workflowType,
+        identifier: request.identifier,
+      },
+      'worktree_adopted'
+    );
     return {
       id: path,
       provider: 'worktree',
@@ -1067,6 +1083,16 @@ export class WorktreeProvider implements IIsolationProvider {
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
     const warnings = lockWarning ? [...setup.warnings, lockWarning] : setup.warnings;
     if (setup.kind === 'adopted') {
+      getLog().warn(
+        {
+          worktreePath,
+          branchName,
+          codebaseId: request.codebaseId,
+          workflowType: request.workflowType,
+          identifier: request.identifier,
+        },
+        'worktree_adopted'
+      );
       return {
         kind: 'adopted',
         environment: {

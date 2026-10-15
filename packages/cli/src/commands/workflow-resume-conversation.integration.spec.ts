@@ -108,9 +108,9 @@ async function runForeground(fixture: Fixture, name: string, options: WorkflowRu
 }
 
 async function resumeForeground(fixture: Fixture, id: string) {
-  return captureWorkflowCommand(fixture.archonHome, host =>
-    workflowResumeCommand(host, id, false, fixture.repo)
-  );
+  return captureWorkflowCommand(fixture.archonHome, async host => {
+    await workflowResumeCommand(host, id, false, fixture.repo);
+  });
 }
 
 interface ThreadState {
@@ -604,9 +604,9 @@ describe('origin-free continuations stay headless', () => {
     ]);
     expect(seeded.status).toBe('paused');
 
-    const approved = await captureWorkflowCommand(fixture.archonHome, host =>
-      workflowApproveCommand(host, seeded.id, undefined, false, fixture.repo)
-    );
+    const approved = await captureWorkflowCommand(fixture.archonHome, async host => {
+      expect(await workflowApproveCommand(host, seeded.id, undefined, false, fixture.repo)).toBe(0);
+    });
     expect(approved.status).toBe(0);
     expect(readRun(fixture, 'approve-origin-free').status).toBe('completed');
     expectNoConversation(fixture);
@@ -670,4 +670,70 @@ describe('origin-free continuations stay headless', () => {
     }
     expectNoConversation(fixture);
   }, 120_000);
+});
+
+test('resume reuses a registered worktree with one warning and durable adoption', async () => {
+  const fixture = makeFixture();
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', ['-C', fixture.repo, ...args], { encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(result.stderr);
+  };
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('add', '.archon');
+  git('commit', '-qm', 'seed workflow');
+  git('branch', '-M', 'dev');
+  const remote = join(fixture.archonHome, 'remote.git');
+  git('init', '--bare', '-q', remote);
+  git('remote', 'add', 'origin', remote);
+  git('push', '-q', 'origin', 'dev');
+  writeFileSync(join(fixture.repo, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: dev\n');
+  const first = await runForeground(fixture, WORKFLOW_NAME, {
+    noWorktree: false,
+    branchName: 'resume-adoption',
+  });
+  expect(first.output).toContain('boom');
+  const before = readThreadState(fixture);
+  expect(before.runStatus).toBe('failed');
+  const readCheckout = () => {
+    const database = openDatabase(fixture);
+    try {
+      return database
+        .query<
+          { working_path: string; metadata: string },
+          []
+        >('SELECT working_path, metadata FROM remote_agent_isolation_environments')
+        .all();
+    } finally {
+      database.close();
+    }
+  };
+  const [created] = readCheckout();
+  expect(JSON.parse(created.metadata).adopted).toBe(false);
+  expect(created.working_path).not.toBe(fixture.repo);
+  const resumed = await resumeForeground(fixture, before.runId);
+  expect(resumed.output).toContain('boom');
+  expect(resumed.output).toContain(`Working path: ${created.working_path}`);
+  const warnings = resumed.stderr
+    .split('\n')
+    .filter(Boolean)
+    .flatMap(line => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    })
+    .filter(event => event.msg === 'worktree_adopted');
+  expect(warnings).toEqual([
+    expect.objectContaining({ level: 40, worktreePath: created.working_path }),
+  ]);
+  const rows = readCheckout();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].working_path).toBe(created.working_path);
+  expect(JSON.parse(rows[0].metadata)).toMatchObject({
+    ...JSON.parse(created.metadata),
+    adopted: true,
+  });
 });

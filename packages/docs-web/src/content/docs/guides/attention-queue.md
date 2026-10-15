@@ -68,7 +68,10 @@ they cannot disagree about what a run needs.
 
 - **`kind`** says how to answer. `attention` is a `wait: attention` pause: answer it in
   its `form` with `answer`, or the `respond`/`approve`/`reject` shorthand. `awaiting_response`
-  is an approval gate: answer it with `approve`, `reject` or `respond`. `unreadable` is a
+  is an approval gate: answer it with `approve`, `reject` or `respond`. `usage_limit` is a
+  run waiting for a provider usage limit to reset: `node` hit the limit and `resetAt` is
+  when the provider said it reopens. It needs no answer and continues by itself after
+  `resetAt`; abandon it to stop it. It has no `occurrence`. `unreadable` is a
   paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
   sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
   `detail` say why, and the action is to look at it and resume or abandon it.
@@ -221,11 +224,30 @@ nodes:
     depends_on: [decide]
     bash: |
       answers=$decide.output.answers
-      printf '%s' "$answers" | jq -c '.[]' | while read -r item; do
-        archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
-          --occurrence "$(jq -r .occurrence <<<"$item")" --json
-      done
+      items=$(printf '%s' "$answers" | jq -c '.[]') || exit 1
+      if [ -z "$items" ]; then
+        exit 0
+      fi
+      failed=0
+      while read -r item; do
+        if ! result=$(archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
+          --occurrence "$(jq -r .occurrence <<<"$item")" --json); then
+          printf '%s\n' "$result" >&2
+          failed=1
+          continue
+        fi
+        if ! printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null; then
+          printf '%s\n' "$result" >&2
+          failed=1
+        fi
+      done <<<"$items"
+      exit "$failed"
 ```
+
+Answer commands exit non-zero when an answer is refused, including with `--json`
+(`ok: false`). An accepted answer at full capacity exits 0: the run keeps its place
+and a continuation host continues it when a slot frees. `--json` records the answer
+without continuing inline; run `archon workflow wake` or use `archon serve`.
 
 Two handlers can watch the same class. The occurrence check refuses the second answer,
 and the run stays answered once.
