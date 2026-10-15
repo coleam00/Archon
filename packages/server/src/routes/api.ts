@@ -1188,7 +1188,8 @@ const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
   tags: ['Workflows'],
-  summary: 'Signal the exact external event awaited by a paused workflow run',
+  summary:
+    'Signal an external event awaited by a paused workflow run; use occurrence for an exact match',
   request: {
     params: z.object({ runId: z.string() }),
     body: {
@@ -4097,18 +4098,13 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const request = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const { event } = request;
     try {
       const store = createWorkflowStore();
       const run = await store.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const { signaled } = await signalWorkflowWait(
-        runId,
-        event,
-        resumeAt,
-        payload,
-        await resolveRunActor(c)
-      );
+      const { signaled } = await signalWorkflowWait(runId, request, await resolveRunActor(c));
       if (!signaled) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }

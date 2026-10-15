@@ -7099,6 +7099,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.durationMs).toISOString(),
     };
@@ -7123,6 +7124,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'time',
+      pauseId: randomUUID(),
       waitingSince: now.toISOString(),
       resumeAt: new Date(resumeAtMs).toISOString(),
     };
@@ -7134,6 +7136,7 @@ async function executeWaitNode(
     context = {
       ...owner,
       kind: 'event',
+      pauseId: randomUUID(),
       event,
       waitingSince: now.toISOString(),
       resumeAt: new Date(now.getTime() + condition.deadlineMs).toISOString(),
