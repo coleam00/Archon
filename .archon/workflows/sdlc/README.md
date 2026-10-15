@@ -80,15 +80,18 @@ selected, [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and write
 and [`.shared/issue.ts`](.shared/issue.ts) owns the issue read, each returning the
 same shapes from either source:
 
-- **`forge` (default).** Operations go through `archon forge`, which needs a forge
+- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge`. Operations go through `archon forge`, which needs a forge
   plugin installed for the repository's host, a credential that plugin accepts
   (for GitHub, the host tries `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth login`;
   GitHub App mode supplies a run token; see the forge
   reference in the docs), and the `ARCHON_CLI_COMMAND` host command that the CLI
   and server publish at startup.
-- **`gh` (opt-in).** Set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs
+- **`gh` (default).** Optionally set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
+
+The released GitHub plugin v0.11.1 lacks seven required operations and refuses preflight.
+Keep `gh` as the default until a compatible release passes a real-PR check.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -105,7 +108,9 @@ the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
 
 `archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
-can act before any agent spends: on `forge`, one authenticated repository read for
+can act after worktree setup and before any agent spends: on `forge`, host metadata
+must advertise every operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`,
+then one authenticated repository read for
 the repositories the checkout's remotes name, at least one of which must answer
 (`pr.view` by head, which every released GitHub plugin supports; it proves read
 access, not write access); on

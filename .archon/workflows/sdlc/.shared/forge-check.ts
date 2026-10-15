@@ -22,6 +22,12 @@ export function forgeAccessRead(repo: QualifiedPr['repo']) {
   } as const;
 }
 
+export const REQUIRED_FORGE_OPERATIONS = [
+  'pr.view', 'pr.create', 'pr.edit-body', 'pr.ready', 'pr.draft', 'comment.upsert',
+  'checks.state', 'checks.rerun', 'workitem.view', 'repo.labels.list',
+  'repo.label.ensure', 'workitem.labels.set', 'workitem.comment.upsert', 'workitem.close',
+] as const;
+
 export function checkForgeAccess(): { readonly source: ForgeSource } {
   const source = forgeSource();
   if (source === 'gh') checkGh();
@@ -59,7 +65,7 @@ function checkGh(): void {
     } catch (error) {
       throw new Error(
         `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
-          'install gh, or unset ARCHON_SDLC_FORGE to use the forge plugin'
+          'install gh, or set ARCHON_SDLC_FORGE=forge to use a compatible forge plugin'
       );
     }
     if (result.exitCode === 0) return;
@@ -67,7 +73,7 @@ function checkGh(): void {
   }
   throw new Error(
     `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated for any host a remote names:\n${failures.join('\n')}\n` +
-      'run `gh auth login --hostname <host>`, or unset ARCHON_SDLC_FORGE to use the forge plugin'
+      'run `gh auth login --hostname <host>`, or set ARCHON_SDLC_FORGE=forge to use a compatible forge plugin'
   );
 }
 
@@ -77,8 +83,9 @@ function checkGh(): void {
  * is enough; a mirror on a host no plugin claims must not refuse a run its canonical
  * remote can serve.
  *
- * The read is `pr.view` by head, which every released GitHub plugin supports. It
- * answers null when no open pull request has that head, so any head proves the
+ * Metadata must advertise every pack operation before the read runs. The read
+ * is `pr.view` by head, which answers null when no open PR has that head. Any
+ * head therefore proves the
  * plugin, the token and read access. No forge operation reports what the token may
  * write, so write access is first proven by the run's first write.
  */
@@ -104,6 +111,15 @@ function checkForge(): void {
   for (const repo of repos) {
     const name = `${repo.host}/${repo.path}`;
     try {
+      const metadata = invokeForge('metadata', { host: repo.host });
+      const capabilities = metadata?.capabilities;
+      if (!Array.isArray(capabilities) || !capabilities.every(op => typeof op === 'string'))
+        throw new Error('forge metadata returned no operation capabilities');
+      const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
+      if (missing.length) throw new Error(
+        `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
+        'The released GitHub plugin v0.11.1 is insufficient. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+      );
       const read = forgeAccessRead(repo);
       invokeForge(read.op, read.data);
       answered.push(name);

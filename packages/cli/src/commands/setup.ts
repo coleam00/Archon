@@ -1286,13 +1286,14 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 async function collectForgeToken(): Promise<string | undefined> {
   note(
     'The SDLC workflows (archon-ship, archon-deliver, archon-upkeep, archon-pr)\n' +
-      'reach GitHub through the GitHub forge plugin. They need two things:\n\n' +
+      'use gh by default. ARCHON_SDLC_FORGE=forge opts into a compatible plugin.\n' +
+      'For the forge opt-in, configure:\n\n' +
       `1. The plugin: archon plugin add ${FORGE_GITHUB_PLUGIN}\n` +
       '2. A credential: GH_TOKEN, then GITHUB_TOKEN, then the gh CLI login.\n' +
       '   Set GH_TOKEN in this env file, use gh auth login, or configure GitHub App mode.\n\n' +
       'Create a classic token at github.com/settings/tokens with the repo scope\n' +
       '(and workflow, only if runs may change .github/workflows/ files).\n' +
-      'To use the gh CLI instead, set ARCHON_SDLC_FORGE=gh.',
+      'The released GitHub plugin v0.11.1 lacks required pack operations; keep gh until a compatible release is tested.',
     'GitHub Forge Plugin'
   );
 

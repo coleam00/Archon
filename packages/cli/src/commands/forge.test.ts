@@ -481,3 +481,36 @@ test('reviews retain bodies in stdout and digest them through the CLI audit boun
   expect(JSON.stringify(auditRecords)).not.toContain('confidential review');
   expect(JSON.stringify(auditRecords)).toContain('digest');
 });
+
+test('host metadata exposes selected plugin capabilities without credentials or operations', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-metadata-')));
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'metadata',
+    { data: JSON.stringify({ host: 'github.com' }) },
+    {
+      env: { HOME: root, ARCHON_HOME: root, PATH: '' },
+      readConfig: async () => ({
+        scanPath: false,
+        plugins: [
+          {
+            plugin: 'github',
+            command: process.execPath,
+            args: [
+              '--no-env-file',
+              join(import.meta.dir, '../../../forge/src/fixtures/credential-plugin.ts'),
+            ],
+          },
+        ],
+      }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(code).toBe(0);
+  expect(output[0]).toMatchObject({
+    ok: true,
+    result: { op: 'metadata', value: { capabilities: ['pr.view', 'resolve'] } },
+  });
+});

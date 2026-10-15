@@ -1123,7 +1123,10 @@ describe('setup provider selection', () => {
         return chosen.value;
       });
       const input = spyOn(prompts, 'text').mockResolvedValue('');
-      const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+      const confirm = spyOn(prompts, 'confirm').mockImplementation(
+        async options => options.message === 'Set GH_TOKEN for the SDLC workflows now?'
+      );
+      const password = spyOn(prompts, 'password').mockResolvedValue('setup-private-github-token');
       const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
       const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
       const install = mock(async (_ids: readonly string[]) => undefined);
@@ -1138,6 +1141,10 @@ describe('setup provider selection', () => {
       const doctor = spyOn(doctorModule, 'doctorCommand').mockResolvedValue(0);
       try {
         expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
+        expect(readFileSync(join(root, 'archon', '.env'), 'utf8')).toContain(
+          'GH_TOKEN=setup-private-github-token'
+        );
+        expect(password).toHaveBeenCalledTimes(1);
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);
         expect(diagnose.mock.calls).toEqual([['claude'], ['codex']]);
         expect(info.mock.calls.flat().join('')).toContain('provider-owned check');
@@ -1149,7 +1156,17 @@ describe('setup provider selection', () => {
           );
         }
       } finally {
-        for (const spy of [selection, input, confirm, detect, info, collect, platforms, doctor])
+        for (const spy of [
+          selection,
+          input,
+          confirm,
+          password,
+          detect,
+          info,
+          collect,
+          platforms,
+          doctor,
+        ])
           spy.mockRestore();
         for (const key of ['HOME', 'USERPROFILE', 'ARCHON_HOME'] as const) {
           if (saved[key] === undefined) delete process.env[key];

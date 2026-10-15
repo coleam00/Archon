@@ -1,11 +1,11 @@
 /**
- * Standalone client for `archon forge`, the pack's default forge source.
+ * Standalone client for `archon forge`, the pack's opt-in forge source.
  *
  * One switch selects the source for every forge read and write this pack makes:
  *
- *   forge  the default. An installed forge plugin, reached through the host
- *          command (`ARCHON_CLI_COMMAND`) the CLI and server publish.
- *   gh     opt-in with `ARCHON_SDLC_FORGE=gh`. The GitHub CLI.
+ *   gh     the default. The GitHub CLI.
+ *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
+ *          reached through the host command (`ARCHON_CLI_COMMAND`).
  *
  * The source is never inferred from what happens to be installed, and a selected
  * source that cannot answer fails the operation rather than falling back to the
@@ -17,16 +17,18 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
-export type ForgeSource = 'gh' | 'forge';
+export const FORGE_SOURCES = ['gh', 'forge'] as const;
+export type ForgeSource = (typeof FORGE_SOURCES)[number];
 
 // Read here, not in each calling script: the unbound-env checker scans a node-bound
 // script's own text but never follows its imports, so a bare process.env read in a
 // shared module like this one never trips a false "unbound variable" warning.
 export function forgeSource(): ForgeSource {
   const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
-  if (selected === '' || selected === 'forge') return 'forge';
-  if (selected === 'gh') return 'gh';
-  throw new Error(`ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"`);
+  if (selected === '') return 'gh';
+  const source = FORGE_SOURCES.find(source => source === selected);
+  if (source) return source;
+  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
 
 /**

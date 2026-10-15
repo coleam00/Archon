@@ -286,7 +286,7 @@ async function runForgeCommand(
 }
 
 /**
- * Whether the SDLC workflows' default forge path works: the GitHub forge plugin is
+ * Whether the SDLC workflows' opt-in forge path works: the GitHub forge plugin is
  * installed and accepts the resolved credential. A missing plugin is skipped and a missing
  * token warns, since an install that never runs the SDLC workflows needs neither.
  *
@@ -306,7 +306,7 @@ export async function checkGithubForge(
     return {
       label,
       status: 'fail',
-      message: `ARCHON_SDLC_FORGE must be "forge" (the default) or "gh", not "${selected}"; every SDLC run refuses until it is`,
+      message: `ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"; every SDLC run refuses until it is`,
     };
   }
   const appMode = Boolean(env.GITHUB_APP_ID);
@@ -326,7 +326,7 @@ export async function checkGithubForge(
     return {
       label,
       status: 'skip',
-      message: `not installed. The SDLC workflows need \`${FORGE_PLUGIN_INSTALL}\` and a credential: GH_TOKEN in ${envFile}, GITHUB_TOKEN, or gh auth login (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
+      message: `not installed. The SDLC forge opt-in needs \`${FORGE_PLUGIN_INSTALL}\` and a credential: GH_TOKEN in ${envFile}, GITHUB_TOKEN, or gh auth login (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
     };
   }
   if (kind === 'unsupported_op') {

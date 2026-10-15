@@ -12,6 +12,8 @@ import { validateStructuredOutput } from '../../../packages/workflows/src/struct
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import { getArchonHome } from '../../../packages/paths/src/archon-paths';
 import {
+  FORGE_SOURCES,
+  record,
   archonEnvFile,
   parseQualifiedPr,
   REMEDY,
@@ -266,4 +268,23 @@ test('standalone new-operation projections carry typed request and result eviden
       },
     }).landed.commit
   ).toBe('landed');
+});
+
+test('all four preflight source validators conform to the pack source selector', () => {
+  for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
+    const file = `archon-${folder}.yaml`;
+    const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
+    if (!parsed.workflow) throw new Error('invalid preflight workflow');
+    const first = parsed.workflow.nodes[0];
+    if (!first || !('output_format' in first)) throw new Error('missing preflight schema');
+    expect(record(record(first.output_format?.properties)?.source)?.enum).toEqual(FORGE_SOURCES);
+  }
+});
+
+test('operator guidance describes the gh default and forge host login source', () => {
+  const root = join(import.meta.dir, '../../..');
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split('## [')[1] ?? '';
+  const docker = readFileSync(join(root, 'packages/docs-web/src/content/docs/deployment/docker.md'), 'utf8');
+  expect(changelog.includes('forge path does not read your `gh` login')).toBe(false);
+  expect(docker.includes('read this login only when')).toBe(false);
 });

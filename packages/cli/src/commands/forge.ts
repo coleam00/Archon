@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
 import { getPluginsPath } from '@archon/paths';
+import { discoverPlugins } from '@archon/forge/discovery';
 import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
@@ -82,12 +83,39 @@ export async function forgeCommand(
     if (typeof supplied !== 'object' || supplied === null || Array.isArray(supplied)) {
       throw new Error('--data must be a JSON object');
     }
-    request = forgeRequestSchema.parse({ ...supplied, operationId, op });
     const config = forgePluginConfigSchema.parse(
       dependencies.readConfig
         ? await dependencies.readConfig()
         : await readForgeConfig(options.configPath ?? getArchonConfigPath(archonHome))
     );
+    // Host introspection reads the same trusted discovery metadata as dispatch;
+    // it is not a plugin operation and never resolves a credential.
+    if (op === 'metadata') {
+      if (!('host' in supplied) || typeof supplied.host !== 'string' || !supplied.host.trim())
+        throw new Error('metadata requires a host');
+      const discovery = await discoverPlugins({
+        config,
+        env: trustedEnv,
+        pluginsDir: getPluginsPath(archonHome),
+      });
+      const plugin = discovery.byHost.get(supplied.host.trim().toLowerCase());
+      if (plugin) {
+        await write({ operationId, ok: true, result: { op: 'metadata', value: plugin.metadata } });
+        return 0;
+      }
+      await write({
+        operationId,
+        ok: false,
+        error: {
+          kind: discovery.unavailable.length ? 'process_failed' : 'no_plugin_for_host',
+          message: discovery.unavailable.length
+            ? discovery.unavailable.map(error => error.message).join('; ')
+            : `no forge plugin claims ${supplied.host}`,
+        },
+      });
+      return 1;
+    }
+    request = forgeRequestSchema.parse({ ...supplied, operationId, op });
     dispatched = true;
     const result = await (dependencies.dispatch ?? dispatchForge)(request, {
       config,

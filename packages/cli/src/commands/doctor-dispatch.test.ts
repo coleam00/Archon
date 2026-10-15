@@ -1,5 +1,5 @@
 import { expect, mock, spyOn, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -17,7 +17,7 @@ mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: async () => null,
   findCodebaseByPathPrefix: async () => null,
 }));
-const { doctorCommand } = await import('./doctor');
+const { doctorCommand, checkGithubForge } = await import('./doctor');
 
 test('normal doctor dispatch renders registered diagnostics and fails on their failure', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-doctor-dispatch-'));
@@ -72,6 +72,45 @@ test('normal doctor dispatch renders registered diagnostics and fails on their f
     output.mockRestore();
     process.env = savedEnv;
     process.chdir(savedCwd);
+    await removeTempTree(root);
+  }
+});
+
+test('default forge runner reports its selected credential without exposing it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-doctor-credential-'));
+  const token = 'github-doctor-private-token';
+  try {
+    writeFileSync(join(root, 'expected'), token);
+    writeFileSync(
+      join(root, 'config.yaml'),
+      JSON.stringify({
+        forge: {
+          scanPath: false,
+          plugins: [
+            {
+              plugin: 'github',
+              command: process.execPath,
+              args: [
+                '--no-env-file',
+                join(import.meta.dir, '../../..', 'forge/src/fixtures/credential-plugin.ts'),
+              ],
+            },
+          ],
+        },
+      })
+    );
+    const result = await checkGithubForge({
+      ARCHON_SDLC_FORGE: 'forge',
+      ARCHON_HOME: root,
+      HOME: root,
+      GITHUB_TOKEN: token,
+    });
+    expect(result).toMatchObject({
+      status: 'pass',
+      message: expect.stringContaining('source: GITHUB_TOKEN'),
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+  } finally {
     await removeTempTree(root);
   }
 });
