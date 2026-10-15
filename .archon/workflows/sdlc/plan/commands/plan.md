@@ -40,8 +40,10 @@ A call is a person's only when one of these holds, and you name which:
 
 - No project document covers it, and the code, a spike, and usage data do not settle it.
 - Two project documents disagree on it.
-- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write, a shipped lifecycle, or what an existing persisted or shipped value means, even when no schema changes — and no project document already rules on that change. If the plan must rewrite the comment or reference text that defines a persisted or shipped value, it changes that value's meaning.
+- It changes a shipped contract — what an existing persisted or shipped value means, or how an existing use of a public API, a configuration or language surface users write, or a shipped lifecycle behaves, even when no schema changes; a removal of something shipped; or a persisted shape — and no project document already rules on that change. If the plan must rewrite the comment or reference text that defines a persisted or shipped value so that the value reads differently, it changes that value's meaning.
 - The plan you can responsibly execute delivers less than the request's stated outcome: it drops a path, an acceptance item, or an invariant.
+
+An addition to a public API, or to a configuration, language or lifecycle surface, is not a shipped-contract change when every existing value keeps meaning what it meant before: everything that worked before behaves as it did, and only the new part, or a value that failed before, behaves differently. Judge that yourself; it is not a person's call. Name the addition under **Contract additions** in the plan, with why each existing value keeps its meaning, so the pull request body flags it for the reviewer. Reference text that gains a statement of the addition does not change a meaning. When you cannot show that an existing value keeps its meaning, the change is not only an addition. A persisted shape is not covered: changing one stops even when it only adds.
 
 A choice that is cheap to reverse and changes no shipped contract, such as wording, presentation, naming or an internal shape, is provisional, never a person's call: make it, say so in the plan, and declare it as a non-blocking question when the owner should see it.
 
@@ -60,6 +62,7 @@ Write `$ARTIFACTS_DIR/plan.md`:
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused, behavior-proving, no padding.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
+- **Contract additions** — each addition to a shipped surface the plan makes without a person: what it adds and why every existing value keeps its meaning. The pull request body flags each one as a contract addition.
 - **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
 - **Open questions** — only when a call belongs to a person: each question, as declared below.
 

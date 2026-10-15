@@ -121,7 +121,7 @@ Turns decided intent, such as a feature request, an investigation report, or an 
 archon workflow run archon-plan "Add CSV export to the reports page"
 ```
 
-**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. The SDLC pack README's sidecar section describes the rulings document.
+**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops for a person. The SDLC pack README's sidecar section describes the rulings document.
 
 ---
 

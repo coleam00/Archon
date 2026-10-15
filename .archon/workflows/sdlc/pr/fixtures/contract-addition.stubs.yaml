@@ -1,0 +1,9 @@
+# Dry-run fixture: a delivered plan that lists contract additions. Prepare is told to
+# flag each one in the body so the reviewer sees the claim that every existing value
+# keeps its meaning.
+prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: opens a pull request that flags a contract addition" }
+publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 8, url: "https://github.com/example/repo/pull/8", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+fixture:
+  expect: completed
+  resolved-text-contains:
+    prepare: "When the plan this work delivers lists contract additions, flag each one in the body as a contract addition"
