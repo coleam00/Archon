@@ -737,6 +737,7 @@ describe('workflow continuation scanner', () => {
 
     await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toEqual({
       kind: 'waiting_for_capacity',
+      refusal: 'paused',
       message: busy.message,
     });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);

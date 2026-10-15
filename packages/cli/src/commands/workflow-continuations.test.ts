@@ -133,6 +133,7 @@ test('a continuation waiting for capacity is reported and the pass succeeds', as
       runId: 'full',
       kind: 'waiting_for_capacity',
       blocker: { kind: 'run', id: 'holder' },
+      refusal: 'waiting',
       message: 'busy',
     },
   ]);

@@ -10,6 +10,8 @@ import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/conne
 import { findOrCreateUserByPlatformIdentity, setUserRole } from '@archon/core/db/users';
 import { createWorkflowRun, getWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import { resumeRefusal } from '@archon/workflows/resource-start-store';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { descriptor } from './fixtures/descriptor';
 import { ChatPluginPlatform } from './platform';
 
@@ -25,6 +27,14 @@ mock.module('../services/workflow-resume-service', () => ({
   resumeWorkflowRunFromServer: resume,
 }));
 const { registerChatInbound } = await import('./inbound');
+/** A resume refused for capacity, with the refusal the store derives from the run's state. */
+const refuseForCapacity = (): void => {
+  resume.mockImplementationOnce(async (_host: unknown, run: unknown) => ({
+    kind: 'waiting_for_capacity',
+    refusal: resumeRefusal(run as WorkflowRun, undefined),
+    message: 'busy',
+  }));
+};
 
 let inbound: Parameters<ConnectedChat['onInbound']>[0];
 let action: Parameters<ConnectedChat['onRunAction']>[0];
@@ -288,13 +298,6 @@ test('resume continues a wait paused before answers, and refuses an unanswered f
     await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'starter' } })
   ).toEqual({ status: 'done', result: { kind: 'resumed', resumed: true } });
   expect(resume.mock.calls[0]?.[2]).toBe(userId);
-  resume.mockImplementationOnce(async () => ({ kind: 'waiting_for_capacity', message: 'busy' }));
-  expect(
-    await action({ runId: legacy, action: 'resume', sender: { platformUserId: 'starter' } })
-  ).toEqual({
-    status: 'done',
-    result: { kind: 'resumed', resumed: false, waitingForCapacity: true },
-  });
   const unanswered = await waiting(select);
   expect(
     await action({ runId: unanswered, action: 'resume', sender: { platformUserId: 'starter' } })
@@ -302,7 +305,48 @@ test('resume continues a wait paused before answers, and refuses an unanswered f
     status: 'refused',
     message: expect.stringContaining("waiting for an answer to its 'select' attention wait"),
   });
-  expect(resume).toHaveBeenCalledTimes(2);
+  expect(resume).toHaveBeenCalledTimes(1);
+});
+
+test('a resume refused for capacity reports a wait only for a run that keeps its place', async () => {
+  const resumeAs = (runId: string) =>
+    action({ runId, action: 'resume', sender: { platformUserId: 'starter' } });
+  // An early resume of a pause that is not ready holds no place.
+  const notReady = await waiting({});
+  refuseForCapacity();
+  expect(await resumeAs(notReady)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false },
+  });
+  const failed = await run();
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
+    [failed.id]
+  );
+  refuseForCapacity();
+  expect(await resumeAs(failed.id)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false },
+  });
+  const answered = await waiting(select);
+  refuseForCapacity();
+  expect(
+    await action({
+      runId: answered,
+      action: 'answer',
+      response: { nodeId: 'hold', pauseId: 'w1', choose: ['use-dev'] },
+      sender: { platformUserId: 'starter' },
+    })
+  ).toEqual({
+    status: 'done',
+    result: { kind: 'answered', resumed: false, waitingForCapacity: true },
+  });
+  refuseForCapacity();
+  expect(await resumeAs(answered)).toEqual({
+    status: 'done',
+    result: { kind: 'resumed', resumed: false, waitingForCapacity: true },
+  });
+  expect(resume).toHaveBeenCalledTimes(4);
 });
 
 test('a failed resume reports the recorded approval as not resumed, not refused', async () => {
@@ -323,7 +367,7 @@ test('a failed resume reports the recorded approval as not resumed, not refused'
 
 test('an approval refused for capacity reports the run as waiting, not refused', async () => {
   const paused = await run(true);
-  resume.mockImplementationOnce(async () => ({ kind: 'waiting_for_capacity', message: 'busy' }));
+  refuseForCapacity();
   expect(
     await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'starter' } })
   ).toEqual({

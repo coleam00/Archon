@@ -138,6 +138,7 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
       runId,
       kind: outcome.kind,
       blocker: outcome.blocker,
+      refusal: outcome.refusal,
       message: outcome.message,
       ...deferral,
     };

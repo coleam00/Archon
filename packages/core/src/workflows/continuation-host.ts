@@ -5,6 +5,7 @@ import {
   WorkflowResourceBusyError,
   resumeCursorMatches,
   type IWorkflowStore,
+  type ResumeRefusal,
 } from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
@@ -39,6 +40,8 @@ export type ContinuationAdmission =
   | {
       kind: 'waiting_for_capacity';
       blocker: WorkflowResourceBusyError['blocker'];
+      /** Only `waiting` keeps the run's place as a capacity waiter. */
+      refusal: ResumeRefusal;
       /** The refusal as an operator reads it (`WorkflowResourceBusyError`). */
       message: string;
     }
@@ -138,7 +141,12 @@ export async function resumeWorkflowContinuation(
     )
       return { kind: 'not-accepted' };
     if (error instanceof WorkflowResourceBusyError)
-      return { kind: 'waiting_for_capacity', blocker: error.blocker, message: error.message };
+      return {
+        kind: 'waiting_for_capacity',
+        blocker: error.blocker,
+        refusal: error.refusal,
+        message: error.message,
+      };
     throw error;
   }
 }

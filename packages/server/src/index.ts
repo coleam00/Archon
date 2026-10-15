@@ -644,9 +644,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (!run) return 'not_resumed';
         const actorUserId = await resolveUserId('slack', slackUserId, undefined);
         const target = await workflowResumeTargetForRun(run, workflowPlatforms);
-        return (
-          await resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target)
-        ).kind;
+        const outcome = await resumeWorkflowRunFromServer(
+          createSqlWorkflowHost(),
+          run,
+          actorUserId,
+          target
+        );
+        if (outcome.kind !== 'waiting_for_capacity') return outcome.kind;
+        return outcome.refusal === 'waiting' ? 'waiting_for_capacity' : 'not_resumed';
       });
       slackBridge.attach();
 
