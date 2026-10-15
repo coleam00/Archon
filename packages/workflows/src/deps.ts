@@ -1,3 +1,4 @@
+import type { SETTING_SOURCES } from '@archon/paths/skills';
 import type { ResolvedWorkflowPolicy } from './schemas/run-config';
 /**
  * Workflow dependency injection types.
@@ -185,7 +186,7 @@ export interface WorkflowConfig {
   assistants: ProviderDefaultsMap & {
     claude: {
       model?: string;
-      settingSources?: ('project' | 'user')[];
+      settingSources?: (typeof SETTING_SOURCES)[number][];
     };
     codex: {
       model?: string;

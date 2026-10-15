@@ -1,3 +1,5 @@
+import type { SETTING_SOURCES } from '@archon/paths/skills';
+import type { NodeConfig } from '@archon/provider-contract';
 import type { z } from 'zod';
 import type { AssertNever, PiExtensionPosture } from '@archon/provider-contract';
 import type {
@@ -40,4 +42,9 @@ export type PiDefaultsMatchSchema = AssertNever<
 // A per-node override is resolved as the contract's posture.
 export type PiNodeOverrideMatchesContract = AssertNever<
   Mismatch<NonNullable<PiProviderDefaults['nodes']>[string], PiExtensionPosture>
+>;
+
+// The contract does not depend on paths; this conformance check binds their vocabularies.
+export type SettingSourcesMatchContract = AssertNever<
+  Mismatch<NonNullable<NodeConfig['settingSources']>, (typeof SETTING_SOURCES)[number][]>
 >;

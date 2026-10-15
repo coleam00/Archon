@@ -28,6 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import type { SETTING_SOURCES } from '@archon/paths/skills';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -895,7 +896,7 @@ function buildBaseClaudeOptions(
   toolResultQueue: ToolResultEntry[],
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined,
-  settingSources: ('project' | 'user')[]
+  settingSources: (typeof SETTING_SOURCES)[number][]
 ): Options {
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
