@@ -1097,11 +1097,7 @@ describe('setup provider selection', () => {
     '%s setup uses diagnostics and persists the selected default for multiple providers',
     async mode => {
       const root = mkdtempSync(join(tmpdir(), 'archon-setup-providers-'));
-      const saved = {
-        HOME: process.env.HOME,
-        USERPROFILE: process.env.USERPROFILE,
-        ARCHON_HOME: process.env.ARCHON_HOME,
-      };
+      const savedEnv = { ...process.env };
       process.env.HOME = root;
       process.env.USERPROFILE = root;
       process.env.ARCHON_HOME = join(root, 'archon');
@@ -1124,7 +1120,9 @@ describe('setup provider selection', () => {
       });
       const input = spyOn(prompts, 'text').mockResolvedValue('');
       const confirm = spyOn(prompts, 'confirm').mockImplementation(
-        async options => options.message === 'Set GH_TOKEN for the SDLC workflows now?'
+        async options =>
+          options.message === 'Set GH_TOKEN for the SDLC workflows now?' ||
+          options.message === 'Run `archon doctor` now to verify your setup?'
       );
       const password = spyOn(prompts, 'password').mockResolvedValue('setup-private-github-token');
       const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
@@ -1143,6 +1141,10 @@ describe('setup provider selection', () => {
         expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
         expect(readFileSync(join(root, 'archon', '.env'), 'utf8')).toContain(
           'GH_TOKEN=setup-private-github-token'
+        );
+        expect(doctor).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ GH_TOKEN: 'setup-private-github-token' })
         );
         expect(password).toHaveBeenCalledTimes(1);
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);
@@ -1168,10 +1170,7 @@ describe('setup provider selection', () => {
           doctor,
         ])
           spy.mockRestore();
-        for (const key of ['HOME', 'USERPROFILE', 'ARCHON_HOME'] as const) {
-          if (saved[key] === undefined) delete process.env[key];
-          else process.env[key] = saved[key];
-        }
+        process.env = savedEnv;
         await removeTempTree(root);
       }
     }

@@ -56,7 +56,8 @@
       "src/commands/workflow.test.ts"
     ],
     [
-      "src/commands/doctor-dispatch.test.ts"
+      "src/commands/doctor-dispatch.test.ts",
+      "src/commands/doctor-forge-parity.test.ts"
     ],
     [
       "src/commands/setup-exit.test.ts"

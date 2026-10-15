@@ -236,13 +236,14 @@ export const FORGE_GITHUB_PLUGIN = GITHUB_FORGE_PLUGIN;
 async function runForgeCommand(
   op: string,
   data: Record<string, unknown>,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  trustedEnv: NodeJS.ProcessEnv
 ): ReturnType<ForgeProbe> {
   let response: unknown;
   let credentialSource: string | undefined;
   const exitCode = await forgeCommand(
     op,
-    { data: JSON.stringify(data) },
+    { data: JSON.stringify(data), trustedEnv },
     {
       env,
       write: async value => {
@@ -258,7 +259,8 @@ async function runForgeCommand(
 
 export async function checkSdlcForge(
   env: NodeJS.ProcessEnv,
-  probe: ForgeProbe = (op, data) => runForgeCommand(op, data, env)
+  probe: ForgeProbe = (op, data) => runForgeCommand(op, data, env, trustedEnv),
+  trustedEnv: NodeJS.ProcessEnv = env
 ): Promise<CheckResult> {
   const label = 'SDLC forge';
   try {
@@ -901,7 +903,8 @@ function renderResult(r: CheckResult): string {
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
-  checks?: (() => Promise<CheckResult | CheckResult[]>)[]
+  checks?: (() => Promise<CheckResult | CheckResult[]>)[],
+  trustedEnv: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
   getLog().info('doctor.run_started');
@@ -914,7 +917,10 @@ export async function doctorCommand(
         checkInstalledProviders(),
         ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
         checkGitHubApp(env),
-        checkSdlcForge(env),
+        (async () => {
+          const config = await defaultLoadMergedConfig(process.cwd());
+          return checkSdlcForge({ ...env, ...config.envVars }, undefined, trustedEnv);
+        })(),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
         checkDatabase(),

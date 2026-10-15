@@ -1402,7 +1402,7 @@ async function main(): Promise<number> {
         const { doctorCommand } = await loadRoute(() => import('./commands/doctor'), {
           database: true,
         });
-        return await doctorCommand();
+        return await doctorCommand(undefined, forgeTrustedEnv);
       }
 
       case 'auth': {

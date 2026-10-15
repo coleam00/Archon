@@ -14,10 +14,7 @@ import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
-import {
-  checkForgeAccess,
-  REQUIRED_FORGE_OPERATIONS,
-} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
+import { REQUIRED_FORGE_OPERATIONS } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -58,57 +55,6 @@ const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
-
-describe('doctor matches selected-source preflight', () => {
-  it.each(['keyring', 'logged-out', 'released-plugin'])('%s', async setup => {
-    const saved = process.env;
-    process.env = setup === 'released-plugin' ? { ARCHON_SDLC_FORGE: 'forge' } : {};
-    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(argv => {
-      const args = argv as string[];
-      const op = args[1];
-      const stdout =
-        args[0] === 'git'
-          ? 'remote.origin.url https://github.com/coleam00/Archon.git'
-          : args.includes('metadata')
-            ? JSON.stringify({
-                operationId: 'op',
-                ok: true,
-                result: { op: 'metadata', value: { capabilities: ['pr.view'] } },
-              })
-            : '';
-      return {
-        exitCode: setup === 'logged-out' && op === 'auth' ? 1 : 0,
-        stdout: Buffer.from(stdout),
-        stderr: Buffer.from('logged out'),
-      } as ReturnType<typeof Bun.spawnSync>;
-    });
-    const output = spyOn(console, 'log').mockImplementation(() => {});
-    process.env.ARCHON_CLI_COMMAND = '["archon"]';
-    try {
-      let preflight = 0;
-      try {
-        await checkForgeAccess();
-      } catch {
-        preflight = 1;
-      }
-      const result = await checkSdlcForge(process.env, async () => ({
-        value: { capabilities: ['pr.view'] },
-      }));
-      expect(result.status).toBe(preflight === 0 ? 'pass' : 'fail');
-      expect(await doctorCommand([async () => result])).toBe(preflight);
-      if (setup === 'keyring') expect(result.message).toContain('source: gh auth login');
-      if (setup === 'logged-out') {
-        expect(result.message).toContain('GH_TOKEN');
-        expect(result.message).not.toContain('ARCHON_SDLC_FORGE=forge');
-      }
-      if (setup === 'released-plugin') expect(result.message).toContain('missing:');
-    } finally {
-      spawn.mockRestore();
-      output.mockRestore();
-      process.env = saved;
-    }
-  });
-});
 
 describe('gh credential-source reporting', () => {
   it.each([
