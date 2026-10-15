@@ -1360,6 +1360,20 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
   }
   if (run.status !== 'paused') return null;
 
+  // A release is written only by the running -> paused transition and cleared on resume,
+  // so while it is present it is why the run is paused; any gate or wait beside it is
+  // history. The host continues a released run, except a container run.
+  const release = readSourceRelease(run.metadata);
+  if (release) {
+    return isContainerRun(run)
+      ? unreadableAttention(
+          run.id,
+          'source_release_not_continued',
+          `paused because a host could not read its frozen source for node '${release.nodeId}'; a container run is only resumed by hand`
+        )
+      : null;
+  }
+
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     // Answered: like a resolved gate, it waits on the machine, not on an answer.
@@ -1377,19 +1391,10 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 
   const raw = run.metadata?.approval;
   if (raw === undefined) {
-    // No gate recorded. A durable `wait:` and a source release own their own
-    // resumption, except a released container run: the host never continues one.
-    // Anything else is a run parked with nothing that describes why, which nothing but
-    // an outside response can unstick.
-    const release = readSourceRelease(run.metadata);
-    if (release && isContainerRun(run)) {
-      return unreadableAttention(
-        run.id,
-        'source_release_not_continued',
-        `paused because a host could not read its frozen source for node '${release.nodeId}'; a container run is only resumed by hand`
-      );
-    }
-    return isWorkflowWaitContext(run.metadata?.wait) || release
+    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is a
+    // run parked with nothing that describes why, which nothing but an outside response
+    // can unstick.
+    return isWorkflowWaitContext(run.metadata?.wait)
       ? null
       : unreadableAttention(
           run.id,

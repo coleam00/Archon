@@ -2480,7 +2480,7 @@ async function executeNodeInternal(
   // Load prompt
   let rawPrompt: string;
   if (commandName !== undefined) {
-    await assertWorkflowSourceIntegrity(workflowSourceRoots);
+    await assertNodeSourceReadable(workflowSourceRoots, stepName);
     const promptResult = await loadCommandPrompt(
       deps,
       cwd,
@@ -3350,6 +3350,19 @@ class RunSourceUnreadableError extends Error {
   }
 }
 
+/** Verify the run's frozen source before a node reads it; a read failure releases the run. */
+async function assertNodeSourceReadable(
+  roots: WorkflowSourceRoots,
+  stepName: string
+): Promise<void> {
+  try {
+    await assertWorkflowSourceIntegrity(roots);
+  } catch (error) {
+    if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+    throw error;
+  }
+}
+
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
 class NodeFailure extends Error {
   constructor(
@@ -3830,14 +3843,7 @@ async function executeScriptNode(
       references: nodeTemplateReferences(node.script, ctx, 'script'),
     }
   );
-  if (!isInlineScript(finalScript)) {
-    try {
-      await assertWorkflowSourceIntegrity(workflowSourceRoots);
-    } catch (error) {
-      if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
-      throw error;
-    }
-  }
+  if (!isInlineScript(finalScript)) await assertNodeSourceReadable(workflowSourceRoots, stepName);
 
   // One-release migration warn for any literal user-controlled var ref that no
   // longer substitutes now that delivery moved to env vars (#2115).
@@ -5705,7 +5711,7 @@ async function executeLoopNode(
       );
       return failLoopNode(errorMsg, { failureKind: 'config', data: { command: loop.command } });
     } else {
-      await assertWorkflowSourceIntegrity(workflowSourceRoots);
+      await assertNodeSourceReadable(workflowSourceRoots, stepName);
       const promptResult = await loadCommandPrompt(
         deps,
         cwd,
@@ -8033,6 +8039,9 @@ export async function resolveFanOutChildDefinition(
 > {
   try {
     const sourceRoots = source ?? liveSourceRoots(cwd);
+    // Verified first, so a capture this host cannot read throws a typed error rather
+    // than surfacing as a discovery error string.
+    await assertWorkflowSourceIntegrity(sourceRoots);
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
@@ -8054,7 +8063,6 @@ export async function resolveFanOutChildDefinition(
         unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
       };
     }
-    await assertWorkflowSourceIntegrity(sourceRoots);
     const commandContents = await resolveWorkflowCommandContents(sourceRoots, definitions);
     return { definition, definitions, commandContents };
   } catch (err) {
@@ -8888,12 +8896,14 @@ async function executeComposeFanOutNode(
 
   // Preflight BEFORE any instance spend: the target must still resolve (it may have been
   // renamed or deleted since load), and its complete closure must remain suspension-free.
-  const resolved = await resolveFanOutChildDefinition(
-    deps,
-    cwd,
-    node.include,
-    ctx.workflowSourceRoots
-  );
+  let resolved: Awaited<ReturnType<typeof resolveFanOutChildDefinition>>;
+  try {
+    resolved = await resolveFanOutChildDefinition(deps, cwd, node.include, ctx.workflowSourceRoots);
+  } catch (error) {
+    if (isSourceReadFailure(error))
+      throw new RunSourceUnreadableError(ctx.stepNamePrefix + node.id, error);
+    throw error;
+  }
   if ('unresolved' in resolved) {
     const msg =
       `composed fan-out node '${node.id}': cannot resolve the composed block '${node.include}' — ` +
@@ -9152,7 +9162,25 @@ async function executeComposeFanOutNode(
         // loop's substitution pass, so its command bodies don't either.
         loopBodyScopes: [],
       };
-      await runLayers(instanceCtx);
+      try {
+        await runLayers(instanceCtx);
+      } catch (error) {
+        // Without a terminal record the resumed fan-out would find this instance started
+        // and never finished, and refuse to replay it.
+        if (error instanceof RunSourceUnreadableError) {
+          const releasedRecord = finishNodeExecution(
+            instanceExecution,
+            { status: 'failed', error: error.message, failureKind: 'child_failed' },
+            {
+              output: { text: '' },
+              diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
+            }
+          );
+          await deps.store.persistWorkflowEvent(serializeNodeStateRecord(releasedRecord));
+          await deriveInstanceSinks(releasedRecord);
+        }
+        throw error;
+      }
       // Every instance exit carries the work it already paid for.
       const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
         ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),

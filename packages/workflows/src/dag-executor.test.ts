@@ -21351,6 +21351,130 @@ describe('executeDagWorkflow -- script nodes', () => {
         expect(failedGroup).toHaveLength(1);
       });
 
+      for (const [kind, node] of [
+        ['an agent', { id: 'step', command: 'my-cmd' }],
+        ['a loop', { id: 'step', loop: { command: 'my-cmd', until: 'DONE', max_iterations: 1 } }],
+      ] as const) {
+        it(`${kind} command node that cannot read its source releases the run`, async () => {
+          const mockDeps = createMockDeps();
+          await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+          await writeFile(join(testDir, '.archon', 'commands', 'my-cmd.md'), 'Do the thing.');
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          try {
+            await executeDagWorkflow(
+              dagOptions({
+                deps: mockDeps,
+                cwd: testDir,
+                workflow: { name: 'command-source-unreadable', nodes: [dagNodeSchema.parse(node)] },
+                workflowRun: makeWorkflowRun('command-source-unreadable-run'),
+                workflowSourceRoots: capture.roots,
+              })
+            );
+          } finally {
+            await capture.restore();
+          }
+
+          expectReleased(mockDeps.store, 'step');
+          expect(mockSendQueryDag).not.toHaveBeenCalled();
+        });
+      }
+
+      it('a composed block that cannot be resolved from an unreadable source releases the run', async () => {
+        const mockDeps = createMockDeps();
+        await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+        await writeFile(
+          join(testDir, '.archon', 'workflows', 'compose-blk.yaml'),
+          'name: compose-blk\ndescription: b\nnodes:\n  - id: work\n    script: check\n    runtime: bun\n'
+        );
+        const capture = await unreadableCapture(join(testDir, 'ran'));
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflow: {
+                name: 'compose-source-unreadable',
+                nodes: [
+                  {
+                    id: 'fan',
+                    kind: 'compose_fan_out',
+                    include: 'compose-blk',
+                    fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                  },
+                ],
+              },
+              workflowRun: makeWorkflowRun('compose-source-unreadable-run'),
+              workflowSourceRoots: capture.roots,
+            })
+          );
+        } finally {
+          await capture.restore();
+        }
+
+        expectReleased(mockDeps.store, 'fan');
+      });
+
+      it('a run released inside a composed instance completes on a later pass', async () => {
+        const mockDeps = createMockDeps();
+        const scriptsDir = join(testDir, '.archon', 'scripts');
+        const marker = join(testDir, 'ran');
+        await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+        await mkdir(scriptsDir, { recursive: true });
+        await writeFile(
+          join(scriptsDir, 'check.ts'),
+          `await Bun.write(${JSON.stringify(marker)}, "ran")`
+        );
+        // The instance's first node makes the scripts unreadable before its script node reads them.
+        await writeFile(
+          join(testDir, '.archon', 'workflows', 'compose-blk.yaml'),
+          [
+            'name: compose-blk',
+            'description: b',
+            'nodes:',
+            '  - id: lock',
+            '    bash: "chmod 000 .archon/scripts"',
+            '  - id: work',
+            '    script: check',
+            '    runtime: bun',
+            '    depends_on: [lock]',
+          ].join('\n')
+        );
+        const workflowRunId = 'compose-instance-released-run';
+        const options = dagOptions({
+          deps: mockDeps,
+          cwd: testDir,
+          workflow: {
+            name: 'compose-instance-released',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(workflowRunId),
+        });
+        try {
+          await executeDagWorkflow(options);
+        } finally {
+          await chmod(scriptsDir, 0o755);
+        }
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+
+        mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+        mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+          foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+        );
+        await executeDagWorkflow(options);
+
+        expect(await readFile(marker, 'utf-8')).toBe('ran');
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+      });
+
       it('an operator transition that already moved the row wins over the release', async () => {
         const mockDeps = createMockDeps();
         mockDeps.store.releaseRunForUnreadableSource.mockImplementation(async () => {
