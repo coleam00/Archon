@@ -4471,9 +4471,11 @@ export interface components {
       kinds: ('api_key' | 'subscription' | 'ambient')[];
       /** @enum {string|null} */
       connected: 'api_key' | 'oauth' | null;
+      connectionConsumed: boolean;
       subscriptionAvailable: boolean;
       installEnv: boolean;
       ambientConfigured?: boolean;
+      usable: boolean;
     };
     ProviderKeySetResponse: {
       success: boolean;

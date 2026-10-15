@@ -99,7 +99,10 @@ for the background-start admission and observation cutoff rules.
   `best-effort` (schema appended to the prompt, then validated + re-asked up to 3×),
   or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
 - **In-process native tools** — the provider can register Archon `NativeTool`s for a
-  turn (gates auto-injection of Archon's `manage_run` tool into project-scoped chat).
+  turn. It gates auto-injection of Archon's `invoke_workflow` and `register_project` tools
+  into every chat, and of `manage_run` into project-scoped chat. Providers without it
+  launch workflows and register projects by writing `/invoke-workflow` and
+  `/register-project` lines that Archon reads from the reply.
 
 For per-provider field-level notes (YAML syntax, caveats), see the
 [AI Assistants guide](/getting-started/ai-assistants/).

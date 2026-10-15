@@ -267,19 +267,15 @@ export function validateRunBudgetShape(
  * Guidance for a key the engine drops, appended to the unknown-key warning.
  *
  * `interactive` gets its own text because it is the reported failure (#2213):
- * an author writes it expecting a human gate, the key is dropped, and the run
- * proceeds unattended. Both escapes offered here actually gate — in particular
- * `loop.gate_message` ALONE does not: the executor requires
- * `loop.interactive && loop.gate_message` (dag-executor.ts, `runLoopNode` /
- * `runLoopGroupNode`), so naming only `gate_message` would hand the author a
- * loop with a message and no gate.
+ * an author writes it expecting the run to stop and ask, the key is dropped, and
+ * the run proceeds without asking. The guidance names the attention wait, the one
+ * answerable pause (#4042).
  */
 function unknownNodeKeyHint(key: string): string {
   if (key === 'interactive') {
     return (
-      " Nothing on this node gates. For a human gate, use an 'approval:' node; to gate each" +
-      " iteration of a loop, set BOTH 'loop.interactive: true' and 'loop.gate_message'" +
-      " ('gate_message' on its own does not gate)."
+      " Nothing on this node pauses. To ask for an answer, add a 'wait: { attention: <message> }'" +
+      " node; to ask on each iteration of a loop, use a 'loop_group' whose body ends in one."
     );
   }
   if (WORKFLOW_ONLY_KEYS.has(key)) {
@@ -513,42 +509,40 @@ export function collectLoopGroupSinkWarnings(
       enclosingOwnerSessions ||
       node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
-    // A gate that is the body's sole terminal sink (any other placement is a load
-    // error in `validateDagStructure`). Design A (#2707 step 3) is deliberately
-    // unopinionated about what a decision means — the group's own 'until_bash' is the
-    // completion channel, and it either reads the gate's '$<gateId>.output.decision'/
-    // '.text' or it doesn't. If it doesn't, the human's answer is captured (every
-    // resolution still writes node_completed) but never consulted for completion — the
-    // loop just runs to max_iterations, silently ignoring every response. Structural
-    // check (does the until_bash string reference the gate's node id), not
-    // prose-sniffing — no judgment about what the check DOES with it, only whether it
-    // looks at it at all. A gate with its own `when:` is exempt: when it skips it has
-    // no output, so an until_bash reading it would fail the group (#4043).
+    // A gate or attention wait that is the body's sole terminal sink (any other
+    // placement is a load error in `validateDagStructure`). The group's own
+    // 'until_bash' is the completion channel, and it either reads the pause's
+    // '$<id>.output' or it doesn't. If it doesn't, the answer is recorded but never
+    // consulted for completion — the loop just runs to max_iterations, silently
+    // ignoring every answer. Structural check (does the until_bash string reference
+    // the pause's node id), not prose-sniffing. A pause with its own `when:` is exempt:
+    // when it skips it has no output, so an until_bash reading it would fail the
+    // group (#4043).
     if (
       soleSink !== undefined &&
       !isIncludeDirective(soleSink) &&
-      isGateNode(soleSink) &&
+      (isGateNode(soleSink) || (isWaitNode(soleSink) && soleSink.wait.attention !== undefined)) &&
       soleSink.when === undefined
     ) {
       const untilBash = node.loop_group.until_bash;
-      const untilBashRefsGate =
+      const untilBashRefsPause =
         untilBash !== undefined &&
         Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
           m => m[1] === soleSink.id
         );
-      if (!untilBashRefsGate) {
-        const gateRef = `$${soleSink.id}.output`;
+      if (!untilBashRefsPause) {
+        const pauseRef = `$${soleSink.id}.output`;
         const message =
-          `Node '${soleSink.id}': this gate is the loop_group's terminal sink, but ` +
-          `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
-          'decision is captured but never consulted for completion, so the loop only ' +
-          `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
-          `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
-          'drives completion (#2707 step 3).';
+          `Node '${soleSink.id}': this pause is the loop_group's terminal sink, but ` +
+          `'loop_group.until_bash' does not reference '${pauseRef}' — the answer is ` +
+          'recorded but never consulted for completion, so the loop only ends via ' +
+          `max_iterations. Declare 'until_bash' checking '${pauseRef}' (e.g. ` +
+          `'decision=${pauseRef}.decision; [ "$decision" = "approve" ]') so the answer ` +
+          'drives completion.';
         warnings.push(message);
         getLog().debug(
           { id: soleSink.id, warning: message },
-          'loop_group_gate_completion_not_referenced'
+          'loop_group_pause_completion_not_referenced'
         );
       }
     }
@@ -568,7 +562,7 @@ export function collectLoopGroupSinkWarnings(
         `Node '${node.id}': this loop_group's terminal sink ('${soleSink.id}') is itself an ` +
         'interactive loop/loop_group — a pause inside it does not escalate to stop ' +
         "this loop_group's own iteration (#2753). The outer loop can run further iterations " +
-        "while a human's answer to the inner pause is still pending. Only a gate node " +
+        'while an answer to the inner pause is still pending. Only a gate or wait node ' +
         'directly as the terminal sink correctly stops the enclosing loop_group ' +
         '(#2707 step 3).';
       warnings.push(message);
@@ -583,79 +577,23 @@ export function collectLoopGroupSinkWarnings(
 }
 
 /**
- * #2707 step 1 grow-then-deprecate warnings: `approval.capture_response`,
- * `approval.on_reject`, and node-level loop `interactive:` still parse and
- * function exactly as before (Migration section — these become load errors
- * only after #2123), but warn so authors migrate ahead of that. `$REJECTION_REASON`
- * and `$LOOP_USER_INPUT` are covered as a consequence rather than by a separate
- * text scan: they are populated ONLY inside `on_reject.prompt` / an interactive
- * loop body respectively, so warning on the enabling key covers their only
- * sanctioned usage — any other usage was already a dead (always-empty)
- * reference before this PR, with no behavior for a new warning to explain.
- *
- * Every notice here is about one node as its author wrote it — the gate ones read
- * the RAW node to see a key Zod already normalized away. Verdicts about graph
- * SHAPE are not here: the loop_group sink-shape checks live in
- * `collectLoopGroupSinkWarnings`, which judges the expanded graph (#2756).
+ * The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
+ * not only interactive ones (#2707 step 3, "What gets deleted"): its one stated
+ * reason to exist — "the iteration output is a message a human reads at an
+ * interactive gate" (#2563) — evaporates once that interaction is a pause with
+ * structured output rather than a prose sentinel. `until_bash` and (loop: only)
+ * `until_field` are the declared, structured replacements. This keeps running
+ * exactly as before; only the guidance is new.
  */
-function collectGateAndLoopDeprecationWarnings(
+function collectLoopUntilDeprecationWarnings(
   node: DagNode | IncludeDirective,
-  raw: unknown,
   id: string,
   warnings: string[]
 ): void {
-  // An include directive has no gate/loop shape of its own, and its target is a
-  // workflow file in its own right: discovery parses that file and warns on what it
-  // declares there, so the inlined copy needs no second notice.
+  // An include directive has no loop shape of its own, and its target is a workflow
+  // file in its own right: discovery parses that file and warns on what it declares
+  // there, so the inlined copy needs no second notice.
   if (isIncludeDirective(node)) return;
-  if (isGateNode(node) && raw !== null && typeof raw === 'object') {
-    const rawApproval = (raw as Record<string, unknown>).approval;
-    if (rawApproval !== null && typeof rawApproval === 'object') {
-      const approvalObj = rawApproval as Record<string, unknown>;
-      // capture_response is genuinely ignored ONLY once the gate has also
-      // opted into the new mechanism by authoring 'decisions:' (GateNode.
-      // decisionsAuthored) — combined with 'on_reject', or on a bare gate with
-      // no 'decisions:' authored, it still fully controls whether the
-      // reviewer's comment becomes the node's output, exactly as before this
-      // PR. Warning unconditionally would be false in those cases.
-      if (approvalObj.capture_response !== undefined && node.decisionsAuthored) {
-        const message =
-          `Node '${id}': 'approval.capture_response' is deprecated. Gate output is now ` +
-          `always structured as {decision, text} — read '$${id}.output.text' downstream ` +
-          'instead. This field is ignored.';
-        warnings.push(message);
-        getLog().debug({ id, warning: message }, 'node_capture_response_deprecated');
-      }
-      if (approvalObj.on_reject !== undefined) {
-        const message =
-          `Node '${id}': 'approval.on_reject' is deprecated. Declare 'approval.decisions' ` +
-          `and wire a rework node with "when: \\"$${id}.output.decision == 'reject'\\"" ` +
-          'instead (loop it with loop_group if it should iterate). This gate keeps running ' +
-          'via the legacy mechanism until migrated.';
-        warnings.push(message);
-        getLog().debug({ id, warning: message }, 'node_on_reject_deprecated');
-      }
-    }
-  }
-  const interactiveLoop =
-    (isLoopNode(node) && node.loop.interactive === true) ||
-    (isLoopGroupNode(node) && node.loop_group.interactive === true);
-  if (interactiveLoop) {
-    const message =
-      `Node '${id}': node-level loop 'interactive:' is deprecated. A future release ` +
-      're-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). ' +
-      'Continue using it for now.';
-    warnings.push(message);
-    getLog().debug({ id, warning: message }, 'node_loop_interactive_deprecated');
-  }
-
-  // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
-  // not only interactive ones (#2707 step 3, "What gets deleted"): its one stated
-  // reason to exist — "the iteration output is a message a human reads at an
-  // interactive gate" (#2563) — evaporates once that human interaction is a gate
-  // node with structured decision output rather than a prose sentinel. `until_bash`
-  // and (loop: only) `until_field` are the declared, structured replacements. This
-  // keeps running exactly as before; only the guidance is new.
   if (isLoopNode(node) && node.loop.until !== undefined) {
     const message =
       `Node '${id}': the prose 'loop.until' completion signal is deprecated. Declare ` +
@@ -675,27 +613,123 @@ function collectGateAndLoopDeprecationWarnings(
     getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
   }
 
-  // Recurse into a loop_group body — mirrors collectUnknownNodeKeys's own body
-  // recursion. Resolved and raw body arrays share index order (Zod arrays
-  // preserve it), so they're zipped by position rather than by id.
-  if (isLoopGroupNode(node) && raw !== null && typeof raw === 'object') {
-    const rawGroup = (raw as Record<string, unknown>).loop_group;
-    const rawBody =
-      rawGroup !== null && typeof rawGroup === 'object'
-        ? (rawGroup as Record<string, unknown>).nodes
-        : undefined;
-    if (Array.isArray(rawBody)) {
-      // `id` is unused on the IncludeDirective early-return path above, so a
-      // cheap fallback is fine when the body entry isn't a plain DagNode.
-      node.loop_group.nodes.forEach((bodyNode, i) => {
-        collectGateAndLoopDeprecationWarnings(
-          bodyNode,
-          rawBody[i],
-          isIncludeDirective(bodyNode) ? `#${String(i)}` : bodyNode.id,
-          warnings
-        );
-      });
+  if (isLoopGroupNode(node)) {
+    for (const bodyNode of node.loop_group.nodes) {
+      if (!isIncludeDirective(bodyNode))
+        collectLoopUntilDeprecationWarnings(bodyNode, bodyNode.id, warnings);
     }
+  }
+}
+
+/**
+ * The legacy answerable pauses, each still answerable but replaced by an attention
+ * wait (#4042). A plain gate, a `decisions:` gate and an `on_reject:` gate
+ * are mutually exclusive shapes; `capture_response` can ride on any of them.
+ */
+type LegacyPauseShape =
+  | 'approval'
+  | 'decisions'
+  | 'on_reject'
+  | 'capture_response'
+  | 'interactive_loop';
+
+/** Each legacy shape's replacement. The runtime is unchanged: nothing is translated. */
+const LEGACY_PAUSE_REPLACEMENTS: Record<LegacyPauseShape, string> = {
+  approval:
+    "'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' " +
+    "instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy " +
+    "reject cancels the run, while an attention wait continues with decision 'reject', so add " +
+    "a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting " +
+    'should end the run.',
+  decisions:
+    "'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, " +
+    "options: <the same decisions> }' instead; the output is the same {decision, text}.",
+  on_reject:
+    "'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: " +
+    "<message>, form: approval }' followed by a rework node with " +
+    "when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat " +
+    "the rework, write a 'loop_group' whose body ends in the wait; the rework node comes " +
+    "first and reads '$LOOP_PREV.<id>.output.text'.",
+  capture_response:
+    "'approval.capture_response' is deprecated. An attention wait always records the answer; " +
+    "the next node reads '$<id>.output.text'.",
+  interactive_loop:
+    "loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a " +
+    "'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration " +
+    "reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at " +
+    "'$<id>.output'.",
+};
+
+function legacyPauseShapes(node: DagNode, raw: unknown): LegacyPauseShape[] {
+  const shapes: LegacyPauseShape[] = [];
+  if (isGateNode(node)) {
+    // Read the raw key: an authored `capture_response: false` is still the legacy key.
+    const rawApproval =
+      raw !== null && typeof raw === 'object'
+        ? (raw as Record<string, unknown>).approval
+        : undefined;
+    const capturesResponse =
+      rawApproval !== null &&
+      typeof rawApproval === 'object' &&
+      (rawApproval as Record<string, unknown>).capture_response !== undefined;
+    if (node.decisionsAuthored) shapes.push('decisions');
+    else if (node.decisions.some(decision => decision.rework !== undefined))
+      shapes.push('on_reject');
+    else shapes.push('approval');
+    if (capturesResponse) shapes.push('capture_response');
+  }
+  if (
+    (isLoopNode(node) && node.loop.interactive === true) ||
+    (isLoopGroupNode(node) && node.loop_group.interactive === true)
+  )
+    shapes.push('interactive_loop');
+  return shapes;
+}
+
+/**
+ * One warning per legacy pause shape per workflow file, naming every node that
+ * uses it and the attention form that replaces it (#4042). The shapes keep running
+ * unchanged; the warning only tells the author how to rewrite.
+ *
+ * Resolved and raw node arrays share index order (Zod arrays preserve it), so they are
+ * zipped by position, recursing into loop_group bodies. An include directive is skipped:
+ * discovery parses its target file on its own, and warns there.
+ */
+function collectLegacyPauseWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  rawNodes: readonly unknown[],
+  warnings: string[]
+): void {
+  const nodeIdsByShape = new Map<LegacyPauseShape, string[]>();
+  const visit = (
+    body: readonly (DagNode | IncludeDirective)[],
+    rawBody: readonly unknown[]
+  ): void => {
+    body.forEach((node, i) => {
+      if (isIncludeDirective(node)) return;
+      for (const shape of legacyPauseShapes(node, rawBody[i])) {
+        nodeIdsByShape.set(shape, [...(nodeIdsByShape.get(shape) ?? []), node.id]);
+      }
+      if (isLoopGroupNode(node)) {
+        const rawGroup = (rawBody[i] as Record<string, unknown> | undefined)?.loop_group;
+        const rawGroupBody =
+          rawGroup !== null && typeof rawGroup === 'object'
+            ? (rawGroup as Record<string, unknown>).nodes
+            : undefined;
+        visit(node.loop_group.nodes, Array.isArray(rawGroupBody) ? rawGroupBody : []);
+      }
+    });
+  };
+  visit(nodes, rawNodes);
+
+  for (const [shape, nodeIds] of nodeIdsByShape) {
+    const label =
+      nodeIds.length === 1
+        ? `Node '${nodeIds[0]}'`
+        : `Nodes ${nodeIds.map(id => `'${id}'`).join(', ')}`;
+    const message = `${label}: ${LEGACY_PAUSE_REPLACEMENTS[shape]} It keeps running as before until rewritten.`;
+    warnings.push(message);
+    getLog().debug({ shape, nodeIds, warning: message }, 'legacy_pause_deprecated');
   }
 }
 
@@ -742,7 +776,7 @@ function parseDagNode(
     return null;
   }
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
-  collectGateAndLoopDeprecationWarnings(node, raw, id, warnings);
+  collectLoopUntilDeprecationWarnings(node, id, warnings);
 
   // `with:` is live on an agent node's command-sourced form (node-local bindings,
   // #2637), on exec (script-runtime only), and on include/workflow (caller inputs).
@@ -825,7 +859,7 @@ function parseDagNode(
  *                      `$group.output` a JSON document. This is the one asymmetry left.
  *
  * Everything else keeps whole-output comparison: `bash:`/`script:` stdout is
- * author-controlled and exact by construction, an `approval:` capture is what a human
+ * author-controlled and exact by construction, an attention answer is what the answerer
  * typed, and a `workflow:` sub-run's output is the callee's business.
  *
  * `command:` is grouped with `prompt:` even though #2566 names only three node types: a
@@ -1694,6 +1728,7 @@ export function parseWorkflow(
     }
 
     collectConditionalJoinWarnings(dagNodes, parseWarnings);
+    collectLegacyPauseWarnings(dagNodes, raw.nodes as unknown[], parseWarnings);
 
     if (raw.interactive !== undefined) {
       const message =

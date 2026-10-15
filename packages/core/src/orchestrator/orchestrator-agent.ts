@@ -54,6 +54,13 @@ import { safeDeactivateSession } from '../state/session-transitions';
 import { getProviderCapabilities } from '@archon/providers';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
+import {
+  buildInvokeWorkflowTool,
+  buildRegisterProjectTool,
+  findCodebaseByName,
+  type ChatLaunch,
+  type ProjectRegistration,
+} from './chat-tools';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import { getDefaultRemote, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
@@ -325,16 +332,12 @@ export interface WorkflowInvocation {
   synthesizedPrompt?: string;
 }
 
-export interface ProjectRegistration {
-  projectName: string;
-  projectPath: string;
-  folder?: boolean;
-}
-
 export interface OrchestratorCommands {
   workflowInvocation: WorkflowInvocation | null;
   projectRegistration: ProjectRegistration | null;
 }
+
+const NO_COMMANDS: OrchestratorCommands = { workflowInvocation: null, projectRegistration: null };
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
 
@@ -350,6 +353,17 @@ function parseProjectRegistration(message: string): ProjectRegistration | null {
     ...(folder ? { folder: true } : {}),
   };
 }
+
+// One definition of a quoted command argument, shared by the streaming completeness
+// checks and the --prompt extractor. When they disagreed, an escaped quote passed the
+// check and truncated the extracted prompt.
+const DQ_ARG_BODY = String.raw`(?:[^"\\]|\\.)`;
+const SQ_ARG_BODY = String.raw`(?:[^'\\]|\\.)`;
+const DQ_ARG_RE = new RegExp(`^"${DQ_ARG_BODY}*"`);
+const SQ_ARG_RE = new RegExp(`^'${SQ_ARG_BODY}*'`);
+const PROMPT_ARG_RE = new RegExp(
+  String.raw`--prompt\s+(?:"(${DQ_ARG_BODY}+)"|'(${SQ_ARG_BODY}+)')`
+);
 
 // Prefix patterns: fire as soon as the command keyword is seen.
 const INVOKE_WORKFLOW_PREFIX_RE = /^\/invoke-workflow\s/m;
@@ -380,12 +394,8 @@ const INVOKE_WORKFLOW_FULL_RE = {
     const promptKeywordMatch = /--prompt\s+/.exec(line);
     if (promptKeywordMatch) {
       const afterPrompt = line.slice(promptKeywordMatch.index + promptKeywordMatch[0].length);
-      if (afterPrompt.startsWith('"')) {
-        return /^"(?:[^"\\]|\\.)*"/.test(afterPrompt);
-      }
-      if (afterPrompt.startsWith("'")) {
-        return /^'(?:[^'\\]|\\.)*'/.test(afterPrompt);
-      }
+      if (afterPrompt.startsWith('"')) return DQ_ARG_RE.test(afterPrompt);
+      if (afterPrompt.startsWith("'")) return SQ_ARG_RE.test(afterPrompt);
       // Unquoted --prompt value: require line terminator.
       return !isEos;
     }
@@ -416,13 +426,9 @@ const REGISTER_PROJECT_FULL_RE = {
     if (nameEnd === -1) return false; // no path token yet
     const projectPath = rest.slice(nameEnd).trimStart();
     if (!projectPath) return false;
-    if (projectPath.startsWith('"')) {
-      // Quoted path: require closing quote
-      return /^"(?:[^"\\]|\\.)*"/.test(projectPath);
-    }
-    if (projectPath.startsWith("'")) {
-      return /^'(?:[^'\\]|\\.)*'/.test(projectPath);
-    }
+    // Quoted path: require the closing quote
+    if (projectPath.startsWith('"')) return DQ_ARG_RE.test(projectPath);
+    if (projectPath.startsWith("'")) return SQ_ARG_RE.test(projectPath);
     // Unquoted path: require line terminator so we don't freeze on a partial path with spaces
     return !isEos;
   },
@@ -437,6 +443,12 @@ const REGISTER_PROJECT_FULL_RE = {
  */
 function normalizeCommandText(text: string): string {
   return text.replace(/^\s*\*+(\/[^\n]*?)\**\s*$/gm, '$1');
+}
+
+/** Returns true once accumulated text starts an orchestrator command line. */
+function hasCommandPrefix(accumulated: string): boolean {
+  const normalized = normalizeCommandText(accumulated);
+  return INVOKE_WORKFLOW_PREFIX_RE.test(normalized) || REGISTER_PROJECT_PREFIX_RE.test(normalized);
 }
 
 /** Returns true once accumulated text contains a complete orchestrator command. */
@@ -500,21 +512,6 @@ async function resolveUserAiPrefsForChat(userId: string): Promise<UserAiPrefs> {
     getLog().warn({ err: err as Error, userId }, 'orchestrator.user_ai_prefs_resolve_failed');
     return {};
   }
-}
-
-/**
- * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
- * Case-insensitive. Used in both the parse phase and the dispatch phase.
- */
-function findCodebaseByName(
-  codebases: readonly Codebase[],
-  projectName: string
-): Codebase | undefined {
-  const projectLower = projectName.toLowerCase();
-  return codebases.find(c => {
-    const nameLower = c.name.toLowerCase();
-    return nameLower === projectLower || nameLower.endsWith(`/${projectLower}`);
-  });
 }
 
 /**
@@ -602,9 +599,10 @@ export function parseOrchestratorCommands(
 
         // Extract optional --prompt "..." parameter (double or single quotes)
         const commandText = normalizedResponse.slice(commandIndex);
-        const promptPattern = /--prompt\s+(?:"([^"]+)"|'([^']+)')/;
-        const promptMatch = promptPattern.exec(commandText);
-        const rawPrompt = (promptMatch?.[1] ?? promptMatch?.[2])?.trim();
+        const promptMatch = PROMPT_ARG_RE.exec(commandText);
+        const rawPrompt = (promptMatch?.[1] ?? promptMatch?.[2])
+          ?.replace(/\\(["'\\])/g, '$1')
+          .trim();
         const synthesizedPrompt = rawPrompt || undefined;
 
         if (promptMatch && !synthesizedPrompt) {
@@ -2595,10 +2593,10 @@ export async function handleMessage(
     const protectedEnvKeys = Object.keys(userProviderEnv);
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 
+    const caps = getProviderCapabilities(providerKey);
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
-      const providerCaps = getProviderCapabilities(providerKey);
-      if (!providerCaps.envInjection) {
+      if (!caps.envInjection) {
         getLog().warn(
           { provider: providerKey, envVarCount: Object.keys(effectiveEnv).length },
           'orchestrator.unsupported_env_injection'
@@ -2608,20 +2606,21 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
-    // Capabilities are only consulted for project-scoped chats (both the native tool
-    // and the CLI pointer are scoped features), so look them up lazily — this also
-    // avoids a registry lookup (and a throw for an unregistered provider) on the
-    // unscoped path.
-    const scopedCaps =
-      conversation.codebase_id !== null ? getProviderCapabilities(providerKey) : null;
+    // Providers with in-process tools launch and register through typed tools; the
+    // others still write command lines that the command scan reads from the reply.
+    let systemAppend = await buildOrchestratorSystemAppend(
+      conversation,
+      codebases,
+      workflows,
+      caps.nativeTools ? 'tools' : 'commands'
+    );
     // Providers WITHOUT the in-process manage_run tool (Codex/OpenCode/Copilot) get a
     // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
     // project's runs over bash. Claude/Pi get the native tool below and are nudged to it
     // — adding the CLI pointer there would be redundant and steer them onto a bash path
     // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
     // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
-    if (scopedCaps !== null && !scopedCaps.nativeTools) {
+    if (conversation.codebase_id !== null && !caps.nativeTools) {
       systemAppend += `\n\n${buildRunManagementSection()}`;
     }
     const systemPrompt =
@@ -2676,65 +2675,45 @@ export async function handleMessage(
     // here rather than blocking the agent loop on a whole workflow. Held in an
     // object because a `let` assigned only from a callback narrows to `null`.
     const gateResolution: { resolved: ResolvedGate | null } = { resolved: null };
+    // Written by `invoke_workflow` and dispatched once the turn ends, for the same
+    // reason: on a foreground surface the run would otherwise block the agent loop.
+    const pendingLaunch: { launch: ChatLaunch | null } = { launch: null };
 
-    // Project-scoped chats get the `manage_run` tool so the agent can see and
-    // launch this project's workflow runs. Only when a codebase is scoped and
-    // the provider supports in-process native tools (Claude, Pi). The explicit
-    // codebase_id check (redundant with scopedCaps !== null) narrows it to string
-    // for the block below.
-    if (conversation.codebase_id !== null && scopedCaps?.nativeTools) {
-      const scopedCodebaseId = conversation.codebase_id;
-      requestOptions.nativeTools = [
-        buildManageRunTool({
-          actor,
-          operations: createSqlWorkflowOperations(),
-          codebaseId: scopedCodebaseId,
-          surface: platform,
-          // One continuation per turn: the resume runs in this conversation and
-          // to completion, so a second gate resolved in the same turn is
-          // declined rather than silently dropped (the tool tells the agent).
-          onGateResolved: (run, action) => {
-            if (gateResolution.resolved !== null) return false;
-            gateResolution.resolved = { run, action };
-            return true;
-          },
-          startWorkflow: async (workflowName, msg): Promise<string> => {
-            let wf: ResolvedWorkflow | undefined;
-            try {
-              wf = resolveWorkflowName(workflowName, workflows);
-            } catch (e: unknown) {
-              return toError(e).message; // ambiguous-name error is user-facing
-            }
-            if (wf === undefined) {
-              const names = workflows.map(w => w.name).join(', ');
-              return `No workflow named "${workflowName}". Available: ${names}`;
-            }
-            try {
-              await dispatchBackgroundWorkflow(
-                {
-                  platform,
-                  conversationId,
-                  cwd,
-                  originalMessage: msg.length > 0 ? msg : `Run ${wf.name}`,
-                  conversationDbId: conversation.id,
-                  codebaseId: scopedCodebaseId,
-                  availableWorkflows: workflows,
-                  userId,
-                },
-                wf
-              );
-            } catch (e: unknown) {
-              const err = toError(e);
-              getLog().error(
-                { err, workflow: wf.name, codebaseId: scopedCodebaseId, conversationId },
-                'manage_run.start_failed'
-              );
-              return `Failed to start workflow "${wf.name}": ${err.message}`;
-            }
-            return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
+    // Providers with in-process native tools (Claude, Pi) launch workflows and
+    // register projects through typed tools in every chat. Project-scoped chats also
+    // get `manage_run` to inspect and operate that project's runs.
+    if (caps.nativeTools) {
+      const tools = [
+        buildInvokeWorkflowTool({
+          workflows: workflowsWithSource,
+          listCodebases: () => codebaseDb.listCodebases(),
+          onLaunch: launch => {
+            if (pendingLaunch.launch !== null) return pendingLaunch.launch;
+            pendingLaunch.launch = launch;
+            return null;
           },
         }),
+        buildRegisterProjectTool({ registerProject }),
       ];
+      if (conversation.codebase_id !== null) {
+        tools.push(
+          buildManageRunTool({
+            actor,
+            operations: createSqlWorkflowOperations(),
+            codebaseId: conversation.codebase_id,
+            surface: platform,
+            // One continuation per turn: the resume runs in this conversation and
+            // to completion, so a second gate resolved in the same turn is
+            // declined rather than silently dropped (the tool tells the agent).
+            onGateResolved: (run, action) => {
+              if (gateResolution.resolved !== null) return false;
+              gateResolution.resolved = { run, action };
+              return true;
+            },
+          })
+        );
+      }
+      requestOptions.nativeTools = tools;
     }
 
     const mode = platform.getStreamingMode();
@@ -2757,11 +2736,17 @@ export async function handleMessage(
     // resolved and parked with only a generic error to show for it. The outer
     // catch cannot cover this: it does not know about the resolution.
     // continueResolvedGateRun never throws, so this cannot mask the real error.
-    const turn: ChatTurn = { startedAt: Date.now(), reported: false, routed: false };
+    const turn: ChatTurn = {
+      startedAt: Date.now(),
+      reported: false,
+      failed: false,
+      routed: false,
+    };
     try {
       if (mode === 'stream') {
         await handleStreamMode(
           turn,
+          !caps.nativeTools,
           platform,
           conversationId,
           message,
@@ -2780,6 +2765,7 @@ export async function handleMessage(
       } else {
         await handleBatchMode(
           turn,
+          !caps.nativeTools,
           platform,
           conversationId,
           message,
@@ -2824,6 +2810,37 @@ export async function handleMessage(
       }
     }
 
+    // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
+    // gate it is dropped when the turn throws or ends in an error result, and the user sees
+    // the error instead. The command scan launches nothing in either case.
+    if (pendingLaunch.launch !== null && turn.failed) {
+      getLog().info(
+        { conversationId, workflowName: pendingLaunch.launch.entry.workflow.name },
+        'orchestrator.invoke_workflow_dropped_failed_turn'
+      );
+    } else if (pendingLaunch.launch !== null) {
+      const { entry, codebase, prompt } = pendingLaunch.launch;
+      getLog().info(
+        { conversationId, workflowName: entry.workflow.name, codebaseId: codebase.id },
+        'orchestrator.invoke_workflow_dispatching'
+      );
+      await dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        {
+          kind: 'start',
+          definition: entry.workflow,
+          args: prompt,
+          parseWarnings: entry.parseWarnings,
+        },
+        actor,
+        isolationHints,
+        entry.source
+      );
+    }
+
     // Direct-chat turns may have written to source/. If there is local-only state
     // (uncommitted edits, unpushed commits), surface a one-line reminder so the
     // user can push or commit + push before the next worktree creation or
@@ -2861,8 +2878,10 @@ export async function handleMessage(
 interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
+  /** The turn ended in a provider error result; a launch queued during it is dropped. */
+  failed: boolean;
   /**
-   * The model's reply routed the turn to a workflow or a project registration, which
+   * The command scan routed the turn to a workflow or a project registration, which
    * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
    * while dispatching it is not a failed chat turn. A dispatch that fails before its run
    * exists sends nothing, as a workflow-not-found or invalid-YAML dispatch does; the
@@ -2886,6 +2905,7 @@ function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface)
 
 function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
   turn.reported = true;
+  turn.failed = props.outcome === 'failed';
   captureChatTurn(props);
 }
 
@@ -2893,10 +2913,12 @@ function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn
 
 /**
  * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
- * If an orchestrator command is detected, retract streamed text and dispatch.
+ * With `commandScan` on (providers without in-process tools), a detected orchestrator
+ * command retracts the streamed text and dispatches.
  */
 async function handleStreamMode(
   turn: ChatTurn,
+  commandScan: boolean,
   platform: IPlatformAdapter,
   conversationId: string,
   originalMessage: string,
@@ -2936,11 +2958,7 @@ async function handleStreamMode(
         // If detected, suppress this chunk and all future chunks — the full
         // response will be parsed post-loop and the command dispatched there.
         const accumulated = allMessages.join('');
-        const normalizedAccumulated = normalizeCommandText(accumulated);
-        if (
-          INVOKE_WORKFLOW_PREFIX_RE.test(normalizedAccumulated) ||
-          REGISTER_PROJECT_PREFIX_RE.test(normalizedAccumulated)
-        ) {
+        if (commandScan && hasCommandPrefix(accumulated)) {
           commandDetected = true;
           // If the complete command pattern is already present, stop accumulating —
           // no more chunks needed. This prevents trailing chunks from corrupting
@@ -3046,11 +3064,13 @@ async function handleStreamMode(
   }
 
   const fullResponse = allMessages.join('');
-  const commands = parseOrchestratorCommands(
-    fullResponse,
-    codebases,
-    workflows.map(ws => ws.workflow)
-  );
+  const commands = commandScan
+    ? parseOrchestratorCommands(
+        fullResponse,
+        codebases,
+        workflows.map(ws => ws.workflow)
+      )
+    : NO_COMMANDS;
 
   if (commands.workflowInvocation) {
     turn.routed = true;
@@ -3125,6 +3145,7 @@ async function handleStreamMode(
  */
 async function handleBatchMode(
   turn: ChatTurn,
+  commandScan: boolean,
   platform: IPlatformAdapter,
   conversationId: string,
   originalMessage: string,
@@ -3182,11 +3203,7 @@ async function handleBatchMode(
 
       if (!commandDetected) {
         const accumulated = assistantMessages.join('');
-        const normalizedAccumulated = normalizeCommandText(accumulated);
-        if (
-          INVOKE_WORKFLOW_PREFIX_RE.test(normalizedAccumulated) ||
-          REGISTER_PROJECT_PREFIX_RE.test(normalizedAccumulated)
-        ) {
+        if (commandScan && hasCommandPrefix(accumulated)) {
           commandDetected = true;
           if (isCommandFullyParsed(accumulated)) {
             commandFullyParsed = true;
@@ -3307,11 +3324,13 @@ async function handleBatchMode(
   // separator lines that break multi-chunk command text (name and path appear on
   // separate lines from '/register-project'). Raw join preserves the command as a
   // contiguous string. User-visible output still comes from filterToolIndicators.
-  const commands = parseOrchestratorCommands(
-    assistantMessages.join(''),
-    codebases,
-    workflows.map(ws => ws.workflow)
-  );
+  const commands = commandScan
+    ? parseOrchestratorCommands(
+        assistantMessages.join(''),
+        codebases,
+        workflows.map(ws => ws.workflow)
+      )
+    : NO_COMMANDS;
 
   if (commands.workflowInvocation) {
     turn.routed = true;

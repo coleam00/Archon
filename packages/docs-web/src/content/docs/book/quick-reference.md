@@ -131,7 +131,8 @@ All nodes share these base fields:
 | `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named package-local/shared reference. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
 | `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
-| `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
+| `wait` | One of | object | Durable pause: a time, an event, or an `attention:` question answered in a `form` (`message`, `approval`, `select`, `multi_select`). See [Durable waits](/guides/authoring-workflows/#durable-waits) and [Attention waits](/guides/authoring-workflows/#attention-waits) |
+| `approval` | One of | object | **Deprecated.** Loads with a warning; use `wait: { attention: ..., form: approval }`. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
 | `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
 | `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Composing Another Workflow](/guides/authoring-workflows/#composing-another-workflow-with-include) |
 | `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Launching a Separate Governed Run](/guides/authoring-workflows/#launching-a-separate-governed-run-with-workflow) |
@@ -169,16 +170,16 @@ All nodes share these base fields:
 | `isolation` | No | `'inherit' \| 'worktree'` | Which checkout the child runs in. Default (and `'inherit'`) shares the parent's. `'worktree'` gives the child its own worktree + branch — opt-in only, never inferred, and it fails the node rather than falling back to the shared checkout when a worktree can't be created (folder projects, surfaces with no resolver) |
 | `fan_out` | No | object | Run one child per item of a runtime list: `items` (a `$node.output` ref or literal JSON array), `max_parallel` (default `5`, bounds concurrency not total), `join` (default `all_done`), `as` (names the item as `$INPUTS.<as>` and must not collide with `with`). Every child runs to its own terminal state; none cancels another |
 
-`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes. A child of a `fan_out:` node may pause too: it waits as its own run, keeps its `max_parallel` slot, and the parent continues once every child it waits on finishes.
+`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child that pauses for an answer pauses the whole tree — answer the **child** by run id and the parent auto-resumes. A child of a `fan_out:` node may pause too: it waits as its own run, keeps its `max_parallel` slot, and the parent continues once every child it waits on finishes.
 
-**Approval-specific fields** (required when `approval:` is set):
+**Approval-specific fields** (deprecated `approval:` nodes only; each has an attention-wait replacement in [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates)):
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `approval.message` | Yes | string | The message shown to the user when the workflow pauses |
-| `approval.capture_response` | No | boolean | `true` = user's comment becomes `$<node-id>.output`. Default: `false` |
-| `approval.on_reject.prompt` | No | string | AI rework prompt when the user rejects. `$REJECTION_REASON` substituted |
-| `approval.on_reject.max_attempts` | No | number | Max rework iterations before cancel. Range 1-10, default 3 |
+| `approval.message` | Yes | string | The message shown when the workflow pauses. Replacement: `wait.attention` |
+| `approval.capture_response` | No | boolean | `true` = the answer's comment becomes `$<node-id>.output`. Default: `false`. Replacement: every attention form records `$<node-id>.output.text` |
+| `approval.on_reject.prompt` | No | string | AI rework prompt run on reject. `$REJECTION_REASON` substituted. Replacement: a rework node with `when: "$<node-id>.output.decision == 'reject'"` that reads `$<node-id>.output.text` |
+| `approval.on_reject.max_attempts` | No | number | Max rework iterations before cancel. Range 1-10, default 3. Replacement: put the wait and its rework node in a `loop_group` with `max_iterations` |
 
 > **bash and script node timeout**: The `timeout` field is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
 
@@ -208,9 +209,9 @@ Defined under `loop:` inside a node:
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
 | `until_field` | One channel required | string | **`loop:` only.** Names a boolean in the node's `output_format`; the loop ends when its validated value is `true` |
-| `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
-| `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
-| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
+| `interactive` | No | boolean | **Deprecated.** Pause after each iteration for input via `/workflow approve`. Use a `loop_group` whose body ends in a `wait: attention` node; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) |
+| `gate_message` | No | string | **Deprecated** with `interactive`. Message shown at the interactive gate (required when `interactive: true`) |
+| `signal_completes` | No | boolean | **Deprecated** with `interactive`. Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
 
 **Example:**
 
@@ -234,9 +235,9 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
-| `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
-| `gate_message` | No | string | Message shown at the interactive gate |
-| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |
+| `interactive` | No | boolean | **Deprecated.** Pause after each non-completing iteration. End the body in a `wait: attention` node instead; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) |
+| `gate_message` | No | string | **Deprecated** with `interactive`. Message shown at the interactive gate |
+| `signal_completes` | No | boolean | **Deprecated** with `interactive`. Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |
 
 Body nodes can reference the previous iteration via
 `$LOOP_PREV.<nodeId>.output`, and outer-DAG outputs via plain `$nodeId.output`.
