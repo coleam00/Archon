@@ -676,10 +676,12 @@ describe('score', () => {
     appendLine(join(out, MARKS_FILE), { run_id: 'a-6-2-y', batch: 2, row: '6', label: 'a', mark: 'right', note: '' });
     const crashed = row(9, { group: 'fixed' });
     appendLine(join(out, SAMPLES_FILE), line('a', crashed, '2-y', failed));
+    appendLine(join(out, SAMPLES_FILE), line('a', leaked, '2-y', { ...failed, leak: ['triage: gh issue view 7'] }));
     const [a] = score({ ...set, rows: [...set.rows, crashed] }, out).versions;
     expect(a.bars.duplicate).toMatchObject({ rows: 1, right: 0, failed: 1, unmarked: 0, status: 'fail' });
     expect(a.bars.fixed).toMatchObject({ rows: 2, right: 1, failed: 1, status: 'fail' });
     expect(a.type).toEqual({ rows: 2, agree: 0, matrix: { feature: { failed: 1 }, bug: { failed: 1 } } });
+    expect(a.leaks).toEqual(['7']);
     expect(a.unscored).toEqual(['2', '1', '9']);
   });
 

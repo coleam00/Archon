@@ -224,7 +224,7 @@ function scoreVersion(
       unmarked: judged.filter(line => markOf(line) === undefined).length,
     },
     leaks: lines.filter(line => batchPassed(line, checks) && line.leak.length > 0).map(line => line.row),
-    unscored: lines.filter(line => batchPassed(line, checks) && !line.passed).map(line => line.row),
+    unscored: scored.filter(line => !line.passed).map(line => line.row),
     cost: { runs: costs.length, unreported: costs.length - reported.length, total, mean: reported.length === 0 ? null : total / reported.length },
     median_ms: median(lines.flatMap(line => (line.duration_ms === null ? [] : [line.duration_ms]))),
   };
