@@ -1,0 +1,35 @@
+# Dry-run fixture: the agent asks about one discovery, the pass pauses as one
+# attention item, and the stubbed answer is stored on the asked record.
+facts:
+  path: decide
+  mode: live
+  base: { branch: dev, sha: "stub-sha" }
+  runs: ["run-a"]
+  refs: 1
+  decisions: 0
+  policy_defaults: "/stub/policy"
+decide:
+  decisions:
+    - outcome: ask
+      key: stub-open-question
+      refs: ["run-a:review#0"]
+      title: "stub: a scope question"
+      question: "stub: is this in scope?"
+      recommendation: "stub: drop it as out of scope"
+  summary: "stub: 1 record, asked."
+outcome:
+  mode: live
+  summary: "stub: 1 record, asked."
+  written: []
+  dropped: []
+  asked: [stub-open-question]
+  question: "1. stub-open-question: stub: is this in scope?\n   Recommended: stub: drop it as out of scope"
+  evaluation: null
+ask: { text: "stub: drop it" }
+answer:
+  answered: [stub-open-question]
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, decide, outcome, ask, answer]
+exec-code: true
