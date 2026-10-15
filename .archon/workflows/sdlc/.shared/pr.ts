@@ -77,7 +77,6 @@ const PR_FIELDS = [
   'isDraft',
   'state',
   'baseRefName',
-  'baseRefOid',
   'headRefName',
   'headRefOid',
   'headRepository',
@@ -108,8 +107,8 @@ function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
       head_repo: headPath === undefined ? null : { host: repo.host, path: headPath },
       head_revision:
         typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
-      base_revision:
-        typeof row?.baseRefOid === 'string' && row.baseRefOid !== '' ? row.baseRefOid : null,
+      // A PR's base OID can lag the live branch; review checks the Git ref directly.
+      base_revision: null,
       maintainer_can_modify:
         typeof row?.maintainerCanModify === 'boolean' ? row.maintainerCanModify : null,
     }),

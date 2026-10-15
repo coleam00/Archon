@@ -37,7 +37,6 @@ export interface GhPr {
   readonly headRepository?: { readonly name: string };
   readonly headRepositoryOwner?: { readonly login: string };
   readonly baseRefName?: string;
-  readonly baseRefOid?: string;
 }
 
 export interface GhFake {
@@ -135,7 +134,7 @@ const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
 const pr = {
   number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
-  headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev', baseRefOid: 'cafe',
+  headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));

@@ -182,24 +182,20 @@ export function checkReviewBase(pr: PrRecord, value: string): void {
   }
   if (base.branch !== pr.base)
     throw new Error('the PR base changed; resolve scope and review the new diff');
-  let revision = pr.base_revision;
-  if (revision === null) {
-    const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
-    const ref = `refs/heads/${pr.base}`;
-    const lookup = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
-    const rows = lookup.stdout.split('\n');
-    const [sha, name] = rows[0]?.split('\t') ?? [];
-    if (
-      lookup.code !== 0 ||
-      rows.length !== 1 ||
-      name !== ref ||
-      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha ?? '')
-    ) {
-      throw new Error(
-        `the PR base revision could not be established (lookup exited ${String(lookup.code)})`
-      );
-    }
-    revision = sha;
+  const remote = findRemote(pr.repo) ?? `https://${pr.repo.host}/${pr.repo.path}.git`;
+  const ref = `refs/heads/${pr.base}`;
+  const lookup = git('ls-remote', '--exit-code', '--refs', '--', remote, ref);
+  const rows = lookup.stdout.split('\n');
+  const [revision, name] = rows[0]?.split('\t') ?? [];
+  if (
+    lookup.code !== 0 ||
+    rows.length !== 1 ||
+    name !== ref ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision ?? '')
+  ) {
+    throw new Error(
+      `the PR base revision could not be established (lookup exited ${String(lookup.code)})`
+    );
   }
   if (base.revision !== revision)
     throw new Error('the PR base changed; fetch the base and review the new diff');

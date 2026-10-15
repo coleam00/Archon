@@ -310,11 +310,14 @@ describe('publish-pr opens the pull request at most once', () => {
 });
 
 function publishReview(options: ScriptOptions = {}): ScriptRun {
+  const cwd = options.cwd ?? gitCheckout({}, trackTempRoot);
+  const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
   return runPackScript('review/scripts/publish-review', {
     ...options,
+    cwd,
     inputs: {
       INPUTS_PR: JSON.stringify(PR),
-      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
+      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
       INPUTS_REPORT: '{ARTIFACTS}/review/report.md',
       INPUTS_HEAD: REVIEWED,
       ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
@@ -435,43 +438,67 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   for (const scope of [PR_URL, JSON.stringify(PR)]) {
-    for (const change of [{ base: 'main' }, { base_revision: 'movedbase' }, { number: 99 }]) {
+    for (const change of ['retargeted', 'advanced', 'identity']) {
       it(`refuses publication after target drift: ${scope}, ${JSON.stringify(change)}`, () => {
         const result = publishReview({
           source: 'forge',
-          inputs: { ...report, INPUTS_SCOPE: scope },
+          inputs: {
+            ...report,
+            INPUTS_SCOPE: scope,
+            ...(change === 'advanced'
+              ? { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
+              : {}),
+          },
           forge: {
             kind: 'fake',
-            response: forgeOperation('pr.view', { pr: forgePrRecord(change) }),
+            response: forgeOperation('pr.view', {
+              pr: forgePrRecord(
+                change === 'retargeted'
+                  ? { base: 'main' }
+                  : change === 'identity'
+                    ? { number: 99 }
+                    : {}
+              ),
+            }),
           },
         });
         expect(result.code).toBe(1);
         expect(result.forge).toHaveLength(1);
-        expect(result.stderr).toContain('number' in change ? 'does not match' : 'base changed');
+        expect(result.stderr).toContain(change === 'identity' ? 'does not match' : 'base changed');
         expect(result.gh).toEqual([]);
       });
     }
   }
 
-  it('refuses an explicit URL whose head moved after preflight, without writing a comment', () => {
-    const preflight = runPackScript('review/scripts/check-review-head', {
-      inputs: {
-        INPUTS_SCOPE: PR_URL,
-        INPUTS_PR: JSON.stringify(PR),
-        INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
-        INPUTS_HEAD: REVIEWED,
-        ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
-      },
+  for (const moved of ['head', 'base']) {
+    it(`refuses an explicit URL whose ${moved} moved after preflight, without writing a comment`, () => {
+      const cwd = gitCheckout({}, trackTempRoot);
+      const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
+      const preflight = runPackScript('review/scripts/check-review-head', {
+        cwd,
+        inputs: {
+          INPUTS_SCOPE: PR_URL,
+          INPUTS_PR: JSON.stringify(PR),
+          INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
+          INPUTS_HEAD: REVIEWED,
+          ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
+        },
+      });
+      expect(preflight.code).toBe(0);
+      if (moved === 'base') {
+        const push = spawnSync('git', ['push', '-q', 'upstream', 'HEAD:dev'], { cwd });
+        expect(push.status).toBe(0);
+      }
+      const result = publishReview({
+        inputs: { ...report, INPUTS_SCOPE: PR_URL },
+        gh: moved === 'head' ? { pr: { headRefOid: 'pushed-after-preflight' } } : {},
+        cwd,
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(moved === 'head' ? 'pushed-after-preflight' : 'base changed');
+      expect(result.gh.some(call => call.includes('--method'))).toBe(false);
     });
-    expect(preflight.code).toBe(0);
-    const result = publishReview({
-      inputs: { ...report, INPUTS_SCOPE: PR_URL },
-      gh: { pr: { headRefOid: 'pushed-after-preflight' } },
-    });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('pushed-after-preflight');
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-  });
+  }
 
   it('publishes to the recorded pull request when the scope declaration agrees', () => {
     const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });

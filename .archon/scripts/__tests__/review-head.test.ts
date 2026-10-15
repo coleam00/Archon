@@ -21,13 +21,16 @@ const execution = (head: string) =>
   JSON.stringify({ attempt: { checkoutStart: { kind: 'git', commit: head } } });
 
 function check(options: ScriptOptions = {}) {
+  const cwd = options.cwd ?? gitCheckout({}, track);
+  const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
   return runPackScript('review/scripts/check-review-head', {
     ...options,
+    cwd,
     inputs: {
       INPUTS_SCOPE: PR_URL,
       INPUTS_SELECTOR: PR_URL,
       INPUTS_PR: JSON.stringify(PR),
-      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: 'cafe' }),
+      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
       INPUTS_HEAD: HEAD,
       ARCHON_NODE_EXECUTION: execution(HEAD),
       ...options.inputs,
@@ -113,12 +116,17 @@ describe('review head boundary', () => {
   }
 
   for (const scope of [PR_URL, JSON.stringify(PR)]) {
-    for (const change of [{ base: 'main' }, { base_revision: 'movedbase' }]) {
+    for (const change of ['retargeted', 'advanced']) {
       it(`refuses a changed diff base before lenses: ${scope}, ${JSON.stringify(change)}`, () => {
         const run = check({
           source: 'forge',
-          forge: view(change),
-          inputs: { INPUTS_SCOPE: scope },
+          forge: view(change === 'retargeted' ? { base: 'main' } : {}),
+          inputs: {
+            INPUTS_SCOPE: scope,
+            ...(change === 'advanced'
+              ? { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
+              : {}),
+          },
         });
         expect(run.code).toBe(1);
         expect(run.stderr).toContain('base changed');
@@ -135,13 +143,18 @@ describe('review head boundary', () => {
     });
   }
 
-  for (const change of [{ baseRefName: 'main' }, { baseRefOid: 'movedbase' }, { number: 99 }]) {
+  for (const change of [{ baseRefName: 'main' }, { number: 99 }]) {
     it(`rejects GitHub identity or base drift: ${JSON.stringify(change)}`, () => {
       const run = check({ gh: { pr: change } });
       expect(run.code).toBe(1);
       expect(run.stderr).toContain('number' in change ? 'does not match' : 'base changed');
     });
   }
+
+  it('uses the live base branch even when the forge record has a stale base revision', () => {
+    const run = check({ source: 'forge', forge: view({ base_revision: 'stale' }) });
+    expect(run.code).toBe(0);
+  });
 
   it('checks a missing forge base revision against the remote base ref', () => {
     const cwd = gitCheckout({}, track);
@@ -671,7 +684,7 @@ console.log(response);
             docs: continuation,
           };
           stubs.scope = {
-            base: { branch: 'dev', revision: 'cafe' },
+            base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
             selector: scenario === 'erased-selector' ? '' : selector,
             pr:
               scenario === 'null' ||
@@ -796,7 +809,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           docs: false,
         };
         stubs['rereview__scope'] = {
-          base: { branch: 'dev', revision: 'cafe' },
+          base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
           selector: PR_URL,
           pr: scenario === 'missing declaration' ? null : PR,
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
