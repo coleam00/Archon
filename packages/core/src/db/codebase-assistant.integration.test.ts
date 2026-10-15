@@ -60,7 +60,9 @@ test('registration leaves the provider unpinned and new conversations follow con
   expect(codebase.ai_assistant_type).toBeNull();
   const first = await getOrCreateConversation('web', 'first', codebase.id);
   expect(first.ai_assistant_type).toBe('pi');
-  expect(await buildOrchestratorSystemAppend(first, [codebase], [])).toContain('- AI Provider: pi');
+  expect(await buildOrchestratorSystemAppend(first, [codebase], [], 'commands')).toContain(
+    '- AI Provider: pi'
+  );
 
   await updateGlobalConfig({ defaultAssistant: 'codex' });
   expect((await getOrCreateConversation('web', 'second', codebase.id)).ai_assistant_type).toBe(
@@ -112,13 +114,13 @@ test('an unrelated project with an invalid config does not break the chat prompt
   const unpinned = { ...broken, ai_assistant_type: null };
   const scoped = await getOrCreateConversation('web', 'scoped-chat', active.id);
 
-  const prompt = await buildOrchestratorSystemAppend(scoped, [active, unpinned], []);
+  const prompt = await buildOrchestratorSystemAppend(scoped, [active, unpinned], [], 'commands');
   expect(prompt).toContain('### broken\n');
   expect(prompt.match(/- AI Provider: /g)).toHaveLength(1);
-  const pinned = await buildOrchestratorSystemAppend(scoped, [active, broken], []);
+  const pinned = await buildOrchestratorSystemAppend(scoped, [active, broken], [], 'commands');
   expect(pinned.match(/- AI Provider: codex/g)).toHaveLength(2);
   const unscoped = await getOrCreateConversation('web', 'unscoped-chat');
-  expect(await buildOrchestratorSystemAppend(unscoped, [active, unpinned], [])).toContain(
-    '### broken\n'
-  );
+  expect(
+    await buildOrchestratorSystemAppend(unscoped, [active, unpinned], [], 'commands')
+  ).toContain('### broken\n');
 });

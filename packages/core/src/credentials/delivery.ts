@@ -21,11 +21,13 @@
  * pi-ai SDK — `bun run check:pi-vendor-map` guards drift).
  */
 import { dirname, join } from 'node:path';
+import { consumesStoredCredential } from '@archon/provider-contract';
 import {
   PI_PROVIDER_ENV_VARS,
   PI_AMBIENT_VENDORS,
   normalizeCredentialVendor,
 } from '@archon/providers';
+import { descriptor as piDescriptor } from '@archon/providers/pi/descriptor';
 import { CODEX_AUTH_JSON_RELATIVE_PATH, PI_AUTH_JSON_RELATIVE_PATH } from '@archon/workflows/deps';
 
 export { LEGACY_VENDOR_ALIASES, normalizeCredentialVendor } from '@archon/providers';
@@ -127,18 +129,9 @@ export function deliverCredential(
         // pre-#1955 'claude' delivery (harmless superset).
         return { env: { ANTHROPIC_API_KEY: cred.apiKey, CLAUDE_API_KEY: cred.apiKey } };
       }
-      // Claude Pro/Max subscription. CLAUDE_CODE_OAUTH_TOKEN is the var the
-      // native Claude SDK reads; ANTHROPIC_OAUTH_TOKEN is what Pi's anthropic
-      // backend reads in env-only chat (Pi never reads the CLAUDE_CODE_* var).
-      // Both carry the same sk-ant-oat* bearer — a harmless superset, mirroring
-      // the api_key branch above shipping ANTHROPIC_API_KEY + CLAUDE_API_KEY
-      // (#1984). The Pi env bridge maps ANTHROPIC_OAUTH_TOKEN into AuthStorage.
-      return {
-        env: {
-          CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey,
-          ANTHROPIC_OAUTH_TOKEN: cred.oauthApiKey,
-        },
-      };
+      // Claude Pro/Max subscription, read by the native Claude SDK. It is not delivered
+      // under a Pi variable: a Claude subscription runs only on the Claude provider.
+      return { env: { CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey } };
 
     case 'openai':
       if (cred.kind === 'api_key') {
@@ -209,9 +202,9 @@ export { PI_AUTH_JSON_RELATIVE_PATH };
 export const PI_AUTH_PATH_ENV = 'ARCHON_PI_AUTH_PATH';
 
 /**
- * Build a per-run Pi `auth.json` from the user's FULL connected credential set so
- * a `pi` node can use the user's API keys AND subscriptions. Returns `null` when
- * no credential maps to a Pi backend. Delivered via a per-run auth path
+ * Build a per-run Pi `auth.json` from the user's connected credentials that Pi
+ * consumes: API keys for its backends and the subscriptions its credential spec
+ * declares. Returns `null` when none qualifies. Delivered via a per-run auth path
  * (`ARCHON_PI_AUTH_PATH`) — NOT by moving `PI_CODING_AGENT_DIR`, which would
  * redirect Pi's whole home and drop the user's `models.json`/`settings.json`.
  */
@@ -221,7 +214,7 @@ export function buildPiAuthJson(
   const data: Record<string, PiAuthCredential> = {};
   for (const { provider, cred } of creds) {
     // Vendor ids ARE Pi backend ids since #1955 (legacy agent-keyed rows are
-    // normalized); anything not in the generated map isn't a Pi backend.
+    // normalized); Pi's credential spec decides which of them it consumes.
     //
     // VERIFY (T5b.0): the OAuth backend ids (`openai`, `github-copilot`)
     // against a real `~/.pi/agent/auth.json` after a local `pi` `/login`.
@@ -230,7 +223,7 @@ export function buildPiAuthJson(
     // index-signature open (`[key: string]: unknown`) and its refresh/getApiKey
     // only read access/refresh/expires/accountId.
     const piId = normalizeCredentialVendor(provider);
-    if (!(piId in PI_PROVIDER_ENV_VARS)) continue;
+    if (!consumesStoredCredential(piDescriptor.credentials, piId, cred.kind)) continue;
     data[piId] =
       cred.kind === 'api_key'
         ? { type: 'api_key', key: cred.apiKey }

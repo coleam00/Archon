@@ -120,7 +120,7 @@ archon workflow resume <run-id>
 
 **Session caveat:** A cold resume does not reconstruct the ambient sequential
 `context: shared` cursor. Explicit `context: { resume: node-id }` ancestry is
-restored from saved run-scoped handles, and an interactive loop with
+restored from saved run-scoped handles, and a deprecated interactive loop with
 `fresh_context: false` resumes its pre-pause session when the provider supports
 it. Artifact-based handoff remains the provider-independent path.
 

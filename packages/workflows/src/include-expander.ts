@@ -53,6 +53,7 @@ import {
   isNodeContextResume,
   isComposeFanOutNode,
   INPUT_NAME_SOURCE,
+  inputEnvKey,
 } from './schemas';
 import {
   canonicalValueText,
@@ -590,7 +591,13 @@ function applyInputsMacro(
   missing: Set<string>,
   includeNode: IncludeDirective
 ): void {
-  const substitute = (text: string, shielded?: ReadonlySet<string>): string =>
+  const substitute = (
+    text: string,
+    shielded?: ReadonlySet<string>,
+    // Canonical text (#2637): a typed input splices as its one deterministic
+    // representation (strings raw, everything else canonical JSON text).
+    render: (name: string) => string = name => canonicalValueText(args[name])
+  ): string =>
     text.replace(INPUTS_REF, (match, name: string) => {
       // A name the node's own `with:` binds is neither the caller's to supply nor the
       // caller's to override — it resolves at run time from the nearest source in the
@@ -605,9 +612,7 @@ function applyInputsMacro(
         missing.add(name);
         return match;
       }
-      // Canonical text (#2637): a typed input splices as its one deterministic
-      // representation (strings raw, everything else canonical JSON text).
-      return canonicalValueText(args[name]);
+      return render(name);
     });
 
   // Value-position substitution (#2637): in a `with:` map value, a string that is
@@ -650,6 +655,20 @@ function applyInputsMacro(
     )
       return slot.value;
     if (slot.surface === 'condition') return substituteWhen(slot.value);
+    // Executable source never receives an input value (#2115): the shell delivers each
+    // input as INPUTS_<UPPER_SNAKE>, so a bash body keeps the author's macro as a quoted
+    // reference to that variable. Inline script languages share no safe quoting form,
+    // so there the macro is refused and the author reads the env var directly.
+    if (slot.surface === 'shell')
+      return substitute(slot.value, undefined, name => `"\${${inputEnvKey(name)}}"`);
+    if (slot.surface === 'script') {
+      const name = slot.value.matchAll(INPUTS_REF).next().value?.[1];
+      if (name !== undefined)
+        throw new IncludeExpansionError(
+          `Node '${includeNode.id}': included node '${slot.owner.id}' script uses '$INPUTS.${name}', which would splice the input value into script source. Read it from the environment as ${inputEnvKey(name)} instead.`
+        );
+      return slot.value;
+    }
     // Names a command node supplies itself. Only its compiled body reads them: the
     // executor merges the node's resolved bindings OVER the run inputs into the `$INPUTS`
     // bag it builds for the prompt, and nothing else (dag-executor.ts). So the shield is

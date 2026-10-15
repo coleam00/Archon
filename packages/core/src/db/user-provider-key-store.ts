@@ -18,6 +18,7 @@ import { createLogger } from '@archon/paths';
 import { mintOAuthApiKey, SubscriptionTokenError } from '../credentials/subscription-oauth';
 import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
+import type { StoredCredentialKind } from '@archon/provider-contract';
 import {
   normalizeCredentialVendor,
   type OAuthCredentials,
@@ -43,7 +44,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export interface SaveUserProviderKeyParams {
   userId: string;
   provider: string;
-  kind: 'api_key' | 'oauth';
+  kind: StoredCredentialKind;
   /** Plaintext API key — encrypted before write. Required when kind='api_key'. */
   apiKey?: string;
   /** Raw OAuth blob — JSON-stringified and encrypted before write. Required when kind='oauth'. */
@@ -104,10 +105,10 @@ export async function getUserProviderKeyRecord(
  */
 export async function listUserProviderKeys(
   userId: string
-): Promise<{ provider: string; kind: 'api_key' | 'oauth'; label: string | null }[]> {
+): Promise<{ provider: string; kind: StoredCredentialKind; label: string | null }[]> {
   const result = await pool.query<{
     provider: string;
-    kind: 'api_key' | 'oauth';
+    kind: StoredCredentialKind;
     label: string | null;
   }>(
     `SELECT provider, kind, label
@@ -348,7 +349,7 @@ async function resolveOAuthCredential(
 export async function listDecryptedUserProviderCredentials(
   userId: string
 ): Promise<{ provider: string; cred: ResolvedCredential }[]> {
-  let rows: { provider: string; kind: 'api_key' | 'oauth'; label: string | null }[];
+  let rows: { provider: string; kind: StoredCredentialKind; label: string | null }[];
   try {
     rows = await listUserProviderKeys(userId);
   } catch (err) {
