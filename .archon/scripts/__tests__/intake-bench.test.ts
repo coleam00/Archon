@@ -7,21 +7,33 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { expandWorkflowIncludes } from '../../../packages/workflows/src/include-expander';
+import { parseWorkflow } from '../../../packages/workflows/src/loader';
+import { TIER_NAMES } from '../../../packages/workflows/src/schemas/model-binding';
+import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
 import { appendLine, readLines } from '../../workflows/sdlc/.shared/bench';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
+  batchChecks,
   CHECKS_FILE,
   checkScratch,
   loadLive,
   findLeaks,
   issueTokens,
   type Line,
+  postedComments,
   SAMPLES_FILE,
+  type Snapshot,
+  snapshotChanges,
+  TIERS,
+  triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
 import { MARKS_FILE, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
@@ -241,8 +253,9 @@ describe('bench run', () => {
     expect(lines).toHaveLength(4);
   });
 
-  it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
-    const { runWith, argv, repo, out, cli } = bench();
+  /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
+  function benchLive(scenario: Partial<FakeConfig> = {}) {
+    const { runWith, argv, repo, out, cli } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
@@ -252,8 +265,11 @@ describe('bench run', () => {
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
     config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
+    return { ...runWith(['--live', join(out, 'live.yaml')], 'base'), argv, scratch };
+  }
 
-    const { status, stderr, lines, checks } = runWith(['--live', join(out, 'live.yaml')], 'base');
+  it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
+    const { status, stderr, lines, checks, argv, scratch } = benchLive();
     expect(stderr).toBe('');
     expect(status).toBe(0);
     expect(argv(1)).toEqual(expect.arrayContaining(['archon-intake', scratch, 'repo_path=me/scratch-base', 'number=101', 'mode=live', 'trust=auto']));
@@ -265,6 +281,16 @@ describe('bench run', () => {
       ['12-outside', true, []],
     ]);
     expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
+  });
+
+  it('does not pass a trust: auto row on which intake took a path without triage', () => {
+    const { lines } = benchLive({ autoPath: 'quiet' });
+    expect(lines.find(line => line.row === '11')).toMatchObject({
+      passed: false,
+      path: 'quiet',
+      verdict: null,
+      problems: ['intake took the quiet path, so triage judged nothing'],
+    });
   });
 
   it('refuses a scratch repository that is the set repository, shared, or not at the base', () => {
@@ -308,7 +334,7 @@ describe('bench run', () => {
       })
     );
     writeFileSync(join(out, 'dispositions.json'), JSON.stringify([{ number: 20, contract: 'BLOCKED' }]));
-    const counts = ['--duplicates', '0', '--fixed', '0', '--not-planned', '0', '--typed', '2', '--outside', '0'];
+    const counts = ['--duplicates', '0', '--fixed', '0', '--not-planned', '0', '--typed', '1', '--outside', '0'];
     const result = spawnSync(
       process.execPath,
       ['--preload', join(cli, 'preload.ts'), SCRIPT, 'select', '--repo', 'github.com/o/r', '--set', join(out, 'pinned.json'), '--dispositions', join(out, 'dispositions.json'), ...counts],
@@ -320,6 +346,23 @@ describe('bench run', () => {
       ['21', 'typed'],
       ['20', 'dispositioned'],
     ]);
+  });
+
+  it('pins nothing when a group finds fewer issues than the set asks for', () => {
+    const { repo, out, cli } = bench();
+    const bare = track(mkdtempSync(join(tmpdir(), 'intake-bench-remote-')));
+    ok(bare, 'clone', '-q', '--bare', repo, '.');
+    ok(repo, 'config', `url.${bare}.insteadOf`, 'https://github.com/o/r.git');
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: [{ number: 30, labels: [], comments: 0 }], searches: { 'not planned': [30] } }));
+    const counts = ['--duplicates', '0', '--fixed', '0', '--not-planned', '2', '--typed', '0', '--outside', '0'];
+    const result = spawnSync(
+      process.execPath,
+      ['--preload', join(cli, 'preload.ts'), SCRIPT, 'select', '--repo', 'github.com/o/r', '--set', join(out, 'pinned.json'), ...counts],
+      { cwd: repo, encoding: 'utf8' }
+    );
+    expect([result.status, result.stderr.trim()]).toEqual([1, 'only 1 not_planned issues were found; the set asks for 2']);
+    expect(existsSync(join(out, 'pinned.json'))).toBe(false);
   });
 
   it('does not pass a run whose judging node recorded no model binding', () => {
@@ -361,6 +404,14 @@ describe('bench run', () => {
     }
   });
 
+  it('does not pass a verdict whose transcript is missing, since its leak check never ran', () => {
+    const { lines } = bench({ noTranscript: true }).run('base');
+    expect(lines.map(line => [line.row, line.passed, line.problems])).toEqual([
+      ['11', false, ['the transcript is unavailable, so the leak check was not performed']],
+      ['12-outside', true, []],
+    ]);
+  });
+
   it('fails the batch when an eval run writes to an issue', () => {
     const { run } = bench({ writeLabel: 'archon-ready' });
     const { status, stderr, checks } = run('base');
@@ -375,6 +426,50 @@ describe('bench run', () => {
     const { status, checks } = run('base');
     expect(status).toBe(1);
     expect(checks[0].checks.outside_agent.problems).toEqual(['base 12-outside: triage__triage ran']);
+  });
+});
+
+describe('hard checks', () => {
+  const facts = { labels: ['bug'], state: 'open', title: 't', body_digest: 'd', comments: 0 };
+  const before: Snapshot = { issues: { 'github.com/o/r#1': facts }, state: { 'o/r': { 'work/1': 2 } } };
+
+  it('name a new or revised state document and a posted comment', () => {
+    const after: Snapshot = { issues: { 'github.com/o/r#1': { ...facts, comments: 1 } }, state: { 'o/r': { 'work/1': 3, 'work/2': 1 } } };
+    expect(snapshotChanges(before, after)).toEqual([
+      'github.com/o/r#1: comments changed from 0 to 1',
+      'state o/r/work/1: revision 2 became 3',
+      'state o/r/work/2: revision none became 1',
+    ]);
+    expect(postedComments(before, after)).toEqual(['github.com/o/r#1: 1 comment(s) posted']);
+    expect([snapshotChanges(before, before), postedComments(before, before)]).toEqual([[], []]);
+  });
+
+  it('fail the batch on a posted comment', () => {
+    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '' } as const;
+    const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted']);
+    expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted'] }]);
+  });
+});
+
+describe('engine names the bench copies', () => {
+  it('tiers are the engine tiers', () => {
+    expect([...TIERS]).toEqual([...TIER_NAMES]);
+  });
+
+  it('the judge node id is the agent node of archon-triage, alone and as intake includes it', () => {
+    registerBuiltinProviders();
+    const pack = join(import.meta.dir, '../../workflows/sdlc');
+    const definitions = new Map<string, WorkflowDefinition>();
+    for (const file of ['intake/archon-intake.yaml', 'triage/archon-triage.yaml']) {
+      const parsed = parseWorkflow(readFileSync(join(pack, file), 'utf8'), file, providerRegistry);
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      definitions.set(parsed.workflow.name, parsed.workflow);
+    }
+    const { workflows, errors } = expandWorkflowIncludes(definitions, new Map([['triage', 'Triage.']]));
+    expect(errors).toEqual([]);
+    const agentIds = (name: string) => (workflows.get(name)?.nodes ?? []).filter(node => node.kind === 'agent').map(node => node.id);
+    expect(agentIds('archon-triage')).toEqual([triageNodeId('triage')]);
+    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake')]);
   });
 });
 

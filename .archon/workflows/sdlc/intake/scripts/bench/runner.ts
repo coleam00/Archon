@@ -38,9 +38,11 @@ import { git, gitOrThrow } from '../../../.shared/git.ts';
 import type { Contract, Route } from '../../../.shared/labels.ts';
 import { remoteFor, urlRepo } from '../../../.shared/remote.ts';
 import { isObject } from '../../../.shared/typed.ts';
+import { INTAKE_PATHS } from '../../../.shared/workitem.ts';
 import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts';
 
 type Repo = QualifiedPr['repo'];
+type IntakePath = (typeof INTAKE_PATHS)[number];
 
 export const TIERS = ['small', 'medium', 'large'] as const;
 export type Tier = (typeof TIERS)[number];
@@ -453,7 +455,7 @@ export interface Line {
   readonly passed: boolean;
   readonly problems: readonly string[];
   /** Intake's path for the row; null for a triage run. */
-  readonly path: string | null;
+  readonly path: IntakePath | null;
   /** Agent nodes that ran, and nodes whose kind the run did not record. */
   readonly agent_nodes: readonly string[];
   readonly binding: NodeBinding | null;
@@ -611,20 +613,21 @@ function inputsFor(run: RowRun, set: BenchSet): Record<string, string> {
 }
 
 /** What a finished run decided, read from where its path records it. */
-async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: string | null; verdict: Verdict | null }> {
+async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: IntakePath | null; verdict: Verdict | null }> {
   const returned = returnedValue(detail);
   if (workflowOf(run) === 'triage') return { path: null, verdict: toVerdict(returned) };
-  if (!isObject(returned) || typeof returned.path !== 'string') throw new Error('intake returned no path');
+  const path = isObject(returned) ? INTAKE_PATHS.find(known => known === returned.path) : undefined;
+  if (!isObject(returned) || path === undefined) throw new Error('intake returned no known path');
   if (run.live !== undefined) {
     if (returned.item !== run.live.number) {
       throw new Error(`intake claimed issue ${String(returned.item)}, not the row's copy ${String(run.live.number)}`);
     }
     const document = await archonJson(['state', 'get', `work/${String(run.live.number)}`], run.cwd);
-    return { path: returned.path, verdict: liveVerdict(document.value, detail.id) };
+    return { path, verdict: liveVerdict(document.value, detail.id) };
   }
   const evaluation = isObject(returned.evaluation) ? returned.evaluation : undefined;
   if (evaluation === undefined) throw new Error('eval intake returned no evaluation');
-  return { path: returned.path, verdict: evaluation.triage === null ? null : toVerdict(evaluation.triage) };
+  return { path, verdict: evaluation.triage === null ? null : toVerdict(evaluation.triage) };
 }
 
 /** Launch one row on one version, wait for it, and record its line, whatever happened. */
@@ -639,7 +642,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   let runId: string | null = null;
   let status = 'not_started';
   let detail: RunDetail | undefined;
-  let decided: { path: string | null; verdict: Verdict | null } = { path: null, verdict: null };
+  let decided: { path: IntakePath | null; verdict: Verdict | null } = { path: null, verdict: null };
   try {
     runId = await launch({
       workflow: WORKFLOWS[workflow],
@@ -652,7 +655,11 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     status = await waitRun(runId);
     detail = await getRun(runId);
     if (status !== 'completed') problems.push(`the run is ${status}`);
-    else decided = await readDecision(run, detail);
+    else {
+      decided = await readDecision(run, detail);
+      // Every trust: auto row reaches triage; without a verdict there is nothing to score.
+      if (row.trust === 'auto' && decided.verdict === null) problems.push(`intake took the ${String(decided.path)} path, so triage judged nothing`);
+    }
   } catch (error) {
     fail(error);
     if (runId !== null && status === 'not_started') status = 'unknown';
@@ -678,6 +685,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
         ...(run.live === undefined ? [] : issueTokens(run.live.repo, run.live.number)),
       ];
       leak = findLeaks(readFileSync(detail.transcript_path, 'utf8'), tokens);
+    } else if (decided.verdict !== null) {
+      problems.push('the transcript is unavailable, so the leak check was not performed');
     }
     if (detail !== undefined && existsSync(join(artifactsOf(detail), 'triage.md'))) {
       const target = join(context.outDir, 'items', detail.id, 'triage.md');

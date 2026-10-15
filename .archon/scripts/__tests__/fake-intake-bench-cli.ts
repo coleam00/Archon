@@ -40,6 +40,10 @@ export interface FakeConfig {
   readonly issueReadsFailAfterRun?: boolean;
   /** A run's transcript path names a directory, so reading it fails. */
   readonly unreadableTranscript?: boolean;
+  /** A run records no transcript. */
+  readonly noTranscript?: boolean;
+  /** Intake takes this path on a trust: auto row, so triage does not run. */
+  readonly autoPath?: 'quiet' | 'closed';
   /** The project key `archon state list` names. */
   readonly projectKey: string;
   /** Issue numbers a tracker search answers, by a fragment of its query. */
@@ -135,16 +139,23 @@ function answer(dir: string, args: readonly string[]): string {
     const bound = binding(args, config);
     const intake = args[2] === 'archon-intake';
     const outside = given.trust === 'outside';
-    const triageRan = !intake || !outside || config.outsideAgentRuns === true;
+    const path = outside ? 'outside' : (config.autoPath ?? 'triage');
+    const triageRan = !intake || path === 'triage' || (outside && config.outsideAgentRuns === true);
     // A live intake run that triages records its verdict on the item's work document;
     // one that does not leaves an earlier run's there.
     const work = join(dir, `work-${given.number}.json`);
-    if (given.mode === 'live' && !outside) {
+    if (given.mode === 'live' && path === 'triage') {
       const field = { value: 'bug', reason: 'r' };
       const triage = { verdict: { contract: 'READY', route: 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
       writeFileSync(work, JSON.stringify({ triage }));
     } else if (given.mode === 'live' && !existsSync(work)) {
       writeFileSync(work, JSON.stringify({ triage: { verdict: { contract: 'READY', route: 'plan' }, run_id: 'an-earlier-run' } }));
+    }
+    let transcriptPath: string | null = null;
+    if (config.unreadableTranscript === true) transcriptPath = dir;
+    else if (config.noTranscript !== true) {
+      transcriptPath = join(dir, `transcript-run-${n}.jsonl`);
+      writeFileSync(transcriptPath, '');
     }
     const detail = {
       id: `run-${n}`,
@@ -152,13 +163,13 @@ function answer(dir: string, args: readonly string[]): string {
       output_root: join(dir, 'root'),
       started_at: '2026-10-15T10:00:00Z',
       completed_at: '2026-10-15T10:01:00Z',
-      transcript_path: config.unreadableTranscript === true ? dir : null,
+      transcript_path: transcriptPath,
       terminal_record: {
         returns: {
           availability: 'available',
           node_id: intake ? 'outcome' : 'verdict',
           value: intake
-            ? { path: outside ? 'outside' : 'triage', item: Number(given.number), evaluation: given.mode === 'live' ? null : { triage: outside ? null : verdict } }
+            ? { path, item: Number(given.number), evaluation: given.mode === 'live' ? null : { triage: path === 'triage' ? verdict : null } }
             : verdict,
         },
       },

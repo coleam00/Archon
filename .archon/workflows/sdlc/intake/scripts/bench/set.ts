@@ -283,6 +283,12 @@ export function selectSet(
   const typeLabels = Object.keys(HUMAN_TYPE_LABELS).join(',');
   pick('typed', search(repo, `is:open label:${typeLabels}`, c => fresh(c) && humanType(c.labels) !== undefined, counts.typed), () => ({}));
 
+  // A short group pins a set that cannot measure its own bar, and a pinned set is never rewritten.
+  for (const group of ['duplicate', 'fixed', 'not_planned', 'typed'] as const) {
+    const found = picked.filter(entry => entry.group === group).length;
+    if (found < counts[group]) throw new Error(`only ${String(found)} ${group} issues were found; the set asks for ${String(counts[group])}`);
+  }
+
   const isMaintainer = (author: string | null): boolean => author !== null && maintainers.has(author.toLowerCase());
   const rows: Row[] = [];
   for (const { candidate, group, known } of picked) {

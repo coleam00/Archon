@@ -341,7 +341,8 @@ are the operator's and stay outside the pack and the repository.
   through intake in eval mode; an outside author's runs through `archon-triage`
   directly on the same creation text with `publish=false`, because eval intake never
   triages an outside item; and some maintainer issues get a second `trust: outside`
-  row, which must take the outside path with no agent node.
+  row, which must take the outside path with no agent node. A group that finds
+  fewer issues than its count pins nothing.
 - **Versions.** A version file is `{label, pack_sha}` for the baseline, the model
   triage's tier resolves to today, plus `provider` and `model` for any other. Every
   version runs with a config layer pinning that tier, with the baseline's effort, so
@@ -352,7 +353,9 @@ are the operator's and stay outside the pack and the repository.
   appends one line, labelled with its version, to `samples.jsonl`. The batch then
   fails if any batch issue or state document of the repository changed, if a
   `trust: outside` row ran an agent node, if any comment was posted, or if a run did
-  not finish; a failed batch is reported before anyone evaluates it.
+  not finish; a failed batch is reported before anyone evaluates it. A `trust: auto`
+  run that returns no triage verdict, or a verdict whose transcript is missing so no
+  leak check ran, is recorded as failed and left out of the accuracy numbers.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
