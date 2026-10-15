@@ -318,5 +318,5 @@ test('preflight capabilities cover concrete pack calls and agent command instruc
       )
     );
   expect(used).toContain('checks.state');
-  expect([...REQUIRED_FORGE_OPERATIONS].sort()).toEqual(used.sort());
+  expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
 });
