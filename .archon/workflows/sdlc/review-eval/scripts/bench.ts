@@ -1112,8 +1112,8 @@ export function writeBatch(outDir: string, caseId: string, judge: Judge): void {
     rmSync(staging, { force: true });
   }
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
-  if (samples.some(sample => !sample.line.passed || sample.judgement?.valid === false)) {
-    throw new Error(`batch ${caseId} has failed hard checks or invalid judgements; see its page`);
+  if (samples.some(sample => !sample.line.passed || sample.judgement?.valid !== true)) {
+    throw new Error(`batch ${caseId} is incomplete: failed hard checks, invalid or missing judgements; see its page`);
   }
 }
 

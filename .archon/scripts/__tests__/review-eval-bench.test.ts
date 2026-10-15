@@ -631,7 +631,7 @@ describe('the batch page and marks', () => {
         appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'clean', sample: 1, run_id: runId, version: { label: runId }, passed: true, item: join('items', runId) });
         appendLine(join(out, 'judgements.jsonl'), { run_id: runId, judge: runId === 'old' ? changed : current, valid: true, defects: [], shape_unmatched: 0 });
       }
-      writeBatch(out, 'counting', current);
+      expect(() => writeBatch(out, 'counting', current)).toThrow('missing judgements');
       const page = readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8');
       expect(page).toContain('| Judgement | valid | not judged |');
       expect(page).toContain('new');
@@ -1052,13 +1052,15 @@ describe('bench run', () => {
     expect(result.stderr).toContain('no sample');
   });
 
-  it.each(['hard check', 'judgement'])('renders diagnostics but fails for a saved failed %s', failure => {
+  it.each(['hard check', 'judgement', 'missing judgement'])('renders diagnostics but fails for a saved failed %s', failure => {
     const { out, cli, run, render, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
     judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 });
     expect(run('--variant', 'v1').status).toBe(0);
     if (failure === 'hard check') {
       const [sample] = readLines(join(out, 'samples.jsonl'));
       writeFileSync(join(out, 'samples.jsonl'), JSON.stringify({ ...sample, passed: false, problems: ['wrong binding'] }) + '\n');
+    } else if (failure === 'missing judgement') {
+      writeFileSync(join(out, 'judgements.jsonl'), '');
     } else {
       const [judgement] = readLines(join(out, 'judgements.jsonl'));
       appendLine(join(out, 'judgements.jsonl'), { ...judgement, valid: false, reason: 'bad return' });
@@ -1066,8 +1068,8 @@ describe('bench run', () => {
     const result = render('--batch', 'counting');
     expect(result.status).toBe(1);
     const page = readFileSync(join(out, 'batches/counting/page.md'), 'utf8');
-    expect(page).toContain(failure === 'hard check' ? 'FAILED' : 'invalid: bad return');
-    if (failure === 'judgement') expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
+    expect(page).toContain(failure === 'hard check' ? 'FAILED' : failure === 'missing judgement' ? 'not judged' : 'invalid: bad return');
+    if (failure !== 'hard check') expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
     expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
   });
 
