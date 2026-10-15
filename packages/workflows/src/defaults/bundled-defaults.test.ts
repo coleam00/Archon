@@ -1,3 +1,4 @@
+import { REVIEW_LENSES } from '../../../../.archon/workflows/sdlc/.shared/review-policy';
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'fs';
@@ -527,29 +528,44 @@ describe('bundled-defaults', () => {
         type: 'object',
         properties: {
           selector: { type: 'string' },
-          base: {
-            type: ['object', 'null'],
-            additionalProperties: false,
-            properties: {
-              branch: { type: 'string', pattern: '\\S' },
-              revision: { type: 'string', pattern: '\\S' },
-            },
-            required: ['branch', 'revision'],
-          },
-          pr: {
-            type: ['object', 'null'],
-            properties: {
-              repo: {
+          target: {
+            anyOf: [
+              {
                 type: 'object',
                 properties: {
-                  host: { type: 'string', pattern: '\\S' },
-                  path: { type: 'string', pattern: '\\S' },
+                  base: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      branch: { type: 'string', pattern: '\\S' },
+                      revision: { type: 'string', pattern: '\\S' },
+                    },
+                    required: ['branch', 'revision'],
+                  },
+                  pr: {
+                    type: 'object',
+                    properties: {
+                      repo: {
+                        type: 'object',
+                        properties: {
+                          host: { type: 'string', pattern: '\\S' },
+                          path: { type: 'string', pattern: '\\S' },
+                        },
+                        required: ['host', 'path'],
+                      },
+                      number: { type: 'integer', minimum: 1 },
+                    },
+                    required: ['repo', 'number'],
+                  },
                 },
-                required: ['host', 'path'],
+                required: ['pr', 'base'],
               },
-              number: { type: 'integer', minimum: 1 },
-            },
-            required: ['repo', 'number'],
+              {
+                type: 'object',
+                properties: { pr: { type: 'null' }, base: { type: 'null' } },
+                required: ['pr', 'base'],
+              },
+            ],
           },
           report: {
             type: 'object',
@@ -561,24 +577,29 @@ describe('bundled-defaults', () => {
             required: ['type', 'run_id', 'path'],
           },
         },
-        required: ['selector', 'pr', 'base', 'report'],
+        required: ['selector', 'target', 'report'],
       });
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
       expect(
         validateStructuredOutput(
-          { selector: '', pr: null, base: null, report: scopeReport },
+          { selector: '', target: { pr: null, base: null }, report: scopeReport },
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ selector: '', pr: null }, scopeSchema).valid).toBe(false);
+      expect(
+        validateStructuredOutput({ selector: '', target: { pr: null, base: null } }, scopeSchema)
+          .valid
+      ).toBe(false);
       expect(
         validateStructuredOutput(
           {
             selector: 'https://github.com/coleam00/Archon/pull/3557',
-            base: { branch: 'dev', revision: 'fetched-base-sha' },
-            pr: {
-              repo: { host: 'github.com', path: 'coleam00/Archon' },
-              number: 3557,
+            target: {
+              base: { branch: 'dev', revision: 'fetched-base-sha' },
+              pr: {
+                repo: { host: 'github.com', path: 'coleam00/Archon' },
+                number: 3557,
+              },
             },
             report: scopeReport,
           },
@@ -586,11 +607,17 @@ describe('bundled-defaults', () => {
         ).valid
       ).toBe(true);
       expect(
-        validateStructuredOutput({ selector: '', pr: {}, report: scopeReport }, scopeSchema).valid
+        validateStructuredOutput(
+          { selector: '', target: { pr: {}, base: null }, report: scopeReport },
+          scopeSchema
+        ).valid
       ).toBe(false);
-      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
-        false
-      );
+      expect(
+        validateStructuredOutput(
+          { target: { pr: null, base: null }, report: scopeReport },
+          scopeSchema
+        ).valid
+      ).toBe(false);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
@@ -598,23 +625,14 @@ describe('bundled-defaults', () => {
         expect(parsed.workflow.nodes.find(node => node.id === id)).toBeUndefined();
       }
 
-      const specialists = ['seams', 'code', 'tests', 'errors', 'docs'];
+      const specialists = REVIEW_LENSES;
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
       expect(reviewComplete?.depends_on).toEqual(['head-check', 'route', ...specialists]);
       // Structure is judged once, by delivery after a review passes, not as a lens.
       expect(parsed.workflow.nodes.find(node => node.id === 'simplify')).toBeUndefined();
       // Reviewers are read-only by the engine's check, not only by their prompts.
-      for (const id of [
-        'scope',
-        'seams',
-        'code',
-        'tests',
-        'route',
-        'errors',
-        'docs',
-        'synthesize',
-      ]) {
+      for (const id of ['scope', ...specialists, 'route', 'synthesize']) {
         const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
         expect(node && 'mutates_checkout' in node ? node.mutates_checkout : undefined).toBe(false);
       }
@@ -936,7 +954,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'publish-review',
-        with: { pr: '$scope.output.pr' },
+        with: { target: '$scope.output.target' },
       });
       // The verdict the composing loop terminates on passes through unchanged.
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');

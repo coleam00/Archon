@@ -6,9 +6,10 @@ route: { seams: true, code: true, tests: true, errors: false, docs: false, reaso
 head-check: "target matches"
 scope:
   selector: ""
-  base: null
-  # A standalone review of the working diff: no pull request to publish to.
-  pr: null
+  target:
+    base: null
+    # A standalone review of the working diff: no pull request to publish to.
+    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 seams: "0 findings"
 code: "0 findings"

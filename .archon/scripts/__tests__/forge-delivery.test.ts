@@ -151,8 +151,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const review = (report: string, ready: boolean): void => {
       through('review/scripts/publish-review', {
         inputs: {
-          INPUTS_PR: JSON.stringify(PR),
-          INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: BASE_SHA }),
+          INPUTS_TARGET: JSON.stringify({ pr: PR, base: { branch: 'dev', revision: BASE_SHA } }),
           INPUTS_REPORT: '{ARTIFACTS}/report.md',
           INPUTS_HEAD: HEAD_SHA,
           ARCHON_NODE_EXECUTION: JSON.stringify({

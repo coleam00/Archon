@@ -5,8 +5,9 @@ review__route: { seams: true, code: true, tests: true, errors: true, docs: true,
 review__head-check: "target matches"
 review__scope:
   selector: ""
-  base: null
-  pr: null
+  target:
+    base: null
+    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
 review__code: "1 finding"

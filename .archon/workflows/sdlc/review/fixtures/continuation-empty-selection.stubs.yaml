@@ -7,9 +7,10 @@ route: { seams: false, code: true, tests: true, errors: false, docs: false, reas
 head-check: "target matches"
 scope:
   selector: ""
-  base: null
-  # A standalone review of the working diff: no pull request to publish to.
-  pr: null
+  target:
+    base: null
+    # A standalone review of the working diff: no pull request to publish to.
+    pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 code: "0 findings; prior finding C1 resolved by the delta"
 tests: "0 findings"

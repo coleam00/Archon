@@ -58,14 +58,12 @@ test('standalone pack consumes the owning qualified identity and pull-request re
   expect(producesPrRecord(consumesPrRecord(pr))).toEqual(pr);
 });
 
-// archon-review's scope node declares the pull request that publish-review then
-// hands to parseQualifiedPr. A value the schema admits but the parser refuses
-// passes the provider's structured output and fails publication after the whole
-// review ran, so the two must accept the same values.
 test('every reason the pack closes an issue with is a forge close reason', () => {
   for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
 });
 
+// Scope must reject identities that head-check's parseQualifiedPr would refuse,
+// so the provider is re-asked at the producer boundary.
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
   const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
   const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
@@ -87,6 +85,20 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     { repo: { ...repo, path: '' }, number: 1 },
     { repo: { ...repo, path: '\t' }, number: 1 },
   ];
+  const base = { branch: 'dev', revision: 'base-sha' };
+  for (const target of [
+    { pr: candidates[0], base, valid: true },
+    { pr: null, base: null, valid: true },
+    { pr: candidates[0], base: null, valid: false },
+    { pr: null, base, valid: false },
+  ]) {
+    expect(
+      validateStructuredOutput(
+        { selector: '', target: { pr: target.pr, base: target.base }, report },
+        schema
+      ).valid
+    ).toBe(target.valid);
+  }
   const verdicts = candidates.map(pr => {
     let parserAccepts = true;
     try {
@@ -97,7 +109,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     return {
       pr,
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ selector: '', pr, base: null, report }, schema)
+      schemaAccepts: validateStructuredOutput({ selector: '', target: { pr, base }, report }, schema)
         .valid,
     };
   });

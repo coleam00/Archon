@@ -1,5 +1,5 @@
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { forgeSource, samePr, sameRepo, type PrRecord } from '../../.shared/forge.ts';
+import { forgeSource, record, samePr, sameRepo, type PrRecord } from '../../.shared/forge.ts';
 import { report, refuse, text } from '../../.shared/io.ts';
 import { findRemote } from '../../.shared/remote.ts';
 import {
@@ -50,7 +50,9 @@ try {
   }
   const scope = text(process.env.INPUTS_SCOPE);
   const recorded = recordedPr(scope);
-  const declared = declaredPr(text(process.env.INPUTS_PR));
+  const target = record(JSON.parse(text(process.env.INPUTS_TARGET)));
+  if (!target || !('pr' in target) || !('base' in target)) throw new Error('missing review target');
+  const declared = declaredPr(JSON.stringify(target.pr));
   if (recorded && (!declared || !samePr(declared, recorded))) {
     throw new Error('the scope declaration does not match the recorded pull request');
   }
@@ -73,7 +75,7 @@ try {
           `No review lenses ran.\n${retry(pr, remoteHead)}`
       );
     }
-    checkReviewBase(pr, text(process.env.INPUTS_BASE));
+    checkReviewBase(pr, JSON.stringify(target.base));
   }
   report(
     pr

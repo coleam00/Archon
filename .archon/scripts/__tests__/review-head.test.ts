@@ -23,17 +23,20 @@ const execution = (head: string) =>
 function check(options: ScriptOptions = {}) {
   const cwd = options.cwd ?? gitCheckout({}, track);
   const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
+  const { targetPr, targetBase, ...inputs } = options.inputs ?? {};
   return runPackScript('review/scripts/check-review-head', {
     ...options,
     cwd,
     inputs: {
       INPUTS_SCOPE: PR_URL,
       INPUTS_SELECTOR: PR_URL,
-      INPUTS_PR: JSON.stringify(PR),
-      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
+      INPUTS_TARGET: JSON.stringify({
+        pr: targetPr === undefined ? PR : JSON.parse(targetPr),
+        base: targetBase === undefined ? { branch: 'dev', revision: base } : JSON.parse(targetBase),
+      }),
       INPUTS_HEAD: HEAD,
       ARCHON_NODE_EXECUTION: execution(HEAD),
-      ...options.inputs,
+      ...inputs,
     },
   });
 }
@@ -124,7 +127,7 @@ describe('review head boundary', () => {
           inputs: {
             INPUTS_SCOPE: scope,
             ...(change === 'advanced'
-              ? { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
+              ? { targetBase: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
               : {}),
           },
         });
@@ -163,7 +166,7 @@ describe('review head boundary', () => {
       cwd,
       source: 'forge',
       forge: view({ base_revision: null }),
-      inputs: { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }) },
+      inputs: { targetBase: JSON.stringify({ branch: 'dev', revision: base }) },
     };
     expect(check(options).code).toBe(0);
     writeFileSync(join(cwd, 'base.txt'), 'new base');
@@ -187,7 +190,7 @@ describe('review head boundary', () => {
       const run = check({
         cwd,
         gh: { noOpenPr: true },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null', INPUTS_BASE: 'null' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null', targetBase: 'null' },
       });
       expect(run.code).toBe(0);
       expect(run.stdout).toContain('working diff');
@@ -227,7 +230,7 @@ describe('review head boundary', () => {
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/contributor/repo.git');
     const run = check({
       cwd,
-      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
+      inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null' },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('more than one open pull request matches');
@@ -247,7 +250,7 @@ describe('review head boundary', () => {
       forge: view({ number: 99, url: PR_URL.replace('/42', '/99') }),
       inputs: {
         INPUTS_SELECTOR: PR_URL.replace('/42', '/99'),
-        INPUTS_PR: JSON.stringify({ ...PR, number: 99 }),
+        targetPr: JSON.stringify({ ...PR, number: 99 }),
       },
     });
     expect(run.code).toBe(1);
@@ -276,7 +279,7 @@ describe('review head boundary', () => {
   for (const declared of ['null', JSON.stringify({ ...PR, number: 99 })]) {
     it(`refuses a recorded target with a conflicting declaration ${declared}`, () => {
       const run = check({
-        inputs: { INPUTS_SCOPE: JSON.stringify(forgePrRecord()), INPUTS_PR: declared },
+        inputs: { INPUTS_SCOPE: JSON.stringify(forgePrRecord()), targetPr: declared },
       });
       expect(run.code).toBe(1);
       expect(run.stderr).toContain('does not match');
@@ -292,7 +295,7 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true, pr: { headRefOid: 'anotherhead' } },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: PR_URL, INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
+        inputs: { INPUTS_SCOPE: PR_URL, INPUTS_SELECTOR: '', targetPr: 'null' },
       });
       expect(run.code).toBe(1);
       if (source === 'gh') {
@@ -317,7 +320,7 @@ describe('review head boundary', () => {
             inputs: {
               INPUTS_SCOPE: scope,
               INPUTS_SELECTOR: scope,
-              INPUTS_PR: JSON.stringify(
+              targetPr: JSON.stringify(
                 declaration === 'null' ? null : declaration === 'wrong' ? { ...PR, number: 99 } : PR
               ),
             },
@@ -357,7 +360,7 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', targetPr: 'null' },
       });
       expect(run.code).toBe(0);
       expect(run.stdout).toContain('working diff');
@@ -378,7 +381,7 @@ describe('review head boundary', () => {
     const run = check({
       cwd,
       gh: { noOpenPr: true },
-      inputs: { INPUTS_SCOPE: 'feature', INPUTS_SELECTOR: 'feature', INPUTS_PR: 'null' },
+      inputs: { INPUTS_SCOPE: 'feature', INPUTS_SELECTOR: 'feature', targetPr: 'null' },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('no open pull request');
@@ -682,19 +685,22 @@ console.log(response);
             errors: false,
             docs: continuation,
           };
+          const declaredPr =
+            scenario === 'null' ||
+            scenario === 'message-pr-no-ambient-null' ||
+            scenario === 'erased-selector'
+              ? null
+              : scenario === 'message-pr-ambient-declaration'
+                ? PR
+                : scenario === 'wrong'
+                  ? { ...PR, number: 99 }
+                  : target;
           stubs.scope = {
-            base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
             selector: scenario === 'erased-selector' ? '' : selector,
-            pr:
-              scenario === 'null' ||
-              scenario === 'message-pr-no-ambient-null' ||
-              scenario === 'erased-selector'
-                ? null
-                : scenario === 'message-pr-ambient-declaration'
-                  ? PR
-                  : scenario === 'wrong'
-                    ? { ...PR, number: 99 }
-                    : target,
+            target: {
+              pr: declaredPr,
+              base: declaredPr ? { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') } : null,
+            },
             report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
           };
           const result = await dryRunWorkflow({
@@ -808,9 +814,14 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           docs: false,
         };
         stubs['rereview__scope'] = {
-          base: { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
           selector: PR_URL,
-          pr: scenario === 'missing declaration' ? null : PR,
+          target: {
+            pr: scenario === 'missing declaration' ? null : PR,
+            base:
+              scenario === 'missing declaration'
+                ? null
+                : { branch: 'dev', revision: git(cwd, 'rev-parse', 'dev') },
+          },
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
         };
         const result = await dryRunWorkflow({

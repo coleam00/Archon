@@ -312,12 +312,15 @@ describe('publish-pr opens the pull request at most once', () => {
 function publishReview(options: ScriptOptions = {}): ScriptRun {
   const cwd = options.cwd ?? gitCheckout({}, trackTempRoot);
   const base = readFileSync(join(cwd, '.git/refs/heads/dev'), 'utf8').trim();
+  const { targetPr, targetBase, ...inputs } = options.inputs ?? {};
   return runPackScript('review/scripts/publish-review', {
     ...options,
     cwd,
     inputs: {
-      INPUTS_PR: JSON.stringify(PR),
-      INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
+      INPUTS_TARGET: JSON.stringify({
+        pr: targetPr === undefined ? PR : JSON.parse(targetPr),
+        base: targetBase === undefined ? { branch: 'dev', revision: base } : JSON.parse(targetBase),
+      }),
       INPUTS_REPORT: '{ARTIFACTS}/review/report.md',
       INPUTS_HEAD: REVIEWED,
       ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
@@ -339,7 +342,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
         errors: false,
         docs: false,
       }),
-      ...options.inputs,
+      ...inputs,
     },
     artifacts: { 'review-report.md': REPORT, ...options.artifacts },
   });
@@ -399,7 +402,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('publishes nothing for a working-diff review and still reports the verdict', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_PR: 'null' } });
+    const result = publishReview({ inputs: { ...report, targetPr: 'null' } });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
@@ -407,7 +410,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('still accepts a legacy empty-object working-diff declaration', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_PR: '{}' } });
+    const result = publishReview({ inputs: { ...report, targetPr: '{}' } });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
@@ -421,7 +424,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
   ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
     const result = publishReview({
-      inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), INPUTS_PR: declared },
+      inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), targetPr: declared },
     });
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
@@ -431,7 +434,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 
   it('refuses to publish to a substituted PR even when its head matches', () => {
     const result = publishReview({
-      inputs: { ...report, INPUTS_SCOPE: PR_URL, INPUTS_PR: JSON.stringify({ ...PR, number: 99 }) },
+      inputs: { ...report, INPUTS_SCOPE: PR_URL, targetPr: JSON.stringify({ ...PR, number: 99 }) },
     });
     expect(result.code).toBe(1);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
@@ -446,7 +449,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
             ...report,
             INPUTS_SCOPE: scope,
             ...(change === 'advanced'
-              ? { INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
+              ? { targetBase: JSON.stringify({ branch: 'dev', revision: '0'.repeat(40) }) }
               : {}),
           },
           forge: {
@@ -500,8 +503,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
         cwd,
         inputs: {
           INPUTS_SCOPE: PR_URL,
-          INPUTS_PR: JSON.stringify(PR),
-          INPUTS_BASE: JSON.stringify({ branch: 'dev', revision: base }),
+          INPUTS_TARGET: JSON.stringify({ pr: PR, base: { branch: 'dev', revision: base } }),
           INPUTS_HEAD: REVIEWED,
           ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
         },
@@ -746,7 +748,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
       inputs: {
         ...report,
         INPUTS_SCOPE: JSON.stringify(PR),
-        INPUTS_PR: 'null',
+        targetPr: 'null',
         INPUTS_HEAD: STALE,
         ARCHON_NODE_EXECUTION: atCommit(STALE),
       },

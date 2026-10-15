@@ -20,9 +20,8 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
  *   pull-request record here, and that record is then the only write target.
- * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
- *   or `null` for a working diff. An explicit scope remains the write target.
- * - INPUTS_BASE: the fetched base branch and revision scope used for its diff.
+ * - INPUTS_TARGET: the paired PR identity and fetched diff base declared by scope,
+ *   both null for a working diff. An explicit scope remains the write target.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -75,7 +74,9 @@ try {
     contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
-  const declared = declaredPr(text(process.env.INPUTS_PR));
+  const target = record(JSON.parse(text(process.env.INPUTS_TARGET)));
+  if (!target || !('pr' in target) || !('base' in target)) throw new Error('missing review target');
+  const declared = declaredPr(JSON.stringify(target.pr));
   const scope = text(process.env.INPUTS_SCOPE).trim();
   const requested = !recorded && scope ? resolveReviewPr(scope, source) : undefined;
   const bound = recorded ?? requested;
@@ -96,7 +97,7 @@ try {
         `this round reviewed ${head}, but ${label(pr)} is at ${remote}: the commits under review were not pushed`
       );
     }
-    checkReviewBase(live, text(process.env.INPUTS_BASE));
+    checkReviewBase(live, JSON.stringify(target.base));
   }
   if (bound && (declared?.number !== bound.number || !sameRepo(declared.repo, bound.repo))) {
     throw new Error(

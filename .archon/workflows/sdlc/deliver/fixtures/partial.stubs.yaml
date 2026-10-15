@@ -16,8 +16,9 @@ review__route: { seams: true, code: true, tests: true, errors: false, docs: fals
 review__head-check: "target matches"
 review__scope:
   selector: "https://github.com/example/repo/pull/1"
-  base: { branch: dev, revision: cafe }
-  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  target:
+    base: { branch: dev, revision: cafe }
+    pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
 review__code: "0 findings"

@@ -135,29 +135,36 @@ nodes:
       type: object
       properties:
         selector: { type: string }
-        base:
-          type: [object, 'null']
-          additionalProperties: false
-          properties:
-            branch: { type: string, pattern: '\S' }
-            revision: { type: string, pattern: '\S' }
-          required: [branch, revision]
-        # The qualified pull request this round reviewed, or `null` for a working
-        # diff. publish below writes to this record and to nothing else, so the
-        # comment can never land on an ambient branch→PR mapping. The bounds match
-        # parseQualifiedPr in .shared/forge.ts, which publish runs on this value:
-        # non-blank host and path, a positive number.
-        pr:
-          type: [object, 'null']
-          properties:
-            repo:
-              type: object
+        target:
+          anyOf:
+            - type: object
               properties:
-                host: { type: string, pattern: '\S' }
-                path: { type: string, pattern: '\S' }
-              required: [host, path]
-            number: { type: integer, minimum: 1 }
-          required: [repo, number]
+                base:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    branch: { type: string, pattern: '\S' }
+                    revision: { type: string, pattern: '\S' }
+                  required: [branch, revision]
+                # This declaration must match the resolved target. Head-check verifies it
+                # before lenses; publication rechecks the bound identity before writing.
+                pr:
+                  type: object
+                  properties:
+                    repo:
+                      type: object
+                      properties:
+                        host: { type: string, pattern: '\S' }
+                        path: { type: string, pattern: '\S' }
+                      required: [host, path]
+                    number: { type: integer, minimum: 1 }
+                  required: [repo, number]
+              required: [pr, base]
+            - type: object
+              properties:
+                pr: { type: 'null' }
+                base: { type: 'null' }
+              required: [pr, base]
         # The engine refuses this node when scope.md is missing or empty, so no
         # verdict is ever judged without its scope.
         report:
@@ -167,7 +174,7 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [selector, pr, base, report]
+      required: [selector, target, report]
 
   - id: head-check
     script: check-review-head
@@ -176,8 +183,7 @@ nodes:
     with:
       scope: "$INPUTS.scope"
       selector: "$scope.output.selector"
-      pr: "$scope.output.pr"
-      base: "$scope.output.base"
+      target: "$scope.output.target"
       head: "$mode.output.head"
 
   # The lens decision is quick and separate from scope: a small model reads the diff
@@ -336,11 +342,9 @@ nodes:
     runtime: bun
     depends_on: [synthesize]
     with:
-      # Delivery's verified record, when it passed one, is the write target;
-      # the scope agent's declaration names it only for a standalone review.
+      # A recorded or requested PR binds the write target; the declaration must match.
       scope: "$INPUTS.scope"
-      pr: "$scope.output.pr"
-      base: "$scope.output.base"
+      target: "$scope.output.target"
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
       ready: "$synthesize.output.ready"

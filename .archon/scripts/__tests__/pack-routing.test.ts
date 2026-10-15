@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
+import { REVIEW_LENSES } from '../../workflows/sdlc/.shared/review-policy';
 import { PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -310,8 +311,6 @@ describe("deliver's round", () => {
 });
 
 describe('review lens gating', () => {
-  // The route agent's schema, the mode node's rerun selection and the lens nodes must
-  // name the same lenses; this holds the three in step.
   it('gates every lens node on the route or recorded boolean of the same name', async () => {
     const source = await Bun.file(
       join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
@@ -321,15 +320,30 @@ describe('review lens gating', () => {
         id: string;
         when?: string;
         output_type?: string;
-        output_format?: { properties: Record<string, unknown> };
+        depends_on?: string[];
+        output_format?: { properties: Record<string, { type: string }>; required: string[] };
       }[];
     };
     const lenses = workflow.nodes.filter(node => node.output_type === 'review-lens');
     const route = workflow.nodes.find(node => node.id === 'route');
-    const ids = lenses.map(node => node.id);
-    expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual([...ids, 'reason'].sort());
-    const mode = Object.keys(workflow.nodes.find(node => node.id === 'mode')?.output_format?.properties ?? {});
-    expect(mode).toEqual(expect.arrayContaining(ids));
+    expect(lenses.map(node => node.id)).toEqual([...REVIEW_LENSES]);
+    for (const [id, metadata] of [
+      ['route', ['reason']],
+      ['mode', ['continuation', 'light', 'head', 'cursor', 'risks', 'execution', 'part']],
+    ] as const) {
+      const schema = workflow.nodes.find(node => node.id === id)?.output_format;
+      expect(Object.keys(schema?.properties ?? {}).sort()).toEqual(
+        [...REVIEW_LENSES, ...metadata].sort()
+      );
+      expect([...(schema?.required ?? [])].sort()).toEqual([...REVIEW_LENSES, ...metadata].sort());
+      for (const lens of REVIEW_LENSES)
+        expect(schema?.properties[lens]).toEqual({ type: 'boolean' });
+    }
+    expect(workflow.nodes.find(node => node.id === 'review-complete')?.depends_on).toEqual([
+      'head-check',
+      'route',
+      ...REVIEW_LENSES,
+    ]);
     // Only a light round skips route; every other round unions its selection.
     expect(route?.when).toBe('$mode.output.light == false');
     for (const lens of lenses) {
