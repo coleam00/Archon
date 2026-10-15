@@ -2,7 +2,15 @@
  * Tests for setup command utility functions
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  readdirSync,
+} from 'fs';
 import { join, dirname, relative, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
@@ -1658,6 +1666,144 @@ describe('GitHub setup wizard', () => {
       });
     }
   );
+
+  const retainedOverlayCases = (['update', 'fresh'] as const).flatMap(mode =>
+    (['home', 'project'] as const).flatMap(selectedScope =>
+      (['path', 'inline'] as const).flatMap(source =>
+        ['GITHUB_APP_SLUG', 'GITHUB_APP_INSTALLATION_ID'].map(key => ({
+          mode,
+          selectedScope,
+          source,
+          key,
+        }))
+      )
+    )
+  );
+  it.each(retainedOverlayCases)(
+    'rejects retained App with other-scope blank $key ($mode, $selectedScope, $source)',
+    async scenario => {
+      setupMode = scenario.mode;
+      scope = scenario.selectedScope;
+      target = resolveScopedEnvPath(scope, root);
+      const otherPath = resolveScopedEnvPath(scope === 'home' ? 'project' : 'home', root);
+      const original = serializeEnv({
+        GITHUB_APP_ID: '123',
+        [scenario.source === 'path' ? 'GITHUB_APP_PRIVATE_KEY_PATH' : 'GITHUB_APP_PRIVATE_KEY']:
+          scenario.source === 'path' ? keyPath : privateKey,
+        WEBHOOK_SECRET: webhookSecret,
+      });
+      writeFileSync(target, original);
+      writeFileSync(otherPath, serializeEnv({ [scenario.key]: '' }));
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        expect(await run()).toBe(1);
+        expect(readFileSync(target, 'utf8')).toBe(original);
+        expect(readdirSync(dirname(target))).toEqual(['.env']);
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
+
+  it.each(
+    (['path', 'inline'] as const).flatMap(source =>
+      ['', '   '].flatMap(blank =>
+        (blank ? ['credentials'] : ['credentials', 'webhook']).map(disabled => ({
+          source,
+          blank,
+          disabled,
+        }))
+      )
+    )
+  )(
+    'rejects project overlay disabling proposed home App ($source, $disabled, "$blank")',
+    async scenario => {
+      scope = 'home';
+      target = resolveScopedEnvPath(scope, root);
+      keySource = scenario.source;
+      const otherPath = resolveScopedEnvPath('project', root);
+      const original = serializeEnv(
+        scenario.disabled === 'webhook'
+          ? { WEBHOOK_SECRET: scenario.blank }
+          : {
+              GITHUB_APP_ID: scenario.blank,
+              GITHUB_APP_PRIVATE_KEY: scenario.blank,
+              GITHUB_APP_PRIVATE_KEY_PATH: scenario.blank,
+            }
+      );
+      writeFileSync(otherPath, original);
+      expect(await run()).toBe(1);
+      expect(existsSync(target)).toBe(false);
+      expect(readFileSync(otherPath, 'utf8')).toBe(original);
+    }
+  );
+
+  it('rejects a retained home App disabled by empty project activation fields', async () => {
+    scope = 'home';
+    target = resolveScopedEnvPath(scope, root);
+    writeFileSync(
+      target,
+      serializeEnv({
+        GITHUB_APP_ID: '123',
+        GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
+        WEBHOOK_SECRET: webhookSecret,
+      })
+    );
+    writeFileSync(
+      resolveScopedEnvPath('project', root),
+      serializeEnv({
+        GITHUB_APP_ID: '',
+        GITHUB_APP_PRIVATE_KEY: '',
+        GITHUB_APP_PRIVATE_KEY_PATH: '',
+      })
+    );
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    try {
+      expect(await run()).toBe(1);
+      expect(readdirSync(dirname(target))).toEqual(['.env']);
+    } finally {
+      platforms.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    'previews a PAT switch from the startup environment (inherited PAT=%j)',
+    async inheritedPat => {
+      const original = serializeEnv({ GITHUB_TOKEN: pat, WEBHOOK_SECRET: webhookSecret });
+      writeFileSync(target, original);
+      const prior = process.env.GITHUB_TOKEN;
+      process.env.GITHUB_TOKEN = pat;
+      try {
+        const inheritedEnv = inheritedPat ? { GITHUB_TOKEN: pat } : {};
+        expect(await setupCommand({ repoPath: root, scope, providers: [], inheritedEnv })).toBe(
+          inheritedPat ? 1 : 0
+        );
+        if (inheritedPat) {
+          expect(readFileSync(target, 'utf8')).toBe(original);
+          expect(readdirSync(dirname(target))).toEqual(['.env']);
+        } else {
+          const effective = { ...inheritedEnv, ...read() };
+          expect(selectGitHubAuthMode(effective)).toEqual({ kind: 'app' });
+          expect(loadGitHubAppConfig(effective)).toMatchObject({ appId: '123', privateKey });
+        }
+      } finally {
+        if (prior === undefined) delete process.env.GITHUB_TOKEN;
+        else process.env.GITHUB_TOKEN = prior;
+      }
+    }
+  );
+
+  it('rejects inherited PAT beside a proposed App before writing', async () => {
+    const prior = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = pat;
+    try {
+      expect(await run()).toBe(1);
+      expect(existsSync(target)).toBe(false);
+    } finally {
+      if (prior === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prior;
+    }
+  });
 
   it.each(['home', 'relative'] as const)(
     'validates and stores the absolute private key path from a %s path',

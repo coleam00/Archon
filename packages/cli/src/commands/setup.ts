@@ -258,6 +258,8 @@ interface ExistingConfig {
 }
 
 interface SetupOptions {
+  /** Environment before CLI startup overlays the Archon env files. */
+  inheritedEnv?: NodeJS.ProcessEnv;
   spawn?: boolean;
   providers?: readonly string[];
   repoPath: string;
@@ -2344,7 +2346,14 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   let replaceGitHubAuth = false;
-  let otherGitHubEnv: Record<string, string> = {};
+  const otherEnvPath = resolveScopedEnvPath(
+    scope === 'home' ? 'project' : 'home',
+    options.repoPath
+  );
+  const otherGitHubEnv =
+    otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)
+      ? parseDotenv(readFileSync(otherEnvPath, 'utf8'))
+      : {};
   const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
   if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
     cancel(
@@ -2354,13 +2363,8 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
   if (config.platforms.github) {
     const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
-    const otherEnvPath = resolveScopedEnvPath(
-      scope === 'home' ? 'project' : 'home',
-      options.repoPath
-    );
     if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
-      const other = parseDotenv(readFileSync(otherEnvPath, 'utf8'));
-      otherGitHubEnv = other;
+      const other = otherGitHubEnv;
       const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
       if (conflictingKeys.some(key => other[key])) {
         cancel(
@@ -2396,21 +2400,35 @@ async function runSetup(options: SetupOptions): Promise<void> {
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
     const envContent = generateEnvContent(config);
+    const selected = parseDotenv(
+      !force && existsSync(targetEnvPath)
+        ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth).content
+        : envContent
+    );
+    const inheritedEnv = options.inheritedEnv ?? process.env;
+    const effective = {
+      ...inheritedEnv,
+      ...(scope === 'project' ? otherGitHubEnv : selected),
+      ...(scope === 'project' ? selected : otherGitHubEnv),
+    };
     if (
       config.github?.mode === 'app' ||
-      (!config.github && selectGitHubAuthMode(saved).kind === 'app')
+      (!config.github &&
+        [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
+          GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
+        ))
     ) {
-      const selected = parseDotenv(
-        !force && existsSync(targetEnvPath)
-          ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth)
-              .content
-          : envContent
-      );
-      const effective =
-        scope === 'project'
-          ? { ...otherGitHubEnv, ...selected }
-          : { ...selected, ...otherGitHubEnv };
-      loadGitHubAppConfig(effective);
+      const mode = selectGitHubAuthMode(effective);
+      if (mode.kind !== 'app') {
+        throw new Error(
+          mode.kind === 'conflict'
+            ? mode.message
+            : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
+        );
+      }
+      if (!loadGitHubAppConfig(effective)) {
+        throw new Error('Effective GitHub App configuration could not be loaded.');
+      }
     }
     writeResult = writeScopedEnv(envContent, {
       scope,

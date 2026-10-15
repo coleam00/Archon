@@ -29,6 +29,7 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
+const inheritedEnv = { ...process.env };
 const forgeTrustedEnv = await loadCliEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
@@ -693,6 +694,7 @@ async function main(): Promise<number> {
         });
         const providers = (values.providers as string | undefined) ?? process.env.ARCHON_PROVIDERS;
         const setupExitCode = await setupCommand({
+          inheritedEnv,
           spawn: spawnFlag,
           repoPath,
           scope,
