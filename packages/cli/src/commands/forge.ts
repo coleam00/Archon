@@ -67,6 +67,7 @@ export async function forgeCommand(
   let response: ForgeResponse;
   let request: ForgeRequest | undefined;
   let dispatched = false;
+  let credentialSource: string | undefined;
   try {
     // Config and plugin discovery resolve from the same trusted environment the plugin
     // runs in, never from this process's ambient env.
@@ -127,13 +128,14 @@ export async function forgeCommand(
       credentialEnv: env,
     });
     response = result.response;
+    credentialSource = result.credentialSource;
     if (env.WORKFLOW_ID) {
       try {
         await (dependencies.audit ?? persistAudit)(result.audit, env.WORKFLOW_ID);
       } catch {
         // Retain the actual operation outcome on stdout. Audit failure is a
         // separate failure and never rewrites an observed result as a refusal.
-        await write(response);
+        await write({ ...response, ...(credentialSource ? { credentialSource } : {}) });
         process.stderr.write(
           `Forge operation ${operationId} completed but its run audit could not be persisted.\n`
         );
@@ -166,6 +168,6 @@ export async function forgeCommand(
         : {}),
     };
   }
-  await write(response);
+  await write({ ...response, ...(credentialSource ? { credentialSource } : {}) });
   return response.ok ? 0 : 1;
 }

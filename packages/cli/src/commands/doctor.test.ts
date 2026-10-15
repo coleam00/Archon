@@ -1,7 +1,7 @@
 /**
  * Tests for `archon doctor` check functions.
  *
- * Uses spyOn for `@archon/git.execFileAsync` and `globalThis.fetch`.
+ * Uses spies for subprocesses and fetch.
  * Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
@@ -10,16 +10,14 @@ import { tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
-import * as git from '@archon/git';
 import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
 import {
-  GITHUB_FORGE_PLUGIN,
-  forgeSource,
-} from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
-import { forgeAccessRead } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
+  checkForgeAccess,
+  REQUIRED_FORGE_OPERATIONS,
+} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -27,9 +25,8 @@ import {
   checkProviderDeprecation,
   checkDatabase,
   checkConnectedProviders,
-  checkGhAuth,
-  checkGithubForge,
-  FORGE_GITHUB_PLUGIN,
+  checkGitHubApp,
+  checkSdlcForge,
   checkAssistantLogin,
   type AssistantLoginDeps,
   checkWorkspaceWritable,
@@ -45,8 +42,6 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
-import type { ForgeError } from '@archon/forge/operations';
-import type { RunForge } from './doctor';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import {
   clearRegistry,
@@ -64,173 +59,128 @@ spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
 
-describe('checkGithubForge', () => {
-  const answering =
-    (credentialSource?: string): RunForge =>
-    async () => ({
-      response: { operationId: 'op', ok: true, result: { op: 'pr.view', value: null } },
-      credentialSource,
+describe('doctor matches selected-source preflight', () => {
+  it.each(['keyring', 'logged-out', 'released-plugin'])('%s', async setup => {
+    const saved = process.env;
+    process.env = setup === 'released-plugin' ? { ARCHON_SDLC_FORGE: 'forge' } : {};
+    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(argv => {
+      const args = argv as string[];
+      const op = args[1];
+      const stdout =
+        args[0] === 'git'
+          ? 'remote.origin.url https://github.com/coleam00/Archon.git'
+          : args.includes('metadata')
+            ? JSON.stringify({
+                operationId: 'op',
+                ok: true,
+                result: { op: 'metadata', value: { capabilities: ['pr.view'] } },
+              })
+            : '';
+      return {
+        exitCode: setup === 'logged-out' && op === 'auth' ? 1 : 0,
+        stdout: Buffer.from(stdout),
+        stderr: Buffer.from('logged out'),
+      } as ReturnType<typeof Bun.spawnSync>;
     });
-  const refusing =
-    (kind: ForgeError['kind'], message = `${kind} message`): RunForge =>
-    async () => ({
-      response: { operationId: 'op', ok: false, error: { kind, message } },
-    });
-
-  it('fails on exactly the ARCHON_SDLC_FORGE values the SDLC pack refuses', async () => {
-    const saved = process.env.ARCHON_SDLC_FORGE;
+    const output = spyOn(console, 'log').mockImplementation(() => {});
+    process.env.ARCHON_CLI_COMMAND = '["archon"]';
     try {
-      for (const value of ['', 'forge', 'gh', ' gh ', 'github', 'GH']) {
-        process.env.ARCHON_SDLC_FORGE = value;
-        let packRefuses = false;
-        try {
-          forgeSource();
-        } catch {
-          packRefuses = true;
-        }
-        const result = await checkGithubForge(
-          { ARCHON_SDLC_FORGE: value, GH_TOKEN: 'ghp_x' },
-          answering()
-        );
-        expect({ value, failed: result.status === 'fail' }).toEqual({ value, failed: packRefuses });
+      let preflight = 0;
+      try {
+        await checkForgeAccess();
+      } catch {
+        preflight = 1;
       }
-    } finally {
-      if (saved === undefined) delete process.env.ARCHON_SDLC_FORGE;
-      else process.env.ARCHON_SDLC_FORGE = saved;
-    }
-  });
-
-  it('skips without a forge read when the operator selected gh', async () => {
-    const runForge = mock(answering());
-    const result = await checkGithubForge({ ARCHON_SDLC_FORGE: 'gh' }, runForge);
-    expect(result.status).toBe('skip');
-    expect(runForge).not.toHaveBeenCalled();
-  });
-
-  it('passes when the plugin answers the SDLC preflight read', async () => {
-    const runForge = mock(answering());
-    expect((await checkGithubForge({ GH_TOKEN: 'ghp_x' }, runForge)).status).toBe('pass');
-    const read = forgeAccessRead({ host: 'github.com', path: 'coleam00/Archon' });
-    expect(runForge).toHaveBeenCalledWith(read.op, read.data);
-  });
-
-  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
-    'names the source used: %s',
-    async credentialSource => {
-      const result = await checkGithubForge({}, answering(credentialSource));
-      expect(result).toMatchObject({
-        status: 'pass',
-        message: expect.stringContaining(credentialSource),
-      });
-    }
-  );
-
-  it('names the selected source when the forge rejects its token', async () => {
-    const response = await refusing('authorization', 'Bad credentials')('pr.view', {});
-    const result = await checkGithubForge({}, async () => ({
-      ...response,
-      credentialSource: 'GH_TOKEN',
-    }));
-    expect(result).toMatchObject({ status: 'fail', message: 'Bad credentials (source: GH_TOKEN)' });
-  });
-
-  it('fails when gh credential lookup fails instead of warning about an absent token', async () => {
-    const result = await checkGithubForge({}, refusing('process_failed', 'gh auth token failed'));
-    expect(result).toMatchObject({ status: 'fail', message: 'gh auth token failed' });
-  });
-
-  it('names the plugin the SDLC pack names', () => {
-    expect(FORGE_GITHUB_PLUGIN).toBe(GITHUB_FORGE_PLUGIN);
-  });
-
-  it('skips naming both steps when no plugin is installed', async () => {
-    const result = await checkGithubForge(
-      { GH_TOKEN: 'ghp_x', ARCHON_HOME: '/srv/archon' },
-      refusing('no_plugin_for_host')
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
-    expect(result.message).toContain(`GH_TOKEN in ${join('/srv/archon', '.env')}`);
-  });
-
-  it('warns about a missing token, unless GitHub App mode supplies it in runs', async () => {
-    const withoutApp = await checkGithubForge(
-      { ARCHON_HOME: '/srv/archon' },
-      refusing('no_credential')
-    );
-    expect(withoutApp.status).toBe('warn');
-    expect(withoutApp.message).toContain(`GH_TOKEN in ${join('/srv/archon', '.env')}`);
-    expect((await checkGithubForge({ GITHUB_APP_ID: '1' }, refusing('no_credential'))).status).toBe(
-      'skip'
-    );
-  });
-
-  it('warns with the update command and the gh switch when the plugin lacks the read', async () => {
-    const result = await checkGithubForge(
-      { GH_TOKEN: 'ghp_x' },
-      refusing('unsupported_op', 'plugin github does not support pr.view')
-    );
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('archon plugin update coleam00/Archon/plugins/forge-github');
-    expect(result.message).toContain('may not support it either');
-    expect(result.message).toContain('ARCHON_SDLC_FORGE=gh');
-  });
-
-  it.each(['no_plugin_for_host', 'unsupported_op', 'no_credential'] as const)(
-    'fails doctor when the explicitly selected forge refuses with %s',
-    async kind => {
-      for (const app of [{}, { GITHUB_APP_ID: '1' }]) {
-        const result = await checkGithubForge(
-          { ARCHON_SDLC_FORGE: 'forge', ARCHON_HOME: '/srv/archon', ...app },
-          refusing(kind)
-        );
-        expect(result.status).toBe('fail');
-        const output = spyOn(console, 'log').mockImplementation(() => {});
-        try {
-          expect(await doctorCommand([async () => result])).toBe(1);
-        } finally {
-          output.mockRestore();
-        }
+      const result = await checkSdlcForge(process.env, async () => ({
+        value: { capabilities: ['pr.view'] },
+      }));
+      expect(result.status).toBe(preflight === 0 ? 'pass' : 'fail');
+      expect(await doctorCommand([async () => result])).toBe(preflight);
+      if (setup === 'keyring') expect(result.message).toContain('source: gh auth login');
+      if (setup === 'logged-out') {
+        expect(result.message).toContain('GH_TOKEN');
+        expect(result.message).not.toContain('ARCHON_SDLC_FORGE=forge');
       }
-    }
-  );
-
-  it('reads plugins and config from the diagnostic environment, not the ambient one', async () => {
-    const diagnosticHome = mkdtempSync(join(tmpdir(), 'doctor-forge-'));
-    const ambientHome = mkdtempSync(join(tmpdir(), 'doctor-forge-ambient-'));
-    // Only the diagnostic home's config is unreadable, so only reading it fails the check.
-    writeFileSync(join(diagnosticHome, 'config.yaml'), '- not an object\n');
-    const saved = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = ambientHome;
-    try {
-      const result = await checkGithubForge({ ARCHON_HOME: diagnosticHome, GH_TOKEN: 'ghp_x' });
-      expect(result).toMatchObject({
-        status: 'fail',
-        message: expect.stringContaining('configuration'),
-      });
+      if (setup === 'released-plugin') expect(result.message).toContain('missing:');
     } finally {
-      if (saved === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = saved;
-      await removeTempTree(diagnosticHome);
-      await removeTempTree(ambientHome);
+      spawn.mockRestore();
+      output.mockRestore();
+      process.env = saved;
     }
-  });
-
-  it('fails with the forge message when the token is rejected', async () => {
-    const result = await checkGithubForge(
-      { GH_TOKEN: 'ghp_x' },
-      refusing('authorization', 'Bad credentials')
-    );
-    expect(result).toMatchObject({ status: 'fail', message: 'Bad credentials' });
   });
 });
 
-describe('checkGhAuth', () => {
-  const GH_AUTH_STATUS = ['auth', 'status', '--active'];
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+describe('gh credential-source reporting', () => {
+  it.each([
+    { host: 'github.com', env: { GH_TOKEN: 'first', GITHUB_TOKEN: 'second' }, source: 'GH_TOKEN' },
+    { host: 'tenant.ghe.com', env: { GITHUB_TOKEN: 'second' }, source: 'GITHUB_TOKEN' },
+    {
+      host: 'ghe.example.com',
+      env: { GH_TOKEN: 'ignored', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GH_ENTERPRISE_TOKEN',
+    },
+    {
+      host: 'ghe.example.com',
+      env: { GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GITHUB_ENTERPRISE_TOKEN',
+    },
+  ])('$host uses $source', async ({ host, env, source }) => {
+    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(
+      argv =>
+        ({
+          exitCode: 0,
+          stdout: Buffer.from(
+            (argv as string[])[0] === 'git'
+              ? `remote.origin.url https://${host}/example/repo.git`
+              : ''
+          ),
+          stderr: Buffer.from(''),
+        }) as ReturnType<typeof Bun.spawnSync>
+    );
+    try {
+      const result = await checkSdlcForge(env);
+      expect(result.status).toBe('pass');
+      expect(result.message).toContain(`source: ${source}`);
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+});
+
+describe('selected forge diagnostics', () => {
+  const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
+    'names %s after checking capabilities and read access',
+    async credentialSource => {
+      const spawn = spyOn(Bun, 'spawnSync').mockReturnValue({
+        exitCode: 0,
+        stdout: Buffer.from('remote.origin.url https://github.com/coleam00/Archon.git'),
+        stderr: Buffer.from(''),
+      } as ReturnType<typeof Bun.spawnSync>);
+      const probe = mock(async (op: string) => ({
+        value: op === 'metadata' ? { capabilities: REQUIRED_FORGE_OPERATIONS } : null,
+        credentialSource: op === 'metadata' ? undefined : credentialSource,
+      }));
+      try {
+        const result = await checkSdlcForge({ ARCHON_SDLC_FORGE: 'forge' }, probe);
+        expect(result.status).toBe('pass');
+        expect(result.message).toContain(`source: ${credentialSource}`);
+        expect(probe.mock.calls.map(call => call[0])).toEqual(['metadata', 'pr.view']);
+        expect(probe).toHaveBeenLastCalledWith('pr.view', {
+          selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
+        });
+      } finally {
+        spawn.mockRestore();
+      }
+    }
+  );
+});
+
+describe('checkGitHubApp', () => {
+  let execSpy: ReturnType<typeof spyOn<typeof Bun, 'spawnSync'>>;
 
   beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
+    execSpy = spyOn(Bun, 'spawnSync');
   });
 
   afterEach(() => {
@@ -251,7 +201,7 @@ describe('checkGhAuth', () => {
         { GITHUB_APP_PRIVATE_KEY: privateKey.replaceAll('\n', '\\n') },
         { GITHUB_APP_PRIVATE_KEY_PATH: keyPath },
       ]) {
-        expect(await checkGhAuth({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
+        expect(await checkGitHubApp({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
           label: 'GitHub App',
           status: 'pass',
           message: 'App mode configured (local configuration valid; GitHub access not checked)',
@@ -278,7 +228,7 @@ describe('checkGhAuth', () => {
       { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: '/missing/archon-key.pem' },
       { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey, GITHUB_TOKEN: 'pat-secret' },
     ]) {
-      const result = await checkGhAuth(env);
+      const result = await checkGitHubApp(env);
       expect(result.label).toBe('GitHub App');
       expect(result.status).toBe('fail');
       expect(result.message).not.toContain(privateKey);
@@ -296,7 +246,7 @@ describe('checkGhAuth', () => {
     try {
       expect(
         await doctorCommand([
-          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
         ])
       ).toBe(1);
       const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
@@ -313,50 +263,15 @@ describe('checkGhAuth', () => {
     try {
       expect(
         await doctorCommand([
-          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
         ])
       ).toBe(0);
       expect(JSON.stringify(output.mock.calls)).toContain('GitHub App');
-      expect(await doctorCommand([() => checkGhAuth({ GITHUB_APP_ID: '123' })])).toBe(1);
+      expect(await doctorCommand([() => checkGitHubApp({ GITHUB_APP_ID: '123' })])).toBe(1);
       expect(JSON.stringify(output.mock.calls)).not.toContain(privateKey);
     } finally {
       output.mockRestore();
     }
-  });
-
-  it('returns skip when no GitHub token is set', async () => {
-    const result = await checkGhAuth({});
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('GitHub not configured');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('checks gh authentication without a token when ARCHON_SDLC_FORGE selects gh', async () => {
-    execSpy.mockRejectedValue(new Error('not logged in'));
-    const result = await checkGhAuth({ ARCHON_SDLC_FORGE: 'gh' });
-    expect(result.status).toBe('fail');
-    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
-  });
-
-  it('runs gh auth check when only GH_TOKEN is set', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
-  });
-
-  it('returns pass when gh auth status succeeds', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GITHUB_TOKEN: 'ghp_x' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', GH_AUTH_STATUS, expect.any(Object));
-  });
-
-  it('returns fail when gh auth status throws', async () => {
-    execSpy.mockRejectedValue(new Error('not logged in'));
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('not logged in');
   });
 });
 

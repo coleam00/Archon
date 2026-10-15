@@ -1,3 +1,7 @@
+import {
+  checkForgeAccess,
+  REQUIRED_FORGE_OPERATIONS,
+} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import { expect, mock, spyOn, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +21,7 @@ mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: async () => null,
   findCodebaseByPathPrefix: async () => null,
 }));
-const { doctorCommand, checkGithubForge } = await import('./doctor');
+const { doctorCommand, checkSdlcForge } = await import('./doctor');
 
 test('normal doctor dispatch renders registered diagnostics and fails on their failure', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-doctor-dispatch-'));
@@ -66,7 +70,7 @@ test('normal doctor dispatch renders registered diagnostics and fails on their f
     expect(output.mock.calls.flat().join('\n')).toContain(
       '✗ fixture: Distinctive probe: fixture needs repair Remedy: repair fixture'
     );
-    expect(output.mock.calls.flat().join('\n')).toContain('1 check(s) failed');
+    expect(output.mock.calls.flat().join('\n')).toContain('2 check(s) failed');
   } finally {
     clearRegistry();
     output.mockRestore();
@@ -76,11 +80,60 @@ test('normal doctor dispatch renders registered diagnostics and fails on their f
   }
 });
 
-test('default forge runner reports its selected credential without exposing it', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'archon-doctor-credential-'));
-  const token = 'github-doctor-private-token';
+test.each([true, false])(
+  'default forge runner reports its selected credential without exposing it (accepted: %s)',
+  async accepted => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-doctor-credential-'));
+    const token = 'github-doctor-private-token';
+    try {
+      writeFileSync(
+        join(root, 'config.yaml'),
+        JSON.stringify({
+          forge: {
+            scanPath: false,
+            plugins: [
+              {
+                plugin: 'github',
+                command: process.execPath,
+                args: [
+                  '--no-env-file',
+                  '-e',
+                  `if (process.argv.includes('metadata')) console.log(JSON.stringify({protocol: 1, name: 'github', version: 'test', forge: 'github', hosts: ['github.com'], capabilities: ${JSON.stringify(REQUIRED_FORGE_OPERATIONS)}, token_env: ['GITHUB_TOKEN']})); else { const request = await Bun.stdin.json(); if (process.env.ARCHON_FORGE_TOKEN !== '${token}') throw new Error('wrong token'); console.log(JSON.stringify(${accepted} ? {operationId: request.operationId, ok: true, result: {op: request.op, value: null}} : {operationId: request.operationId, ok: false, error: {kind: 'authorization', message: 'Bad credentials'}})); }`,
+                ],
+              },
+            ],
+          },
+        })
+      );
+      const result = await checkSdlcForge({
+        ARCHON_SDLC_FORGE: 'forge',
+        ARCHON_HOME: root,
+        HOME: root,
+        GITHUB_TOKEN: token,
+      });
+      expect(result).toMatchObject({
+        status: accepted ? 'pass' : 'fail',
+        message: expect.stringContaining('source: GITHUB_TOKEN'),
+      });
+      expect(JSON.stringify(result)).not.toContain(token);
+    } finally {
+      await removeTempTree(root);
+    }
+  }
+);
+
+test('released v0.11.1 refuses the same seven missing operations in doctor and run preflight', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-doctor-release-'));
+  const savedEnv = { ...process.env };
+  const savedCwd = process.cwd();
+  const output = spyOn(console, 'log').mockImplementation(() => {});
   try {
-    writeFileSync(join(root, 'expected'), token);
+    for (const args of [
+      ['init'],
+      ['remote', 'add', 'origin', 'https://ghe.example.com/example/repo.git'],
+    ]) {
+      expect(Bun.spawnSync(['git', ...args], { cwd: root }).exitCode).toBe(0);
+    }
     writeFileSync(
       join(root, 'config.yaml'),
       JSON.stringify({
@@ -92,25 +145,53 @@ test('default forge runner reports its selected credential without exposing it',
               command: process.execPath,
               args: [
                 '--no-env-file',
-                join(import.meta.dir, '../../..', 'forge/src/fixtures/credential-plugin.ts'),
+                join(
+                  import.meta.dir,
+                  '../../../../.archon/scripts/__tests__/fixtures/released-github-plugin.ts'
+                ),
               ],
             },
           ],
         },
       })
     );
-    const result = await checkGithubForge({
-      ARCHON_SDLC_FORGE: 'forge',
+    process.chdir(root);
+    Object.assign(process.env, {
       ARCHON_HOME: root,
       HOME: root,
-      GITHUB_TOKEN: token,
+      ARCHON_SDLC_FORGE: 'forge',
+      GH_TOKEN: 'accepted',
+      ARCHON_CLI_COMMAND: JSON.stringify([
+        process.execPath,
+        '--no-env-file',
+        join(import.meta.dir, '../cli.ts'),
+      ]),
     });
-    expect(result).toMatchObject({
-      status: 'pass',
-      message: expect.stringContaining('source: GITHUB_TOKEN'),
-    });
-    expect(JSON.stringify(result)).not.toContain(token);
+    let refusal = '';
+    try {
+      await checkForgeAccess();
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    const result = await checkSdlcForge(process.env);
+    expect(result.status).toBe('fail');
+    expect(result.message).toBe(refusal);
+    for (const op of [
+      'pr.draft',
+      'checks.rerun',
+      'repo.labels.list',
+      'repo.label.ensure',
+      'workitem.labels.set',
+      'workitem.comment.upsert',
+      'workitem.close',
+    ])
+      expect(result.message).toContain(op);
+    expect(await doctorCommand([async () => result])).toBe(1);
+    expect(result.message).not.toContain('source:');
   } finally {
+    output.mockRestore();
+    process.env = savedEnv;
+    process.chdir(savedCwd);
     await removeTempTree(root);
   }
 });

@@ -7,14 +7,15 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, forgeSource, invokeForge, type ForgeSource, type QualifiedPr } from './forge.ts';
-import { note } from './io.ts';
+import {
+  archonCommand,
+  forgeSource,
+  invokeForge,
+  type ForgeSource,
+  type QualifiedPr,
+} from './forge.ts';
 import { remoteRepos } from './remote.ts';
 
-/**
- * The read that proves a repository's forge access. `archon doctor` makes the same
- * read; doctor.test.ts holds the two together.
- */
 export function forgeAccessRead(repo: QualifiedPr['repo']) {
   return {
     op: 'pr.view',
@@ -23,25 +24,94 @@ export function forgeAccessRead(repo: QualifiedPr['repo']) {
 }
 
 export const REQUIRED_FORGE_OPERATIONS = [
-  'pr.view', 'pr.create', 'pr.edit-body', 'pr.ready', 'pr.draft', 'comment.upsert',
-  'checks.state', 'checks.rerun', 'workitem.view', 'repo.labels.list',
-  'repo.label.ensure', 'workitem.labels.set', 'workitem.comment.upsert', 'workitem.close',
+  'pr.view',
+  'pr.create',
+  'pr.edit-body',
+  'pr.ready',
+  'pr.draft',
+  'comment.upsert',
+  'checks.state',
+  'checks.rerun',
+  'workitem.view',
+  'repo.labels.list',
+  'repo.label.ensure',
+  'workitem.labels.set',
+  'workitem.comment.upsert',
+  'workitem.close',
 ] as const;
 
-export function checkForgeAccess(): { readonly source: ForgeSource } {
-  const source = forgeSource();
-  if (source === 'gh') checkGh();
-  else checkForge();
-  return { source };
+export interface ForgeProbe {
+  (
+    op: string,
+    data: Record<string, unknown>
+  ): Promise<{
+    value: Record<string, unknown> | null;
+    credentialSource?: string;
+  }>;
 }
 
-function checkGh(): void {
+const probeForge: ForgeProbe = async (op, data) => {
+  // A container receives only the project's configured env, never Archon's env file,
+  // so the gh switch has to go through the repository config.
+  try {
+    archonCommand();
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}. ` +
+        'To use the GitHub CLI in a container execution, set `env: { ARCHON_SDLC_FORGE: gh }` ' +
+        "in the repository's `.archon/config.yaml`; Archon's env file does not reach the container"
+    );
+  }
+  let credentialSource: string | undefined;
+  const value = invokeForge(op, data, source => {
+    credentialSource = source;
+  });
+  return { value, credentialSource };
+};
+
+export async function checkForgeAccess(
+  env: NodeJS.ProcessEnv = process.env,
+  probe: ForgeProbe = probeForge
+): Promise<{ readonly source: ForgeSource; readonly detail: string }> {
+  const source = forgeSource(env);
+  const detail = source === 'gh' ? await checkGh(env, probe) : await checkForge(probe);
+  return { source, detail };
+}
+
+async function ghRemedy(probe: ForgeProbe): Promise<string> {
+  const login = 'run `gh auth login --hostname <host>`, or set GH_TOKEN or GITHUB_TOKEN';
+  for (const repo of remoteRepos()) {
+    try {
+      requirePackOperations((await probe('metadata', { host: repo.host })).value);
+      return (
+        login + ', or set ARCHON_SDLC_FORGE=forge to use the installed compatible forge plugin'
+      );
+    } catch {
+      // An optional alternative must not hide the selected gh source's refusal.
+    }
+  }
+  return login;
+}
+
+function requirePackOperations(metadata: Record<string, unknown> | null): void {
+  const capabilities = metadata?.capabilities;
+  if (!Array.isArray(capabilities) || !capabilities.every(op => typeof op === 'string'))
+    throw new Error('forge metadata returned no operation capabilities');
+  const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
+  if (missing.length)
+    throw new Error(
+      `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
+        'The released GitHub plugin v0.11.1 is insufficient. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+    );
+}
+
+async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<string> {
   // Per-user GitHub mode hands an unconnected user's run empty `GH_TOKEN` and
   // `GITHUB_TOKEN`. gh reads an empty token as unset and falls back to `GITHUB_TOKEN`,
   // then to the host's stored login, so without this refusal the run would push and
   // write as the host's identity. An empty `GH_TOKEN=` line in an env file looks the
   // same when no `GITHUB_TOKEN` is set, so the refusal names both causes.
-  if (process.env.GH_TOKEN === '' && !process.env.GITHUB_TOKEN) {
+  if (env.GH_TOKEN === '' && !env.GITHUB_TOKEN) {
     throw new Error(
       'ARCHON_SDLC_FORGE=gh selects the GitHub CLI, but GH_TOKEN is set and empty and GITHUB_TOKEN is unset, so gh would act as ' +
         "the host's stored login. If an env file has an empty `GH_TOKEN=` line (the Docker `.env` starts " +
@@ -61,19 +131,30 @@ function checkGh(): void {
   for (const host of hosts) {
     let result: ReturnType<typeof Bun.spawnSync>;
     try {
-      result = Bun.spawnSync(['gh', 'auth', 'status', '--active', '--hostname', host], { stdout: 'pipe', stderr: 'pipe' });
+      result = Bun.spawnSync(['gh', 'auth', 'status', '--active', '--hostname', host], {
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
     } catch (error) {
       throw new Error(
         `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
-          'install gh, or set ARCHON_SDLC_FORGE=forge to use a compatible forge plugin'
+          `install gh; ${await ghRemedy(probe)}`
       );
     }
-    if (result.exitCode === 0) return;
+    if (result.exitCode === 0) {
+      const tokenNames =
+        host === 'github.com' || host.endsWith('.ghe.com')
+          ? ['GH_TOKEN', 'GITHUB_TOKEN']
+          : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+      const credentialSource = tokenNames.find(name => env[name]) ?? 'gh auth login';
+      return `gh authenticated for ${host} (source: ${credentialSource})`;
+    }
     failures.push(`${host}: ${result.stderr?.toString().trim()}`);
   }
   throw new Error(
     `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated for any host a remote names:\n${failures.join('\n')}\n` +
-      'run `gh auth login --hostname <host>`, or set ARCHON_SDLC_FORGE=forge to use a compatible forge plugin'
+      (await ghRemedy(probe))
   );
 }
 
@@ -89,19 +170,7 @@ function checkGh(): void {
  * plugin, the token and read access. No forge operation reports what the token may
  * write, so write access is first proven by the run's first write.
  */
-function checkForge(): void {
-  // A host that published no command (a container execution) refuses once here, not
-  // once per repository. A container receives only the project's configured env, never
-  // Archon's env file, so the gh switch has to go through the repository config.
-  try {
-    archonCommand();
-  } catch (error) {
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}. ` +
-        'To use the GitHub CLI in a container execution, set `env: { ARCHON_SDLC_FORGE: gh }` ' +
-        "in the repository's `.archon/config.yaml`; Archon's env file does not reach the container"
-    );
-  }
+async function checkForge(probe: ForgeProbe): Promise<string> {
   const repos = remoteRepos();
   if (repos.length === 0) {
     throw new Error('this checkout has no git remote that names a forge repository');
@@ -111,26 +180,18 @@ function checkForge(): void {
   for (const repo of repos) {
     const name = `${repo.host}/${repo.path}`;
     try {
-      const metadata = invokeForge('metadata', { host: repo.host });
-      const capabilities = metadata?.capabilities;
-      if (!Array.isArray(capabilities) || !capabilities.every(op => typeof op === 'string'))
-        throw new Error('forge metadata returned no operation capabilities');
-      const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
-      if (missing.length) throw new Error(
-        `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
-        'The released GitHub plugin v0.11.1 is insufficient. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
-      );
+      requirePackOperations((await probe('metadata', { host: repo.host })).value);
       const read = forgeAccessRead(repo);
-      invokeForge(read.op, read.data);
-      answered.push(name);
+      const { credentialSource } = await probe(read.op, read.data);
+      answered.push(name + (credentialSource ? ` (source: ${credentialSource})` : ''));
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if (answered.length === 0) throw new Error(failures.join('\n'));
-  note(
+  return (
     `forge source answered for ${answered.join(', ')}` +
-      (failures.length === 0 ? '' : `; did not answer for ${failures.join('; ')}`) +
-      '. Read access is verified; write access is not, until the first write.'
+    (failures.length === 0 ? '' : `; did not answer for ${failures.join('; ')}`) +
+    '. Read access is verified; write access is not, until the first write.'
   );
 }

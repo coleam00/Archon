@@ -18,7 +18,6 @@ import { readReceipts } from '@archon/plugin-manifest/store';
  */
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { execFileAsync } from '@archon/git';
 import {
   getArchonHome,
   createLogger,
@@ -36,9 +35,15 @@ import {
   type CredentialStatus,
   type StoredCredentialKind,
 } from '@archon/provider-contract';
-import { forgeResponseSchema, type ForgeResponse } from '@archon/forge/operations';
 import { forgeCommand } from './forge';
-import { dispatchForge, type ForgeDispatchResult } from '@archon/forge/dispatch';
+import {
+  checkForgeAccess,
+  type ForgeProbe,
+} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
+import {
+  GITHUB_FORGE_PLUGIN,
+  forgeResult,
+} from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -206,7 +211,7 @@ export async function checkProviderDiagnostics(
   }
 }
 
-export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+export async function checkGitHubApp(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   try {
     const { loadGitHubAppConfig } = await import('@archon/core');
     if (loadGitHubAppConfig(env)) {
@@ -223,131 +228,49 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
       message: error instanceof Error ? error.message : 'Invalid GitHub App configuration.',
     };
   }
-  const label = 'gh CLI';
-  // Skip for users without GitHub configured — gh auth is irrelevant
-  // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
-  // Selecting gh for the SDLC workflows configures it: they then use its stored login.
-  if (!env.GITHUB_TOKEN && !env.GH_TOKEN && selectedSdlcForge(env) !== 'gh') {
-    return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
-  }
-  try {
-    // A bare `gh auth status` fails when any stored account is stale; gh commands use only each
-    // host's active login, and the host may be GitHub Enterprise rather than github.com.
-    await execFileAsync('gh', ['auth', 'status', '--active'], { timeout: 10_000 });
-    return { label, status: 'pass', message: 'authenticated' };
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `gh auth status failed: ${(err as Error).message}. Run \`gh auth login\`.`,
-    };
-  }
+  return { label: 'GitHub App', status: 'skip', message: 'App mode not configured' };
 }
 
-// The SDLC pack owns the plugin id and the access read; doctor.test.ts holds these to it.
-export const FORGE_GITHUB_PLUGIN = 'coleam00/Archon/plugins/forge-github';
-const FORGE_PLUGIN_INSTALL = `archon plugin add ${FORGE_GITHUB_PLUGIN}`;
-
-// The SDLC pack's `forgeSource()` owns these values; doctor.test.ts holds this to it.
-function selectedSdlcForge(env: NodeJS.ProcessEnv): string {
-  return (env.ARCHON_SDLC_FORGE ?? '').trim();
-}
-
-/** One forge read with its host-resolved credential source, outside the plugin protocol. */
-export type RunForge = (
-  op: string,
-  data: unknown
-) => Promise<Pick<ForgeDispatchResult, 'response' | 'credentialSource'>>;
+export const FORGE_GITHUB_PLUGIN = GITHUB_FORGE_PLUGIN;
 
 async function runForgeCommand(
   op: string,
-  data: unknown,
+  data: Record<string, unknown>,
   env: NodeJS.ProcessEnv
-): ReturnType<RunForge> {
-  let response: ForgeResponse | undefined;
+): ReturnType<ForgeProbe> {
+  let response: unknown;
   let credentialSource: string | undefined;
-  await forgeCommand(
+  const exitCode = await forgeCommand(
     op,
     { data: JSON.stringify(data) },
     {
       env,
-      dispatch: async (request, options) => {
-        const result = await dispatchForge(request, options);
-        credentialSource = result.credentialSource;
-        return result;
-      },
       write: async value => {
-        response = forgeResponseSchema.parse(value);
+        response = value;
       },
     }
   );
-  if (!response) throw new Error(`archon forge ${op} printed no response`);
-  return { response, credentialSource };
+  const value = forgeResult(op, response, exitCode, source => {
+    credentialSource = source;
+  });
+  return { value, credentialSource };
 }
 
-/**
- * Diagnose the optional GitHub plugin's installation and read credential. Pack
- * preflight separately checks required operations. Unavailable forge opt-ins fail;
- * installs that never opt in need neither a plugin nor its token.
- *
- * The read is the SDLC preflight's: `pr.view` by head, which every released GitHub
- * plugin supports. It answers null when no open pull request has that head.
- */
-export async function checkGithubForge(
+export async function checkSdlcForge(
   env: NodeJS.ProcessEnv,
-  runForge: RunForge = (op, data) => runForgeCommand(op, data, env)
+  probe: ForgeProbe = (op, data) => runForgeCommand(op, data, env)
 ): Promise<CheckResult> {
-  const label = 'GitHub forge plugin';
-  const selected = selectedSdlcForge(env);
-  if (selected === 'gh') {
-    return { label, status: 'skip', message: 'ARCHON_SDLC_FORGE=gh: the SDLC workflows use gh' };
-  }
-  if (selected !== '' && selected !== 'forge') {
+  const label = 'SDLC forge';
+  try {
+    const { detail } = await checkForgeAccess(env, probe);
+    return { label, status: 'pass', message: detail };
+  } catch (error) {
     return {
       label,
       status: 'fail',
-      message: `ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"; every SDLC run refuses until it is`,
+      message: error instanceof Error ? error.message : String(error),
     };
   }
-  const appMode = Boolean(env.GITHUB_APP_ID);
-  const envFile = join(getArchonHome(env), '.env');
-  // A public repository, the plugin's own source, so any valid token can read it.
-  const repo = { host: 'github.com', path: 'coleam00/Archon' };
-  const { response, credentialSource } = await runForge('pr.view', {
-    selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
-  });
-  const source = credentialSource ? ` (source: ${credentialSource})` : '';
-  if (response.ok)
-    return { label, status: 'pass', message: `installed; the token is accepted${source}` };
-  const { kind, message } = response.error;
-  if (kind === 'no_plugin_for_host') {
-    return {
-      label,
-      status: selected === 'forge' ? 'fail' : 'skip',
-      message: `not installed. The SDLC forge opt-in needs \`${FORGE_PLUGIN_INSTALL}\` and a credential: GH_TOKEN in ${envFile}, GITHUB_TOKEN, or gh auth login (or GitHub App mode), or ARCHON_SDLC_FORGE=gh.`,
-    };
-  }
-  if (kind === 'unsupported_op') {
-    return {
-      label,
-      status: selected === 'forge' ? 'fail' : 'warn',
-      message: `${message}. \`archon plugin update ${FORGE_GITHUB_PLUGIN}\` installs the latest released plugin, which may not support it either; ARCHON_SDLC_FORGE=gh uses gh instead.`,
-    };
-  }
-  if (kind === 'no_credential') {
-    return appMode && selected !== 'forge'
-      ? {
-          label,
-          status: 'skip',
-          message: 'installed; GitHub App mode supplies the token inside runs',
-        }
-      : {
-          label,
-          status: selected === 'forge' ? 'fail' : 'warn',
-          message: `installed, but no token. Set GH_TOKEN in ${envFile}, GITHUB_TOKEN, or run gh auth login. ${message}`,
-        };
-  }
-  return { label, status: 'fail', message: `${message}${source}` };
 }
 
 export interface AssistantLoginDeps {
@@ -990,8 +913,8 @@ export async function doctorCommand(
         checkConfigFiles(),
         checkInstalledProviders(),
         ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
-        checkGhAuth(env),
-        checkGithubForge(env),
+        checkGitHubApp(env),
+        checkSdlcForge(env),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
         checkDatabase(),

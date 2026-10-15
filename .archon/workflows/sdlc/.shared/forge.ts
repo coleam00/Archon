@@ -23,15 +23,15 @@ export type ForgeSource = (typeof FORGE_SOURCES)[number];
 // Read here, not in each calling script: the unbound-env checker scans a node-bound
 // script's own text but never follows its imports, so a bare process.env read in a
 // shared module like this one never trips a false "unbound variable" warning.
-export function forgeSource(): ForgeSource {
-  const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
+export function forgeSource(env: NodeJS.ProcessEnv = process.env): ForgeSource {
+  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
   if (selected === '') return 'gh';
   const source = FORGE_SOURCES.find(source => source === selected);
   if (source) return source;
   throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
 
-/** The GitHub forge plugin's install id; doctor.test.ts holds doctor's copy to it. */
+/** The GitHub forge plugin install id. */
 export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
 
 const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
@@ -172,7 +172,8 @@ export class ForgeOperationError extends Error {
  */
 export function invokeForge(
   op: string,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  credential?: (source: string) => void
 ): Record<string, unknown> | null {
   const command = archonCommand();
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
@@ -180,6 +181,7 @@ export function invokeForge(
   try {
     writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
     const result = Bun.spawnSync([...command, 'forge', op, '--json', '--data-file', path], {
+      env: process.env,
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -190,41 +192,53 @@ export function invokeForge(
       const detail = result.stderr.toString().trim();
       throw new Error(`forge ${op} failed${detail === '' ? '' : `: ${detail}`}`);
     }
-    const response = record(parsed);
-    if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
-      throw new Error(`forge ${op} returned an unexpected response envelope`);
-    }
-    // Exit 2 is the host saying it could not audit an operation that did complete.
-    // The response on stdout is the real outcome, so the result is still a result;
-    // losing it here would report a performed write as a failure.
-    if (response.ok === true && result.exitCode === 2) {
-      note(`forge ${op} completed but the host could not record it in the run's audit log.`);
-    } else if (response.ok !== true || result.exitCode !== 0) {
-      const mutation = record(response.mutation);
-      const error = record(response.error);
-      const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
-      const message = typeof error?.message === 'string' ? error.message : 'operation failed';
-      const kind = typeof error?.kind === 'string' ? error.kind : undefined;
-      const remedy =
-        kind !== undefined && Object.hasOwn(REMEDY, kind)
-          ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
-          : '';
-      throw new ForgeOperationError(
-        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
-        mutation
-      );
-    }
-    const body = record(response.result);
-    if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
-    // A read may answer "there is none": `pr.view` by head returns null when the
-    // branch has no open pull request.
-    if (body.value === null) return null;
-    const value = record(body.value);
-    if (!value) throw new Error(`forge ${op} returned the wrong result`);
-    return value;
+    return forgeResult(op, parsed, result.exitCode, credential);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+export function forgeResult(
+  op: string,
+  parsed: unknown,
+  exitCode: number,
+  credential?: (source: string) => void
+): Record<string, unknown> | null {
+  const response = record(parsed);
+  if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
+    throw new Error(`forge ${op} returned an unexpected response envelope`);
+  }
+  const source =
+    typeof response.credentialSource === 'string' ? response.credentialSource : undefined;
+  if (source) credential?.(source);
+  // Exit 2 is the host saying it could not audit an operation that did complete.
+  // The response on stdout is the real outcome, so the result is still a result;
+  // losing it here would report a performed write as a failure.
+  if (response.ok === true && exitCode === 2) {
+    note(`forge ${op} completed but the host could not record it in the run's audit log.`);
+  } else if (response.ok !== true || exitCode !== 0) {
+    const mutation = record(response.mutation);
+    const error = record(response.error);
+    const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+    const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+    const kind = typeof error?.kind === 'string' ? error.kind : undefined;
+    const remedy =
+      kind !== undefined && Object.hasOwn(REMEDY, kind)
+        ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
+        : '';
+    throw new ForgeOperationError(
+      `forge ${op} ${outcome ?? 'failed'}: ${message}${source ? ` (source: ${source})` : ''}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
+      mutation
+    );
+  }
+  const body = record(response.result);
+  if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
+  // A read may answer "there is none": `pr.view` by head returns null when the
+  // branch has no open pull request.
+  if (body.value === null) return null;
+  const value = record(body.value);
+  if (!value) throw new Error(`forge ${op} returned the wrong result`);
+  return value;
 }
 
 function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
