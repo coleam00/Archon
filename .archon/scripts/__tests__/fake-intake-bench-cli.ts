@@ -36,6 +36,8 @@ export interface FakeConfig {
   readonly unboundTriage?: boolean;
   /** archon-triage's agent node ran on this binding, whatever the launch pinned. */
   readonly triageRanAs?: { provider: string; model: string };
+  /** A launched run comments on its issue and revises a state document, as a broken eval would. */
+  readonly commentAndRecord?: boolean;
   /** After a launched run, every issue read fails, as a lost tracker would. */
   readonly issueReadsFailAfterRun?: boolean;
   /** A run's transcript path names a directory, so reading it fails. */
@@ -111,7 +113,9 @@ function answer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
   const save = (): void => writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
   if (args[0] === 'state' && args[1] === 'list') {
-    return JSON.stringify({ scope: { kind: 'project', key: config.projectKey }, documents: [] });
+    const runs = existsSync(join(dir, 'count')) ? Number(readFileSync(join(dir, 'count'), 'utf8')) : 0;
+    const documents = config.commentAndRecord === true ? [{ name: 'work/12', revision: runs + 1 }] : [];
+    return JSON.stringify({ scope: { kind: 'project', key: config.projectKey }, documents });
   }
   if (args[0] === 'state' && args[1] === 'get') {
     const work = join(dir, `${args[2].replace('/', '-')}.json`);
@@ -130,6 +134,11 @@ function answer(dir: string, args: readonly string[]): string {
     const given = inputs(args);
     if (config.issueReadsFailAfterRun === true) {
       config.issues.length = 0;
+      save();
+    }
+    if (config.commentAndRecord === true && given.number !== undefined) {
+      const judged = config.issues.find(issue => issue.number === Number(given.number));
+      if (judged !== undefined) config.issues[config.issues.indexOf(judged)] = { ...judged, comments: judged.comments + 1 };
       save();
     }
     if (config.writeLabel !== undefined && given.number !== undefined) {

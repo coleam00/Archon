@@ -421,6 +421,14 @@ describe('bench run', () => {
     expect(stderr).toContain('FAILED its hard checks');
   });
 
+  it('fails the batch when an eval run comments on an issue and revises a state document', () => {
+    const { run } = bench({ commentAndRecord: true });
+    const { status, checks } = run('base');
+    expect(status).toBe(1);
+    expect(checks[0].checks.writes.problems).toEqual(expect.arrayContaining([expect.stringMatching(/^state o\/r\/work\/12: revision \d+ became \d+$/)]));
+    expect(checks[0].checks.posted_text.problems).toEqual(expect.arrayContaining([expect.stringContaining('github.com/o/r#12: 1 comment(s) posted')]));
+  });
+
   it('fails the batch when a trust: outside row runs an agent node', () => {
     const { run } = bench({ outsideAgentRuns: true });
     const { status, checks } = run('base');
