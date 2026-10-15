@@ -44,6 +44,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import type { DockerRunner } from './docker-exec';
 import { extractDockerError } from './docker-exec';
+import { IsolationFailure } from '../errors';
 
 const log = createLogger('isolation.overlay');
 
@@ -203,13 +204,20 @@ export async function applyOverlayChanges(
     ]));
   } catch (err) {
     const detail = extractDockerError(err);
-    const partial = (err as { stdout?: string }).stdout ?? '';
+    const processError = err instanceof IsolationFailure ? err.cause : err;
+    const partial =
+      processError instanceof Error &&
+      'stdout' in processError &&
+      typeof processError.stdout === 'string'
+        ? processError.stdout
+        : '';
     const landed = parseRecords(partial).filter(
       r => r.tag === 'W' || r.tag === 'K' || r.tag === 'D'
     ).length;
     throw new Error(
       `Write-back apply failed partway (${landed} path(s) already applied to the live ` +
-        `root — inspect and reconcile manually): ${detail}`
+        `root — inspect and reconcile manually): ${detail}`,
+      { cause: err }
     );
   }
 

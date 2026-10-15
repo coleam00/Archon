@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { summarizeOverlayChanges, applyOverlayChanges } from './overlay';
 import type { DockerRunner, DockerExecResult } from './docker-exec';
+import { IsolationFailure } from '../errors';
 
 const TARGET = { volume: 'archon-x-upper', hostRoot: '/tmp/ops', image: 'archon-runner:test' };
 
@@ -109,17 +110,22 @@ describe('applyOverlayChanges', () => {
     expect(joined).not.toContain('/tmp/ops:/dest:ro');
   });
 
-  test('a partial apply throws loudly, reporting how many paths landed', async () => {
-    const err = Object.assign(new Error('cp: No space left on device'), {
-      stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
-    });
-    const docker = fakeDocker(() => {
-      throw err;
-    });
-    await expect(applyOverlayChanges(docker, TARGET)).rejects.toThrow(
-      /2 path\(s\) already applied/
-    );
-  });
+  test.each(['raw', 'wrapped'] as const)(
+    'a %s partial apply failure reports how many paths landed',
+    async shape => {
+      const err = Object.assign(new Error('cp: No space left on device'), {
+        stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
+      });
+      const docker = fakeDocker(() => {
+        throw shape === 'wrapped'
+          ? new IsolationFailure('unclassified', 'docker run failed', err)
+          : err;
+      });
+      await expect(applyOverlayChanges(docker, TARGET)).rejects.toThrow(
+        /2 path\(s\) already applied/
+      );
+    }
+  );
 
   test('surfaces helper stderr as warnings', async () => {
     const docker = fakeDocker({

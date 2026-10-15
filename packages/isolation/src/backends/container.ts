@@ -687,7 +687,7 @@ export class ContainerBackend implements IIsolationBackend {
     codebaseId: string,
     mounts: HostMounts
   ): Promise<{ containerId: string; mode: OverlayMode }> {
-    const failures: string[] = [];
+    const failures: { mode: OverlayMode; error: unknown }[] = [];
     for (const mode of OVERLAY_MODES) {
       let containerId: string;
       try {
@@ -700,9 +700,10 @@ export class ContainerBackend implements IIsolationBackend {
           mounts
         );
       } catch (runErr) {
+        if (runErr instanceof TypeError || runErr instanceof RangeError) throw runErr;
         // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
         // fuse device) — record and try the next mode. Nothing to remove.
-        failures.push(`${mode}: ${extractDockerError(runErr)}`);
+        failures.push({ mode, error: runErr });
         continue;
       }
       try {
@@ -712,9 +713,10 @@ export class ContainerBackend implements IIsolationBackend {
         }
         return { containerId, mode };
       } catch (readyErr) {
+        if (readyErr instanceof TypeError || readyErr instanceof RangeError) throw readyErr;
         // Container started but the mount failed (entrypoint exits fast) — remove
         // it so the name is free for the next mode, then continue.
-        failures.push(`${mode}: ${(readyErr as Error).message}`);
+        failures.push({ mode, error: readyErr });
         await this.docker(['rm', '-f', containerName]).catch(rmErr => {
           log.warn(
             { containerName, mode, detail: extractDockerError(rmErr) },
@@ -723,10 +725,15 @@ export class ContainerBackend implements IIsolationBackend {
         });
       }
     }
-    throw new Error(
+    throw new IsolationFailure(
+      'unclassified',
       'Could not mount the overlay in any mode. Native overlay needs CAP_SYS_ADMIN; ' +
         'fuse-overlayfs needs /dev/fuse AND an unprivileged-mount daemon ' +
-        `(rootless / userns-remap). Attempts:\n${failures.join('\n')}`
+        `(rootless / userns-remap). Attempts:\n${failures.map(({ mode, error }) => `${mode}: ${extractDockerError(error)}`).join('\n')}`,
+      new AggregateError(
+        failures.map(({ error }) => error),
+        'Docker overlay attempts failed'
+      )
     );
   }
 

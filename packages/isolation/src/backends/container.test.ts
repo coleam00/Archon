@@ -7,6 +7,7 @@ import type { ContainerBackendConfig } from '../types';
 import type { IIsolationStore } from '../store';
 import type { IsolationEnvironmentRow, CreateEnvironmentParams } from '../types';
 import type { DockerRunner, DockerExecResult } from '../container/docker-exec';
+import { IsolationFailure, isKnownIsolationError } from '../errors';
 
 const CONFIG: ContainerBackendConfig = {
   image: 'archon-runner:test',
@@ -89,6 +90,68 @@ function fakeDocker(
 }
 
 describe('ContainerBackend.prepare', () => {
+  test.each(['run', 'ready'] as const)(
+    'preserves typed %s failures after both overlay modes fail',
+    async phase => {
+      const store = fakeStore();
+      const failures: IsolationFailure[] = [];
+      const docker = fakeDocker(args => {
+        if ((args[0] === 'run' && phase === 'run') || (args[0] === 'exec' && phase === 'ready')) {
+          const cause = Object.assign(new Error('process failed'), {
+            code: 125,
+            stderr: 'permission denied: fix/timeout-retry',
+          });
+          const failure = new IsolationFailure(
+            'unclassified',
+            `docker ${args[0]} failed: ${cause.stderr} (exit code 125)`,
+            cause
+          );
+          failures.push(failure);
+          throw failure;
+        }
+        if (args[0] === 'run') return { stdout: 'cid', stderr: '' };
+        if (args[0] === 'inspect') return { stdout: 'false', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const error = await backend.prepare({ codebase: FOLDER }).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(IsolationFailure);
+      if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+      expect(error.kind).toBe('unclassified');
+      expect(isKnownIsolationError(error)).toBe(true);
+      expect(error.cause).toBeInstanceOf(AggregateError);
+      if (!(error.cause instanceof AggregateError)) throw new Error('expected attempt failures');
+      if (phase === 'run') expect(error.cause.errors).toEqual(failures);
+      else {
+        expect(error.cause.errors).toHaveLength(2);
+        expect(error.cause.errors).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining('Container overlay did not become ready'),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining('Container overlay did not become ready'),
+          }),
+        ]);
+      }
+      expect(store.created).toBeUndefined();
+    }
+  );
+
+  test('propagates a programming failure without trying another overlay mode', async () => {
+    const failure = new TypeError('invalid Docker options');
+    const docker = fakeDocker(args => {
+      if (args[0] === 'run') throw failure;
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({
+      store: fakeStore(),
+      config: CONFIG,
+      dockerRunner: docker,
+    });
+    await expect(backend.prepare({ codebase: FOLDER })).rejects.toBe(failure);
+    expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
+  });
+
   test('prefers fuse mode (no CAP_SYS_ADMIN) with labels, mounts, and resource limits', async () => {
     const store = fakeStore();
     const docker = fakeDocker(args => {
