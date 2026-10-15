@@ -128,6 +128,27 @@ describe('checkGithubForge', () => {
     expect(result.message).toContain('archon plugin update coleam00/Archon/plugins/forge-github');
   });
 
+  it('reads plugins and config from the diagnostic environment, not the ambient one', async () => {
+    const diagnosticHome = mkdtempSync(join(tmpdir(), 'doctor-forge-'));
+    const ambientHome = mkdtempSync(join(tmpdir(), 'doctor-forge-ambient-'));
+    // Only the diagnostic home's config is unreadable, so only reading it fails the check.
+    writeFileSync(join(diagnosticHome, 'config.yaml'), '- not an object\n');
+    const saved = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = ambientHome;
+    try {
+      const result = await checkGithubForge({ ARCHON_HOME: diagnosticHome, GH_TOKEN: 'ghp_x' });
+      expect(result).toMatchObject({
+        status: 'fail',
+        message: expect.stringContaining('configuration'),
+      });
+    } finally {
+      if (saved === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = saved;
+      await removeTempTree(diagnosticHome);
+      await removeTempTree(ambientHome);
+    }
+  });
+
   it('fails with the forge message when the token is rejected', async () => {
     const result = await checkGithubForge(
       { GH_TOKEN: 'ghp_x' },
@@ -240,6 +261,13 @@ describe('checkGhAuth', () => {
     expect(result.status).toBe('skip');
     expect(result.message).toContain('GitHub not configured');
     expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('checks gh authentication without a token when ARCHON_SDLC_FORGE selects gh', async () => {
+    execSpy.mockRejectedValue(new Error('not logged in'));
+    const result = await checkGhAuth({ ARCHON_SDLC_FORGE: 'gh' });
+    expect(result.status).toBe('fail');
+    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
   });
 
   it('runs gh auth check when only GH_TOKEN is set', async () => {

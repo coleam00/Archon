@@ -225,7 +225,8 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   const label = 'gh CLI';
   // Skip for users without GitHub configured — gh auth is irrelevant
   // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
-  if (!env.GITHUB_TOKEN && !env.GH_TOKEN) {
+  // Selecting gh for the SDLC workflows configures it: they then use its stored login.
+  if (!env.GITHUB_TOKEN && !env.GH_TOKEN && selectedSdlcForge(env) !== 'gh') {
     return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
   }
   try {
@@ -242,15 +243,25 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
 
 const FORGE_PLUGIN_INSTALL = 'archon plugin add coleam00/Archon/plugins/forge-github';
 
+// The SDLC pack's `forgeSource()` owns these values; doctor.test.ts holds this to it.
+function selectedSdlcForge(env: NodeJS.ProcessEnv): string {
+  return (env.ARCHON_SDLC_FORGE ?? '').trim();
+}
+
 /** One forge read, answered with the response `archon forge` would print. */
 export type RunForge = (op: string, data: unknown) => Promise<ForgeResponse>;
 
-async function runForgeCommand(op: string, data: unknown): Promise<ForgeResponse> {
+async function runForgeCommand(
+  op: string,
+  data: unknown,
+  env: NodeJS.ProcessEnv
+): Promise<ForgeResponse> {
   let response: ForgeResponse | undefined;
   await forgeCommand(
     op,
     { data: JSON.stringify(data) },
     {
+      env,
       write: async value => {
         response = forgeResponseSchema.parse(value);
       },
@@ -267,11 +278,10 @@ async function runForgeCommand(op: string, data: unknown): Promise<ForgeResponse
  */
 export async function checkGithubForge(
   env: NodeJS.ProcessEnv,
-  runForge: RunForge = runForgeCommand
+  runForge: RunForge = (op, data) => runForgeCommand(op, data, env)
 ): Promise<CheckResult> {
   const label = 'GitHub forge plugin';
-  // The SDLC pack's `forgeSource()` owns these values; doctor.test.ts holds this to it.
-  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
+  const selected = selectedSdlcForge(env);
   if (selected === 'gh') {
     return { label, status: 'skip', message: 'ARCHON_SDLC_FORGE=gh: the SDLC workflows use gh' };
   }
