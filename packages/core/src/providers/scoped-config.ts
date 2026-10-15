@@ -7,32 +7,66 @@ import { z } from 'zod';
 
 type JsonSchema = z.core.JSONSchema.BaseSchema | boolean;
 
+function resolveConfigSchema(node: JsonSchema, schema: z.core.JSONSchema.BaseSchema): JsonSchema {
+  if (typeof node !== 'object' || !node.$ref) return node;
+  const referenced = node.$ref
+    .split('/')
+    .slice(1)
+    .reduce<unknown>((value, key) => {
+      if (value === null || typeof value !== 'object') return undefined;
+      return Reflect.get(value, key.replaceAll('~1', '/').replaceAll('~0', '~'));
+    }, schema);
+  if (referenced === undefined) throw new Error(`Unresolved config schema reference ${node.$ref}`);
+  return resolveConfigSchema(
+    z.union([z.boolean(), z.record(z.string(), z.json())]).parse(referenced),
+    schema
+  );
+}
+
+// Credential selection has only a model; root constraints and unrelated run fields
+// belong to full configuration validation, not to this field projection.
+export function modelConfigSchema(
+  schema: z.core.JSONSchema.BaseSchema
+): z.ZodType<{ model: string }> {
+  const modelRule = (unresolved: JsonSchema): z.core.JSONSchema.BaseSchema => {
+    const node = resolveConfigSchema(unresolved, schema);
+    if (typeof node !== 'object') return node ? {} : { not: {} };
+    if (node.anyOf) return { anyOf: node.anyOf.map(modelRule) };
+    // Distinct run branches can share a model rule once unrelated fields are removed.
+    if (node.oneOf) return { anyOf: node.oneOf.map(modelRule) };
+    if (node.allOf) {
+      const rules = node.allOf.map(modelRule).filter(rule => Object.keys(rule).length > 0);
+      return rules.length === 0 ? {} : rules.length === 1 ? rules[0] : { allOf: rules };
+    }
+    const field = node.properties?.model ?? true;
+    return typeof field === 'object' ? field : field ? {} : { not: {} };
+  };
+  return scopedConfigSchema(
+    {
+      type: 'object',
+      properties: { model: modelRule(schema) },
+      required: ['model'],
+      $defs: schema.$defs,
+      definitions: schema.definitions,
+    },
+    false,
+    false
+  ).pipe(z.object({ model: z.string() }));
+}
+
 export function scopedConfigSchema(
   schema: z.core.JSONSchema.BaseSchema,
   stripUnknownKeys: boolean,
   snapshot: boolean
 ): z.ZodType {
   const validator = z.fromJSONSchema(schema);
-  const resolve = (node: JsonSchema): JsonSchema => {
-    if (typeof node !== 'object' || !node.$ref) return node;
-    const referenced = node.$ref
-      .split('/')
-      .slice(1)
-      .reduce<unknown>((value, key) => {
-        if (value === null || typeof value !== 'object') return undefined;
-        return Reflect.get(value, key.replaceAll('~1', '/').replaceAll('~0', '~'));
-      }, schema);
-    if (referenced === undefined)
-      throw new Error(`Unresolved config schema reference ${node.$ref}`);
-    return resolve(z.union([z.boolean(), z.record(z.string(), z.json())]).parse(referenced));
-  };
   const project = (
     value: unknown,
     unresolved: JsonSchema,
     root = false,
     output = false
   ): unknown => {
-    const node = resolve(unresolved);
+    const node = resolveConfigSchema(unresolved, schema);
     if (typeof node !== 'object') return value;
     const normalization = node[CONFIG_STRING_NORMALIZATION_KEY];
     if (output && typeof value === 'string' && normalization !== undefined) {
@@ -83,7 +117,7 @@ export function scopedConfigSchema(
       Object.entries(value).flatMap(([key, field]) => {
         const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
         if (property !== undefined) {
-          const resolved = resolve(property);
+          const resolved = resolveConfigSchema(property, schema);
           if (
             output &&
             root &&

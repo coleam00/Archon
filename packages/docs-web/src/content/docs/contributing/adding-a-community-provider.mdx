@@ -103,9 +103,11 @@ that compatibility.
 Credentials are a static
 list of vendor specs; declare only vendors the provider consumes. API-key vendors must
 have an existing Archon delivery rule. With one vendor, all models use it. With several,
-the descriptor's run schema (`config.run`, else `configSchema`) normalizes the model, and
-the text before its first `/` selects a declared vendor after credential alias
-normalization. A model the run schema rejects selects none. An empty list uses native auth.
+model-only lookup uses the `model` field rule from the descriptor's run schema
+(`config.run`, else `configSchema`), following root references and composition. It validates
+and normalizes that field without validating unrelated run fields or root constraints.
+The text before the first `/` selects a declared vendor after credential alias
+normalization; a model rejected by its field rule selects none. An empty list uses native auth.
 `checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
 its environment and abort signal from Archon. Return `not_checked` when the runtime
 cannot check without spending on a session.

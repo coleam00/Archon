@@ -109,6 +109,95 @@ test.each(['scoped', 'legacy'] as const)(
   }
 );
 
+test.each(['direct', 'field-ref', '$ref', 'allOf', 'anyOf', 'oneOf'] as const)(
+  '%s plugin model rules normalize credential preflight without unrelated run fields',
+  async composition => {
+    const modelRule = normalizedConfigString(
+      z.string().regex(/^\s*[a-z]+\s*\//),
+      'slash-separated'
+    );
+    const fields = z.toJSONSchema(z.strictObject({ model: modelRule, region: z.literal('eu') }), {
+      io: 'input',
+    });
+    const alternative = z.toJSONSchema(
+      z.strictObject({ model: modelRule, region: z.literal('us') }),
+      { io: 'input' }
+    );
+    const run =
+      composition === 'direct'
+        ? fields
+        : composition === 'field-ref'
+          ? {
+              ...fields,
+              $defs: { model: fields.properties?.model ?? true },
+              properties: { ...fields.properties, model: { $ref: '#/$defs/model' } },
+            }
+          : composition === '$ref'
+            ? { $defs: { fields }, $ref: '#/$defs/fields' }
+            : { [composition]: composition === 'allOf' ? [fields] : [fields, alternative] };
+    const registration = processProviderRegistration(
+      providerPluginDescriptorSchema.parse({
+        ...descriptor,
+        config: { install: run, run, snapshot: run },
+        credentials: {
+          kind: 'static',
+          specs: [
+            { vendor: 'openai', displayName: 'OpenAI', kinds: ['api_key'] },
+            { vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'] },
+          ],
+        },
+      }),
+      argv
+    );
+    const model = ' openai / gpt ';
+    expect(registration.parseConfig({ model, region: 'eu' }, 'run')).toEqual({
+      model: 'openai/gpt',
+      region: 'eu',
+    });
+    expect(registration.credentials.vendorFor(model)).toBe('openai');
+    expect(registration.credentials.vendorFor('invalid')).toBeUndefined();
+    const checkCredential = mock(async () => ({
+      state: 'usable' as const,
+      source: 'native' as const,
+    }));
+    const native = registration.factory();
+    native.checkCredential = checkCredential;
+    const getUserProviderCredentialStatus = mock(async (_user: string, _vendor: string) => ({
+      kind: 'api_key' as const,
+      status: { state: 'usable' as const, source: 'archon' as const },
+    }));
+    const deps = {
+      providers: { get: () => registration, list: () => [registration] },
+      loadConfig: async () => ({
+        assistant: registration.id,
+        assistants: { claude: {}, codex: {}, [registration.id]: { model, region: 'eu' } },
+        commands: {},
+      }),
+      store: { getCodebaseEnvVars: async () => ({}) },
+      getAgentProvider: () => native,
+      isPerUserProviderKeysEnabled: () => true,
+      getUserProviderCredentialStatus,
+    };
+    const prepared = await prepareRunAiConfiguration(
+      deps,
+      makeTestResolvedWorkflow({ name: 'plugin-credentials' }),
+      '/project',
+      { userId: 'user' }
+    );
+    expect(prepared.requirements).toEqual([
+      { provider: registration.id, model: 'openai/gpt', vendor: 'openai' },
+    ]);
+    await assertRunCredentials(deps, {
+      ...prepared,
+      requirements: [
+        { provider: registration.id, model, vendor: registration.credentials.vendorFor(model) },
+      ],
+    });
+    expect(getUserProviderCredentialStatus).toHaveBeenCalledWith('user', 'openai');
+    expect(checkCredential).not.toHaveBeenCalled();
+  }
+);
+
 test('a declared skillDiscovery survives process registration', () => {
   const skillDiscovery = { project: ['.stub/skills'], user: ['skills'] };
   expect(

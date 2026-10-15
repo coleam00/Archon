@@ -13,7 +13,7 @@ import {
 } from '@archon/provider-contract/plugin';
 import { KNOWN_VENDORS } from '../credentials/delivery';
 import { ProcessAgentProvider } from './process-provider';
-import { scopedConfigSchema } from './scoped-config';
+import { modelConfigSchema, scopedConfigSchema } from './scoped-config';
 
 export function processProviderRegistration(
   input: ProviderPluginDescriptor,
@@ -41,17 +41,7 @@ export function processProviderRegistration(
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
   const runSchema: z.core.JSONSchema.BaseSchema = config?.run ?? descriptor.configSchema;
-  const runModel = scopedConfigSchema(
-    {
-      type: 'object',
-      properties: { model: runSchema.properties?.model ?? true },
-      required: ['model'],
-      $defs: runSchema.$defs,
-      definitions: runSchema.definitions,
-    },
-    false,
-    false
-  ).pipe(z.object({ model: z.string() }));
+  const runModel = modelConfigSchema(runSchema);
   return {
     id: descriptor.id,
     displayName: descriptor.displayName,
