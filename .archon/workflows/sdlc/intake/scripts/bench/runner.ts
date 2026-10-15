@@ -652,8 +652,23 @@ export function findLookups(transcript: string, tokens: readonly RegExp[]): stri
   return [...lookups.values()];
 }
 
-// Compound shell commands may contain reads outside gh, which the socket cannot cover.
-const GH_LOOKUP = /^[^:\n]+: (?:\S*sh\s+-[a-z]*c\s+['"])?gh\s+(?:issue\s+view|api)\s+[^;&|\n`$]*$/;
+/** Only one gh command can be accounted for by the lookup socket. */
+function singleGhLookup(lookup: string): boolean {
+  let command = lookup.slice(lookup.indexOf(': ') + 2);
+  const wrapped = /^(?:\S*sh)\s+-[a-z]*c\s+(['"])([\s\S]*)\1$/.exec(command);
+  if (wrapped !== null) command = wrapped[2];
+  if (!/^gh\s+(?:issue\s+view|api)\s+/.test(command)) return false;
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (char === "'" && quote !== '"') quote = quote === "'" ? undefined : "'";
+    else if (char === '"' && quote !== "'") quote = quote === '"' ? undefined : '"';
+    else if (char === '\\' && quote !== "'") i++;
+    else if (quote !== "'" && (char === '`' || char === '$')) return false;
+    else if (quote === undefined && /[;&|\n()]/.test(char)) return false;
+  }
+  return quote === undefined;
+}
 
 /**
  * Split a run's lookups of the judged issue into those the creation-time answer
@@ -669,7 +684,7 @@ export function splitLookups(
   answeredRowIssue: boolean,
   answeredLive: readonly string[]
 ): { answered: string[]; leak: string[] } {
-  const answered = answeredRowIssue ? lookups.filter(lookup => GH_LOOKUP.test(lookup)) : [];
+  const answered = answeredRowIssue ? lookups.filter(lookup => singleGhLookup(lookup)) : [];
   return {
     answered,
     leak: [...lookups.filter(lookup => !answered.includes(lookup)), ...answeredLive.map(request => `lookup server: ${request} was answered live`)],

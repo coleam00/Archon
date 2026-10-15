@@ -900,6 +900,58 @@ describe('lookups', () => {
     expect([other.answered, other.live]).toEqual([[], []]);
   });
 
+  it('rewrites aliased issue fields by schema name and preserves caller-owned private aliases', async () => {
+    const keptAliases = ['id', 'node_id', 'number', 'url', 'html_url', 'repository_url', '__typename', 'databaseId', 'author', 'user', 'author_association', 'authorAssociation', 'createdAt', 'created_at'];
+    const query = `{ repository(owner: "o", name: "r") {
+      issue(number: 4) { ${keptAliases.map(key => `${key}: body`).join(' ')} text: title status: state tags: labels(first: 10) { items: nodes { text: name } count: totalCount } }
+      pullRequest(number: 4) { _archonBenchIssueId: id }
+    } }`;
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query }),
+    }), REPO, views, async (_url, init) => {
+      const forwarded = JSON.parse(String(init.body)) as { query: string };
+      const identity = /on Issue \{ (\w+): id/.exec(forwarded.query)?.[1];
+      expect(identity).toBeDefined();
+      return Response.json({ data: { repository: {
+        issue: { [identity ?? 'missing']: 'I_4', ...Object.fromEntries(keptAliases.map(key => [key, 'Live outcome'])), text: 'Current title', status: 'CLOSED', tags: { items: [{ text: 'done' }], count: 1 } },
+        pullRequest: { _archonBenchIssueId: 'PR_4' },
+      } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { repository: {
+      issue: { ...Object.fromEntries(keptAliases.map(key => [key, 'As opened.'])), text: 'Issue 4 as opened', status: 'OPEN', tags: { items: [{ text: 'bug' }], count: 1 } },
+      pullRequest: { _archonBenchIssueId: 'PR_4' },
+    } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
+  it('does not count issue syntax inside GraphQL strings or comments as a selection', async () => {
+    for (const query of [
+      '{ search(query: "issue(number: 4)", type: ISSUE, first: 1) { issueCount } }',
+      '{ viewer { login } # issue(number: 4) { body }\n }',
+    ]) {
+      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+        method: 'POST', body: JSON.stringify({ query }),
+      }), REPO, views, async (_url, init) => {
+        expect(JSON.parse(String(init.body)).query).toBe(query);
+        return Response.json({ data: {} });
+      });
+      expect([answer.answered, answer.live]).toEqual([[], []]);
+    }
+  });
+
+  it('identifies issueOrPullRequest only through the requested private identity', async () => {
+    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
+      method: 'POST', body: JSON.stringify({ query: '{ repository(owner: "o", name: "r") { issueOrPullRequest(number: 4) { ... on Issue { body state } } } }' }),
+    }), REPO, views, async (_url, init) => {
+      const { query } = JSON.parse(String(init.body)) as { query: string };
+      // The field selection itself must request identity, independently of Issue fragments.
+      const identified = /issueOrPullRequest\(number: 4\) \{ \.\.\. on Issue \{ _archonBenchIssueId: id \}/.test(query);
+      return Response.json({ data: { repository: { issueOrPullRequest: { ...(identified ? { _archonBenchIssueId: 'I_4' } : {}), body: 'Fixed', state: 'CLOSED' } } } });
+    });
+    expect(await answer.response.json()).toEqual({ data: { repository: { issueOrPullRequest: { body: 'As opened.', state: 'OPEN' } } } });
+    expect([answer.answered, answer.live]).toEqual([[4], []]);
+  });
+
   it('identifies issues in named and inline fragments used by search queries', async () => {
     for (const query of [
       'fragment issue on Issue { number state title } query { search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ...issue } } }',
@@ -974,6 +1026,26 @@ describe('lookups', () => {
       const command = `triage: gh issue view 4${separator}curl https://github.com/o/r/issues/4`;
       expect(splitLookups([command], true, []).leak).toEqual([command]);
     }
+  });
+
+  it('keeps executable process substitutions flagged through both transcript routes', () => {
+    for (const redirect of ['< <', '> >']) {
+      const command = `gh issue view 4 ${redirect}(curl https://github.com/o/r/issues/4)`;
+      for (const event of [
+        { type: 'tool_call', toolCallId: 'lookup', rawInput: { command } },
+        { type: 'subtask', taskType: 'command_execution', taskId: 'lookup', description: command },
+      ]) {
+        const transcript = JSON.stringify({ type: 'provider_event', step: 'triage', event });
+        const lookups = findLookups(transcript, issueTokens(REPO, 4));
+        expect(lookups).toHaveLength(1);
+        expect(splitLookups(lookups, true, [])).toEqual({ answered: [], leak: lookups });
+      }
+    }
+  });
+
+  it('covers a single gh command whose quoted jq expression contains a pipe', () => {
+    const command = "triage: gh issue view 4 --json body --jq '.body | length'";
+    expect(splitLookups([command], true, [])).toEqual({ answered: [command], leak: [] });
   });
 
   it('preserves stored gh credentials in the socket configuration', () => {

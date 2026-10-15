@@ -115,100 +115,187 @@ const sameText = (a: unknown, b: string): boolean => typeof a === 'string' && a.
 
 const ISSUE_ID = '_archonBenchIssueId';
 
-/**
- * Ask GitHub to identify issue selections even when the caller requested only state
- * or body. Tokenising GraphQL keeps strings and comments opaque; balanced arguments
- * locate the selection set without assuming variable names, aliases or repositories.
- */
-function identifyIssues(body: string | undefined): string | undefined {
-  if (body === undefined) return body;
+interface Selection {
+  readonly name: string;
+  readonly key: string;
+  readonly children: Selections;
+}
+type Selections = readonly (Selection | string)[];
+interface Graphql {
+  readonly body: string;
+  readonly identity: string;
+  readonly fields: Selections;
+  readonly fragments: ReadonlyMap<string, Selections>;
+  readonly numbers: readonly number[];
+}
+
+/** Preserve schema-field identity separately from response aliases, including fragments. */
+function identifyIssues(body: string | undefined): Graphql | undefined {
+  if (body === undefined) return undefined;
   let request: unknown;
   try {
     request = JSON.parse(body);
   } catch {
-    return body;
+    return undefined;
   }
-  if (!isObject(request) || typeof request.query !== 'string') return body;
+  if (!isObject(request) || typeof request.query !== 'string') return undefined;
   const query = request.query;
-  const tokens = [...query.matchAll(/"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\])*"|#[^\r\n]*|[A-Za-z_]\w*|[^\s,]/g)]
+  const tokens = [...query.matchAll(/"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\])*"|#[^\r\n]*|\.\.\.|[A-Za-z_]\w*|[0-9]+|[^\s,]/g)]
     .filter(token => !token[0].startsWith('#'));
+  let identity = ISSUE_ID;
+  while (tokens.some(token => token[0] === identity)) identity += '_';
+  const variables = isObject(request.variables) ? request.variables : {};
+  const numbers: number[] = [];
   const insertions: number[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const fragment = tokens[i][0] === 'Issue' && tokens[i - 1]?.[0] === 'on';
-    const field = ['issue', 'issueOrPullRequest'].includes(tokens[i][0]) && tokens[i + 1]?.[0] === '(';
-    if (!fragment && !field) continue;
-    let j = i;
+  const fragments = new Map<string, Selections>();
+  let i = 0;
+  const token = () => tokens[i]?.[0];
+  const skipGroup = (open: string, close: string): void => {
+    if (token() !== open) return;
     let depth = 0;
-    if (field) {
-      for (j = i + 1; j < tokens.length; j++) {
-        if (tokens[j][0] === '(') depth++;
-        if (tokens[j][0] === ')' && --depth === 0) break;
-      }
+    do {
+      if (token() === open) depth++;
+      if (token() === close) depth--;
+      i++;
+    } while (i < tokens.length && depth > 0);
+  };
+  const directives = (): void => {
+    while (token() === '@') {
+      i += 2;
+      skipGroup('(', ')');
     }
-    // A field may have directives (with their own arguments) before its selection.
-    while (tokens[++j]?.[0] === '@') {
-      j++;
-      if (tokens[j + 1]?.[0] !== '(') continue;
-      j += 2;
-      depth = 1;
-      for (; j < tokens.length; j++) {
-        if (tokens[j][0] === '(') depth++;
-        if (tokens[j][0] === ')' && --depth === 0) break;
+  };
+  const selectionSet = (issue = false): Selections => {
+    if (token() !== '{') return [];
+    if (issue) insertions.push(tokens[i].index + 1);
+    i++;
+    const fields: (Selection | string)[] = [];
+    while (i < tokens.length && token() !== '}') {
+      if (token() === '...') {
+        i++;
+        if (token() === 'on') {
+          i++;
+          const type = token();
+          i++;
+          directives();
+          fields.push(...selectionSet(type === 'Issue'));
+        } else if (token() === '@' || token() === '{') {
+          directives();
+          fields.push(...selectionSet());
+        } else {
+          fields.push(token() ?? '');
+          i++;
+          directives();
+        }
+        continue;
       }
+      const key = token() ?? '';
+      i++;
+      let name = key;
+      if (token() === ':') {
+        i++;
+        name = token() ?? '';
+        i++;
+      }
+      const issueField = name === 'issue' || name === 'issueOrPullRequest';
+      if (issueField && token() === '(') {
+        for (let j = i + 1; j < tokens.length && tokens[j][0] !== ')'; j++) {
+          if (tokens[j][0] !== 'number' || tokens[j + 1]?.[0] !== ':') continue;
+          const value = tokens[j + 2]?.[0];
+          const number = value === '$' ? variables[tokens[j + 3]?.[0] ?? ''] : Number(value);
+          if (typeof number === 'number') numbers.push(number);
+        }
+      }
+      skipGroup('(', ')');
+      directives();
+      fields.push({ key, name, children: selectionSet(issueField) });
     }
-    if (tokens[j]?.[0] === '{') insertions.push(tokens[j].index + 1);
+    i++;
+    return fields;
+  };
+  const fields: (Selection | string)[] = [];
+  while (i < tokens.length) {
+    if (token() === 'fragment') {
+      const name = tokens[i + 1]?.[0] ?? '';
+      const type = tokens[i + 3]?.[0];
+      i += 4;
+      directives();
+      fragments.set(name, selectionSet(type === 'Issue'));
+    } else if (token() === '{') fields.push(...selectionSet());
+    else if (token() === '(') skipGroup('(', ')');
+    else i++;
   }
-  if (insertions.length === 0) return body;
   let identified = query;
-  for (const at of insertions.reverse()) identified = `${identified.slice(0, at)} ... on Issue { ${ISSUE_ID}: id } ${identified.slice(at)}`;
-  return JSON.stringify({ ...request, query: identified });
+  for (const at of insertions.reverse()) identified = `${identified.slice(0, at)} ... on Issue { ${identity}: id } ${identified.slice(at)}`;
+  return { body: insertions.length === 0 ? body : JSON.stringify({ ...request, query: identified }), identity, fields, fragments, numbers };
+}
+
+function selectedFields(fields: Selections, graphql: Graphql): Selection[] {
+  const merged = new Map<string, Selection>();
+  for (const field of fields.flatMap(field => typeof field === 'string' ? selectedFields(graphql.fragments.get(field) ?? [], graphql) : [field])) {
+    const previous = merged.get(field.key);
+    merged.set(field.key, previous === undefined ? field : { ...field, children: [...previous.children, ...field.children] });
+  }
+  return [...merged.values()];
+}
+
+function projectSelection(value: unknown, fields: Selections, graphql: Graphql): unknown {
+  if (Array.isArray(value)) return value.map(inner => projectSelection(inner, fields, graphql));
+  if (!isObject(value)) return value;
+  return Object.fromEntries(selectedFields(fields, graphql)
+    .filter(field => field.name in value)
+    .map(field => [field.key, projectSelection(value[field.name], field.children, graphql)]));
 }
 
 /** Replace identified batch issues, preserving every unrelated object and field. */
 export function atCreation(
   value: unknown,
-  views: ReadonlyMap<number, CreationView>
+  views: ReadonlyMap<number, CreationView>,
+  graphql?: Graphql
 ): { value: unknown; answered: Set<number> } {
   const answered = new Set<number>();
-  const visit = (node: unknown): unknown => {
-    if (Array.isArray(node)) return node.map(visit);
+  const visit = (node: unknown, selections: Selections): unknown => {
+    if (Array.isArray(node)) return node.map(inner => visit(inner, selections));
     if (!isObject(node)) return node;
-    const original = Object.fromEntries(Object.entries(node).filter(([key]) => key !== ISSUE_ID));
+    const fields = graphql === undefined ? [] : selectedFields(selections, graphql);
+    const identity = graphql?.identity ?? ISSUE_ID;
+    const original = Object.fromEntries(Object.entries(node).filter(([key]) => key !== identity));
     const view = [...views.values()].find(view =>
-      node[ISSUE_ID] === view.id || node.id === view.id || node.node_id === view.id ||
-      sameText(node.url, view.url) || sameText(node.html_url, view.url)
+      node[identity] === view.id || (graphql === undefined && (
+        node.id === view.id || node.node_id === view.id || sameText(node.url, view.url) || sameText(node.html_url, view.url)
+      ))
     );
     if (view !== undefined) {
       answered.add(view.number);
-      return creationObject(original, view);
+      if (graphql === undefined) return creationObject(original, view);
+      return Object.fromEntries(fields.flatMap(field => {
+        if (!(field.key in original)) return [];
+        const inner = original[field.key];
+        const canonical = isObject(inner) ? Object.fromEntries(Object.entries(inner).map(([key, value]) => [
+          selectedFields(field.children, graphql).find(child => child.key === key)?.name ?? key, value,
+        ])) : inner;
+        const rewritten = creationObject({ [field.name]: canonical }, view);
+        if (!(field.name in rewritten)) return [];
+        const value = KEPT.has(field.name) ? original[field.key] : projectSelection(rewritten[field.name], field.children, graphql);
+        return [[field.key, value]];
+      }));
     }
-    return Object.fromEntries(Object.entries(original).map(([key, inner]) => [key, visit(inner)]));
+    return Object.fromEntries(Object.entries(original).map(([key, inner]) => [key, visit(inner, fields.find(field => field.key === key)?.children ?? [])]));
   };
-  return { value: visit(value), answered };
+  return { value: visit(value, graphql === undefined ? [] : [{ key: 'data', name: 'data', children: graphql.fields }]), answered };
 }
 
 /**
  * The batch issues a request names by machine identifier: an issue path under the set's
- * repository, or a GraphQL `number` variable or literal. A literal `number` of another
+ * repository, or a parsed GraphQL issue selection's number. A number of another
  * repository's object also matches; that errs toward reporting.
  */
-function namedIssues(path: string, body: string | undefined, repo: Repo, views: ReadonlyMap<number, CreationView>): number[] {
+function namedIssues(path: string, graphql: Graphql | undefined, repo: Repo, views: ReadonlyMap<number, CreationView>): number[] {
   const named = new Set<number>();
   const rest = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/.exec(path);
   if (rest !== null && sameText(rest[1], repo.path)) named.add(Number(rest[2]));
-  if (path.endsWith('/graphql') && body !== undefined) {
-    let request: unknown;
-    try {
-      request = JSON.parse(body);
-    } catch {
-      request = undefined;
-    }
-    const variables = isObject(request) && isObject(request.variables) ? request.variables : {};
-    const query = isObject(request) && typeof request.query === 'string' ? request.query : body;
-    for (const selection of query.matchAll(/\bissue(?:OrPullRequest)?\s*\(\s*number\s*:\s*(?:\$(\w+)|(\d+))/g)) {
-      const number = selection[1] === undefined ? Number(selection[2]) : variables[selection[1]];
-      if (typeof number === 'number') named.add(number);
-    }
+  if (path.endsWith('/graphql')) {
+    for (const number of graphql?.numbers ?? []) named.add(number);
   }
   return [...named].filter(number => views.has(number));
 }
@@ -245,14 +332,15 @@ export async function answerLookup(
   const headers = new Headers(request.headers);
   for (const name of DROPPED_REQUEST_HEADERS) headers.delete(name);
   const originalBody = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
-  const body = sameHost && path.endsWith('/graphql') ? identifyIssues(originalBody) : originalBody;
+  const graphql = sameHost && path.endsWith('/graphql') ? identifyIssues(originalBody) : undefined;
+  const body = graphql?.body ?? originalBody;
   const forwarded = await upstream(`https://${host}${url.pathname}${url.search}`, { method: request.method, headers, body });
   const responseHeaders = new Headers(forwarded.headers);
   for (const name of DROPPED_RESPONSE_HEADERS) responseHeaders.delete(name);
   const bytes = await forwarded.arrayBuffer();
   const init = { status: forwarded.status, statusText: forwarded.statusText, headers: responseHeaders };
   // A refused request, such as a GraphQL query missing a token scope, carries no issue.
-  const named = sameHost && forwarded.ok ? namedIssues(path, body, repo, views) : [];
+  const named = sameHost && forwarded.ok ? namedIssues(path, graphql, repo, views) : [];
   const unchanged = { response: new Response(bytes, init), answered: [], live: named };
   if (!(forwarded.headers.get('content-type') ?? '').includes('json')) return unchanged;
   let parsed: unknown;
@@ -263,7 +351,7 @@ export async function answerLookup(
   }
   const refused = isObject(parsed) && parsed.data == null && 'errors' in parsed;
   if (!sameHost) return unchanged;
-  const rewritten = atCreation(parsed, views);
+  const rewritten = atCreation(parsed, views, graphql);
   if (rewritten.answered.size === 0 && body === originalBody) return refused ? { ...unchanged, live: [] } : unchanged;
   const answered = [...rewritten.answered];
   // Enriched selections carry their own identity. An unmatched number can name a

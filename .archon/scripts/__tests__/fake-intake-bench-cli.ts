@@ -151,7 +151,7 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
     method: 'POST',
     headers: { host: 'api.github.com', 'content-type': 'application/json' },
     body: JSON.stringify({
-      query: 'query IssueByNumber($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue: issueOrPullRequest(number: $number) { __typename ... on Issue { id title body state stateReason closedAt url labels(first: 100) { nodes { name } totalCount } comments(first: 100) { nodes { body } totalCount } } } } }',
+      query: 'query IssueByNumber($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue: issueOrPullRequest(number: $number) { __typename ... on Issue { id number title body state stateReason closedAt url labels(first: 100) { nodes { name } totalCount } comments(first: 100) { nodes { body } totalCount pageInfo { hasNextPage endCursor } } } } } }',
       variables: { owner, repo, number: config.lookupIssue },
     }),
   });
@@ -191,7 +191,7 @@ function upstream(dir: string, url: string, body: string | undefined): Response 
     // A query with literals gets only the field it asks for, as the tracker answers it.
     const literal = /number: (\d+)\)/.exec(request.query);
     if (literal !== null) return Response.json({ data: { repository: { issue: { ...(request.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: `I_${literal[1]}` } : {}), state: now(Number(literal[1]))?.state ?? null } } } });
-    return Response.json({ data: { repository: { issue: now(Number(request.variables?.number)) ?? null } } });
+    return Response.json({ data: { repository: { issue: { ...now(Number(request.variables?.number)), ...(request.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: `I_${String(request.variables?.number)}` } : {}) } } } });
   }
   const rest = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(pathname);
   return rest === null ? undefined : Response.json(now(Number(rest[1])) ?? {}, { status: now(Number(rest[1])) === undefined ? 404 : 200 });
@@ -295,6 +295,7 @@ function answer(dir: string, args: readonly string[], env?: Record<string, strin
 function ghAnswer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
   if (args.includes('graphql') && args.some(arg => arg.includes('CROSS_REFERENCED_EVENT'))) {
+    const query = args.find(arg => arg.startsWith('query=')) ?? '';
     const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
     const issue = config.issues.find(entry => entry.number === number);
     if (issue === undefined) throw new Error(`fake gh: no issue ${String(number)}`);
@@ -312,7 +313,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
             url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
             createdAt: issue.createdAt ?? '2026-01-01T00:00:00Z',
             author: { login: issue.author ?? 'someone' },
-            labelEvents: { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 }, nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
+            labelEvents: { ...(/labelEvents:[^{]+\{\s*pageInfo\s*\{\s*hasNextPage\s*\}/.test(query) ? { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 } } : {}), nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
             refs: {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
               nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
