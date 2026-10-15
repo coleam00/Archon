@@ -1,3 +1,4 @@
+import { formatPackagedResourceReference } from './packaged-workflow';
 import { providerRegistry } from '@archon/providers';
 import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
@@ -21725,6 +21726,62 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
+      for (const failure of ['script-directory', 'script-content', 'declaration', 'directory']) {
+        it(`preserves composed discovery ${failure} read failures`, async () => {
+          const mockDeps = createMockDeps();
+          const workflows = join(testDir, '.archon', 'workflows');
+          const scripts = join(testDir, '.archon', 'scripts');
+          await mkdir(workflows, { recursive: true });
+          await mkdir(scripts, { recursive: true });
+          await writeFile(
+            join(workflows, 'root-file.yaml'),
+            'name: root\ndescription: root\nnodes:\n  - id: wrapped\n    include: block\n'
+          );
+          const declaration = join(workflows, 'different-file.yaml');
+          await writeFile(
+            declaration,
+            'name: block\ndescription: block\nnodes:\n  - id: work\n    script: check\n    runtime: bun\n'
+          );
+          const script = join(scripts, 'check.ts');
+          await writeFile(script, 'console.log("done")');
+          const locked =
+            failure === 'script-directory'
+              ? scripts
+              : failure === 'script-content'
+                ? script
+                : failure === 'declaration'
+                  ? declaration
+                  : workflows;
+          await chmod(locked, 0o000);
+          const options = dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('composed-discovery-failure'),
+            workflow: {
+              name: 'composed-discovery-failure',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'root',
+                  fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ],
+            },
+          });
+          try {
+            await executeDagWorkflow(options);
+          } finally {
+            await chmod(locked, locked === script || locked === declaration ? 0o644 : 0o755);
+          }
+          expectReleased(mockDeps.store, 'fan');
+          mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          await executeDagWorkflow(options);
+          expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        });
+      }
+
       for (const nested of [false, true]) {
         it(`ignores an unrelated ${nested ? 'included' : 'direct'} command read failure`, async () => {
           const mockDeps = createMockDeps();
@@ -21800,6 +21857,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             workflowSourceRoots: capture.roots,
             workflow: {
               name: 'command-read-race',
+              budget: { max_work_units: 1 },
               nodes: [
                 dagNodeSchema.parse(
                   loop
@@ -21809,6 +21867,9 @@ describe('executeDagWorkflow -- script nodes', () => {
               ],
             },
           });
+          mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+          );
           try {
             await executeDagWorkflow(options);
           } finally {
@@ -21816,6 +21877,9 @@ describe('executeDagWorkflow -- script nodes', () => {
             await chmod(commandFile, 0o644);
           }
           expectReleased(mockDeps.store, 'step');
+          expect(
+            (await mockDeps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+          ).toBe(0);
           expect(mockSendQueryDag).not.toHaveBeenCalled();
           mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
           mockSendQueryDag.mockImplementation(async function* () {
@@ -21825,6 +21889,119 @@ describe('executeDagWorkflow -- script nodes', () => {
           await executeDagWorkflow(options);
           expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
           expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        });
+      }
+
+      for (const loop of [false, true]) {
+        it(`releases a packaged command ${loop ? 'loop' : 'agent'} lost after verification`, async () => {
+          const mockDeps = createMockDeps();
+          const folder = join(testDir, '.archon', 'workflows', 'team', 'block', 'commands');
+          await mkdir(folder, { recursive: true });
+          await writeFile(join(folder, 'work.md'), 'Do the work.');
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          await capture.restore();
+          const command = formatPackagedResourceReference(
+            { source: 'project', pack: 'team', workflow: 'block' },
+            'work'
+          );
+          const file = join(
+            capture.captureRoot,
+            'project',
+            '.archon',
+            'workflows',
+            'team',
+            'block',
+            'commands',
+            'work.md'
+          );
+          const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
+          let restoreRead = () => {};
+          const verifier = spyOn(
+            sourceIntegrity,
+            'assertWorkflowSourceIntegrity'
+          ).mockImplementation(async roots => {
+            const verified = await verify(roots);
+            const reader = spyOn(sourceFiles, 'readFile').mockRejectedValueOnce(
+              Object.assign(new Error('capture disappeared'), {
+                code: 'ENOENT',
+                syscall: 'open',
+                path: file,
+              })
+            );
+            restoreRead = () => reader.mockRestore();
+            return verified;
+          });
+          const options = dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('packaged-command-race'),
+            workflowSourceRoots: capture.roots,
+            workflow: {
+              name: 'packaged-command-race',
+              budget: { max_work_units: 1 },
+              nodes: [
+                dagNodeSchema.parse(
+                  loop
+                    ? { id: 'step', loop: { command, until: 'DONE', max_iterations: 1 } }
+                    : { id: 'step', command }
+                ),
+              ],
+            },
+          });
+          mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+          );
+          try {
+            await executeDagWorkflow(options);
+          } finally {
+            restoreRead();
+            verifier.mockRestore();
+          }
+          expectReleased(mockDeps.store, 'step');
+          expect(
+            (await mockDeps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+          ).toBe(0);
+          mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'DONE' };
+            yield { type: 'result', sessionId: 'packaged-resumed', cost: 0.1 };
+          });
+          await executeDagWorkflow(options);
+          expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        });
+      }
+
+      for (const loop of [false, true]) {
+        it(`keeps a genuinely absent packaged command ${loop ? 'loop' : 'agent'} as a configuration failure`, async () => {
+          const mockDeps = createMockDeps();
+          const capture = await unreadableCapture(join(testDir, 'ran'));
+          await capture.restore();
+          const command = formatPackagedResourceReference(
+            { source: 'project', pack: 'team', workflow: 'block' },
+            'missing'
+          );
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('missing-packaged-command'),
+              workflowSourceRoots: capture.roots,
+              workflow: {
+                name: 'missing-packaged-command',
+                nodes: [
+                  dagNodeSchema.parse(
+                    loop
+                      ? { id: 'step', loop: { command, until: 'DONE', max_iterations: 1 } }
+                      : { id: 'step', command }
+                  ),
+                ],
+              },
+            })
+          );
+          expect(mockDeps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(mockSendQueryDag).not.toHaveBeenCalled();
         });
       }
 
@@ -23346,7 +23523,7 @@ nodes:
       let restoreRead: () => void = () => undefined;
       const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
         async source => {
-          await verifyActual(source);
+          const verified = await verifyActual(source);
           const reader = spyOn(sourceFiles, 'readFile')
             .mockImplementation(readActual)
             .mockRejectedValueOnce(
@@ -23361,6 +23538,7 @@ nodes:
             readPaths = reader.mock.calls.map(([path]) => path);
             reader.mockRestore();
           };
+          return verified;
         }
       );
       try {

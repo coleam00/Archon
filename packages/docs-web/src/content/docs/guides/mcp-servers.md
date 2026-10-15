@@ -85,9 +85,11 @@ The engine adds nothing to the prompt. The agent sees which servers loaded from 
 tool list, so write the prompt to check for the `mcp__<server>__*` tools, as above.
 
 Only a missing file counts as absent. A file that exists but is unreadable or invalid
-JSON still fails `archon validate workflows`, and fails the node on a provider that loads
-MCP. `archon validate workflows`
-reports nothing for an optional declaration whose file is missing or whose provider
+JSON still fails `archon validate workflows`. Invalid JSON and unreadable checkout
+config files fail the node on a provider that loads MCP. A host-local read failure
+in a run's captured home MCP config pauses the run so it can resume on a host that
+can read the capture, including when the MCP declaration is optional.
+`archon validate workflows` reports nothing for an optional declaration whose file is missing or whose provider
 lacks MCP, because that is the expected state for most users of a portable workflow.
 
 Relative paths resolve against the run's checkout first. Only a declaration in a

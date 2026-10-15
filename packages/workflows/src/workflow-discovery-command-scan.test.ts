@@ -49,6 +49,29 @@ test('discovery reports an inaccessible global workflow scope but tolerates a mi
   }
 });
 
+test('project directory access failures preserve their typed cause', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archon-project-workflow-read-'));
+  const workflowPath = join(root, '.archon', 'workflows');
+  const cause = Object.assign(new Error('project scope unavailable'), {
+    code: 'EIO',
+    syscall: 'access',
+    path: workflowPath,
+  });
+  const realAccess = fs.access;
+  const accessSpy = spyOn(fs, 'access').mockImplementation(async (path, mode) => {
+    if (path === workflowPath) throw cause;
+    return realAccess(path, mode);
+  });
+  try {
+    await expect(
+      discoverWorkflows(root, { providers: providerRegistry, loadDefaults: false })
+    ).rejects.toBe(cause);
+  } finally {
+    accessSpy.mockRestore();
+    await removeTempTree(root);
+  }
+});
+
 afterEach(async () => {
   await Promise.all(
     tempDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))

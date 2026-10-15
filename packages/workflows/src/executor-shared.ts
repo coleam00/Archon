@@ -405,7 +405,7 @@ export async function loadCommandPrompt(
       return {
         success: false,
         reason,
-        ...(err.code !== 'ENOENT' ? { cause: error } : {}),
+        cause: error,
         message:
           err.code === 'ENOENT'
             ? `Packaged command not found: ${filePath}`

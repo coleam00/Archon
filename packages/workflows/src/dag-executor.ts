@@ -3370,9 +3370,9 @@ class RunSourceUnreadableError extends Error {
 async function assertNodeSourceReadable(
   roots: WorkflowSourceRoots,
   stepName: string
-): Promise<void> {
+): Promise<ReadonlySet<string> | undefined> {
   try {
-    await assertWorkflowSourceIntegrity(roots);
+    return await assertWorkflowSourceIntegrity(roots);
   } catch (error) {
     if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
     throw error;
@@ -3384,7 +3384,7 @@ async function loadNodeCommandPrompt(
   command: string,
   stepName: string
 ): Promise<Awaited<ReturnType<typeof loadCommandPrompt>>> {
-  await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
+  const verifiedFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
   try {
     const result = await loadCommandPrompt(
       ctx.deps,
@@ -3393,7 +3393,20 @@ async function loadNodeCommandPrompt(
       ctx.configuredCommandFolder,
       ctx.workflowSourceRoots
     );
-    if (!result.success && isSourceReadFailure(result.cause)) throw result.cause;
+    if (!result.success && isSourceReadFailure(result.cause)) {
+      // Packaged commands resolve by path, so ENOENT can also mean an authored command
+      // never existed. Only a file in the verified capture was lost on this host.
+      if (
+        result.reason === 'not_found' &&
+        !(
+          isSystemError(result.cause) &&
+          typeof result.cause.path === 'string' &&
+          verifiedFiles?.has(result.cause.path)
+        )
+      )
+        return result;
+      throw result.cause;
+    }
     return result;
   } catch (error) {
     if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
@@ -8085,12 +8098,14 @@ export async function resolveFanOutChildDefinition(
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
-      const relevantError = errors.find(error => {
-        const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
-        return error.workflowName !== undefined
-          ? error.workflowName === targetName
-          : filename === targetName;
-      });
+      const relevantError =
+        errors.find(error => {
+          const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
+          return error.workflowName !== undefined
+            ? error.workflowName === targetName
+            : filename === targetName;
+        }) ??
+        errors.find(error => error.workflowName === undefined && isSourceReadFailure(error.cause));
       if (relevantError !== undefined && isSourceReadFailure(relevantError.cause)) {
         throw relevantError.cause;
       }

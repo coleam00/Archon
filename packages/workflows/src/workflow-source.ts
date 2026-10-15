@@ -1134,7 +1134,7 @@ export async function loadWorkflowSource(
   expectedDigest?: string,
   /** The source resolution config the RUN recorded, when new enough to have one. */
   expectedConfig?: WorkflowSourceConfig
-): Promise<WorkflowSourceCapture> {
+): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
   const manifest = await readManifest(captureRoot);
   if (expectedDigest !== undefined && manifest.digest !== expectedDigest) {
     throw new WorkflowSourceIntegrityError(
@@ -1181,6 +1181,7 @@ export async function loadWorkflowSource(
     );
   }
   return {
+    verifiedFiles: new Set(entries.map(entry => join(captureRoot, entry.relPath))),
     origin: manifest.origin,
     manifest,
     anchor: {
@@ -1195,10 +1196,17 @@ function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unkno
   return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined));
 }
 
-/** Verify a captured root against its retained anchor immediately before a filesystem read. */
-export async function assertWorkflowSourceIntegrity(roots: WorkflowSourceRoots): Promise<void> {
+/** Returned paths are files covered by the verified digest; live roots have no inventory. */
+export async function assertWorkflowSourceIntegrity(
+  roots: WorkflowSourceRoots
+): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
-  await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config);
+  const capture = await loadWorkflowSource(
+    roots.anchor.root,
+    roots.anchor.digest,
+    roots.anchor.config
+  );
+  return capture.verifiedFiles;
 }
 
 /**

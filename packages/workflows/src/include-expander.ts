@@ -1122,7 +1122,8 @@ function materializeBlockCommandPrompts(
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
-  commandContents?: ReadonlyMap<string, IncludeCommandContent>
+  commandContents?: ReadonlyMap<string, IncludeCommandContent>,
+  loadErrors: readonly WorkflowLoadError[] = []
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
@@ -1302,7 +1303,18 @@ export function expandWorkflowIncludes(
     if (!raw) {
       // Top-level names always exist (they come from rawByName.keys()); this only
       // fires when the name was reached as an unresolvable include TARGET.
-      throw new IncludeExpansionError(`include target '${name}' not found`);
+      // An unreadable declaration has no known workflow name. Until every declaration
+      // is readable, a missing include cannot be distinguished from that read failure.
+      const error =
+        loadErrors.find(error => error.workflowName === name) ??
+        loadErrors.find(
+          error => error.workflowName === undefined && error.errorType === 'read_error'
+        );
+      throw new IncludeExpansionError(
+        error?.error ?? `include target '${name}' not found`,
+        error?.errorType,
+        { cause: error?.cause }
+      );
     }
 
     // Collapse this workflow's own node-affecting scope onto its own nodes BEFORE

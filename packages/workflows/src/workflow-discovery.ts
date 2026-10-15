@@ -950,7 +950,8 @@ export async function discoverWorkflows(
     });
     const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
       rawByName,
-      commandContents
+      commandContents,
+      allErrors
     );
     // Re-key expansion errors from workflow name to the includer's real filename.
     allErrors.push(
@@ -1297,9 +1298,7 @@ export async function discoverWorkflows(
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code !== 'ENOENT') {
-      throw new Error(
-        `Cannot access workflow folder at ${workflowPath}: ${err.message} (${err.code ?? 'unknown'})`
-      );
+      throw error;
     }
     getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
