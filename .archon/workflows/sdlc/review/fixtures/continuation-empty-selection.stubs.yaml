@@ -7,7 +7,7 @@ route: { seams: false, code: true, tests: true, errors: false, docs: false, reas
 head-check: "target matches"
 scope:
   selector: ""
-  base: { branch: dev, revision: cafe }
+  base: null
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }

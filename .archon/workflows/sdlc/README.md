@@ -32,7 +32,10 @@ PR review has two checks at different times. After the scope agent interprets th
 trigger message and returns a selector and qualified PR, `head-check` resolves the
 explicit nonempty `scope` input first, using the agent's selector only when that
 input is empty. It rejects a missing or different PR declaration and compares the
-live PR head with the commit fixed by `mode`, before routing or lenses. When the
+live PR head with the commit fixed by `mode`, before routing or lenses. Scope also
+records the fetched base branch and revision used for its diff; both checks refuse
+a PR whose current base differs, so retargeting or advancing the base requires a
+new review of that diff. When the
 forge omits the head revision, the check reads the retained PR ref from the base
 repository. If that lookup fails or the ref is absent, it stops with the missing
 prerequisite and no retry command. A resolved mismatch stops with a retained-ref
