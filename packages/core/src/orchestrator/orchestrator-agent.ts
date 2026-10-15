@@ -1,3 +1,4 @@
+import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
 import { registerFolder } from '../handlers/sql-registration';
 import { detectProjectKind } from '../services/project-kind';
 import {
@@ -3685,7 +3686,12 @@ async function handleRemoveProject(message: string): Promise<string> {
     return `Project "${projectName}" not found.`;
   }
 
-  await codebaseDb.deleteCodebase(codebase.id);
+  try {
+    await codebaseDb.deleteCodebase(codebase.id);
+  } catch (error) {
+    if (error instanceof ActiveContainerEnvironmentsError) return error.message;
+    throw error;
+  }
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }

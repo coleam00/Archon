@@ -438,6 +438,14 @@ async function handleWorktreeCommand(
         return { success: false, message: 'Isolation environment not found in database.' };
       }
 
+      if (isolationEnv.provider !== 'worktree') {
+        return {
+          success: false,
+          message:
+            'This environment is not a worktree. Use `archon isolation cleanup 0` for container cleanup.',
+        };
+      }
+
       const forceFlag = args[1] === '--force';
 
       try {

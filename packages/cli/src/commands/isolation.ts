@@ -121,14 +121,15 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 
   console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
 
-  const staleEnvs = await isolationDb.findStaleEnvironments(daysStale);
+  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
+    env => env.provider === 'worktree'
+  );
 
   if (staleEnvs.length === 0) {
-    console.log('No stale environments found.');
-    return;
+    console.log('No stale worktree environments found.');
+  } else {
+    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
   }
-
-  console.log(`Found ${String(staleEnvs.length)} stale environment(s):`);
 
   const provider = getIsolationProvider();
   let cleaned = 0;

@@ -273,6 +273,7 @@ export class IsolationResolver {
     baseBranch?: BranchName
   ): Promise<IsolationResolution | null> {
     const env = await this.store.getById(envId);
+    if (env) this.assertWorktreeEnvironment(env);
     if (env && (await worktreeExists(toWorktreePath(env.working_path)))) {
       const warnings = await this.collectBaseBranchWarnings(env, baseBranch, { envId });
       return {
@@ -334,6 +335,7 @@ export class IsolationResolver {
   ): Promise<{ env: IsolationEnvironmentRow; warnings: string[] } | null> {
     const existing = await this.store.findActiveByWorkflow(codebaseId, workflowType, workflowId);
     if (!existing) return null;
+    this.assertWorktreeEnvironment(existing);
 
     const worktreePath = toWorktreePath(existing.working_path);
     if (await worktreeExists(worktreePath)) {
@@ -378,6 +380,7 @@ export class IsolationResolver {
         String(issueNum)
       );
       if (!linkedEnv) continue;
+      this.assertWorktreeEnvironment(linkedEnv);
 
       const worktreePath = toWorktreePath(linkedEnv.working_path);
       if (await worktreeExists(worktreePath)) {
@@ -449,6 +452,14 @@ export class IsolationResolver {
       };
     }
     return null;
+  }
+
+  private assertWorktreeEnvironment(env: IsolationEnvironmentRow): void {
+    if (env.provider !== 'worktree') {
+      throw new Error(
+        `Environment ${env.id} is not a worktree. Use archon isolation cleanup 0 for container cleanup.`
+      );
+    }
   }
 
   /**

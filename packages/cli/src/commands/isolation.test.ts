@@ -860,6 +860,20 @@ describe('isolationCleanupCommand', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it.each([false, true])(
+    'runs container cleanup without worktree destruction (stale container: %s)',
+    async hasContainer => {
+      mockFindStaleEnvironments.mockResolvedValueOnce(
+        hasContainer ? [{ ...mockEnv, provider: 'container' }] : []
+      );
+      mockCleanupContainerEnvironments.mockClear();
+      await isolationCleanupCommand(0);
+      expect(mockDestroyWorktree).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(0);
+    }
+  );
+
   it('rejects before reconciliation or destruction when the initial list rejects a legacy path', async () => {
     const { InvalidCodebaseDefaultCwdError } = await import('@archon/core/db/codebases');
     mockListEnvironments.mockRejectedValueOnce(

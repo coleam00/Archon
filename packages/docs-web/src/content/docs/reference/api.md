@@ -151,7 +151,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
-| DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
+| DELETE | `/api/codebases/{id}` | Delete a codebase after container cleanup |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
 | POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
@@ -198,7 +198,11 @@ Returns the updated codebase. The name is trimmed and must be 1 to 255 character
 curl -X DELETE http://localhost:3090/api/codebases/{id}
 ```
 
-Removes the codebase registration and cleans up associated worktrees and isolation environments.
+Removes the codebase registration and cleans up associated worktrees. If active container environments remain, returns `409` with their environment IDs and leaves the registration intact. Deletion does not remove containers or volumes. A worktree cleanup failure returns `500` and keeps the registration and unfinished cleanup records for retry. If a worktree is registered during cleanup, deletion returns `409`; retry the request to clean it up.
+
+If managed-workspace removal fails after the registration is deleted, the response is `500` and names the retained path. Resolve the filesystem error and remove that directory manually.
+
+Run `archon isolation cleanup 0` to remove eligible containers, then retry the DELETE request. Cleanup preserves containers owned by resumable runs; release those runs before cleanup.
 
 ### List Environments
 
@@ -206,7 +210,7 @@ Removes the codebase registration and cleans up associated worktrees and isolati
 curl http://localhost:3090/api/codebases/{id}/environments
 ```
 
-Returns the isolation environments (worktrees) associated with a codebase.
+Returns the active isolation environments (worktrees and containers) associated with a codebase.
 
 ---
 
