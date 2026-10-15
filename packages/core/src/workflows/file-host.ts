@@ -25,6 +25,8 @@ import { assertFileStoreConfiguration } from '../config/store-selection';
 import { createWorkflowDeps } from './store-adapter';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
+import { runOwnerLossWatch } from '../services/run-attention-watch';
+import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
@@ -259,7 +261,10 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   return {
     records,
     deps,
-    engine: new InProcessWorkflowEngine(deps),
+    engine: new InProcessWorkflowEngine(deps, {
+      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+      ownerLoss: runOwnerLossWatch(store),
+    }),
     operations: createWorkflowOperations({
       store,
       hostStore: records,

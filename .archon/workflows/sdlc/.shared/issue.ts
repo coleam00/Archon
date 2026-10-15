@@ -1,8 +1,10 @@
 /**
- * The pack's one issue read, through whichever source the run selected (./forge.ts).
+ * The pack's one issue read, and its close, through whichever source the run
+ * selected (./forge.ts).
  *
  * Both sources prove the number names an issue on the tracker before anything is
- * returned, so a pull request with the same number is never read as the issue.
+ * returned or written, so a pull request with the same number is never read or
+ * closed as the issue.
  * `issueAtCreation` recovers the text an issue was opened with, from GitHub's edit
  * history; the forge source has no history and answers with the current text.
  */
@@ -29,6 +31,14 @@ export interface IssueView {
   readonly url: string;
 }
 
+/** The number names a pull request, which shares the issue numbering. */
+export class NotAnIssueError extends Error {
+  constructor(where: string) {
+    super(`${where} is a pull request, not an issue`);
+    this.name = 'NotAnIssueError';
+  }
+}
+
 export function viewIssue(item: QualifiedPr): IssueView {
   return forgeSource() === 'forge' ? forgeView(item) : ghView(item);
 }
@@ -45,7 +55,10 @@ function login(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
-function ghView(item: QualifiedPr): IssueView {
+/** The issue as `gh api` reports it, after its identity is proved. */
+function ghIssue(
+  item: QualifiedPr
+): Record<string, unknown> & { readonly html_url: string; readonly state: IssueView['state'] } {
   const result = Bun.spawnSync(
     [
       'gh',
@@ -63,30 +76,38 @@ function ghView(item: QualifiedPr): IssueView {
   }
   const issue = record(JSON.parse(result.stdout.toString()));
   const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
+  if (issue?.number === item.number && 'pull_request' in issue) throw new NotAnIssueError(url);
   if (
     issue?.number !== item.number ||
-    (typeof issue.html_url === 'string' ? issue.html_url : '').toLowerCase() !==
-      url.toLowerCase() ||
-    'pull_request' in issue
+    typeof issue.html_url !== 'string' ||
+    issue.html_url.toLowerCase() !== url.toLowerCase()
   ) {
     throw new Error(`tracker identity mismatch: ${url} does not answer as that issue`);
   }
   if (issue.state !== 'open' && issue.state !== 'closed') {
     throw new Error(`${url} has no open or closed state`);
   }
+  return { ...issue, html_url: issue.html_url, state: issue.state };
+}
+
+function ghView(item: QualifiedPr): IssueView {
+  const issue = ghIssue(item);
   return {
     title: typeof issue.title === 'string' ? issue.title : '',
     body: typeof issue.body === 'string' ? issue.body : '',
     author: login(record(issue.user)?.login),
     labels: labelNames(Array.isArray(issue.labels) ? issue.labels : []),
     state: issue.state,
-    url: issue.html_url as string,
+    url: issue.html_url,
   };
 }
 
 function forgeView(item: QualifiedPr): IssueView {
   const value = invokeForge('workitem.view', { ref: item });
   const observed = parseQualifiedPr(JSON.stringify(value?.ref));
+  if (samePr(item, observed) && value?.kind === 'pr') {
+    throw new NotAnIssueError(`${item.repo.host}/${item.repo.path}#${String(item.number)}`);
+  }
   if (
     !samePr(item, observed) ||
     value?.kind !== 'issue' ||
@@ -107,6 +128,54 @@ function forgeView(item: QualifiedPr): IssueView {
     state: value.state,
     url: value.url,
   };
+}
+
+/** Why the pack closes an issue: the subset of the forge contract's reasons it uses. */
+export const CLOSE_REASONS = ['completed', 'duplicate'] as const;
+export type CloseReason = (typeof CLOSE_REASONS)[number];
+
+/**
+ * Close the issue with a reason and read the result back. An issue already closed
+ * for that reason is left as it is; one closed for another reason is refused, as the
+ * forge contract does.
+ */
+export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
+  if (forgeSource() === 'forge') {
+    const value = invokeForge('workitem.close', { ref: item, reason });
+    if (record(value?.workitem)?.state !== 'closed' || value?.reason !== reason)
+      throw new Error('forge returned no verified close');
+    return;
+  }
+  const before = ghIssue(item);
+  if (before.state === 'closed') {
+    if (before.state_reason === reason) return;
+    throw new Error(`${before.html_url} is already closed for another reason`);
+  }
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      item.repo.host,
+      '--method',
+      'PATCH',
+      `repos/${item.repo.path}/issues/${String(item.number)}`,
+      '-f',
+      'state=closed',
+      '-f',
+      `state_reason=${reason}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh api close of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
+    );
+  }
+  const after = ghIssue(item);
+  if (after.state !== 'closed' || after.state_reason !== reason) {
+    throw new Error(`${after.html_url} does not read back closed as ${reason}; it may be closed`);
+  }
 }
 
 /** `current` when the creation body could not be recovered and the current one stands in. */

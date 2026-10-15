@@ -48,6 +48,9 @@ test('a continuation refused for capacity waits for capacity instead of failing'
     async subscribe() {
       throw new Error('not invoked');
     },
+    async watchAttention() {
+      throw new Error('not invoked');
+    },
   };
   const admission = await resumeWorkflowContinuation(
     {

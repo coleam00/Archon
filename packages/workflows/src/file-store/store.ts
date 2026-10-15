@@ -224,8 +224,8 @@ export async function createFileWorkflowStore(
         return { released };
       }),
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
-    pauseWorkflowRun: (id, approval, extra, suspension) =>
-      write([id], view => view.pauseWorkflowRun(id, approval, extra, suspension)),
+    pauseWorkflowRun: (id, approval, extra, event) =>
+      write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>
