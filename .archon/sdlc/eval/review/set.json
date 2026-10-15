@@ -217,7 +217,7 @@
               "id": "D3",
               "class": "wrong_behaviour",
               "owner": "code",
-              "claim": "The $LOOP_PREV branch of parseWhenAtomInternal no longer applies isComparableLiteral, so a loop-body condition such as `$LOOP_PREV.work.output > ''` (or `> 'high'`) passes load-time validation and then evaluates false with parsed: true on every iteration, silently skipping the node.",
+              "claim": "The $LOOP_PREV branch of parseWhenAtomInternal no longer applies isComparableLiteral, so a loop-body condition such as `$LOOP_PREV.work.output > ''` (or `> 'high'`) passes load-time validation but can never compare true, so the node is skipped on every iteration: silently when the prior output is numeric, and as a run-time parse-error skip on the first iteration or when the prior output is not numeric.",
               "location": "packages/workflows/src/when-atom.ts:222-227"
             }
           ]
