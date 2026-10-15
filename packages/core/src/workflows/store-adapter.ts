@@ -139,6 +139,10 @@ export function createWorkflowStore(): IWorkflowStore {
       if (!Number.isSafeInteger(limit) || limit <= 0)
         throw new RangeError('limit must be a positive integer');
       const rows = await workflowEventDb.readWorkflowEventsAfter(order, limit);
+      // A returned row proves the cursor is behind the head; only an empty page can hide
+      // a cursor this install never issued (another database, a restored backup).
+      if (rows.length === 0 && BigInt(order) > BigInt(await workflowEventDb.getWorkflowEventHead()))
+        throw new WorkflowEventCursorError();
       const deliveries = rows.map(event => {
         if (event.event_order == null) throw new Error('Feed row has no event order');
         return { cursor: sqlCursor(event.event_order), event: hydrateWorkflowEventRow(event) };

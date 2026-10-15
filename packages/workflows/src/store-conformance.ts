@@ -728,7 +728,7 @@ export function describeWorkflowStoreConformance(
         )
       ).toEqual([next.id]);
     });
-    test('feed rejects malformed and foreign cursors and invalid page limits', async () => {
+    test('feed rejects malformed cursors, cursors beyond its head and invalid page limits', async () => {
       for (const cursor of ['foreign:1', 'sql:-1', 'file:NaN.0', 'memory:1.5']) {
         expect(
           await rejection(
@@ -736,6 +736,13 @@ export function describeWorkflowStoreConformance(
           )
         ).toBeInstanceOf(WorkflowEventCursorError);
       }
+      const head = await store.getWorkflowEventHead();
+      const beyondHead = head.replace(/[0-9]+/, order => String(BigInt(order) + 1000n));
+      expect(
+        await rejection(
+          store.readWorkflowEventsAfter(beyondHead as WorkflowEventCursor, { limit: 1 })
+        )
+      ).toBeInstanceOf(WorkflowEventCursorError);
       for (const limit of [0, -1, 1.5, Infinity])
         expect(
           await rejection(
