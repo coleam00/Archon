@@ -424,15 +424,21 @@ export function describeWorkflowStoreConformance(
         await store.claimPendingWorkflowRun(id);
         await store.pauseWorkflowRun(id, { ...approval, type, resolved: 'approved' });
         await store.resumeWorkflowRun(id, answeredCursor);
+        const retryAt = new Date().toISOString();
         await store.releaseRunForUnreadableSource(id, {
           nodeId: 'check',
           error: 'EACCES',
-          retryAt: new Date().toISOString(),
+          retryAt,
         });
         const row = await store.getWorkflowRun(id);
         if (!row) throw new Error('missing run');
         expect(continuablePauseCursor(row)).toBeUndefined();
         expect(continuablePause(row)).toBeUndefined();
+        await store.deferWorkflowContinuation(id, '2099-01-01T00:00:00.000Z', answeredCursor);
+        expect((await store.getWorkflowRun(id))?.metadata.continuation_retry_at).toBe(retryAt);
+        expect(await rejection(store.resumeWorkflowRun(id, answeredCursor))).toBeInstanceOf(
+          WorkflowNotResumableError
+        );
         expect(await store.releasePausedRunSlot(id, gateCursor)).toEqual({ released: false });
         expect(await store.admitResourceStart(start())).toMatchObject({
           status: 'queued',

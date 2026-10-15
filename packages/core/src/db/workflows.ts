@@ -1995,12 +1995,12 @@ export async function deferWorkflowContinuation(
     await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4
+       WHERE id = $1 AND ((status = 'paused' AND ${releaseNodeId} IS NULL AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4
            AND (${waitPauseId} = $7 OR (${waitPauseId} IS NULL AND $7 IS NULL)))
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
-         OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
-         OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4)
+         OR (status = 'paused' AND ${releaseNodeId} IS NULL AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
+         OR (status = 'paused' AND ${releaseNodeId} IS NULL AND ${waitPauseId} = $6 AND ${waitNodeId} = $4)
          OR (status = 'paused' AND ${releaseNodeId} = $4 AND ${releasedAt} = $8
            AND (${releaseId} = $9 OR (${releaseId} IS NULL AND $9 IS NULL))))`,
       [
