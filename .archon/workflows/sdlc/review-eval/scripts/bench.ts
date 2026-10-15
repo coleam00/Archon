@@ -1085,8 +1085,9 @@ export function writeBatch(outDir: string, caseId: string, judge: string): void 
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
 }
 
+// git prints forward slashes on Windows; resolve() returns the native form every other path here uses.
 function repositoryRoot(): string {
-  return gitOrThrow('rev-parse', '--show-toplevel');
+  return resolve(gitOrThrow('rev-parse', '--show-toplevel'));
 }
 
 function caseOf(set: BenchSet, id: string): Case {
