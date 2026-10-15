@@ -2375,11 +2375,11 @@ async function executeNodeInternal(
     : undefined;
   const commandPrompt =
     commandName === undefined ? undefined : await loadNodeCommandPrompt(ctx, commandName, stepName);
+  const homeMcpDirectory = readHomeMcpDirectory(node);
+  if (homeMcpDirectory !== undefined) await assertNodeSourceReadable(workflowSourceRoots, stepName);
   await reserveBudget();
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
-  const homeMcpDirectory = readHomeMcpDirectory(node);
-  if (homeMcpDirectory !== undefined) await assertWorkflowSourceIntegrity(workflowSourceRoots);
   const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {

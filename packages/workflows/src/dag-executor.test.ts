@@ -155,6 +155,7 @@ import { expandWorkflowIncludes } from './include-expander';
 import {
   COMPILED_LOOP_COMMAND,
   readHomeMcpDirectory,
+  attachHomeMcpDirectory,
   type CompiledLoopCommand,
   type LoopWithCompiledCommand,
 } from './compiled-command';
@@ -21825,6 +21826,43 @@ describe('executeDagWorkflow -- script nodes', () => {
           expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
         });
       }
+
+      it('a captured home MCP source read releases before reserving an agent work unit', async () => {
+        const mockDeps = createMockDeps();
+        await writeFile(join(testDir, 'servers.json'), '{"local":{"command":"example"}}');
+        const capture = await unreadableCapture(join(testDir, 'ran'));
+        const node = dagNodeSchema.parse({
+          id: 'step',
+          prompt: 'Do the work.',
+          mcp: 'servers.json',
+        });
+        attachHomeMcpDirectory(node, capture.roots.globalWorkflows);
+        const options = dagOptions({
+          deps: mockDeps,
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('home-mcp-source-read'),
+          workflowSourceRoots: capture.roots,
+          workflow: { name: 'home-mcp-source-read', budget: { max_work_units: 1 }, nodes: [node] },
+        });
+        mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+          foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+        );
+        try {
+          await executeDagWorkflow(options);
+        } finally {
+          await capture.restore();
+        }
+        expectReleased(mockDeps.store, 'step');
+        expect(
+          (await mockDeps.store.getDagResumeSnapshot(options.workflowRun.id)).budget.workUnits
+        ).toBe(0);
+        expect(mockSendQueryDag).not.toHaveBeenCalled();
+        mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+        await executeDagWorkflow(options);
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      });
 
       it('an operator transition that already moved the row wins over the release', async () => {
         const mockDeps = createMockDeps();
