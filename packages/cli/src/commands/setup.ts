@@ -1953,6 +1953,14 @@ export function writeScopedEnv(
     const proposed = parseDotenv(content);
     if (options.replaceGitHubAuth) {
       for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+    } else if (proposed.GITHUB_APP_ID) {
+      for (const key of GITHUB_PAT_KEYS) {
+        if (!existing[key]) delete existing[key];
+      }
+    } else if (proposed.GITHUB_TOKEN) {
+      for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
+        if (!existing[key]) delete existing[key];
+      }
     }
     const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
     if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
@@ -2347,12 +2355,12 @@ async function runSetup(options: SetupOptions): Promise<void> {
         exitSetup(1);
       }
     }
-    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_KEYS;
+    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
     const replacePartialApp =
       config.github?.mode === 'app' &&
       !hasCompleteAppCredential(saved) &&
-      GITHUB_APP_CREDENTIAL_KEYS.some(key => key in saved);
-    if (config.github && (oppositeKeys.some(key => key in saved) || replacePartialApp)) {
+      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
+    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
       const approved = await confirm({
         message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
         initialValue: false,

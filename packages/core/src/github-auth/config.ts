@@ -16,6 +16,7 @@ import { loadAppPrivateKey } from './private-key';
 import { AppPrivateKeyError } from './errors';
 import type { GitHubAppConfig } from './types';
 import { getEncryptionKey } from '../utils/token-crypto';
+import { selectGitHubAuthMode } from '../utils/github-auth-mode';
 
 export interface DeviceFlowConfig {
   /** GitHub App client id (the `Iv1.`/`Iv23…` value, distinct from GITHUB_APP_ID). */
@@ -34,13 +35,8 @@ export function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): GitHu
   ) {
     return null;
   }
-  if (env.GITHUB_TOKEN) {
-    throw new Error(
-      'GitHub authentication misconfigured: both App mode (GITHUB_APP_ID) and PAT mode ' +
-        '(GITHUB_TOKEN) are configured. Pick one: unset GITHUB_TOKEN for App mode, ' +
-        'or unset GITHUB_APP_ID and its private key for PAT mode.'
-    );
-  }
+  const mode = selectGitHubAuthMode(env);
+  if (mode.kind === 'conflict') throw new Error(mode.message);
   const appId = env.GITHUB_APP_ID?.trim();
   if (!appId || !/^[0-9]+$/.test(appId) || !/[1-9]/.test(appId)) {
     throw new AppPrivateKeyError('GITHUB_APP_ID must be a positive decimal App ID.');

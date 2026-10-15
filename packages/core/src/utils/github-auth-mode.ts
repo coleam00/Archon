@@ -13,13 +13,16 @@ export function selectGitHubAuthMode(env: NodeJS.ProcessEnv): GitHubAuthModeDeci
   );
   const hasGitHubPat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
 
-  if (hasGitHubApp && hasGitHubPat) {
+  const hasAppCredential = Boolean(
+    env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_APP_PRIVATE_KEY_PATH
+  );
+  if (hasAppCredential && env.GITHUB_TOKEN) {
     return {
       kind: 'conflict',
       message:
         'GitHub adapter misconfigured: both App mode (GITHUB_APP_ID) and PAT mode ' +
         '(GITHUB_TOKEN) are configured. Pick one — unset GITHUB_TOKEN for App mode, ' +
-        'or unset GITHUB_APP_ID for PAT mode.',
+        'or unset GITHUB_APP_ID and its private key for PAT mode.',
     };
   }
   if (hasGitHubApp) return { kind: 'app' };

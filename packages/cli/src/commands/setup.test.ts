@@ -1195,6 +1195,8 @@ describe('GitHub setup wizard', () => {
     .privateKey.export({ type: 'pkcs8', format: 'pem' })
     .toString();
   const pat = 'ghp_fixture_token';
+  let appId: string;
+  let inputValidation: (string | Error | undefined)[];
   let webhookSecret: string;
   let botDisplayName: string;
   let keyPem: string;
@@ -1222,6 +1224,8 @@ describe('GitHub setup wizard', () => {
     mkdirSync(join(root, 'home'));
     mkdirSync(join(root, '.archon'));
     target = join(root, '.archon', '.env');
+    appId = '123';
+    inputValidation = [];
     webhookSecret = 'fixture-webhook-secret';
     botDisplayName = 'Archon';
     keyPem = privateKey;
@@ -1261,7 +1265,11 @@ describe('GitHub setup wizard', () => {
       )
         return 'U222';
       if (options.message === 'Enter the bot display name:') return botDisplayName;
-      if (options.message === 'GitHub App ID:') return '123';
+      if (options.message === 'GitHub App ID:') {
+        const error = await options.validate?.(appId);
+        inputValidation.push(error);
+        return error ? cancelled : appId;
+      }
       if (
         options.message ===
         'Enter allowed GitHub usernames (comma-separated, or leave empty for all):'
@@ -1285,7 +1293,11 @@ describe('GitHub setup wizard', () => {
         keyValidation.push(error);
         return error ? cancelled : value;
       }
-      if (options.message === 'GitHub webhook secret:') return webhookSecret;
+      if (options.message === 'GitHub webhook secret:') {
+        const error = await options.validate?.(webhookSecret);
+        inputValidation.push(error);
+        return error ? cancelled : webhookSecret;
+      }
       if (options.message === 'Enter your GitHub Personal Access Token:') return pat;
       throw new Error(`Unexpected password: ${options.message}`);
     });
@@ -1433,6 +1445,82 @@ describe('GitHub setup wizard', () => {
     expect([...new Set(activationKeys)].sort()).toEqual([...GITHUB_APP_CREDENTIAL_KEYS].sort());
   });
 
+  it.each(['0', '-1', 'abc', '1.2', '   '])(
+    'rejects invalid App ID %j before writing',
+    async value => {
+      appId = value;
+      expect(await run()).toBe(0);
+      expect(inputValidation).toEqual(['Enter a positive decimal App ID']);
+      expect(existsSync(target)).toBe(false);
+    }
+  );
+
+  it('rejects a whitespace webhook secret before writing', async () => {
+    webhookSecret = '   ';
+    expect(await run()).toBe(0);
+    expect(inputValidation).toEqual([undefined, 'Enter the secret configured on your GitHub App']);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it.each([
+    ['app', 'GH_TOKEN', ''],
+    ['app', 'GITHUB_TOKEN', ''],
+    ...GITHUB_APP_KEYS.map(key => ['pat', key, ''] as const),
+    ['pat', 'GITHUB_APP_CLIENT_ID', 'Iv1.old'],
+    ['pat', 'GITHUB_APP_SLUG', 'old-app'],
+    ['pat', 'GITHUB_APP_INSTALLATION_ID', '999'],
+  ] as const)('preserves %s credentials with inactive %s=%j', async (mode, key, value) => {
+    authMode = mode;
+    const original = serializeEnv({
+      ...(mode === 'app'
+        ? { GITHUB_APP_ID: '999', GITHUB_APP_PRIVATE_KEY_PATH: keyPath }
+        : { GITHUB_TOKEN: 'old-token' }),
+      [key]: value,
+      WEBHOOK_SECRET: 'old-webhook',
+      CUSTOM_KEY: 'keep',
+    });
+    writeFileSync(target, original);
+    switchAnswer = false;
+    expect(await run()).toBe(0);
+    expect(output).not.toContain('Setup cancelled. Existing configuration was not changed.');
+    const env = read();
+    expect(selectGitHubAuthMode(env)).toEqual({ kind: mode });
+    expect(env.WEBHOOK_SECRET).toBe('old-webhook');
+    expect(env.CUSTOM_KEY).toBe('keep');
+    if (mode === 'app') {
+      expect(loadGitHubAppConfig(env)).toMatchObject({ appId: '999', privateKey });
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_TOKEN).toBeUndefined();
+    } else {
+      expect(env.GITHUB_TOKEN).toBe('old-token');
+      expect(loadGitHubAppConfig(env)).toBeNull();
+    }
+    const backups = Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target)));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(dirname(target), backups[0]), 'utf8')).toBe(original);
+  });
+
+  it.each(GITHUB_APP_CREDENTIAL_KEYS)(
+    'rejects PAT beside partial %s in Add and workflow loading',
+    async key => {
+      setupMode = 'add';
+      const env = { GITHUB_TOKEN: pat, WEBHOOK_SECRET: webhookSecret, [key]: 'partial' };
+      expect(() => loadGitHubAppConfig(env)).toThrow('both App mode');
+      const original = serializeEnv(env);
+      writeFileSync(target, original);
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        expect(await run()).toBe(1);
+        expect(readFileSync(target, 'utf8')).toBe(original);
+        expect(Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target)))).toEqual(
+          []
+        );
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
+
   it.each(['path', 'inline'] as const)(
     'writes a fresh App using %s without PAT keys or secret output',
     async source => {
@@ -1440,6 +1528,7 @@ describe('GitHub setup wizard', () => {
       expect(await run()).toBe(0);
       const env = read();
       expect(keyValidation).toEqual([undefined]);
+      expect(inputValidation).toEqual([undefined, undefined]);
       expect(env.GITHUB_TOKEN).toBeUndefined();
       expect(env.GH_TOKEN).toBeUndefined();
       expect(env.WEBHOOK_SECRET).toBe(webhookSecret);
@@ -1459,15 +1548,22 @@ describe('GitHub setup wizard', () => {
   it.each(['home', 'relative'] as const)(
     'validates and stores the absolute private key path from a %s path',
     async form => {
-      const absolutePath = keyPath;
-      keyPath =
-        form === 'home'
-          ? `  ~/${relative(homedir(), absolutePath)}  `
-          : `  ${relative(process.cwd(), absolutePath)}  `;
-      expect(await run()).toBe(0);
-      expect(keyValidation).toEqual([undefined]);
-      expect(read().GITHUB_APP_PRIVATE_KEY_PATH).toBe(resolve(absolutePath));
-      expect(loadGitHubAppConfig(read())?.privateKey).toBe(privateKey);
+      const homeRoot =
+        form === 'home' ? mkdtempSync(join(homedir(), 'archon-setup-key-')) : undefined;
+      const absolutePath = homeRoot ? join(homeRoot, 'app.pem') : keyPath;
+      writeFileSync(absolutePath, privateKey);
+      try {
+        keyPath =
+          form === 'home'
+            ? `  ~/${relative(homedir(), absolutePath)}  `
+            : `  ${relative(process.cwd(), absolutePath)}  `;
+        expect(await run()).toBe(0);
+        expect(keyValidation).toEqual([undefined]);
+        expect(read().GITHUB_APP_PRIVATE_KEY_PATH).toBe(resolve(absolutePath));
+        expect(loadGitHubAppConfig(read())?.privateKey).toBe(privateKey);
+      } finally {
+        if (homeRoot) await removeTempTree(homeRoot);
+      }
     }
   );
 
