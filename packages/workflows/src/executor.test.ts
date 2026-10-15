@@ -4975,33 +4975,69 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
-  it.each([true, false])(
-    'source release exits without checking or failing a newly resumed owner (released=%s)',
-    async released => {
-      mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released });
-      const store = makeStore({
-        getWorkflowRunStatus: mock(async () => 'running' as const),
-        getWorkflowRun: mock(async () => {
-          throw new Error('old owner must not read after release');
-        }),
-      });
-      const result = await executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'msg',
-        {
-          conversationId: 'db-conv-1',
-        }
-      );
-      expect(result.success).toBe(released);
-      expect('paused' in result ? result.paused : undefined).toBe(released ? true : undefined);
-      expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      expect(store.getWorkflowRun).not.toHaveBeenCalled();
-    }
-  );
+  it('source release exits without checking or failing a newly resumed owner', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      getWorkflowRun: mock(async () => {
+        throw new Error('old owner must not read after release');
+      }),
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      { conversationId: 'db-conv-1' }
+    );
+    expect(result).toMatchObject({ success: true, paused: true });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('a source release lost to a sibling gate preserves paused handling and slot release', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: false });
+    const paused = makeRun({
+      status: 'paused',
+      metadata: {
+        approval: { type: 'approval', nodeId: 'review', pauseId: 'gate', message: 'Approve?' },
+      },
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => paused),
+      getWorkflowRunStatus: mock(async () => 'paused' as const),
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      { conversationId: 'db-conv-1' }
+    );
+    expect(result).toMatchObject({ success: true, paused: true });
+    expect(store.releasePausedRunSlot).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('a lost source release cannot fail another owner when the status read fails', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: false });
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      getWorkflowRun: mock(async () => {
+        throw new Error('status unavailable');
+      }),
+    });
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      })
+    ).rejects.toThrow('status unavailable');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it('calls failWorkflowRun when run is still running at finally', async () => {
     const failSpy = mock(async () => {});

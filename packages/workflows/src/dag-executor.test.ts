@@ -21435,6 +21435,30 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
+      for (const kind of ['script', 'command'] as const) {
+        it(`source recovery rejects invalid live source directories (${kind}, ENOTDIR)`, async () => {
+          const deps = createMockDeps();
+          await mkdir(join(testDir, '.archon'), { recursive: true });
+          await writeFile(
+            join(testDir, '.archon', kind === 'script' ? 'scripts' : 'commands'),
+            'not a directory'
+          );
+          const node =
+            kind === 'script' ? checkNode : dagNodeSchema.parse({ id: 'work', command: 'work' });
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              cwd: testDir,
+              workflow: { name: 'invalid-source-directory', nodes: [node] },
+              workflowRun: makeWorkflowRun('invalid-source-directory'),
+            })
+          );
+          expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockSendQueryDag).not.toHaveBeenCalled();
+        });
+      }
+
       for (const kind of ['agent', 'loop', 'compose', 'mcp'] as const) {
         it(`source recovery fails an authored directory used as a file (${kind})`, async () => {
           const deps = createMockDeps();

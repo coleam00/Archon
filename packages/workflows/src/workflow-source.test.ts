@@ -1149,6 +1149,19 @@ describe('isSourceReadFailure', () => {
     expect(isSourceReadFailure(error)).toBe(expected);
   });
 
+  test('ENOTDIR requires inventory evidence of the expected file or directory', () => {
+    const path = join('/capture', 'commands');
+    const directoryError = Object.assign(systemError('ENOTDIR', 'scandir'), { path });
+    expect(isSourceReadFailure(directoryError)).toBe(false);
+    expect(isSourceReadFailure(directoryError, new Set([path]))).toBe(false);
+    expect(isSourceReadFailure(directoryError, new Set([`${path}-other/work.md`]))).toBe(false);
+    expect(isSourceReadFailure(directoryError, new Set([join(path, 'work.md')]))).toBe(true);
+    const fileError = Object.assign(systemError('ENOTDIR', 'open'), {
+      path: join(path, 'work.md'),
+    });
+    expect(isSourceReadFailure(fileError, new Set([fileError.path]))).toBe(true);
+  });
+
   test('a directory read is recoverable only where verification found a file', () => {
     const error = Object.assign(systemError('EISDIR', 'read'), { path: '/capture/work.md' });
     expect(isSourceReadFailure(error)).toBe(false);

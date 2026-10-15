@@ -1016,7 +1016,7 @@ Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so
 
 ### `workflow wake`
 
-Wake due durable time waits, event deadlines, signaled events, scheduled quota resumes, answered gates, and runs released because their host could not read their frozen source without running a server:
+Without running a server, wake due durable time waits, event deadlines, signaled events, scheduled quota resumes, answered gates, and runs released because their host could not read their frozen source:
 
 ```bash
 archon workflow wake --json

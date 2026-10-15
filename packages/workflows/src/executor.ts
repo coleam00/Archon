@@ -3424,7 +3424,7 @@ export async function executeWorkflow(
     // The adopted-dir scope (#2747) encloses only the DAG: a child sub-run spawned
     // from a node re-enters
     // `executeWorkflow` and scopes its own (absent) adoption.
-    const dagSummary = await runWithAdoptedRunDir(adoptedRunDir, () =>
+    const dagResult = await runWithAdoptedRunDir(adoptedRunDir, () =>
       executeDagWorkflow({
         deps,
         platform,
@@ -3470,17 +3470,12 @@ export async function executeWorkflow(
       })
     );
 
-    if (typeof dagSummary === 'object') {
+    if (typeof dagResult === 'object') {
       // After release another executor may own even a running row; the backstop has no authority.
       sourceExecutionStopped = true;
-      return dagSummary.released
-        ? { success: true, paused: true, workflowRunId: workflowRun.id }
-        : {
-            success: false,
-            workflowRunId: workflowRun.id,
-            error: 'Workflow did not complete successfully',
-          };
+      if (dagResult.released) return { success: true, paused: true, workflowRunId: workflowRun.id };
     }
+    const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
     const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
@@ -3565,6 +3560,7 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
+    if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
       throw error;

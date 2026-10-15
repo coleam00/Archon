@@ -510,7 +510,8 @@ function sourceReadError(path: string, error: unknown): unknown {
  * was read and found wrong (a digest mismatch, a replaced capture, an unparseable
  * manifest) or a script absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
  * Node system error (string `code` and `syscall`) on the error or its `cause` chain.
- * EISDIR is invalid authored source unless the inventory proves a file belonged there.
+ * Invalid file/directory shapes are recoverable only where the inventory proves the
+ * expected file or directory belonged.
  *
  * A capture missing from this host (`ENOENT`) counts: captures live on the host that made
  * them, so another host may still read it. If it never returns, the continuation host's
@@ -524,10 +525,27 @@ export function isSourceReadFailure(error: unknown, verifiedFiles?: ReadonlySet<
       if (current.code === 'EISDIR') {
         return typeof current.path === 'string' && verifiedFiles?.has(current.path) === true;
       }
+      if (current.code === 'ENOTDIR') {
+        const readingDirectory = current.syscall === 'scandir' || current.syscall === 'readdir';
+        return (
+          typeof current.path === 'string' &&
+          ((!readingDirectory && verifiedFiles?.has(current.path) === true) ||
+            hasVerifiedFileBelow(verifiedFiles, current.path))
+        );
+      }
       return true;
     }
   }
   return false;
+}
+
+function hasVerifiedFileBelow(
+  verifiedFiles: ReadonlySet<string> | undefined,
+  path: string
+): boolean {
+  return (
+    verifiedFiles !== undefined && [...verifiedFiles].some(file => file.startsWith(path + sep))
+  );
 }
 
 /** Missing live paths are optional; a path containing verified captured files is not. */
@@ -535,10 +553,7 @@ export function capturedSourceReadGuard(
   verifiedFiles: ReadonlySet<string> | undefined
 ): (path: string, error: unknown) => void {
   return (path, error) => {
-    if (
-      verifiedFiles &&
-      [...verifiedFiles].some(file => file === path || file.startsWith(path + sep))
-    ) {
+    if (verifiedFiles?.has(path) || hasVerifiedFileBelow(verifiedFiles, path)) {
       throw error;
     }
   };
