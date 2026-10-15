@@ -341,11 +341,11 @@ describe('child worktree resolver', () => {
     expect(first).not.toBe(second);
   });
 
-  test('a re-used worktree is recorded as adopted on the environment row', async () => {
+  test('a re-used worktree is recorded without a creation proof on the environment row', async () => {
     // Adoption is legitimate here — it is how a parent's resume recovers a worktree
     // whose child row never got written — but it must never pass unremarked, because
-    // silence is exactly what made the identifier collision invisible. The row is the
-    // durable half of that signal (a WARN is emitted alongside it).
+    // silence is exactly what made the identifier collision invisible. The row's null
+    // creation id is the durable half of that signal (a WARN is emitted alongside it).
     nextCreateAdopts = true;
 
     const result = await resolver.resolve({
@@ -355,12 +355,11 @@ describe('child worktree resolver', () => {
       codebaseId: 'cb-1',
     });
 
-    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(true);
     expect(mockIsolationDbCreate.mock.calls[0][0].metadata.worktree_creation_id).toBeNull();
     expect(result.ownedWorktree).toBeUndefined();
   });
 
-  test('a freshly created worktree is not recorded as adopted', async () => {
+  test('a freshly created worktree is recorded with its creation proof', async () => {
     const result = await resolver.resolve({
       setupEnvironment: {},
       parentRun,
@@ -368,7 +367,6 @@ describe('child worktree resolver', () => {
       codebaseId: 'cb-1',
     });
 
-    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(false);
     expect(result.ownedWorktree).toEqual({
       envId: 'env-1',
       creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',

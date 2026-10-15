@@ -131,6 +131,29 @@ describe('config-loader', () => {
     expect(mockFsWriteFile).not.toHaveBeenCalled();
   });
 
+  test('attention notice routes load from global config only', async () => {
+    const routes = 'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n';
+    mockFsReadFile.mockImplementation(async (path: string) =>
+      path.replace(/\\/g, '/').includes('/repo/.archon/')
+        ? 'attentionNotices:\n  - platform: repo-chat\n    destination: repo\n'
+        : routes
+    );
+    expect((await loadConfig('/repo')).attentionNotices).toEqual([
+      { platform: 'matrix-chat', destination: 'ops' },
+    ]);
+    expect(toSafeConfig(await loadConfig())).not.toHaveProperty('attentionNotices');
+  });
+
+  test.each([
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n  - platform: matrix-chat\n    destination: ops\n',
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ""\n',
+    'attentionNotices:\n  - platform: Matrix Chat\n    destination: ops\n',
+  ])('an invalid attention notice route degrades to no routes: %s', async yaml => {
+    mockFsReadFile.mockResolvedValue(yaml);
+    expect(await loadGlobalConfig()).toEqual({});
+    expect((await loadConfig()).attentionNotices).toEqual([]);
+  });
+
   test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
     '%s preserves unrelated global settings and the default conversation limit',
     async concurrency => {

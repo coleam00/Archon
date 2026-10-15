@@ -3854,7 +3854,7 @@ async function executeScriptNode(
     // permissions)" branch — that branch is for execFileAsync EACCES.
     let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
     try {
-      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots);
+      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]));
     } catch (discoveryErr) {
       const err = discoveryErr as Error;
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;

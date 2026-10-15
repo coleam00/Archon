@@ -156,6 +156,7 @@ export interface IncludeCommandReadError {
   path: string;
   message: string;
   operation: 'inspect' | 'read';
+  cause?: unknown;
 }
 
 export type IncludeCommandContent = string | null | IncludeCommandReadError;

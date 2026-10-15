@@ -5,7 +5,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
+import {
+  WorkflowSourceUnavailableError,
+  captureWorkflowSource,
+} from '../../../workflows/src/workflow-source';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { resolveRunWorkflow } from './resolve-run-workflow';
 
@@ -103,6 +106,8 @@ describe('resolveRunWorkflow', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain('recorded workflow source is unavailable');
+      expect(result.sourceError).toBeInstanceOf(WorkflowSourceUnavailableError);
+      expect(result.sourceError?.path).toBe(join(capture.anchor.root, 'manifest.json'));
       expect(result.resumeHint).toBe('Start a fresh run to execute the current workflow.');
     }
   });

@@ -36,8 +36,6 @@ import {
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
 
-const lock = (): string => (getDatabase().dialect === 'postgres' ? ' FOR UPDATE' : '');
-
 interface RequestRow {
   id: string;
   resource_key: string;
@@ -54,7 +52,7 @@ async function oldestQueuedRequest(query: Query, resource: string): Promise<Requ
   const queued = await query<RequestRow>(
     `SELECT * FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position LIMIT 1${lock()}`,
+      ORDER BY queue_position LIMIT 1${getDialect().rowLock()}`,
     [resource]
   );
   return queued.rows[0] ?? null;
@@ -477,7 +475,7 @@ export async function withdrawQueuedResourceStart(
       await query('UPDATE remote_agent_resource_start_requests SET id = id WHERE id = $1', [id]);
     }
     const selected = await query<{ launch: unknown }>(
-      `SELECT launch FROM remote_agent_resource_start_requests WHERE id = $1 AND status = 'queued'${lock()}`,
+      `SELECT launch FROM remote_agent_resource_start_requests WHERE id = $1 AND status = 'queued'${getDialect().rowLock()}`,
       [id]
     );
     if (!selected.rows[0]) return null;
@@ -520,7 +518,7 @@ export async function completeStartBindingPreparation(input: {
     }
     const binding = await query<{ intent: unknown }>(
       `SELECT intent FROM remote_agent_start_receipt_bindings
-        WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${lock()}`,
+        WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${getDialect().rowLock()}`,
       [input.receiptId, input.bindingId, input.ownerId]
     );
     const rawIntent = binding.rows[0]?.intent;

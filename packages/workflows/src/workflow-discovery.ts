@@ -562,7 +562,7 @@ async function resolveCommandContentForScan(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') return null;
-      return { path: commandPath, message: err.message, operation: 'read' };
+      return { path: commandPath, message: err.message, operation: 'read', cause: error };
     }
   }
 
@@ -584,7 +584,7 @@ async function resolveCommandContentForScan(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
-      return { path: dir, message: err.message, operation: 'inspect' };
+      return { path: dir, message: err.message, operation: 'inspect', cause: error };
     }
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
@@ -593,7 +593,7 @@ async function resolveCommandContentForScan(
       return await readFile(commandPath, 'utf-8');
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      return { path: commandPath, message: err.message, operation: 'read' };
+      return { path: commandPath, message: err.message, operation: 'read', cause: error };
     }
   }
 
@@ -608,7 +608,7 @@ async function resolveCommandContentForScan(
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return null;
-    return { path: defaultsDir, message: err.message, operation: 'inspect' };
+    return { path: defaultsDir, message: err.message, operation: 'inspect', cause: error };
   }
   const match = entries.find(e => e.commandName === commandName);
   if (!match) return null;
@@ -617,7 +617,7 @@ async function resolveCommandContentForScan(
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    return { path: commandPath, message: err.message, operation: 'read' };
+    return { path: commandPath, message: err.message, operation: 'read', cause: error };
   }
 }
 
@@ -762,7 +762,6 @@ export async function discoverWorkflows(
     if (targetsByFile.size === 0) return;
 
     const discoveryRoot = projectRoot ?? cwd ?? archonPaths.getArchonHome();
-    const scripts = await discoverScriptsForCwd(discoveryRoot, roots);
     const contents = new Map<string, string>();
     const readErrors = new Map<string, Error>();
     const readScript = async (path: string): Promise<string> => {
@@ -782,6 +781,22 @@ export async function discoverWorkflows(
     };
 
     for (const [filename, { workflow, targets }] of targetsByFile) {
+      let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
+      try {
+        scripts = await discoverScriptsForCwd(
+          discoveryRoot,
+          roots,
+          new Set(targets.map(target => target.slot.value))
+        );
+      } catch (error) {
+        allErrors.push({
+          filename,
+          error: `Script discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+          errorType: 'read_error',
+        });
+        files.delete(filename);
+        continue;
+      }
       const sources = new Map<ExecInputValidationTarget, ExecInputSource>();
       let unreadable = false;
       for (const target of targets) {

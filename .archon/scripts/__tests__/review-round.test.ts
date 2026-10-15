@@ -91,6 +91,7 @@ describe('review-round', () => {
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: false,
+      light: false,
       head: newer,
       cursor: '',
       risks: FULL_REVIEW_RISKS,
@@ -108,6 +109,7 @@ describe('review-round', () => {
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
+      light: false,
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
@@ -130,12 +132,23 @@ describe('review-round', () => {
     const { cwd, older, newer } = history();
     const recorded = { seams: true, code: false, tests: true, errors: true, docs: true };
     expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, light: true }).stdout)).toMatchObject({
+      light: true,
       seams: false,
       code: true,
       tests: false,
       errors: false,
       docs: false,
     });
+  });
+
+  // The route agent adds what the delta needs beside this set, so an empty record
+  // still leaves the round lenses to run.
+  it('continues from a record in which the previous round ran no lens', () => {
+    const { cwd, older, newer } = history();
+    const none = { seams: false, code: false, tests: false, errors: false, docs: false };
+    const run = round(cwd, newer, older, { lenses: none });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({ continuation: true, light: false, ...none });
   });
 
   it('refuses a continuation whose report recorded no lenses', () => {
