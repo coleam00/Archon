@@ -98,9 +98,10 @@ and policy import boundaries. Do not compile these binaries locally on macOS.
 yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
-**SDLC workflows**: We do not accept pull requests that change
-`.archon/workflows/sdlc/`. Open an issue instead and describe the problem or
-change you want the maintainers to consider.
+**SDLC workflows**: We do not accept pull requests from outside contributors
+that change `.archon/workflows/sdlc/`. Open an issue instead and describe the
+problem or change you want the maintainers to consider. Maintainers change the
+pack through pull requests that deliver an accepted issue.
 
 ### Publishing the container image
 
