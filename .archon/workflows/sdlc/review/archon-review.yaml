@@ -9,11 +9,12 @@ description: |
   constraint is met with cited evidence or raised as a blocking finding. Given a
   part assignment, items that only later parts own are deferred, not unmet.
   Advisory and read-only: it judges, it never edits. Given the previous round's
-  report, the lenses the previous round ran, plus any the route agent finds the
-  delta needs, review only the correction delta since the reviewed commit,
-  judging whether each prior finding was resolved or validly declined (`light`
-  runs the general code reviewer alone, for a CI fix), and one continuation
-  reviewer carries the prior findings forward.
+  report, the general code reviewer, plus every lens the route agent selects for
+  a finding the previous round left open or for the delta's area, reviews only
+  the correction delta since the reviewed commit, leaving out code a merge of the
+  base brought in, and judges whether each prior finding was resolved or validly
+  declined (`light` runs the general code reviewer alone, for a CI fix); one
+  continuation reviewer carries the prior findings forward.
 
   When reviewing a PR, the final synthesized report is posted to it as one
   canonical comment, edited in place on re-review.
@@ -66,6 +67,18 @@ returns: publish
 outcome_field: ready
 
 nodes:
+  # The directory of the pack's default policy documents in this run's captured
+  # source, the same in a source checkout and a binary install. Synthesis names the
+  # policy file it needs and chooses between the project's own and the default.
+  - id: policy
+    script: policy
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        defaults: { type: string }
+      required: [defaults]
+
   # Fixes what this round reviews before any agent reads the target: whether it
   # continues a previous round, the commit under review (the checkout's HEAD as
   # the engine observed it), and, on a continuation, the previous round's
@@ -95,8 +108,8 @@ nodes:
         risks: { type: string, minLength: 1 }
         # This node's engine identity, so synthesis counts only this round's lenses.
         execution: { type: object }
-        # The lenses a continuation reruns: the previous round's, or code alone on a
-        # light round. All false on a first round, where route alone decides.
+        # The lenses a continuation reruns: code alone on every continuation. All
+        # false on a first round, where route alone decides.
         seams: { type: boolean }
         code: { type: boolean }
         tests: { type: boolean }
@@ -160,8 +173,8 @@ nodes:
 
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. Every round
-  # but a light one routes; on a continuation route judges the delta, and the round
-  # runs its selection together with the lenses the previous round recorded.
+  # but a light one routes; on a continuation route adds to the code lens every lens
+  # whose finding the previous report leaves open or whose area the delta touches.
   - id: route
     command: route-review
     model: small
@@ -263,7 +276,9 @@ nodes:
     context: fresh
     mutates_checkout: false
     output_type: review-report
-    depends_on: [scope, review-complete]
+    depends_on: [policy, scope, review-complete]
+    with:
+      policy_defaults: "$policy.output.defaults"
     output_format: &review_verdict
       type: object
       properties:
@@ -326,8 +341,6 @@ nodes:
       report_pointer: "$synthesize.output.report"
       discoveries: { from: "$synthesize.output.discoveries" }
       contract_left: { from: "$synthesize.output.contract_left" }
-      route: { from: "$route.output", if_skipped: null }
-      mode: { from: "$mode.output" }
     output_type: review-report
     output_format: *review_verdict
 

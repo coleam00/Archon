@@ -723,10 +723,21 @@ const env = await provider.create({
 
 ### Worktree Adoption
 
-The provider adopts existing worktrees before creating new ones:
+Reuse is the default. The provider adopts existing worktrees before creating new ones:
 
 1. **Path match**: If worktree exists at expected path -> adopt
 2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
+
+Every successful provider adoption emits one `worktree_adopted` WARN with the branch and
+worktree path. The registration writers persist `metadata.adopted` on the isolation-environment
+row: `true` marks reuse of a checkout or a new checkout of an existing task branch;
+`false` marks a newly created checkout with a creation proof. New adoption registrations
+have no creation proof. Registered checkout handovers update the flag and preserve the original
+row's creation proof and timestamps; the flag does not grant cleanup ownership. Older rows
+without the flag have unknown adoption history.
+Child runs use the same warning and registration mechanism. A provider used without a store
+still warns and returns adoption provenance, but does not write a row itself. The resolver's
+direct PR-branch adoption and registered checkout handovers also warn and persist `adopted: true`.
 
 Only a worktree whose setup finished can be adopted. `create()` adds every worktree already
 locked (`git worktree add --lock --reason <attempt reason>`) and releases the lock once setup

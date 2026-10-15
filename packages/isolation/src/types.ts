@@ -6,6 +6,7 @@
  * enables future strategies (containers, VMs).
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type {
@@ -189,6 +190,7 @@ export type WorktreeCreationEnvironment = WorktreeEnvironment<
  * and whether that creation made the checked-out branch.
  */
 export interface WorktreeRegistrationMetadata {
+  adopted: boolean;
   worktree_creation_id: string | null;
   worktree_branch_created: boolean;
 }
@@ -198,8 +200,12 @@ export function worktreeRegistrationMetadata(
   metadata: WorktreeCreationEnvironment['metadata']
 ): WorktreeRegistrationMetadata {
   return metadata.provenance === 'created'
-    ? { worktree_creation_id: metadata.creationId, worktree_branch_created: metadata.branchCreated }
-    : { worktree_creation_id: null, worktree_branch_created: false };
+    ? {
+        adopted: metadata.adopted,
+        worktree_creation_id: metadata.creationId,
+        worktree_branch_created: metadata.branchCreated,
+      }
+    : { adopted: metadata.adopted, worktree_creation_id: null, worktree_branch_created: false };
 }
 
 /** Read the creation proof that worktreeRegistrationMetadata persisted. */
@@ -335,6 +341,9 @@ export type IsolationBlockReason = 'creation_failed';
 
 // --- Database Types ---
 
+// An upsert can preserve the checkout and row id while replacing the registration.
+export const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
+
 export interface IsolationEnvironmentRow {
   id: string;
   codebase_id: string;
@@ -349,6 +358,19 @@ export interface IsolationEnvironmentRow {
   /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver. */
   created_by_user_id: string | null;
   metadata: Record<string, unknown>;
+}
+
+export function sameWorktreeRegistration(
+  current: IsolationEnvironmentRow,
+  observed: IsolationEnvironmentRow
+): boolean {
+  if (current.provider !== 'worktree' || current.status !== 'active') return false;
+  const token = observed.metadata[WORKTREE_REGISTRATION_ID];
+  return typeof token === 'string'
+    ? current.id === observed.id &&
+        current.working_path === observed.working_path &&
+        current.metadata[WORKTREE_REGISTRATION_ID] === token
+    : isDeepStrictEqual(current, observed);
 }
 
 // --- Config Injection ---

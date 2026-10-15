@@ -1,3 +1,4 @@
+import { createLogger } from '@archon/paths';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { readFile } from 'node:fs/promises';
@@ -13,6 +14,7 @@ import {
   type ModelAliasPreset,
 } from '@archon/workflows/model-validation';
 import {
+  deprecatedQuotaPolicyWarning,
   workflowRunConfigLayerSchema,
   type WorkflowRunConfigInput,
   type WorkflowRunConfigLayer,
@@ -22,6 +24,12 @@ import {
 import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { GlobalConfig, RepoConfig } from './config-types';
 import { unsealWorkflowRunConfigStructure } from './run-config-handoff';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('config.run');
+  return cachedLog;
+}
 
 type ConfigKey = keyof GlobalConfig | keyof RepoConfig;
 type KeyClassification = { kind: 'runtime' } | { kind: 'unavailable'; reason: string };
@@ -190,6 +198,8 @@ export function parseWorkflowRunConfig(
   };
   const parsed = workflowRunConfigLayerSchema.safeParse(candidate);
   if (!parsed.success) throw validationError(parsed.error);
+  const warning = parsed.data.workflows && deprecatedQuotaPolicyWarning(parsed.data.workflows);
+  if (warning) getLog().warn({ source: source.label, warning }, 'run_config.quota_keys_deprecated');
   return { layer: normalizeRunConfigSemantics(parsed.data), source };
 }
 

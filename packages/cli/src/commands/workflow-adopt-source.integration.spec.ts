@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
@@ -378,4 +378,48 @@ describe('public CLI adopted workflow source', () => {
       expect(capture.manifest.workflow_name).toBe('adopt-source');
     }, 120_000);
   }
+});
+
+test('CLI adoption refuses a worktree from another clone before lane capture or execution', async () => {
+  const fixture = await makeFixture();
+  const other = join(fixture.root, 'other-clone');
+  const clone = spawnSync('git', ['clone', '-q', fixture.repo, other], { encoding: 'utf8' });
+  expect(clone.status).toBe(0);
+  const foreignWorktree = join(fixture.root, 'foreign-worktree');
+  const worktree = spawnSync(
+    'git',
+    ['-C', other, 'worktree', 'add', '-qb', 'fixture-lane', foreignWorktree, 'HEAD'],
+    { encoding: 'utf8' }
+  );
+  expect(worktree.status).toBe(0);
+  const foreignPath = await canonicalizeProjectPath(foreignWorktree);
+  writePack(fixture.repo, 'parent source');
+  writePack(foreignPath, 'foreign source');
+  const db = new Database(join(fixture.home, 'archon.db'));
+  try {
+    db.run('UPDATE remote_agent_isolation_environments SET working_path = ?', [foreignPath]);
+    db.run('UPDATE remote_agent_workflow_runs SET working_path = ?', [foreignPath]);
+  } finally {
+    db.close();
+  }
+  const before = observer(fixture)
+    .query('SELECT metadata FROM remote_agent_isolation_environments')
+    .all();
+  const result = await captureWorkflowCommand(fixture.home, host =>
+    workflowRunCommand(host, fixture.repo, 'adopt-source', '', {
+      adoptRunId: fixture.priorId,
+      inputs: ['token=selected'],
+    })
+  );
+  expect(result.status).toBe(1);
+  expect(result.output).toContain('belongs to a different clone');
+  expect(result.output).not.toContain('worktree_adopted');
+  expect(result.output).not.toContain(`"sourceRoot":${JSON.stringify(foreignPath)}`);
+  expect(
+    observer(fixture).query('SELECT metadata FROM remote_agent_isolation_environments').all()
+  ).toEqual(before);
+  expect(observer(fixture).query('SELECT id FROM remote_agent_workflow_runs').all()).toHaveLength(
+    1
+  );
+  expect(existsSync(join(foreignWorktree, 'source-result.json'))).toBe(false);
 });

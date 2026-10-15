@@ -54,7 +54,14 @@ An explicit narrowing in the operator's trigger is an accepted boundary. The par
 
 ## Light mode (a prior report exists)
 
-When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
+When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. This round's diff is **only the delta**, and only this change's part of it: code that arrived through a merge of the base branch is not this change. Fetch the base as above, rebuild the cursor's change on the base the commit under review now sits on, and diff the commit under review against that tree:
+
+```
+tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <commit under review>)" <cursor> | head -1)
+git diff "$tree" <commit under review>
+```
+
+With no base merge between the two commits, the tree is the cursor's own and this is `git diff <cursor>..<commit under review>`. After a conflicting merge `merge-tree` exits non-zero, the first line is still the tree, and the delta shows how this change resolved the conflict, which is this change's work. Record the tree and both commands in scope.md. For a working-diff target, use the base you resolved in place of `<remote>/<base>`, and include any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
 
 ## Write the scope file
 

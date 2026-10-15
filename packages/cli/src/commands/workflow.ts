@@ -1,3 +1,4 @@
+import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
@@ -215,7 +216,10 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
+import {
+  adoptRegisteredWorktree,
+  resolveWorkflowAdoption,
+} from '@archon/core/operations/workflow-adoption';
 import {
   attentionProjectForCwd,
   attentionQueueSource,
@@ -2492,7 +2496,7 @@ async function runWorkflowWithOwnedSource(
       // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
-          ? detachedAdoptionLane.workingPath
+          ? detachedAdoptionLane.environment.working_path
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
@@ -2796,15 +2800,20 @@ async function runWorkflowWithOwnedSource(
       });
       aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
-        workingCwd = lane.workingPath;
-        isolationEnvId = lane.envId;
+        const env = await adoptRegisteredWorktree(
+          host.records.isolation,
+          lane,
+          codebase.default_cwd
+        );
+        workingCwd = env.working_path;
+        isolationEnvId = env.id;
         adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below
         // and silently cut a fresh worktree from base over the inherited one.
         wantsIsolation = false;
         console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'checkout-branch') {
         adoptedTaskBranch = lane.taskBranch;
@@ -2884,6 +2893,7 @@ async function runWorkflowWithOwnedSource(
     const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
+      await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
       isolationEnvId = matchingEnv.id;
       resumeBranch = matchingEnv.branch_name;
       getLog().info(
@@ -3164,7 +3174,7 @@ async function runWorkflowWithOwnedSource(
           getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
           // Non-blocking — skip warning if base branch cannot be determined
         }
-        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
         workingCwd = existingEnv.working_path;
         isolationEnvId = existingEnv.id;
       } else {
@@ -3711,8 +3721,8 @@ async function runWorkflowWithOwnedSource(
 
     // Check result and exit appropriately
     if (result.success && 'paused' in result && result.paused) {
-      // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
-      // `attention` pause has no deadline and stays with whoever resolves it.
+      // A durable wait with a deadline (time, event or usage limit) is this process's own
+      // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
       if (result.waitCursor !== undefined) {
         const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
         if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
@@ -3792,7 +3802,7 @@ export interface PendingWaitContinuation {
 /**
  * Read the wait this process owns off a run row, if any.
  *
- * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * `undefined` means the run is not paused on a time, event or usage-limit wait — a terminal
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
@@ -4407,6 +4417,8 @@ export async function workflowStatusCommand(
     console.log(`  Status: ${run.status}`);
     const attention = runAttention(run);
     if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
+    if (attention?.kind === 'usage_limit')
+      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
     console.log(`  Age:    ${age}`);
     if (run.active_nodes.length > 0) {
@@ -4425,6 +4437,10 @@ export async function workflowStatusCommand(
 
     console.log('');
   }
+}
+
+function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
+  return `  Wait:   provider usage limit at '${nodeId}' — continues after it resets at ${resumeAt}`;
 }
 
 function formatToolAttention(
@@ -4488,6 +4504,11 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
     case 'blocked_on_children':
       // Unreachable through the waiter, which resolves every child before returning.
       return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
+    case 'usage_limit':
+      return (
+        `Run ${watchedRunId} is waiting for a provider usage limit to reset at ` +
+        `${attention.resumeAt}, then continues by itself.`
+      );
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -4676,6 +4697,12 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       lines.push(
         `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
+      );
+      break;
+    case 'usage_limit':
+      lines.push(
+        `    ${item.node}: provider usage limit reached; continues by itself after it resets at ${item.resetAt}`,
+        `    Stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
       );
       break;
     case 'unreadable':
@@ -5522,7 +5549,9 @@ export async function workflowGetCommand(
       console.log(
         waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
-          : `  Wait:   until ${waitMeta.resumeAt}`
+          : waitMeta.kind === 'quota'
+            ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
+            : `  Wait:   until ${waitMeta.resumeAt}`
       );
     }
   }

@@ -45,6 +45,7 @@ export {
   isPRIsolationRequest,
   CONTAINER_LABELS,
   worktreeRegistrationMetadata,
+  WORKTREE_REGISTRATION_ID,
   readWorktreeCreationId,
   readWorktreeBranchCreated,
 } from './types';
@@ -62,6 +63,7 @@ export type { DockerRunner, DockerExecOptions, DockerExecResult } from './contai
 
 // --- Store ---
 export type { IIsolationStore } from './store';
+export { recordWorktreeAdoption } from './store';
 
 // --- Errors ---
 export {
