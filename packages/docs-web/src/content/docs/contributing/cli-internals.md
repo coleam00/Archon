@@ -312,22 +312,24 @@ archon isolation cleanup [days] (default: 7)
 │  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE/  │
 │                                      UNAVAILABLE)               │
 │                                                                 │
-│  any git signal          → 'reclaimable' if the worktree HEAD   │
+│  any git signal          → 'merged' if the worktree HEAD        │
 │                            also passes `git cherry <base> HEAD` │
-│  MERGED                  → 'reclaimable' if the worktree HEAD   │
+│  MERGED                  → 'merged' if the worktree HEAD        │
 │                            and the branch ref (where each       │
 │                            exists) are at or behind the PR head │
-│  CLOSED                  → same, only if includeClosed          │
+│  CLOSED                  → 'pr-closed' the same way, only if    │
+│                            includeClosed                        │
 │  OPEN                    → 'open-pr', always kept               │
 │  UNAVAILABLE             → 'pr-unavailable', kept and reported  │
 │  NONE and ref present    → 'unmerged', not reclaimed            │
 │  NONE and ref gone       → 'unjudgeable', kept and reported     │
 └─────────────────────────────────┬───────────────────────────────┘
-                                  │ 'reclaimable'
+                                  │ 'merged' or 'pr-closed'
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Guard checks: no uncommitted changes, no run can still claim    │
-│ the env (getRemovalBlocker)                                     │
+│ Guard checks: no uncommitted changes, no run lock (checkRemoval │
+│ → getCleanupRunLock; a failed run's lock is released by the     │
+│ verdict, running/pending/paused runs always lock)               │
 │ provider.destroy() → remove worktree + delete remote branch     │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -353,7 +355,7 @@ fetched by SHA from the branch's remote first; if that fetch fails, the check fa
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
-**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getRemovalBlocker()`
+**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getCleanupRunLock()`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
 **Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
 

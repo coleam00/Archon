@@ -78,18 +78,6 @@ export function escapeMarkdownV2(text: string): string {
 }
 
 /**
- * Check if text appears to be already in MarkdownV2 format
- * (contains escaped characters)
- *
- * @param text - Text to check
- * @returns True if text appears already escaped
- */
-export function isAlreadyEscaped(text: string): boolean {
-  // Look for patterns like \* \_ \[ etc.
-  return /\\[_*[\]()~`>#+\-=|{}.!]/.test(text);
-}
-
-/**
  * Strip markdown formatting for plain text display
  * Used for long messages that can't be formatted (would break when split)
  *

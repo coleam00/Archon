@@ -56,6 +56,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
 | Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
 | The queue item one run stands for | `archon workflow attention <run-id> --json` |
+| Every change in the queue, as it happens | `archon workflow attention --watch --json [--all] [--label k=v] [--after <cursor>]` |
 | Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
@@ -101,6 +102,16 @@ by its `runId` and `occurrence` exactly as above. Labels are the user's routing 
 `--label ci=other` selects one class, and `attention label` writes a classification
 without answering. Archon never routes by them.
 
+`workflow wait` follows one run whose id you hold. To follow every run in scope,
+including runs started later by triggers, schedules or other sessions, run
+`archon workflow attention --watch --json --all` as a background task. It prints one
+JSON line per change: each `attention` line is an item that needs attention, carrying
+the same item the list returns, so treat it as a wake and answer by its `runId` and
+`occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
+lines before `ready` are the whole open set. Keep the `cursor` of the last line you
+handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
+store cannot read the stream's cursor: rerun without `--after`.
+
 When you answer from a run you saw paused earlier, pass the occurrence that
 `workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the
 run has since moved to a different pause, the answer is refused and the error names
@@ -121,7 +132,7 @@ old pause, so immediately follow it with `workflow wait`. A new pause is still
 reported. If acceptance is unconfirmed after 60 seconds, inspect the run before
 retrying; the child may still continue.
 
-## Interactive-loop gates: comment or no comment is a decision
+## Deprecated interactive-loop gates: comment or no comment is a decision
 
 Read the gate state first:
 
@@ -134,8 +145,9 @@ archon workflow get <run-id> --json | jq .metadata.approval.completionSignaled
 - You approve **with** a comment → another full iteration runs using your text
   as feedback.
 - Reject always needs a reason. Gates with authored `decisions:` expose it as
-  `$gate.output.text`; only legacy `approval.on_reject` prompts receive
-  `$REJECTION_REASON`.
+  `$gate.output.text`; only deprecated `approval.on_reject` prompts receive
+  `$REJECTION_REASON`. At an attention wait, reject is an answer
+  (`decision: reject`) and the run continues.
 
 Choose deliberately after reading what the gate produced — not by reflex.
 

@@ -1,6 +1,8 @@
 import type { ConversationLockManager } from '@archon/core';
+import type { AttentionNoticeRoute } from '@archon/core/config';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
-import { ChatSupervisor, type InstalledChatPlugin } from './supervisor';
+import { ChatSupervisor, type ChatPluginState, type InstalledChatPlugin } from './supervisor';
+import { ChatAttentionDestination } from './attention-destination';
 import { ChatPluginPlatform } from './platform';
 import { registerChatInbound } from './inbound';
 import { subscribeChatRunEvents } from './run-events';
@@ -10,9 +12,18 @@ export function createChatHost(
   streaming: Readonly<Record<string, 'stream' | 'batch'>>,
   locks: ConversationLockManager,
   platforms: Map<string, IWorkflowPlatform>,
-  activePlatforms: string[]
-): { start(): void; stop(): Promise<void> } {
+  activePlatforms: string[],
+  attention: { routes: readonly AttentionNoticeRoute[]; inlinePlatforms: ReadonlySet<string> } = {
+    routes: [],
+    inlinePlatforms: new Set(),
+  }
+): {
+  start(): void;
+  stop(): Promise<void>;
+  attentionDestinations: ChatAttentionDestination[];
+} {
   const supervisors = new Map<string, ChatSupervisor>();
+  const states = new Map<string, ChatPluginState>();
   for (const plugin of installed) {
     const { descriptor } = plugin;
     const healthName = `Chat: ${descriptor.id}`;
@@ -23,6 +34,7 @@ export function createChatHost(
         registerChatInbound(connection, descriptor, platform, locks, platforms);
       },
       state => {
+        states.set(descriptor.id, state);
         // While the host runs, health lists each installed plugin with its state; live is the bare name.
         if (listed !== undefined) activePlatforms.splice(activePlatforms.indexOf(listed), 1);
         listed =
@@ -38,8 +50,18 @@ export function createChatHost(
     platforms.set(descriptor.id, platform);
     supervisors.set(descriptor.id, supervisor);
   }
+  const attentionDestinations = attention.routes.map(
+    route =>
+      new ChatAttentionDestination(
+        route,
+        supervisors.get(route.platform),
+        () => states.get(route.platform),
+        attention.inlinePlatforms
+      )
+  );
   let unsubscribe: (() => void) | undefined;
   return {
+    attentionDestinations,
     start(): void {
       unsubscribe ??= installed.length
         ? subscribeChatRunEvents(supervisors)

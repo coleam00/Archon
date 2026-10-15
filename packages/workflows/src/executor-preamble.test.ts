@@ -130,6 +130,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
+      throw new Error('Unexpected hasStartReceiptForDelivery');
+    }),
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
@@ -169,6 +172,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+      Promise.resolve({ released: false })
+    ),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
@@ -236,6 +242,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map<string, { output: string }>(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),

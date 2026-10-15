@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -e -o pipefail
 
 # Ensure required subdirectories exist.
 # Named volumes inherit these from the image layer on first run; bind mounts do not,
@@ -72,25 +72,31 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
-# With /home/appuser now persisted, ~/.gitconfig survives across restarts —
-# so we must check before --add or duplicate safe.directory lines accumulate
-# every boot.
-find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-  repo_dir="$(dirname "$git_dir")"
-  if ! $RUNNER git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$repo_dir"; then
-    $RUNNER git config --global --add safe.directory "$repo_dir"
-  fi
+find /.archon -name ".git" -prune -print0 | while IFS= read -r -d '' git_dir; do
+  repo_dir="${git_dir%/.git}"
+  $RUNNER bun -e 'import { addSafeDirectory, toRepoPath } from "@archon/git"; await addSafeDirectory(toRepoPath(process.argv[1]));' "$repo_dir"
 done
 
-# Configure git to use GH_TOKEN for HTTPS clones via credential helper
-# Uses a helper function so the token stays in the environment, not in ~/.gitconfig.
-# --replace-all: `gh auth login` / `gh auth setup-git` write several values for this
-# key into the persisted ~/.gitconfig, and a plain set then exits non-zero under
-# `set -e`, crash-looping the container on every restart.
-if [ -n "$GH_TOKEN" ]; then
+# The token stays in the environment, not in the persisted ~/.gitconfig.
+ARCHON_PAT_HELPER='!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f'
+# Mirrors selectGitHubAuthMode (packages/server/src/github-auth-bootstrap.ts)
+# on the container env only: the server also loads /.archon/.env, which this
+# script never reads, so docker.md requires the GitHub auth variables in the
+# container env. A partial App config or an App/PAT conflict leaves PAT
+# behavior untouched. scripts/docker-entrypoint.test.ts checks the two agree.
+if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${WEBHOOK_SECRET:-}" ] &&
+  [ -n "${GITHUB_APP_PRIVATE_KEY:-}${GITHUB_APP_PRIVATE_KEY_PATH:-}" ] &&
+  [ -z "${GITHUB_TOKEN:-}" ]; then
+  # Exact matching preserves operator helpers; Git returns 5 when none match.
+  $RUNNER git config --global --fixed-value --unset-all \
+    credential."https://github.com".helper "$ARCHON_PAT_HELPER" || [ $? -eq 5 ]
+elif [ -n "${GH_TOKEN:-}" ]; then
+  # --replace-all: `gh auth login` / `gh auth setup-git` can write several values;
+  # a plain set then exits non-zero under `set -e`, crash-looping on restart.
   $RUNNER git config --global --replace-all credential."https://github.com".helper \
-    '!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f'
+    "$ARCHON_PAT_HELPER"
 fi
+unset ARCHON_PAT_HELPER
 
 # Pin the glibc Claude Code binary to bypass the SDK's musl-first resolver.
 # Bun's hoisted linker installs both glibc and musl optional-dep variants for

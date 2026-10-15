@@ -1,8 +1,9 @@
-# Dry-run fixture: a later round. The mode node reruns the selection the first round
-# recorded (seams and code) on the correction delta, without asking the route agent;
-# the synthesizer carries the prior findings forward. The route node and the lenses
-# the selection left out carry no stub, so one that runs anyway fails this fixture.
-mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false}'
+# Dry-run fixture: a later round. The route agent judges the correction delta and
+# picks only code; seams still reruns because the previous round recorded it, and the
+# synthesizer carries the prior findings forward. The lenses neither selected carry
+# no stub, so one that runs anyway fails this fixture.
+mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
+route: { seams: false, code: true, tests: false, errors: false, docs: false, reason: "stub: the delta is a small behavior fix" }
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
@@ -27,4 +28,4 @@ publish:
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
-  reached: [seams, code, synthesize]
+  reached: [route, seams, code, synthesize]

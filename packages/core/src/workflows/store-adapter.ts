@@ -5,7 +5,7 @@
 import { createSqlStateDocumentStore } from '../db/state-documents';
 import { getDatabase } from '../db/connection';
 import { providerRegistry } from '@archon/providers';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { StoredCredentialKind } from '@archon/provider-contract';
 import {
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -33,6 +33,7 @@ import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { installGitHubCliShim } from '../github-auth/gh-shim-install';
 import { loadGitHubAppConfig, isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -68,13 +69,13 @@ function sqlCursorOrder(cursor: WorkflowEventCursor): string {
 async function requiredCredentialRows(
   userId: string,
   vendors: readonly string[]
-): Promise<{ vendor: string; provider: string }[]> {
+): Promise<{ vendor: string; provider: string; kind: StoredCredentialKind }[]> {
   const rows = await listUserProviderKeys(userId);
   return vendors.flatMap(vendor => {
     const row =
       rows.find(r => r.provider === vendor) ??
       rows.find(r => normalizeCredentialVendor(r.provider) === vendor);
-    return row ? [{ vendor, provider: row.provider }] : [];
+    return row ? [{ vendor, provider: row.provider, kind: row.kind }] : [];
   });
 }
 
@@ -112,6 +113,7 @@ export function createWorkflowStore(): IWorkflowStore {
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,
+    hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
@@ -137,6 +139,10 @@ export function createWorkflowStore(): IWorkflowStore {
       if (!Number.isSafeInteger(limit) || limit <= 0)
         throw new RangeError('limit must be a positive integer');
       const rows = await workflowEventDb.readWorkflowEventsAfter(order, limit);
+      // A returned row proves the cursor is behind the head; only an empty page can hide
+      // a cursor this install never issued (another database, a restored backup).
+      if (rows.length === 0 && BigInt(order) > BigInt(await workflowEventDb.getWorkflowEventHead()))
+        throw new WorkflowEventCursorError();
       const deliveries = rows.map(event => {
         if (event.event_order == null) throw new Error('Feed row has no event order');
         return { cursor: sqlCursor(event.event_order), event: hydrateWorkflowEventRow(event) };
@@ -175,6 +181,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listAttentionQueueRows: () => workflowDb.listAttentionQueueRows(),
     signalWorkflowWait: workflowDb.signalWorkflowWait,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
+    releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
@@ -257,8 +264,12 @@ export function createWorkflowDeps(
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.
-    resolveBotGitHubToken: provider
-      ? (owner, repo): Promise<string> => provider.getInstallationToken(owner, repo)
+    githubApp: provider
+      ? {
+          resolveInstallationToken: (owner, repo): Promise<string> =>
+            provider.getInstallationToken(owner, repo),
+          installCliShim: installGitHubCliShim,
+        }
       : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed
@@ -284,11 +295,11 @@ export function createWorkflowDeps(
           // beside that bag only so the workflow subprocess boundary can scrub echoed
           // file-delivered credentials without knowing provider-specific file shapes.
           isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-          getUserProviderCredentialStatus: async (userId, vendor): Promise<CredentialStatus> => {
+          getUserProviderCredential: async (userId, vendor) => {
             const [row] = await requiredCredentialRows(userId, [vendor]);
             return row
-              ? getStoredCredentialStatus(userId, row.provider)
-              : { state: 'not_connected', source: 'archon' };
+              ? { kind: row.kind, getStatus: () => getStoredCredentialStatus(userId, row.provider) }
+              : undefined;
           },
           getUserProviderEnv: async (
             userId: string,
@@ -329,7 +340,7 @@ export function createWorkflowDeps(
                 collectOAuthCredentialValues(cred.rawCreds, protectedValues);
               }
             }
-            // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+            // Aggregate Pi auth.json (the keys + subscriptions Pi consumes) so a `pi` node
             // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
             // a real artifactsDir (file delivery); the chat path is env-only.
             if (artifactsDir) {

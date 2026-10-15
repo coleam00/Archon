@@ -30,7 +30,12 @@ import {
 } from '@archon/paths';
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
-import type { CredentialStatus } from '@archon/provider-contract';
+import {
+  consumesStoredCredential,
+  unconsumedStoredCredentialReason,
+  type CredentialStatus,
+  type StoredCredentialKind,
+} from '@archon/provider-contract';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -199,6 +204,22 @@ export async function checkProviderDiagnostics(
 }
 
 export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  try {
+    const { loadGitHubAppConfig } = await import('@archon/core');
+    if (loadGitHubAppConfig(env)) {
+      return {
+        label: 'GitHub App',
+        status: 'pass',
+        message: 'App mode configured (local configuration valid; GitHub access not checked)',
+      };
+    }
+  } catch (error) {
+    return {
+      label: 'GitHub App',
+      status: 'fail',
+      message: error instanceof Error ? error.message : 'Invalid GitHub App configuration.',
+    };
+  }
   const label = 'gh CLI';
   // Skip for users without GitHub configured — gh auth is irrelevant
   // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
@@ -228,6 +249,8 @@ export interface AssistantLoginDeps {
   vendor?: string;
   /** Vendors of the user's connected credentials that this assistant can use, as delivery names them. */
   connectedVendors: readonly string[];
+  /** Why the connected credential for `vendor` cannot be used by this assistant, when one is connected. */
+  unconsumedConnectionReason?: string;
   provider: Pick<IAgentProvider, 'checkCredential'>;
 }
 
@@ -285,6 +308,13 @@ export async function checkAssistantLogin(
               message: `${deps.assistant}: cannot be used. ${status.evidence} Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
             };
       case 'not_connected':
+        if (deps.unconsumedConnectionReason) {
+          return {
+            label,
+            status: 'fail',
+            message: `${deps.assistant}: no native credential, and ${deps.unconsumedConnectionReason}`,
+          };
+        }
         return connectedHint
           ? {
               label,
@@ -317,16 +347,36 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
   const usableVendors =
     credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  const vendor = credentials.vendorFor(model);
   let connectedVendors: string[] = [];
+  let unconsumedConnectionReason: string | undefined;
   if (usableVendors.length > 0 && cliId) {
     try {
       const deps = await defaultLoadProviderDeps();
       const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-      const rows = await deps.listUserProviderKeys(user.id);
       // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
+      const rows = (await deps.listUserProviderKeys(user.id)).map(row => ({
+        vendor: normalizeCredentialVendor(row.provider),
+        kind: row.kind,
+      }));
       connectedVendors = [
-        ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
-      ].filter(vendor => usableVendors.includes(vendor));
+        ...new Set(
+          rows
+            .filter(row => consumesStoredCredential(credentials, row.vendor, row.kind))
+            .map(row => row.vendor)
+        ),
+      ];
+      const unconsumed = rows.find(
+        row => row.vendor === vendor && !connectedVendors.includes(row.vendor)
+      );
+      if (unconsumed) {
+        unconsumedConnectionReason = unconsumedStoredCredentialReason(
+          providerRegistry,
+          config.assistant,
+          unconsumed.vendor,
+          unconsumed.kind
+        );
+      }
     } catch (err) {
       // Best-effort, as in the Codex credential lookup: a failed lookup must not hide the
       // native login check, which runs as if nothing were connected. The AI credentials
@@ -339,8 +389,9 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
     assistant: config.assistant,
     assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
     model,
-    vendor: credentials.vendorFor(model),
+    vendor,
     connectedVendors,
+    unconsumedConnectionReason,
     // The factory, not getAgentProvider: a credential check is not a run, so it must not
     // log the deprecation notice the Provider support check already shows.
     provider: registration.factory(),
@@ -486,7 +537,7 @@ export async function checkFolderProject(
 export interface ProviderDeps {
   listUserProviderKeys: (
     userId: string
-  ) => Promise<{ provider: string; kind: string; label: string | null }[]>;
+  ) => Promise<{ provider: string; kind: StoredCredentialKind; label: string | null }[]>;
   getStoredCredentialStatus: (userId: string, vendor: string) => Promise<CredentialStatus>;
   // `platform` is the literal 'cli' — this check resolves the CLI identity only,
   // and narrowing it keeps the real (platform-union-typed) db fn assignable here.

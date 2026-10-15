@@ -1,13 +1,15 @@
 import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import type { IStateDocumentStore } from './state-document-store';
-import type { IResourceStartStore } from './resource-start-store';
+import type { IResourceStartStore, ResourceBlocker } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   answeredPauseContinuation,
+  continuablePause,
   attentionLabels,
   attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type AttentionAnswer,
@@ -15,7 +17,6 @@ import {
 } from './schemas/workflow-run';
 import type { AttentionLabels } from './schemas/dag-node';
 import type { RecordSurface } from './schemas/record-surface';
-import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
 import {
@@ -25,6 +26,12 @@ import {
   type SerializedNodeEvent,
 } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
+import {
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
+  RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
+  type RunBudgetUsage,
+  type RunBudgetWorkUnitEvent,
+} from './run-budget';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
@@ -89,6 +96,11 @@ export interface DagResumeSnapshot {
   tokensUnknown?: boolean;
   /** Cumulative USD cost persisted by completed/failed attempts and abandoned deferred segments. */
   costUsd: number;
+  /**
+   * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
+   * from `costUsd`, which is telemetry and cannot tell unknown spend from none.
+   */
+  budget: RunBudgetUsage;
 }
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
@@ -138,6 +150,41 @@ export function resumeCursorMatches(
       return answered?.nodeId === cursor.nodeId && answered.pauseId === cursor.pauseId;
     }
   }
+}
+
+/** A pause the engine continues by itself, named exactly (`continuablePauseCursor`). */
+export type PauseCursor =
+  | Extract<WorkflowResumeCursor, { kind: 'wait' }>
+  | { kind: 'pause'; nodeId: string; pauseId: string };
+
+/**
+ * The pause a paused run sits at, if the continuation host continues it by itself: a time
+ * or event wait on its deadline, or a gate or attention wait, answered or not
+ * (`continuablePause`). Only such a pause gives back the run's resource slot. A parent
+ * blocked on a child workflow, a fan-out or a write-back keeps its slot: nothing retries
+ * it if its continuation is refused for capacity. Container runs are excluded because the
+ * host refuses to continue them.
+ */
+export function continuablePauseCursor(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): PauseCursor | undefined {
+  if (isContainerRun(run)) return undefined;
+  const wait = pendingWorkflowWaitDeadline(run);
+  if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  const pause = continuablePause(run);
+  return pause && { kind: 'pause', nodeId: pause.nodeId, pauseId: pause.pauseId };
+}
+
+/** True when `run` is still paused at exactly the pause `cursor` names. */
+export function pauseCursorMatches(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  cursor: PauseCursor
+): boolean {
+  const current = continuablePauseCursor(run);
+  if (current?.kind !== cursor.kind || current.nodeId !== cursor.nodeId) return false;
+  return current.kind === 'wait'
+    ? cursor.kind === 'wait' && current.resumeAt === cursor.resumeAt
+    : cursor.kind === 'pause' && current.pauseId === cursor.pauseId;
 }
 
 /** Composite primary key identifying a single persisted node session row. */
@@ -193,9 +240,13 @@ export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   ...WORKTREE_SETUP_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
 ] as const;
 export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];
-export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNodeUsageEvent;
+export type DurableNodeEventInput =
+  | NodeStateEventInput
+  | SerializedDeferredNodeUsageEvent
+  | RunBudgetWorkUnitEvent;
 
 export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',
@@ -209,6 +260,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // SIGTERM handlers could record a failure in metadata and nowhere else), NOT
   // a general "a resume happened" marker: its absence never means the run wasn't resumed.
   'workflow_resumed',
+  // The resume CAS moved a paused run back to running, with or without an answer. Every
+  // resume of a paused run writes it, so a pause that closes reaches the event feed.
+  'workflow_unpaused',
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
@@ -230,6 +284,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // attention queue is where it is answered. `data` carries `nodeId` and `platform`.
   'pause_notice_undelivered',
   'wait_started',
+  // A resumed run paused again at the same wait, which has not fired or been answered:
+  // `data.kind` is the wait kind. Without it a resume that re-pauses would reach no reader.
+  'wait_continued',
   'wait_signaled',
   // An attention wait's answer: `data` carries the surface (`via`), the occurrence it
   // answered and the answer itself; the row's timestamp is when.
@@ -267,6 +324,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // conventional `$ARTIFACTS_DIR/evidence.json` marker was absent at completion.
   // Data carries the expected path; the legacy event name is a persisted contract.
   'evidence_validation_failed',
+  // #2814 — the run budget refused new work, or a spend-limited run's spend could
+  // not be measured. `data` carries the reason, refused node, limits and consumption.
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
   // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
   // executor at run start for EVERY run that has them, whatever surface started
   // it, so the record does not depend on a chat/console notification being
@@ -334,6 +394,30 @@ export function waitAnsweredEvent(
     data: { via: wait.answeredVia, occurrence: wait.pauseId, answer: wait.answer },
   };
 }
+
+/** The audit row of a continued wait pause, written in the pause's transaction by every store. */
+export function waitContinuedEvent(
+  workflowRunId: string,
+  wait: WorkflowWaitContext
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'wait_continued',
+    step_name: workflowWaitStepName(wait),
+    data: { kind: wait.kind },
+  };
+}
+
+/** The row every store's resume CAS writes when it moves a paused run back to running. */
+export function workflowUnpausedEvent(workflowRunId: string): ObservabilityEventInput {
+  return { workflow_run_id: workflowRunId, event_type: 'workflow_unpaused', data: {} };
+}
+
+/**
+ * The event a gate pause commits with its write, so the pause reaches the event feed: the
+ * gate node's `node_suspended`, or the container write-back gate's `writeback_requested`.
+ */
+export type GatePauseEventInput = NodeStateEventInput | WorkflowEventInput<'writeback_requested'>;
 
 /** One answer to an open attention wait, checked against the occurrence it names. */
 export type AttentionAnswerWrite = Required<
@@ -502,6 +586,14 @@ export class WorkflowRunPauseConflictError extends Error {
 declare const workflowEventCursorBrand: unique symbol;
 /** A durable commit position. Only the issuing store interprets its contents. */
 export type WorkflowEventCursor = string & { readonly [workflowEventCursorBrand]: true };
+
+/**
+ * A cursor a host received as text, such as `--after`. Branding decides nothing: only the
+ * issuing store judges it, on read, with `WorkflowEventCursorError`.
+ */
+export function workflowEventCursor(text: string): WorkflowEventCursor {
+  return text as WorkflowEventCursor;
+}
 
 export class WorkflowEventCursorError extends Error {
   constructor() {
@@ -688,7 +780,21 @@ export interface IWorkflowStore
     wait: Extract<WorkflowWaitContext, { kind: 'event' }>,
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
+  /**
+   * A resume of a run admitted through a resource start takes a slot or throws
+   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
+   * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
+   * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
+   * while the host retries (`resumeRefusal`).
+   */
   resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
+  /**
+   * Give back the resource slot of a run admitted through a resource start, while it is
+   * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once
+   * nothing of the run executes any more. `released` is false when the run moved on, never
+   * held a slot, or already gave it back; a capacity wait then stays, keeping its place.
+   */
+  releasePausedRunSlot(id: string, cursor: PauseCursor): Promise<{ released: boolean }>;
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
@@ -747,16 +853,20 @@ export interface IWorkflowStore
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
    * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window. The optional suspension is committed with the
-   * pause so a decision cannot be followed by a stale node_suspended row.
+   * paused-without-marker window. `event` is committed with the pause, so a decision
+   * cannot be followed by a stale node_suspended row and the pause reaches the event
+   * feed; every executor gate pause supplies one.
    */
   pauseWorkflowRun(
     id: string,
     approvalContext: ApprovalContext,
     extraMetadata?: Record<string, unknown>,
-    suspension?: NodeStateEventInput
+    event?: GatePauseEventInput
   ): Promise<void>;
-  /** Pause a running run and record its engine-owned wait start atomically. */
+  /**
+   * Pause a running run on a wait, committing `wait_started` for a new wait or
+   * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.
+   */
   pauseWorkflowRunForWait(
     id: string,
     waitContext: WorkflowWaitContext,
@@ -904,13 +1014,25 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
+/**
+ * What a refused resume leaves behind: a failed run stays failed; a paused run stays
+ * paused, and `waiting` means it also keeps its place as a capacity waiter.
+ */
+export type ResumeRefusal = 'failed' | 'paused' | 'waiting';
+
 export class WorkflowResourceBusyError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
+    public readonly blocker: ResourceBlocker,
+    public readonly refusal: ResumeRefusal = 'failed'
   ) {
+    const reason = `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`;
     super(
-      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
+      refusal === 'waiting'
+        ? `${reason} It stays paused and keeps its place; a continuation host continues it once capacity frees.`
+        : refusal === 'paused'
+          ? `${reason} It stays paused; a continuation host continues it once its wait ends and capacity frees.`
+          : reason
     );
     this.name = 'WorkflowResourceBusyError';
   }

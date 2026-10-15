@@ -1,3 +1,4 @@
+import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
 import {
@@ -17,6 +18,10 @@ import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
+  createRegisteredWorktree,
+  type RegisteredWorktree,
+} from '@archon/core/workflows/registered-worktree';
+import {
   prepareRunAiConfiguration,
   assertRunCredentials,
   type PreparedRunAiConfiguration,
@@ -31,7 +36,7 @@ import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import { registerRepository, registerFolder } from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
@@ -39,8 +44,19 @@ import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
-import { WorkflowNotResumableError, PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
+import type {
+  AttentionWatch,
+  IWorkflowEngine,
+  WorkflowRunSubscription,
+} from '@archon/workflows/engine-port';
+import {
+  WorkflowEventCursorError,
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  PROVIDER_EVENT_ROW_TYPES,
+  workflowEventCursor,
+} from '@archon/workflows/store';
+import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -71,14 +87,8 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
-  worktreeRegistrationMetadata,
 } from '@archon/isolation';
-import type {
-  ExecutionContext,
-  ContainerBackend,
-  ContainerBackendConfig,
-  WorktreeCreationEnvironment,
-} from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
   createLogger,
@@ -1704,6 +1714,24 @@ async function resolveRunCodebase(
 }
 
 /**
+ * A resume continues in the run's own checkout. Cleanup removes a failed run's
+ * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
+ */
+function assertResumeWorkingPathExists(workingPath: string): void {
+  try {
+    statSync(workingPath);
+  } catch (error) {
+    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    throw new Error(
+      `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
+        'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
+    );
+  }
+}
+
+/**
  * Run a specific workflow
  */
 async function runWorkflowWithOwnedSource(
@@ -1754,6 +1782,12 @@ async function runWorkflowWithOwnedSource(
       // answer, and reports the codebase failure first. Nothing executes before it.
       resumeLookupError = error as Error;
     }
+  }
+
+  // Before anything reads the run's checkout: codebase resolution on a removed
+  // worktree fails with a raw git error that reads as a database fault.
+  if (options.resume === true && continuationRun?.working_path) {
+    assertResumeWorkingPathExists(continuationRun.working_path);
   }
 
   let continuation: ResolvedContinuation | undefined;
@@ -2837,15 +2871,8 @@ async function runWorkflowWithOwnedSource(
     // which calls backend.resumeEnv when `resumable.metadata.isolation` is
     // 'container'). Nothing to reject here anymore.
 
-    // Reuse the working path from the resumable run (verify it still exists)
+    // Reuse the working path from the resumable run (checked to exist above).
     if (resumable.working_path) {
-      const { existsSync } = await import('fs');
-      if (!existsSync(resumable.working_path)) {
-        throw new Error(
-          `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
-            'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-        );
-      }
       workingCwd = resumable.working_path;
     }
 
@@ -3076,12 +3103,10 @@ async function runWorkflowWithOwnedSource(
       // Configure isolation with repo config loader (same as orchestrator)
       configureWorktreeIsolation();
 
-      const provider = getIsolationProvider();
-
       // Check for existing worktree (only when explicit --branch)
       const existingEnv = existingBranchEnv;
 
-      if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+      if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
         if (options.fromBranch) {
           getLog().warn(
             { path: existingEnv.working_path, fromBranch: options.fromBranch },
@@ -3145,7 +3170,7 @@ async function runWorkflowWithOwnedSource(
           'worktree_creating'
         );
 
-        let isolatedEnv: WorktreeCreationEnvironment;
+        let created: RegisteredWorktree;
         try {
           if (!preparedSource)
             throw new Error('Worktree setup requires a captured workflow source');
@@ -3191,8 +3216,8 @@ async function runWorkflowWithOwnedSource(
             codebase.default_cwd,
             codebase.id
           );
-          isolatedEnv = await provider.create(
-            {
+          created = await createRegisteredWorktree(host.records.isolation, {
+            request: {
               workflowType: 'task',
               identifier: branchIdentifier,
               taskBranch: adoptedTaskBranch
@@ -3219,34 +3244,22 @@ async function runWorkflowWithOwnedSource(
               canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
               description: `CLI workflow: ${workflowName}`,
             },
-            createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
-          );
+            setupExecutor: createRunWorktreeSetupExecutor(
+              host.deps,
+              setupRun,
+              preparedAiConfiguration.config
+            ),
+            createdByPlatform: 'cli',
+          });
         } catch (createError) {
-          // Same translation the container branches above apply. The classified
-          // message also carries the note a failed cleanup records outside
-          // `err.message`, which the raw error would drop on this path.
-          const err = createError as Error;
-          getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
-          throw new Error(classifyIsolationError(err), { cause: err });
+          getLog().error({ err: createError, branch: branchIdentifier }, 'worktree.create_failed');
+          throw createError;
         }
 
-        // Track in database
-        const envRecord = await host.records.isolation.create({
-          codebase_id: codebase.id,
-          workflow_type: 'task',
-          workflow_id: branchIdentifier,
-          provider: 'worktree',
-          working_path: isolatedEnv.workingPath,
-          branch_name: isolatedEnv.branchName,
-          created_by_platform: 'cli',
-          metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
-        });
-
-        workingCwd = isolatedEnv.workingPath;
-        isolationEnvId = envRecord.id;
-        if (isolatedEnv.metadata.provenance === 'created')
-          ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
-        if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
+        workingCwd = created.env.workingPath;
+        isolationEnvId = created.envId;
+        ownedWorktree = created.ownedWorktree;
+        cutFromCommit = created.cutFromCommit;
         getLog().info({ path: workingCwd }, 'worktree_created');
       }
     } else if (options.noWorktree) {
@@ -3315,6 +3328,7 @@ async function runWorkflowWithOwnedSource(
         isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
         close: closeRunLiveOwner,
       },
+      endNodeProcessTrees: !detachedProcessOwner,
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
@@ -3448,6 +3462,11 @@ async function runWorkflowWithOwnedSource(
             options: commonOptions,
           });
         } catch (error) {
+          // The run is intact; only its resource is busy, so say that and nothing else.
+          if (error instanceof WorkflowResourceBusyError)
+            throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
+              cause: error,
+            });
           const err = error as Error;
           getLog().error(
             { err, workflowName, runId: resumable.id },
@@ -4001,18 +4020,6 @@ function formatAge(startedAt: Date | string): string {
   if (hours < 24) return `${hours}h ${mins % 60}m`;
   const days = Math.floor(hours / 24);
   return `${days}d ${hours % 24}h`;
-}
-
-/**
- * Format a duration in milliseconds as a compact string.
- */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.round(ms / 100) / 10;
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = Math.round(secs % 60);
-  return `${mins}m${remSecs}s`;
 }
 
 export interface NodeSummary {
@@ -4601,6 +4608,10 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /** Stream every change in scope instead of reading the queue once. */
+  watch?: boolean;
+  /** With `watch`: a cursor from an earlier line, to replay what followed it. */
+  after?: string;
 }
 
 /**
@@ -4631,33 +4642,38 @@ async function attentionScope(
   return { kind: 'project', project };
 }
 
-function printAttentionItem(item: AttentionQueueItem): void {
+function attentionItemLines(item: AttentionQueueItem): string[] {
   const paused =
     item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  console.log(
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`
-  );
+  const lines = [
+    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
+  ];
   if (item.fanOut !== null)
-    console.log(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
+    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
-    console.log(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
+    lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   switch (item.kind) {
     case 'attention':
-      console.log(`    ${item.node}: ${item.message}`);
+      lines.push(`    ${item.node}: ${item.message}`);
       for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
-        console.log(`    ${line}`);
+        lines.push(`    ${line}`);
       break;
     case 'awaiting_response':
-      console.log(`    gate '${item.node}': ${item.message}`);
-      console.log(
+      lines.push(
+        `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
       );
       break;
     case 'unreadable':
-      console.log(`    needs a look: ${item.detail}`);
+      lines.push(`    needs a look: ${item.detail}`);
       break;
   }
+  return lines;
+}
+
+function printAttentionItem(item: AttentionQueueItem): void {
+  for (const line of attentionItemLines(item)) console.log(line);
 }
 
 /**
@@ -4672,6 +4688,13 @@ export async function workflowAttentionCommand(
   opts: WorkflowAttentionOptions
 ): Promise<number> {
   try {
+    if (opts.after !== undefined && !opts.watch)
+      throw new Error('workflow attention --after needs --watch');
+    if (opts.watch) {
+      if (runId !== undefined || opts.sort !== undefined || opts.countBy !== undefined)
+        throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
+      return await workflowAttentionWatch(host, cwd, opts);
+    }
     const source = attentionQueueSource(host.deps.store, host.records.isolation);
     if (runId !== undefined) {
       if (
@@ -4754,6 +4777,108 @@ export async function workflowAttentionCommand(
       return 1;
     }
     throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+  }
+}
+
+/** The text for one stream line; none for a bookmark. */
+function attentionStreamText(
+  line: Exclude<AttentionStreamLine, { type: 'error' }>,
+  scope: AttentionQueueScope
+): string[] {
+  switch (line.type) {
+    case 'attention':
+      return [
+        line.snapshot ? 'Needs attention:' : 'Needs attention now:',
+        ...attentionItemLines(line.item),
+      ];
+    case 'resolved':
+      return [
+        line.reason === 'answered'
+          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
+          : `Run ${line.runId} no longer needs attention.`,
+      ];
+    case 'unmatched':
+      return [`Run ${line.runId} no longer matches the label filter.`];
+    case 'terminal':
+      return [
+        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
+      ];
+    case 'owner_lost':
+      return [
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
+          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`,
+      ];
+    case 'ready':
+      return [
+        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
+      ];
+    case 'bookmark':
+      return [];
+  }
+}
+
+/**
+ * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
+ * 0 then, and 4 on an `error` line: the stream's cursor (from `--after`, or the tail's
+ * own position) is not one this install's store can read, so the fix is to rerun without
+ * it. Read-only: stopping the stream affects no run.
+ */
+async function workflowAttentionWatch(
+  host: WorkflowHost,
+  cwd: string,
+  opts: WorkflowAttentionOptions
+): Promise<number> {
+  const { labels } = parseAttentionQueueRequest(opts);
+  const scope = await attentionScope(host, cwd, opts);
+  if (opts.after === '') throw new Error('--after needs a cursor from an earlier line');
+  let stop!: () => void;
+  const stopped = new Promise<void>(resolve => {
+    stop = resolve;
+  });
+  const write = (line: AttentionStreamLine): Promise<void> => {
+    if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
+    if (line.type === 'error')
+      return writeStderr(
+        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
+      );
+    const text = attentionStreamText(line, scope);
+    return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
+  };
+  let exitCode = 0;
+  const listener = async (line: AttentionStreamLine): Promise<void> => {
+    if (line.type === 'error') {
+      exitCode = 4;
+      stop();
+    }
+    try {
+      await write(line);
+    } catch (error) {
+      // The reader is gone (EPIPE); nothing more can be delivered.
+      getLog().debug({ err: error as Error }, 'cli.workflow_attention_watch_stdout_closed');
+      stop();
+    }
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  try {
+    let watch: AttentionWatch;
+    try {
+      watch = await host.engine.watchAttention(listener, {
+        scope,
+        labels,
+        ...(opts.after === undefined ? {} : { after: workflowEventCursor(opts.after) }),
+      });
+    } catch (error) {
+      if (!(error instanceof WorkflowEventCursorError)) throw error;
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return exitCode;
+    }
+    await stopped;
+    await watch.close();
+    return exitCode;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
   }
 }
 
@@ -6017,15 +6142,17 @@ export async function workflowResumeCommand(
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
     await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
-      // The inline path below refuses a run with no recorded working path. Check it
-      // here too, on the run the precheck already holds (message copied verbatim):
-      // otherwise the parent acks success and the child throws where nobody reads it.
+      // The inline path below refuses a run with no recorded working path, or one
+      // whose checkout is gone. Check both here too, on the run the precheck already
+      // holds: otherwise the parent acks success and the child throws where nobody
+      // reads it.
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +
             'Cannot determine where to resume. The run may be too old.'
         );
       }
+      assertResumeWorkingPathExists(run.working_path);
       return run;
     });
     return;
@@ -6364,7 +6491,7 @@ export async function workflowAnswerCommand(
   text: string | undefined,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const request = { choose, ...(text !== undefined ? { text } : {}) };
   if (json) {
     try {
@@ -6383,10 +6510,11 @@ export async function workflowAnswerCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'answer', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6413,6 +6541,7 @@ export async function workflowAnswerCommand(
     failurePrefix: 'Answer recorded but',
     recorded: 'answer',
   });
+  return 0;
 }
 
 /**
@@ -6561,11 +6690,6 @@ export async function workflowRejectCommand(
     return;
   }
 
-  // An empty or omitted reason still needs a meaningful value on the new-mode
-  // structured-output path (#2740) — rejectWorkflow's own internal default
-  // only covers the audit event and legacy rework/cancel path.
-  const rejectText = reason && reason.length > 0 ? reason : 'Rejected';
-
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
@@ -6576,7 +6700,7 @@ export async function workflowRejectCommand(
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
       const result = await rejectWorkflow(
         resolvedId,
-        rejectText,
+        reason,
         { kind: 'operator' },
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
@@ -6599,7 +6723,7 @@ export async function workflowRejectCommand(
   const result = await spelledForCli(async () =>
     rejectWorkflow(
       resolvedId,
-      rejectText,
+      reason,
       { kind: 'operator' },
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )

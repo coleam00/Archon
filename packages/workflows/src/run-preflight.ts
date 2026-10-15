@@ -2,7 +2,10 @@ import { FileStoreUnsupportedError } from './file-store/errors';
 import { gateReworkNode } from './gate-rework';
 import {
   type ProviderRegistry,
+  type StoredCredentialKind,
+  consumesStoredCredential,
   requireProvider,
+  unconsumedStoredCredentialReason,
   NoDefaultProviderError,
 } from '@archon/provider-contract';
 import {
@@ -12,7 +15,7 @@ import {
 } from './run-ai-configuration';
 import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration';
 import type { CredentialStatus } from '@archon/provider-contract';
-import type { WorkflowConfig, WorkflowDeps } from './deps';
+import type { StoredProviderCredential, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
 import { isAgentNode, isLoopNode, isLoopGroupNode, isGateNode } from './schemas';
 import { resolvedBodyNodes } from './graph-plan';
@@ -374,43 +377,73 @@ export function assertCredentialStatus(
 export async function assertRunCredentials(
   deps: Pick<
     WorkflowDeps,
+    | 'providers'
     | 'getAgentProvider'
     | 'isPerUserProviderKeysEnabled'
-    | 'getUserProviderCredentialStatus'
+    | 'getUserProviderCredential'
     | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration
 ): Promise<void> {
+  const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
   for (const requirement of prepared.requirements) {
     const { provider, model, vendor } = requirement;
+    // A stored credential this provider cannot consume is never delivered to it, so the
+    // provider must authenticate natively; the stored kind only explains a missing login.
+    let unconsumedKind: StoredCredentialKind | undefined;
     if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
       if (deps.credentialStore === 'files')
         throw new FileStoreUnsupportedError('stored per-user provider credentials');
-      if (!deps.getUserProviderCredentialStatus)
+      if (!deps.getUserProviderCredential)
         throw new WorkflowCredentialPreflightError(
           requirement,
           'credential adapter has no stored status port'
         );
-      let status = storedStatuses.get(vendor);
-      if (!status) {
+      if (!storedCredentials.has(vendor)) {
         try {
-          status = await deps.getUserProviderCredentialStatus(prepared.executionUserId, vendor);
+          storedCredentials.set(
+            vendor,
+            await deps.getUserProviderCredential(prepared.executionUserId, vendor)
+          );
         } catch {
           throw new WorkflowCredentialPreflightError(
             requirement,
             'could not verify the stored credential'
           );
         }
-        storedStatuses.set(vendor, status);
       }
-      if (status.state === 'not_connected' && prepared.connectedVendors.has(vendor)) {
-        assertCredentialStatus(requirement, status);
-      }
-      if (status.state !== 'not_connected') {
-        assertCredentialStatus(requirement, status);
-        prepared.connectedVendors.add(vendor);
-        continue;
+      const stored = storedCredentials.get(vendor);
+      if (
+        stored &&
+        !consumesStoredCredential(
+          requireProvider(deps.providers, provider).credentials,
+          vendor,
+          stored.kind
+        )
+      ) {
+        unconsumedKind = stored.kind;
+      } else {
+        let status = storedStatuses.get(vendor);
+        if (!status) {
+          try {
+            status = (await stored?.getStatus()) ?? { state: 'not_connected', source: 'archon' };
+          } catch {
+            throw new WorkflowCredentialPreflightError(
+              requirement,
+              'could not verify the stored credential'
+            );
+          }
+          storedStatuses.set(vendor, status);
+        }
+        if (status.state === 'not_connected' && prepared.connectedVendors.has(vendor)) {
+          assertCredentialStatus(requirement, status);
+        }
+        if (status.state !== 'not_connected') {
+          assertCredentialStatus(requirement, status);
+          prepared.connectedVendors.add(vendor);
+          continue;
+        }
       }
     }
     let status: CredentialStatus;
@@ -432,6 +465,12 @@ export async function assertRunCredentials(
       throw new WorkflowCredentialPreflightError(
         requirement,
         'could not verify native authentication'
+      );
+    }
+    if (unconsumedKind && vendor && status.state === 'not_connected') {
+      throw new WorkflowCredentialPreflightError(
+        requirement,
+        unconsumedStoredCredentialReason(deps.providers, provider, vendor, unconsumedKind)
       );
     }
     assertCredentialStatus(requirement, status);

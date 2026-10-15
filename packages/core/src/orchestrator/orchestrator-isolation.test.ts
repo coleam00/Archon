@@ -602,10 +602,9 @@ describe('dispatchBackgroundWorkflow', () => {
     const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original,
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async () => ({
-        state: 'unusable',
-        source: 'archon',
-        evidence: 'cannot read',
+      getUserProviderCredential: async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'cannot read' }),
       }),
     }));
     try {

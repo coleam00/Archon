@@ -143,6 +143,10 @@ mutates_checkout: false          # Optional: assert this workflow does not write
                                  #   can share one working directory. Defaults to true (take the
                                  #   lock, serialize runs on the same path). See
                                  #   [Running sub-runs side by side](#running-sub-runs-side-by-side).
+budget:                          # Optional: ceiling on the run's TOTAL work and spend (not
+  max_work_units: 20             #   concurrency). The engine refuses to start new work once a
+  max_spend_usd: 5               #   ceiling is reached. Declare either or both. See
+                                 #   [Run budgets](#run-budgets).
 tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overrides the
                                  #   keyword-based tag inference. An empty list (`tags: []`)
                                  #   suppresses inference and shows no tags. Omit to fall
@@ -211,7 +215,7 @@ nodes:
 | `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
-| `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
+| `approval` | object | **Deprecated.** Use `wait: { attention: <message>, form: approval }` instead. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
 | `wait` | object | Durably pauses the run until a time, bounded external event, or an answer to an attention wait. See [Durable waits](#durable-waits) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
 | `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. Optional `with:` (named inputs → the block's `$INPUTS.<name>`) and, to fan the composed body out over a runtime list **inside this run**, `fan_out` — see [Composing Another Workflow](#composing-another-workflow-with-include) and [Fanning out a composed block](#fanning-out-a-composed-block-inside-the-run-include--fan_out) |
@@ -247,7 +251,7 @@ nodes:
 | `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
-| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
+| `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
@@ -281,7 +285,7 @@ nodes:
     depends_on: [lens-a, lens-b]
 ```
 
-`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Interactive gates, terminal body approvals, and durable waits restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
 
@@ -451,13 +455,21 @@ nodes:
   - id: gate
     depends_on: [review]
     when: "$review.output != 'ready'"
-    approval:
-      message: "Review found issues. Approve to continue."
+    wait:
+      attention: "Review found issues. Approve to continue."
+      form: approval
+  - id: stop
+    depends_on: [gate]
+    when: "$gate.output.decision == 'reject'"
+    cancel: "Review issues were not approved"
   - id: next
-    depends_on: [review, gate]
+    depends_on: [review, gate, stop]
     trigger_rule: none_failed_min_one_success
     bash: echo continue
 ```
+
+A rejection is an answer, so `gate` completes either way. `next` also depends on
+`stop`, which cancels the run on a rejection before `next` can start.
 
 Use `all_done` instead only when the next step should run even after the gate fails.
 
@@ -578,7 +590,7 @@ than you asked. Declare the shape you are branching on instead:
 
 Unaffected: `bash:` and `script:` producers keep whole-output comparison
 (`when: "$check.output == 'true'"`) because their stdout is author-controlled and exact by
-construction, and so do `approval:` captures (a human typed them) and `workflow:` sub-run
+construction, and so do deprecated `approval:` captures (typed by whoever answered) and `workflow:` sub-run
 results (the callee owns that contract). A scalar field access (`$analyze.output.status`) is
 allowed.
 
@@ -613,7 +625,7 @@ references resolve in one pass over the template. A substituted value is inserte
 and never scanned again, so a message or an upstream output that quotes `$nodeId.output`
 reaches the node unchanged. See [Substitution Order](/reference/variables/#substitution-order).
 
-Output references can follow nested object fields. For example, this gate receives
+Output references can follow nested object fields. For example, this wait asks
 `Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:
 
 ```yaml
@@ -631,8 +643,8 @@ nodes:
       required: [proposal]
   - id: gate
     depends_on: [review]
-    approval:
-      message: "Proposed: $review.output.proposal.action"
+    wait:
+      attention: "Proposed: $review.output.proposal.action"
     when: "$review.output.proposal.action == 'add'"
 ```
 
@@ -841,7 +853,7 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
 - `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/guides/attention-queue/) by them.
 
-Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer names the occurrence it was meant for, so an answer to an earlier pause of the same run is refused. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
+Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
 A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
 
@@ -862,7 +874,7 @@ The process that owns the run enforces a `duration_ms`/`until`/`event` deadline 
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
-A wait may be the sole terminal sink in a `loop_group` body. Archon then escalates the persisted cursor to the group and rechecks the group's completion condition after the wait completes. `max_iterations` still bounds uninterrupted autonomous iterations, but continuing past a terminal `attention` wait (an answer, or a resume of a wait from before answers) permits one fresh iteration even after that bound; each further probe needs another answer. The next iteration reads the answer as `$LOOP_PREV.<wait-id>.output`. A non-terminal body wait, or `approval:` gate, is rejected because resuming a partial iteration would otherwise require replaying already-completed sibling work. A terminal `attention` wait is read past for the group's output, so `$group.output` is the work the wait depends on; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body). Waits below more than one nested `loop_group` boundary are not supported.
+A wait may be the sole terminal sink in a `loop_group` body. Archon then escalates the persisted cursor to the group and rechecks the group's completion condition after the wait completes. `max_iterations` still bounds uninterrupted autonomous iterations, but continuing past a terminal `attention` wait (an answer, or a resume of a wait from before answers) permits one fresh iteration even after that bound; each further probe needs another answer. The next iteration reads the answer as `$LOOP_PREV.<wait-id>.output`. A non-terminal body wait, or a non-terminal deprecated `approval:` gate, is rejected because resuming a partial iteration would otherwise require replaying already-completed sibling work. A terminal `attention` wait is read past for the group's output, so `$group.output` is the work the wait depends on; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body). Waits below more than one nested `loop_group` boundary are not supported.
 
 Durable waits are not supported in container-isolated workflows. The server cannot reconstruct the CLI-owned container context needed for an automatic continuation, so Archon rejects this combination before creating the run. Automatic quota-window continuation is likewise skipped for container runs.
 
@@ -1005,6 +1017,68 @@ The vendors' own clients may still retry an individual API request inside one at
 
 ---
 
+## Run budgets
+
+`budget:` caps how much work and money one run may consume in total. It is not a concurrency
+limit: `fan_out.max_parallel` controls how many things run at once, while a budget controls how
+much runs overall. There is no default; a workflow without `budget:` runs exactly as before.
+
+```yaml
+budget:
+  max_work_units: 20   # positive integer
+  max_spend_usd: 5     # positive number, USD
+```
+
+Declare either ceiling or both. A malformed block, including a misspelt key, is a load error,
+so a typo never silently means "no ceiling".
+
+**What counts.** One work unit is one started attempt of a `prompt:`/`command:` node or a
+`bash:`/`script:` node. Each retry is another attempt, and so is each approval `on_reject`
+rework. Approval gates, waits and `cancel:` nodes do no work and consume nothing. Spend is the
+cost the provider reports for each AI attempt; `bash:` and `script:` nodes cost nothing.
+
+**Refusal.** Before an attempt starts, the engine checks the ceilings. Once a ceiling is
+reached, it does not start the attempt: the run fails with exit reason `budget_refused`, a
+`run_budget_refused` event recording the reason, the refused node, the limits and what was
+consumed, and a message naming the node that was not started.
+
+**Bounded overshoot.** The check happens before an attempt, so an attempt already running
+finishes. Work units are exact, even across a parallel layer. Spend can exceed `max_spend_usd`
+by the cost of the attempts that were already running when the ceiling was crossed.
+
+**Unknown cost is not zero.** With `max_spend_usd`, every AI attempt must report a complete
+cost. The run fails as soon as one does not, before later work starts:
+
+- providers that do not report cost (their `costReporting` capability is false);
+- Claude after resuming a session that an earlier process created, which reports no cost for
+  that query;
+- an attempt where only some provider calls reported cost (for example a structured-output
+  retry), recorded on the node as `spend.costUsd.partial: true`;
+- an attempt that started and never finished, such as one interrupted by a crash or Ctrl-C;
+- an attempt that failed with a provider error that reports no cost, such as a Claude rate
+  limit, overload or startup timeout. The failed attempt may already have made billed calls,
+  so the run fails instead of retrying the node.
+
+Use `max_work_units` alone for providers that do not report cost, or when a failed attempt
+should be retried rather than end the run. Unknown cost is still
+recorded, but it does not refuse the run.
+
+**Resume.** The totals are rebuilt from the run's own durable records each time the run
+resumes, so a resumed run continues from what it already consumed. A run refused for
+exhaustion refuses again on resume: the ceiling comes from the run's captured workflow source,
+not from the YAML on disk. Start a new run with a higher ceiling to continue.
+
+**Supported shapes.** A budgeted workflow may not contain `loop:`, `loop_group:`, `workflow:`
+(with or without `fan_out:`), or `include:` with `fan_out:`, including any reached through
+`include:`. The budget does not count their work yet, so the workflow fails to load instead.
+An included workflow's own `budget:` is dropped with the run-owned-field warning; the composing
+run's budget governs every node.
+
+**Node-level `maxBudgetUsd`** is unchanged and applies alongside a run budget: it caps one
+Claude node, while `budget:` caps the whole run.
+
+---
+
 ## DAG Resume on Failure
 
 When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a candidate for resume. Resume is **explicit**: you opt in by flag or button.
@@ -1121,7 +1195,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 `persist_session` applies to `command:` and `prompt:` nodes only. Other node types skip it:
 
 - **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a parse warning (shown by `archon validate workflows`) and is ignored.
-- **`approval:` / `cancel:`** — same: no AI call, no session to persist.
+- **`wait:` / `cancel:` / deprecated `approval:`** — same: no AI call, no session to persist.
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
@@ -1386,7 +1460,7 @@ Properties worth knowing:
 
 - **Observation, not a ledger.** Entries of a type are ordered by `producedAt` ascending, with ties broken by content path. The listing freezes which artifacts existed when the invocation started (each attempt, loop iteration, and `until_bash` check gets its own) and their metadata; it is not an execution history or a completion-order log, and re-running the same node owner overwrites its sidecar. An invocation sees artifacts published **before it started**, never a running sibling's — declare `depends_on` to order a producer ahead of its consumer. A `loop_group`'s `until_bash` runs after its body, so it sees what that iteration's body published.
 - **Failures stay visible.** `errors` lists every record the read could not turn into an artifact (malformed or foreign-run sidecar, unsafe path, missing or unreadable content). A corrupt sidecar has no trustworthy type, so it never disappears into an empty type list. An absent key means no matching readable metadata; `runId` lets a consumer reject a listing handed to it out of scope.
-- **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and approval rework. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
+- **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and deprecated `approval.on_reject` rework prompts. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
@@ -1643,7 +1717,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `worktree`, `container`, `evidence_policy`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
@@ -1661,7 +1735,7 @@ Two consequences worth knowing:
 
 Expansion happens at **load time (discovery)**, before the workflow ever runs. By the time
 the executor sees the DAG there are no include nodes left — the inlined nodes are ordinary
-executable nodes in the include's containing scope, so runs, events, resume, and approvals all
+executable nodes in the include's containing scope, so runs, events, resume, and answers all
 behave exactly as if you had written the nodes by hand. A top-level include produces top-level
 nodes; an include in a `loop_group` body produces body-local nodes. There is no separate child run.
 
@@ -1727,9 +1801,9 @@ nodes:
 
 Input names must start with a letter or underscore and may then contain letters, numbers,
 underscores, or hyphens. Values may be any JSON value (string, number, boolean, null, array,
-object) and are inserted verbatim during load-time expansion — they are **never
-expressions**: nothing is evaluated, computed, or interpreted. A string value is spliced in
-as text exactly as written; a non-string value keeps its logical type wherever the channel
+object) and are inserted verbatim into prompt text during load-time expansion — they are
+**never expressions**: nothing is evaluated, computed, or interpreted. A string value is
+spliced in as text exactly as written; a non-string value keeps its logical type wherever the channel
 is typed (a nested `with:` value position, `INPUTS_*` env delivery) and splices as its
 canonical JSON text into text surfaces. An inserted `$node.output` reference
 remains a reference and resolves through the normal runtime output substitution. A missing
@@ -1739,9 +1813,21 @@ depends on whether the block declares `inputs:` (see
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
 
-Substitution applies everywhere the value could reach the model or the shell, including
-inside Markdown code fences and inline code spans — `$INPUTS.<name>` has no
-documentation-only meaning, so a fenced occurrence is still a live parameter.
+Substitution applies everywhere the value could reach the model, including inside Markdown
+code fences and inline code spans — `$INPUTS.<name>` has no documentation-only meaning, so a
+fenced occurrence is still a live parameter.
+
+Executable source never receives the value. In an inline `bash:` body and in `loop.until_bash`
+or `loop_group.until_bash`, the macro becomes a double-quoted reference to the input's
+environment variable: `$INPUTS.base_branch` expands to `"${INPUTS_BASE_BRANCH}"`, so a value
+containing `$(...)` or quotes stays data. Write the macro bare: the expansion brings its own
+quotes, so `"$INPUTS.base_branch"` becomes `""${INPUTS_BASE_BRANCH}""`, which leaves the
+reference unquoted and splits a value containing spaces. Inside single quotes the reference
+stays literal, and inside a heredoc its quotes become part of the text; read
+`$INPUTS_<UPPER_SNAKE>` directly there. An inline `script:`
+body (`bun` or `uv`) has no language-neutral quoting form, so `$INPUTS.<name>` there is a load
+error naming the variable to read instead (`process.env.INPUTS_BASE_BRANCH`,
+`os.environ["INPUTS_BASE_BRANCH"]`).
 
 #### Command bodies use the same explicit interface
 
@@ -1763,8 +1849,9 @@ substitution is syntax-agnostic.
 Named `script:` files are different: they are opaque programs, not prompt templates. Archon
 does not scan or rewrite their source, so it delivers a composed workflow's declared inputs to
 them the same way it delivers everything else user-controlled — as environment variables.
-Every `bash:` and `script:` node in a composed workflow receives that workflow's resolved
-inputs as `INPUTS_<UPPER_SNAKE>` (hyphens fold to underscores, so `base-branch` arrives as
+Every `bash:` and `script:` node, and each `loop.until_bash` and
+`loop_group.until_bash` completion check (including checks after resume), receives its
+workflow's resolved inputs as `INPUTS_<UPPER_SNAKE>` (hyphens fold to underscores, so `base-branch` arrives as
 `INPUTS_BASE_BRANCH`), whether the body is inline or a named file:
 
 ```bash
@@ -1775,8 +1862,9 @@ echo "reviewing $INPUTS_PLAN against $INPUTS_BASE_BRANCH"
 The names are the ones the node's **own** workflow declared, at any nesting depth: a block
 three files deep still reads its own input names, not the caller's. Values are delivered
 through the environment and never spliced into the source, so a value containing shell
-metacharacters is data, not syntax. The load-time `$INPUTS.<name>` macro still substitutes
-into inline `bash:`/`script:` bodies as before — both channels work.
+metacharacters is data, not syntax. In an included `bash:` or `until_bash` body the
+`$INPUTS.<name>` macro is a shorthand for the same variable (see above); an inline `script:`
+body must read the variable.
 
 `workflow:` sub-runs deliver the same `INPUTS_<UPPER_SNAKE>` variables, from inputs persisted
 in the child's run metadata.
@@ -1901,7 +1989,7 @@ which surfaces can read it:
 
 | Caller | When `$INPUTS` resolves | Reaches `prompt:`/`bash:`/`script:` | Reaches `command:` file bodies |
 |--------|-------------------------|-------------------------------------|--------------------------------|
-| `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | Yes | **Yes** — resolved command bodies receive the same input binding before execution |
+| `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | `prompt:` yes; `bash:` as a quoted `INPUTS_<UPPER_SNAKE>` reference; inline `script:` is a load error | **Yes** — resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become `$INPUTS` variables on the child run) | Yes | **Yes** — every child node flows through runtime substitution |
 | direct run (`--input` / console form) | **Runtime** — the same path as a sub-run; supplied values are persisted to the run's own metadata, so `$INPUTS` reconstitutes on a cold resume | Yes | **Yes** — every node flows through runtime substitution |
 
@@ -2023,7 +2111,7 @@ points at the CLI and console. That gap is tracked in
 ## Launching a Separate Governed Run with `workflow:`
 
 A `workflow:` node runs another workflow as a **child sub-run** — a genuinely separate
-`workflow_runs` record with its own artifacts directory, its own approval gates, its own
+`workflow_runs` record with its own artifacts directory, its own pauses, its own
 cost line, and its own audit trail. The child's terminal output threads back into the
 parent as `$<nodeId>.output`, exactly like any other node.
 
@@ -2034,11 +2122,11 @@ and three differences are the ones an author actually feels:
 
 | | `include:` — composition | `workflow:` — a separate launch |
 |---|---|---|
-| **The gate** | One run, one id. A human approves the run that composed the block. | Two runs. The human approves the **child** by its own run id; the parent stays paused and auto-resumes when the child finishes. |
+| **The pause** | One run, one id. A pause in the block is answered on the run that composed it. | Two runs. A pause in the child is answered on the **child** by its own run id; the parent stays paused and auto-resumes when the child finishes. |
 | **Command-body freshness** | The block's `command:` bodies are snapshotted at discovery, so a resumed run survives the file being deleted or edited. | The child re-reads its command bodies live when it starts. |
 
 Reach for `include:` when you want one run made of reusable parts — the common case. Reach
-for `workflow:` when a human needs to approve, inspect or abandon one delegated unit
+for `workflow:` when you need to answer, inspect or abandon one delegated unit
 **independently of its siblings and of its caller**, or when you want N runtime copies of
 one workflow (`fan_out:`). That independence is the one thing a single flat DAG cannot
 express, which is why both keywords exist.
@@ -2093,7 +2181,7 @@ Both reuse another workflow. They differ in **governance**, not syntax:
 |---|---|---|
 | Run record | One — the block's nodes flatten into the parent's run | Two — the child gets its own `workflow_runs` row |
 | Artifacts / cost / resume | Shared with the parent | The child's own, separate |
-| Approval gate | The parent's single gate | The child pauses at **its own** gate, approved by the child's run id |
+| Pauses | Answered on the parent run | The child pauses on **its own** run, answered by the child's run id |
 | Output access | `$includeId.output` (terminal only) | `$nodeId.output` (child's terminal) |
 | When to reach for it | Textual reuse of a shared block (e.g. a review sub-DAG) | The block must be a separate **governance object** — separately auditable, gated, and cost-tracked |
 
@@ -2102,9 +2190,9 @@ sub-pipeline.**
 
 ### Gates, failure, and cost
 
-- **Gates pause the whole tree.** When the child hits an approval gate, the child run
-  pauses **and** the parent pauses "blocked on child". A reviewer approves the **child** by
-  its own run id (`/workflow approve <childRunId>` — shown in the pause message). When the
+- **A child pause pauses the whole tree.** When the child pauses for an answer, the child run
+  pauses **and** the parent pauses "blocked on child". Answer the **child** by its own run
+  id (for example `/workflow approve <childRunId>`; the id is shown in the pause message). When the
   child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
   finds the child finished, and threads its output onward.
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
@@ -2338,9 +2426,9 @@ For concurrent 1:1 children launched by different nodes, choose according to the
 | write to the repo | `isolation: worktree` on each **`workflow:` node** |
 | must not overlap at all | sequence them with `depends_on` |
 
-Each 1:1 child run presents its own approval gate independently, addressed by its own run
-ID. Concurrent children can both pause for approval; the parent stays blocked until its
-children finish. Within a single run, gates are presented one at a time, and deferred gates
+Each 1:1 child run presents its own pause independently, addressed by its own run
+ID. Concurrent children can both pause for an answer; the parent stays blocked until its
+children finish. Within a single run, pauses are presented one at a time, and deferred pauses
 re-run when that run resumes.
 
 ### Fanning out over a list with `fan_out:`
@@ -2546,8 +2634,8 @@ within one fan-out.
 
 #### Children that pause
 
-A fan-out child may pause like any run: at an `approval:` gate, an interactive loop, or a
-`wait:`. It stays paused as its own run and its own queue item, and nothing cancels it for
+A fan-out child may pause like any run: at a `wait:` node, or at a deprecated `approval:`
+gate or interactive loop. It stays paused as its own run and its own queue item, and nothing cancels it for
 pausing. Its siblings keep running to their own terminal states.
 
 - **The parent waits.** Once no more children can start, the parent pauses on a `fan_out`
@@ -2565,8 +2653,8 @@ pausing. Its siblings keep running to their own terminal states.
 - **Abandoning one child** leaves the parent paused. Resume the parent; it reads that
   child's outcome as cancelled, and the join treats it like any cancelled child.
 
-Gates around the node work as usual: an `approval:` before the fan-out is an ordinary
-parent gate, and one after it resumes with `$<id>.output` holding the full aggregate.
+Pauses around the node work as usual: a `wait: attention` node before the fan-out is an
+ordinary parent pause, and one after it reads `$<id>.output` holding the full aggregate.
 
 #### Resume, and what `child_index` keys
 
@@ -2666,8 +2754,8 @@ What you get, compared with the `workflow:` fan-out above:
 Two hard limits, both enforced at load time before any upstream node can spend:
 
 - **No suspension inside the complete block closure.** The parent has no durable per-item
-  pause cursor, so a block containing an `approval:` node, `wait:` node, interactive
-  `loop:`/`loop_group:`, or a nested workflow that can pause is rejected. Put the pause in
+  pause cursor, so a block containing a `wait:` node, a deprecated `approval:` node or
+  interactive `loop:`/`loop_group:`, or a nested workflow that can pause is rejected. Put the pause in
   the parent around the node, or invoke the block 1:1. When items may pause, use a
   `workflow:` node with `fan_out:` instead: each item is its own run and may pause and be
   answered on its own (see [Children that pause](#children-that-pause)).
@@ -2728,9 +2816,59 @@ incomplete observations. Cancellation can record pending or running nodes and fi
 that are still changing; terminalization does not make the filesystem snapshot atomic.
 You do not need a new YAML field or collector node to obtain these facts.
 
-Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
-owns typed discovery and failure-cause consumption and completion-only outcome formatting.
-A consumer must still depend on the producers whose artifacts it needs.
+#### Reporting on a failed run
+
+A `returns:` node on the success path is skipped when an upstream node fails, leaving
+`terminal_record.returns` unavailable with reason `node_not_completed`. Keep that success
+composer and add a reporter as `returns:`. With `trigger_rule: all_done`, it runs after the
+composer completes or is skipped; `{ from: "$result.output", if_skipped: null }` lets it
+pass the composer's value through or author a not-done report when the binding is `null`.
+`always_run: true` re-executes the reporter on resume, so a report that reads artifacts
+reflects the current pass instead of replaying a cached completion.
+
+```yaml
+name: failure-report
+description: Preserve an authored report after a node failure
+returns: report
+outcome_field: ok
+nodes:
+  - id: fail
+    bash: exit 1
+  - id: result
+    depends_on: [fail]
+    bash: 'printf ''{"ok":true,"summary":"Done"}'''
+  - id: report
+    depends_on: [result]
+    trigger_rule: all_done
+    always_run: true
+    with:
+      result: { from: "$result.output", if_skipped: null }
+    script: |
+      const result = process.env.INPUTS_RESULT;
+      console.log(result === 'null'
+        ? JSON.stringify({ ok: false, summary: 'Not done: a node failed before the result.' })
+        : result);
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        summary: { type: string }
+      required: [ok, summary]
+```
+
+The run's status stays `failed`; the authored outcome follows the reporter's
+[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The reporter owns the result schema and validates the value it passes through. Bind only
+the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
+so if the composer itself fails, this reporter fails too. Cancellation runs no further
+nodes, and an executor crash can prevent reporting; this pattern covers ordinary node
+failures that skip the composer, not every terminal path.
+
+An `include:` caller waits on the block's sinks. When this reporter is its only sink and
+completes, nodes depending on the block can run even after a node inside it failed. Gate
+success-only work on the returned verdict, for example `when: "$block.output.ok == true"`.
+The enclosing run still fails and its terminal record still names the failed node.
 
 ### A deterministic producer owns the same contract
 
@@ -2978,7 +3116,7 @@ a different setting and is **not** deprecated.
 
 Workflows started from the **Web UI** run in the background: execution is dispatched to a
 worker conversation, and the run's output appears in its run view. A workflow that pauses,
-at an approval gate, an interactive loop gate or a `wait: attention` node, pauses durably
+at a `wait: attention` node or a deprecated approval or interactive loop gate, pauses durably
 however it was started. The console's [Needs your input](/guides/workflow-triggers/#find-runs-needing-your-input)
 banner lists the paused run with its message and controls, and the CLI answers it by run id.
 The same holds for a `--detach` launch and a trigger start.
@@ -3011,18 +3149,18 @@ This checks resource resolution beyond what load-time validation covers. Bundled
 
 ### Unknown Keys Are Reported, Not Rejected
 
-A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a human gate and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
+A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a pause and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
 
 ```text
-WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
-  Nothing on this node gates. For a human gate, use an 'approval:' node; to gate
-  each iteration of a loop, set BOTH 'loop.interactive: true' and
-  'loop.gate_message' ('gate_message' on its own does not gate).
+WARNING [parse_warning] Node 'plan': unknown key 'interactive' will be ignored.
+  Nothing on this node pauses. To ask for an answer, add a 'wait: { attention:
+  <message> }' node; to ask on each iteration of a loop, use a 'loop_group' whose
+  body ends in one.
 ```
 
-(The `WARNING [unknown_key]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
+(The `WARNING [parse_warning]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
 
-**What is checked.** The workflow root, every node, the nested config blocks (`approval:`, `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body.
+**What is checked.** The workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body.
 
 **What is exempt**, because nothing is dropped from these — a key you write is a key that survives:
 
@@ -3036,7 +3174,7 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
 
 | Surface | Where |
 |---|---|
-| `archon validate workflows` | A `WARNING [unknown_key]` issue (also in `--json`) |
+| `archon validate workflows` | A `WARNING [parse_warning]` issue (also in `--json`) |
 | `archon workflow list` | Inline under the workflow; `parseWarnings` on each `--json` entry |
 | `archon workflow run` | On **stderr** before the run starts (`--detach --json` keeps stdout to the payload) |
 | Chat (`/workflow list`) | Inline with the workflow that raised it |
@@ -3161,7 +3299,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$nodeId.output` | Output of a completed upstream node |
 | `$nodeId.output.field` | JSON field from a structured upstream node output |
 
-See the [Variable Reference](/reference/variables/) for the complete list, including `$LOOP_USER_INPUT`, `$REJECTION_REASON`, substitution order, and context variable behavior.
+See the [Variable Reference](/reference/variables/) for the complete list, including the deprecated `$LOOP_USER_INPUT` and `$REJECTION_REASON` (an attention wait's answer replaces both, as `$<wait-id>.output.text`), substitution order, and context variable behavior.
 
 Example:
 ```yaml
@@ -3380,32 +3518,33 @@ nodes:
 
 If the workflow fails at `batch-2`, run `archon workflow run large-migration --resume` to skip `plan` and `batch-1`. Plain `archon workflow run large-migration` (without `--resume`) starts fresh.
 
-### Pattern: Human-in-the-Loop
+### Pattern: Pause for an answer
 
-When a gate authors `approval.decisions`, the console offers exactly those choices
-with their labels, and every response must use a declared id. This includes
-`archon workflow respond`, `approve`, `reject`, and the HTTP routes. An undeclared
-id is refused with the allowed ids without resolving or resuming the run. Gates
-without authored decisions keep the default approve/reject controls.
-
-Use an `approval` node to pause for human review before continuing:
+Use a `wait: attention` node to pause until someone answers before continuing:
 
 ```yaml
 name: careful-refactor
-description: Refactor with human approval gate
+description: Refactor after the proposal is approved
 
 nodes:
   - id: propose
     command: propose-refactor
 
-  - id: review-gate
-    approval:
-      message: "Review the proposed refactor before proceeding. Check the artifacts directory."
+  - id: review
+    wait:
+      attention: "Review the proposed refactor before proceeding. Check the artifacts directory."
+      form: approval
     depends_on: [propose]
+
+  - id: stop-if-rejected
+    cancel: "Refactor proposal rejected"
+    depends_on: [review]
+    when: "$review.output.decision == 'reject'"
 
   - id: execute
     command: execute-approved-refactor
-    depends_on: [review-gate]
+    depends_on: [review]
+    when: "$review.output.decision == 'approve'"
 
   - id: pr
     command: create-pr
@@ -3413,21 +3552,24 @@ nodes:
     context: fresh
 ```
 
-When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
+When the workflow reaches `review`, it pauses and the run needs attention. Answer it with
+`archon workflow answer`, the console, or the `approve`/`reject` shorthand on any surface
+(`/workflow approve <run-id>`, `archon workflow approve <run-id>`, or the API). See
+[Attention waits](#attention-waits) for every form and answer channel.
 
-- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision; `archon serve` or `archon workflow wake` then continues the run)
-- **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
-- **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
-- **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
+`reject` is an answer, not a cancellation: the run continues with
+`$review.output.decision == 'reject'`, and the graph decides what happens next. Here
+`stop-if-rejected` ends the run. Any text given with the answer is
+`$review.output.text`, so a rework node can read it instead.
 
-Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web UI decisions on runs with Slack, Telegram, or GitHub parents record the decision but do not auto-resume when the gate continues execution. Use `archon workflow resume <run-id>` or resume it from the originating conversation to continue the same run.
+To offer named choices, use `form: select` with `options:`; the next node reads the chosen
+id as `$review.output.decision`.
 
-For gates without authored decisions, rejecting cancels the workflow unless
-`on_reject` is configured, which triggers an AI rework prompt and re-pauses for
-re-review. Authored decisions instead produce `$review-gate.output.decision` and
-`.text`; the graph determines what happens next.
-See [Approval Nodes](/guides/approval-nodes/) for full details.
+:::note[Deprecated: `approval:` nodes]
+`approval:`, `approval.decisions`, `approval.capture_response`, `approval.on_reject`, and
+`$REJECTION_REASON` still load and run, with a deprecation warning naming each node and its
+replacement. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates).
+:::
 
 ### Pattern: Early Termination with Cancel
 
@@ -3451,62 +3593,37 @@ nodes:
 
 When a `cancel:` node executes (passes its `when:` gate), it sets the workflow run to `cancelled` with the reason string and stops all in-flight nodes. Unlike node failure, cancellation is intentional — the status is `cancelled`, not `failed`.
 
-### Choosing: Interactive Loop vs Approval with on_reject
+### Pattern: Revise until approved
 
-Two primitives handle human-in-the-loop iteration. Use the right one for your pattern:
-
-| | Interactive Loop | Approval + on_reject |
-|---|---|---|
-| YAML | `loop.interactive: true` | `approval.on_reject: { prompt }` |
-| User input variable | `$LOOP_USER_INPUT` | `$REJECTION_REASON` |
-| How it works | Same prompt runs each iteration, user input injected as variable | Specific on_reject prompt runs only on rejection |
-| Best for | **Conversational iteration** — explore, refine, review cycles where the AI and human go back and forth | **Gate-then-fix** — approve to proceed, or reject to trigger a specific corrective action |
-| Completion condition | A declared `until`, `until_bash`, or `until_field` channel completes; a gate that paused on a completed iteration finalizes on a bare approve | User explicitly approves or rejects via button/command |
-| Example | PIV loop: explore → user feedback → explore again | Report generation: generate → user rejects → AI revises specific section |
-
-**Interactive loop** (`loop.interactive: true`):
+To repeat work until it is approved, put the work and an attention wait in a `loop_group`.
+The wait must be the body's sole terminal sink. The next iteration reads the answer through
+`$LOOP_PREV`, and `until_bash` checks it:
 
 ```yaml
 - id: refine-plan
-  loop:
-    prompt: |
-      User's feedback: $LOOP_USER_INPUT
-      Read the plan, apply feedback, present changes.
-    until: PLAN_APPROVED
+  loop_group:
+    until_bash: 'decision=$ask.output.decision; [ "$decision" = "approve" ]'
     max_iterations: 10
-    interactive: true
-    gate_message: "Review the plan. Provide feedback or say 'approved'."
+    nodes:
+      - id: draft
+        prompt: |
+          Write or revise the plan.
+          Feedback on the previous draft, if any: $LOOP_PREV.ask.output.text
+      - id: ask
+        depends_on: [draft]
+        wait:
+          attention: "Review the plan. Approve it, or reject with what to change."
+          form: approval
 ```
 
-The AI runs each iteration, pauses for user input, and the user's text feeds into the next
-iteration via `$LOOP_USER_INPUT`. What an approve does depends on the paused iteration:
+Each iteration drafts, then pauses. Approving completes the group; rejecting with text runs
+another iteration that reads the text. Continuing past the wait permits one more iteration
+even after `max_iterations`. See [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body).
 
-- If any declared completion channel completed the iteration (the gate names the channel
-  after `✅ Completion condition met via`), approving with **no feedback** accepts the
-  result — the node finalizes from the already-computed output with no extra iteration.
-  Approving **with** feedback runs another iteration instead.
-- If no completion condition was met, any approve runs another iteration with your feedback.
-
-For a loop that should complete autonomously on the signal (no gate at all on success —
-e.g. a validation that only needs a human on failure), add `signal_completes: true`. See
-[Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
-and [`signal_completes`](/guides/loop-nodes/#signal_completes--autonomous-completion) for
-the full semantics.
-
-**Approval with on_reject** (`approval.on_reject`):
-
-```yaml
-- id: review
-  approval:
-    message: "Review the report. Approve or request changes."
-    capture_response: true
-    on_reject: { prompt: "Revise based on: $REJECTION_REASON", max_attempts: 5 }
-  depends_on: [generate]
-```
-
-The workflow pauses at the approval gate. User approves -> workflow continues. User rejects with feedback -> the `on_reject` prompt runs with `$REJECTION_REASON`, then re-pauses at the same gate.
-
-**Rule of thumb**: If the human and AI are having a conversation (exploring, refining, iterating), use an interactive loop. If the workflow should proceed unless the human objects, use an approval gate with `on_reject`.
+This replaces two deprecated shapes: interactive loops (`loop.interactive: true` with
+`gate_message` and `$LOOP_USER_INPUT`) and `approval.on_reject` rework prompts with
+`$REJECTION_REASON`. Both still run, with a deprecation warning. See
+[Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates).
 
 ---
 

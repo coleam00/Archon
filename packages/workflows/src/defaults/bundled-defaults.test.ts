@@ -340,8 +340,8 @@ describe('bundled-defaults', () => {
     });
 
     // Every implementation pass before CI is reviewed: the first by the full routed
-    // review, later ones by delta (the same lenses after review findings, the general
-    // code reviewer after a CI fix). One named exception: the post-review reshape,
+    // review, later ones by delta (the previous round's lenses plus any the delta needs
+    // after review findings, the general code reviewer after a CI fix). One named exception: the post-review reshape,
     // which adopts or declines the structure pass's findings and goes straight to CI.
     it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
@@ -431,7 +431,12 @@ describe('bundled-defaults', () => {
             : []
       );
       expect(waits).toEqual([]);
-      expect(nodes.map(candidate => candidate.id)).toEqual(['rounds', 'update-pr-body', 'outcome']);
+      expect(nodes.map(candidate => candidate.id)).toEqual([
+        'rounds',
+        'update-pr-body',
+        'outcome',
+        'report',
+      ]);
       const rounds = nodes[0];
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
@@ -445,12 +450,14 @@ describe('bundled-defaults', () => {
         'round',
       ]);
       expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
-      expect(parsed.workflow.returns).toBe('outcome');
+      expect(parsed.workflow.returns).toBe('report');
       expect(parsed.workflow.outcome_field).toBe('ready');
     });
 
-    // A delivery ending travels from round to deliver's outcome to ship's outcome; the
-    // three schemas must name the same endings or a valid one fails certification.
+    // A delivery ending travels from round through deliver's report and ship's outcome
+    // to ship's report; the schemas must name the same endings or a valid one fails
+    // certification. `failed` is the reports' own ending: a node failure skipped the
+    // composer.
     it("deliver's endings are the same set at every node that carries them", () => {
       const parse = (name: string) => {
         const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name], `${name}.yaml`, providerRegistry);
@@ -469,11 +476,10 @@ describe('bundled-defaults', () => {
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       const round = reasons(rounds.loop_group.nodes.find(node => node.id === 'round'));
       expect(round.length).toBeGreaterThan(0);
-      expect(reasons(deliver.nodes.find(node => node.id === 'outcome')).sort()).toEqual(
-        [...round].sort()
-      );
-      const ship = reasons(parse('archon-ship').nodes.find(node => node.id === 'outcome'));
-      expect(ship).toEqual(expect.arrayContaining(round));
+      const delivered = reasons(deliver.nodes.find(node => node.id === 'report'));
+      expect([...delivered].sort()).toEqual([...round, 'failed'].sort());
+      const ship = reasons(parse('archon-ship').nodes.find(node => node.id === 'report'));
+      expect(ship).toEqual(expect.arrayContaining(delivered));
     });
 
     // Reviewers create scratch trees under the run, where the workflow removes them;
@@ -863,8 +869,8 @@ describe('bundled-defaults', () => {
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
-      expect(publish.timeout).toBe(30000);
-      expect(publish.retry).toEqual({ max_attempts: 2, delay_ms: 20000 });
+      expect(publish.timeout).toBe(180000);
+      expect(publish.retry).toBeUndefined();
       expect(publish.output_type).toBe('pull-request');
       expect(publish.output_format).toMatchObject({
         properties: {

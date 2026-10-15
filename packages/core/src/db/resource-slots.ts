@@ -1,21 +1,37 @@
-import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
+import {
+  ResourceSlotCapacityConflictError,
+  capacityWaiters,
+  heldCheckouts,
+  type ResourceSlotOccupancy,
+} from '@archon/workflows/resource-start-store';
+import {
+  preparedWorkflowLaunchSchema,
+  type PreparedWorkflowLaunch,
+} from '@archon/workflows/schemas/resource-start';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
  * A slot admits up to `capacity` live holders. Callers run these helpers inside one
  * database transaction, lock the slot first, then decide. A holder is released when
- * the thing it names reaches a terminal state; release is read from that authoritative
- * state inside the slot lock, never from elapsed time, so a live holder is never
- * declared dead. Waiters and their FIFO order belong to the caller, because a waiter
- * carries the caller's own payload (a start request carries its prepared launch).
+ * the thing it names reaches a terminal state, or explicitly by its owner; release is
+ * read from authoritative state inside the slot lock, never from elapsed time, so a
+ * live holder is never declared dead. Waiters and their FIFO order belong to the
+ * caller, because a waiter carries the caller's own payload (a start request carries
+ * its prepared launch, a capacity waiter is a paused run).
  *
  * Holder kinds and their liveness:
- * - `run`: a workflow run, live until the run is terminal or gone.
+ * - `run`: a workflow run, live until the run is terminal or gone, or until the run,
+ *   paused where the engine continues it by itself, gives its slot back
+ *   (`releasePausedRunSlot`).
  * - `attempt`: one provider attempt, released by its owner when the provider stream
  *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType } from './connection';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { parseJsonObject } from './workflow-run-normalization';
 import {
   isOwnerProvablyGone,
   parseProcessOwner,
@@ -184,4 +200,59 @@ export async function removeResourceSlotHolder(
     [resource, holder.kind, holder.id]
   );
   return result.rowCount > 0;
+}
+
+/**
+ * What a run-start slot holds, read under its lock (`lockResourceSlot`): live holders,
+ * capacity waiters, the checkouts live admitted runs hold, and the queued start requests. The
+ * queued rows are locked too, so a concurrent withdrawal cannot race their admission.
+ */
+export async function resourceStartOccupancy(
+  query: TransactionQuery,
+  resource: string,
+  capacity: number
+): Promise<ResourceSlotOccupancy> {
+  const holders = await liveResourceSlotHolders(query, resource);
+  const holding = new Set(holders.map(holder => holder.id));
+  const live = await query<{
+    id: string;
+    status: WorkflowRunStatus;
+    metadata: unknown;
+    working_path: string | null;
+    launch: unknown;
+  }>(
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
+       JOIN remote_agent_resource_start_requests q ON q.id = w.id
+      WHERE q.resource_key = $1 AND q.status = 'admitted'
+        AND w.status NOT IN (${terminalList})`,
+    [resource]
+  );
+  const queued = await query<{ id: string; host_id: string; launch: unknown }>(
+    `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
+      WHERE resource_key = $1 AND status = 'queued'
+      ORDER BY queue_position${getDialect().rowLock()}`,
+    [resource]
+  );
+  const liveRuns = live.rows.map(row => ({
+    id: String(row.id),
+    status: row.status,
+    metadata: parseJsonObject(row.metadata) ?? {},
+    working_path: row.working_path,
+    launch: parseLaunch(row.launch),
+  }));
+  return {
+    capacity,
+    holders,
+    waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
+    queue: queued.rows.map(row => ({
+      id: String(row.id),
+      hostId: String(row.host_id),
+      launch: parseLaunch(row.launch),
+    })),
+    heldCheckouts: heldCheckouts(liveRuns),
+  };
+}
+
+function parseLaunch(value: unknown): PreparedWorkflowLaunch {
+  return preparedWorkflowLaunchSchema.parse(typeof value === 'string' ? JSON.parse(value) : value);
 }

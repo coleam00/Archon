@@ -44,7 +44,7 @@
  * policy at its substitution call sites because an empty fallback would decide loop
  * completion. See `similarNodeIds`.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { NodeOutput } from './schemas';
 import { findSimilar } from './utils/fuzzy-match';
 import { hasTruncationMarker } from './utils/output-truncation';

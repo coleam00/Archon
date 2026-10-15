@@ -1,5 +1,5 @@
 import { declaredOutputPathsSchema } from '../output-ref';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   providerFailureSchema,
   SESSION_PREVIEW_LENGTH,
@@ -49,7 +49,18 @@ export function reportedMeasurementSchema<T extends z.ZodType>(
 }
 export const executionSpendSchema = z.object({
   tokens: reportedMeasurementSchema(tokenUsageSchema),
-  costUsd: reportedMeasurementSchema(z.number()),
+  costUsd: z.discriminatedUnion('source', [
+    z.object({
+      source: z.literal('provider'),
+      value: z.number(),
+      /**
+       * The attempt made provider calls whose cost was not all reported, so
+       * `value` is a floor. A run budget treats such a cost as unavailable.
+       */
+      partial: z.literal(true).optional(),
+    }),
+    unavailableMeasurementSchema,
+  ]),
   stopReason: reportedMeasurementSchema(z.string()),
   numTurns: reportedMeasurementSchema(z.number()),
 });
@@ -164,7 +175,6 @@ export type ExecutionOutput = z.infer<typeof executionOutputSchema>;
  * `mcp_server_status` event instead.
  */
 export const mcpUnavailableReasonSchema = z.enum(['provider_unsupported', 'config_missing']);
-export type McpUnavailableReason = z.infer<typeof mcpUnavailableReasonSchema>;
 
 export const mcpUnavailableSchema = z.object({
   /** The path as the node declared it. */

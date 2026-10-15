@@ -34,8 +34,8 @@ dispatch (no AI). Note the full list of supported slash commands.
 
 ### 4. Understand Session State Machine
 
-Read `packages/core/src/state/session-transitions.ts` in full — `TransitionTrigger` union type,
-`TRIGGER_BEHAVIOR` record (creates / deactivates / none), and session lifecycle rules.
+Read `packages/core/src/state/session-transitions.ts` for command-trigger mapping and safe
+deactivation, and `packages/core/src/schemas/session.ts` for the validated session reasons.
 
 ### 5. Understand AI Client Patterns
 
@@ -79,7 +79,7 @@ Summarize (under 250 words):
 
 ### Session Lifecycle
 - `TransitionTrigger` values and their behaviors
-- Only `plan-to-execute` immediately creates a new session; others deactivate first
+- Messages reuse the active session or create one with `first-message`; reset deactivates it so the next message creates a new one
 
 ### AI Providers
 - `ClaudeProvider` (claude-agent-sdk) and `CodexProvider` (`codex app-server` over JSON-RPC)

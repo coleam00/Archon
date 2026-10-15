@@ -74,6 +74,7 @@ const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot
     completedNodeOutputs: new Map(),
     fanOutSnapshots: new Map(),
     unresolvedNodeStarts: new Set(),
+    budget: { workUnits: 0, spendUsd: 0 },
     tokens: { input: 0, output: 0 },
     costUsd: 0,
   })
@@ -334,6 +335,7 @@ describe('createWorkflowStore', () => {
       completedNodeOutputs: new Map([['step1', { output: 'output text' }]]),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 40, output: 4 },
       costUsd: 0,
     };
@@ -550,9 +552,12 @@ describe('required workflow credential delivery', () => {
     const status = db.getStoredCredentialStatus as ReturnType<typeof mock>;
     status.mockClear();
     mockListDecryptedUserProviderCredentials.mockResolvedValue([
-      { provider: 'codex', cred: { kind: 'api_key', apiKey: 'legacy' } },
+      { provider: 'codex', cred: { kind: 'oauth', oauthApiKey: 'legacy', rawCreds: {} } },
     ]);
-    await createWorkflowDeps().getUserProviderCredentialStatus?.('u', 'openai');
+    const stored = await createWorkflowDeps().getUserProviderCredential?.('u', 'openai');
+    expect(stored?.kind).toBe('oauth');
+    expect(status).not.toHaveBeenCalled();
+    expect(await stored?.getStatus()).toEqual({ state: 'usable', source: 'archon' });
     expect(status).toHaveBeenCalledWith('u', 'codex');
   });
 
@@ -561,9 +566,9 @@ describe('required workflow credential delivery', () => {
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
     ]);
     const deps = createWorkflowDeps();
-    expect(await deps.getUserProviderCredentialStatus?.('u', 'anthropic')).toMatchObject({
-      state: 'usable',
-    });
+    const stored = await deps.getUserProviderCredential?.('u', 'anthropic');
+    expect(stored?.kind).toBe('api_key');
+    expect(await stored?.getStatus()).toMatchObject({ state: 'usable' });
     mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
     await expect(
       deps.getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], ['anthropic'])

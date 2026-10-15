@@ -31,7 +31,9 @@ Slack event
           → buildFullPrompt() (orchestrator-agent.ts:450)
             → If conversation has codebase → buildProjectScopedPrompt() (prompt-builder.ts:153)
             → Otherwise → buildOrchestratorPrompt() (prompt-builder.ts:116)
-            → Prompt includes: registered projects, discovered workflows, /invoke-workflow format
+            → Prompt includes: registered projects, discovered workflows, and how to launch:
+              the invoke_workflow / register_project tools (Claude, Pi) or the
+              /invoke-workflow / /register-project command lines (other providers)
           → sessionDb.getActiveSession() → transitionSession('first-message') if none (orchestrator-agent.ts:462)
           → getAgentProvider(conversation.ai_assistant_type) (orchestrator-agent.ts:470)
           → cwd = getArchonWorkspacesPath() (orchestrator-agent.ts:458)
@@ -39,9 +41,11 @@ Slack event
 
           AI responds with natural language ± structured commands:
             → filterToolIndicators(assistantMessages) — strip emoji-prefixed tool noise (orchestrator-agent.ts:711)
-            → parseOrchestratorCommands() (orchestrator-agent.ts:719)
+            → Claude, Pi: invoke_workflow queues a launch, dispatched via dispatchOrchestratorWorkflow()
+              after the turn; register_project registers inside the tool call
+            → Other providers: parseOrchestratorCommands() scans the reply
               → If /invoke-workflow found → dispatchOrchestratorWorkflow()
-              → If /register-project found → handleRegisterProject()
+              → If /register-project found → registerProject()
               → Otherwise → send remaining text to user via platform.sendMessage()
 ```
 
@@ -158,19 +162,16 @@ AI call completes → tryPersistSessionId(session.id, sdkSessionId)
 Next message → getActiveSession() returns existing
   → sendQuery(..., session.assistant_session_id) — SDK resumes
 
-/reset → transitionSession('reset-requested')
+/reset → safeDeactivateSession(session.id, 'reset')
   → Deactivates current session (ended_reason = 'reset-requested')
   → Does NOT create new session immediately
   → Next message triggers 'first-message' → new session
-
-Plan → Execute transition:
-  → detectPlanToExecuteTransition() checks commandName === 'execute' && lastCommand === 'plan-feature'
-  → transitionSession('plan-to-execute') — ONLY trigger that immediately creates new session
-  → Old session deactivated + new session created atomically in one DB transaction
 ```
 
-**TransitionTrigger values:**
-`'first-message'`, `'plan-to-execute'`, `'isolation-changed'`, `'codebase-changed'`, `'codebase-cloned'`, `'cwd-changed'`, `'reset-requested'`, `'context-reset'`, `'repo-removed'`, `'worktree-removed'`, `'conversation-closed'`
+**Session reasons:** `SESSION_TRANSITION_REASONS` in
+`packages/core/src/schemas/session.ts` owns the validated vocabulary, including
+historical `plan-to-execute` and `cwd-changed` values. There is no automatic
+plan-to-execute transition.
 
 **Audit trail:** `getSessionChain(sessionId)` walks `parent_session_id` links via recursive CTE.
 

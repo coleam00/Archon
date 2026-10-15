@@ -14,8 +14,6 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => archonHome),
   getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),
-  getArchonWorkspacesPath: mock(() => join(archonHome, 'workspaces')),
-  getArchonWorktreesPath: mock(() => join(archonHome, 'worktrees')),
   getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
@@ -129,6 +127,69 @@ describe('config-loader', () => {
       'Invalid streaming config'
     );
     expect(mockFsWriteFile).not.toHaveBeenCalled();
+  });
+
+  test('attention notice routes load from global config only', async () => {
+    const routes = 'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n';
+    mockFsReadFile.mockImplementation(async (path: string) =>
+      path.replace(/\\/g, '/').includes('/repo/.archon/')
+        ? 'attentionNotices:\n  - platform: repo-chat\n    destination: repo\n'
+        : routes
+    );
+    expect((await loadConfig('/repo')).attentionNotices).toEqual([
+      { platform: 'matrix-chat', destination: 'ops' },
+    ]);
+    expect(toSafeConfig(await loadConfig())).not.toHaveProperty('attentionNotices');
+  });
+
+  test.each([
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n  - platform: matrix-chat\n    destination: ops\n',
+    'attentionNotices:\n  - platform: matrix-chat\n    destination: ""\n',
+    'attentionNotices:\n  - platform: Matrix Chat\n    destination: ops\n',
+  ])('an invalid attention notice route degrades to no routes: %s', async yaml => {
+    mockFsReadFile.mockResolvedValue(yaml);
+    expect(await loadGlobalConfig()).toEqual({});
+    expect((await loadConfig()).attentionNotices).toEqual([]);
+  });
+
+  test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
+    '%s preserves unrelated global settings and the default conversation limit',
+    async concurrency => {
+      mockFsReadFile.mockResolvedValue(`botName: MyBot\n${concurrency}\n`);
+      const config = await loadConfig();
+      expect(config.botName).toBe('MyBot');
+      expect(config.concurrency.maxConversations).toBe(10);
+    }
+  );
+
+  test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
+    '%s allows unrelated global settings updates',
+    async concurrency => {
+      mockFsReadFile.mockResolvedValue(`botName: MyBot\n${concurrency}\n`);
+      await updateGlobalConfig({ botName: 'UpdatedBot' });
+      expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+        botName: 'UpdatedBot',
+        concurrency: null,
+      });
+    }
+  );
+
+  test('invalid conversation limits degrade with diagnostics and cannot be persisted', async () => {
+    mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
+    mockLogger.error.mockClear();
+    expect((await loadConfig()).concurrency.maxConversations).toBe(10);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(InvalidConfigError) }),
+      'config_load_error'
+    );
+    await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+      /Invalid concurrency config.*maxConversations/
+    );
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+    await updateGlobalConfig({ concurrency: { maxConversations: 3 } });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      concurrency: { maxConversations: 3 },
+    });
   });
 
   test('registered streaming default and validated environment override apply', async () => {
@@ -429,6 +490,23 @@ ${field}:
       );
     });
 
+    test('strict config reads use defaults only for missing files and preserve read failures', async () => {
+      const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
+      mockFsReadFile.mockRejectedValue(missing);
+      expect(await loadRepoConfig('/repo', { strict: true })).toEqual({});
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      mockFsReadFile.mockRejectedValue(denied);
+      expect(await loadRepoConfig('/repo', { strict: true }).catch(error => error)).toBe(denied);
+    });
+
+    test.each(['worktree: [', 'false', '[]'])(
+      'strict config reads reject invalid configuration: %s',
+      async content => {
+        mockFsReadFile.mockResolvedValue(content);
+        await expect(loadRepoConfig('/repo', { strict: true })).rejects.toThrow();
+      }
+    );
+
     test('parses recommendedWorkflows as an ordered string array', async () => {
       mockFsReadFile.mockResolvedValue(`
 recommendedWorkflows:
@@ -476,6 +554,26 @@ recommendedWorkflows: "archon-plan"
   });
 
   describe('loadConfig', () => {
+    test('tolerates retired YAML keys without merging or exposing them', async () => {
+      mockFsReadFile.mockResolvedValueOnce(`
+paths:
+  workspaces: /unused/workspaces
+  worktrees: /unused/worktrees
+concurrency:
+  maxConversations: 7
+`).mockResolvedValueOnce(`
+defaults:
+  copyDefaults: false
+  loadDefaultCommands: false
+`);
+      const config = await loadConfig('/test/repo');
+      expect(config.concurrency.maxConversations).toBe(7);
+      expect(config.defaults.loadDefaultCommands).toBe(false);
+      expect(config).not.toHaveProperty('paths');
+      expect(config.defaults).not.toHaveProperty('copyDefaults');
+      expect(toSafeConfig(config).defaults).not.toHaveProperty('copyDefaults');
+    });
+
     test('returns defaults when no configs exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
@@ -969,17 +1067,6 @@ env:
 
       const config = await loadConfig('/test/repo');
       expect(config.envVars).toBeUndefined();
-    });
-
-    test('paths use archon defaults', async () => {
-      const error = new Error('ENOENT') as NodeJS.ErrnoException;
-      error.code = 'ENOENT';
-      mockFsReadFile.mockRejectedValue(error);
-
-      const config = await loadConfig();
-
-      expect(config.paths.workspaces).toBe(join(homedir(), '.archon', 'workspaces'));
-      expect(config.paths.worktrees).toBe(join(homedir(), '.archon', 'worktrees'));
     });
   });
 

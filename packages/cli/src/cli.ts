@@ -52,6 +52,7 @@ import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
 import {
+  isContinueSubcommand,
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
@@ -714,6 +715,9 @@ async function main(): Promise<number> {
         if (modelOnContinue) {
           return await fail(jsonFlag, modelOnContinue);
         }
+        if (subcommand === 'answer' && detachFlag) {
+          return await fail(jsonFlag, 'Error: --detach cannot be used with workflow answer.');
+        }
         const {
           workflowListCommand,
           WorkflowListLookupError: workflowListLookupError,
@@ -743,14 +747,7 @@ async function main(): Promise<number> {
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
-        const executesWorkflow = [
-          'run',
-          'resume',
-          'approve',
-          'reject',
-          'respond',
-          'answer',
-        ].includes(subcommand ?? '');
+        const executesWorkflow = subcommand === 'run' || isContinueSubcommand(subcommand);
         const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
@@ -1142,7 +1139,7 @@ async function main(): Promise<number> {
                 'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
               );
             }
-            await workflowAnswerCommand(
+            return await workflowAnswerCommand(
               workflowHost,
               answerRunId,
               answerOccurrence,
@@ -1151,7 +1148,6 @@ async function main(): Promise<number> {
               jsonFlag,
               effectiveCwd
             );
-            break;
           }
 
           case 'attention': {
@@ -1177,7 +1173,7 @@ async function main(): Promise<number> {
             if (positionals[3] !== undefined) {
               return await fail(
                 jsonFlag,
-                'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>] [--json]'
+                'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>] [--watch [--after <cursor>]] [--json]'
               );
             }
             return await workflowAttentionCommand(workflowHost, effectiveCwd, positionals[2], {
@@ -1187,6 +1183,8 @@ async function main(): Promise<number> {
               labels: (values.label as string[] | undefined) ?? [],
               sort: values.sort as string | undefined,
               countBy: values['count-by'] as string | undefined,
+              watch: values.watch as boolean | undefined,
+              after: values.after as string | undefined,
             });
           }
 
@@ -1286,7 +1284,7 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event, wake, signal`
+              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
             );
           }
         }

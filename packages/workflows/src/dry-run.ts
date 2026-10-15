@@ -1,5 +1,5 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
@@ -10,8 +10,10 @@ import {
   checkComposedBlockBoundaries,
   checkTriggerRule,
   loopBodyScope,
+  inputEnvVars,
   nodeTemplateReferences,
   resolveNodeBindings,
+  resolveAttentionOptions,
   substituteLoopBodyText,
   type LoopBodyScope,
   type ShellInputContext,
@@ -25,7 +27,7 @@ import {
   resolveIncludeOutputAliases,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import { canonicalValueText, parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
+import { parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
   describeUnmetCompletion,
@@ -53,7 +55,6 @@ import { observeCheckout } from './checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from './node-execution';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
-  inputEnvKey,
   isGateNode,
   isExecNode,
   isHaltNode,
@@ -73,8 +74,14 @@ import {
   type SkipCause,
   type GraphPlan,
   type ResolvedWorkflow,
+  type WaitCondition,
   type WorkflowRunOutcome,
 } from './schemas';
+import {
+  attentionAnswerSchema,
+  attentionChoiceProblem,
+  attentionOptions,
+} from './schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -745,9 +752,8 @@ async function executeCodeNode(
   node: DagNode,
   code: string,
   ctx: DryRunContext,
-  /** Resolved node-local `with:` bindings (#2637) — the nearest env source, layered
-   *  over run inputs exactly like the executor's `inputEnvVars` third tier. */
-  nodeBindings?: Record<string, JsonValue>,
+  /** The executor's own `INPUTS_<UPPER_SNAKE>` bag: run, composed and node-local inputs. */
+  inputEnv: NodeJS.ProcessEnv,
   execution?: NodeExecutionMetadata
 ): Promise<{ output: string } | { error: string }> {
   try {
@@ -775,23 +781,6 @@ async function executeCodeNode(
         script.runtime === 'bun'
           ? ['--no-env-file', 'run', script.path]
           : ['run', ...(node.deps ?? []).flatMap(dep => ['--with', dep]), script.path];
-    }
-    // Run-level inputs and node-local bindings ride the env bag as
-    // `INPUTS_<UPPER_SNAKE>`, never text substitution — the outer tiers of a real
-    // run's `inputEnvVars` (dag-executor.ts), bindings layered over run inputs in
-    // the same nearest-wins order. Composed include-block inputs for named scripts
-    // remain a real-run-only channel the dry run does not deliver.
-    // That applies to EVERY composed exec node, not just named scripts: a
-    // `bash:` body inlined through `include:` sees none of the caller's `with:`
-    // values here, so one reading `$INPUTS_FOO` under `set -u` dies on an
-    // unbound variable. Such a node can only be stubbed in a fixture — its real
-    // behaviour is not reachable from `workflow test`.
-    const inputEnv: Record<string, string> = {};
-    for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
-      inputEnv[inputEnvKey(name)] = canonicalValueText(value);
-    }
-    for (const [name, value] of Object.entries(nodeBindings ?? {})) {
-      inputEnv[inputEnvKey(name)] = canonicalValueText(value);
     }
     // The executor pre-creates the artifacts dir it advertises; the simulator honors
     // the same contract (#2617). Idempotent, and only reached when code executes, so
@@ -852,6 +841,35 @@ function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined
     return generatedStubFor(node);
   }
   return undefined;
+}
+
+/**
+ * Hold an authored answer to an attention wait to the options the wait declares, as
+ * every answer surface does; the form's output contract alone accepts any decision.
+ */
+function assertStubAnswerChoosesDeclared(
+  node: DagNode,
+  condition: Extract<WaitCondition, { kind: 'attention' }>,
+  answer: DryRunStubValue,
+  outputs: ReadonlyMap<string, NodeOutput>
+): void {
+  const options = resolveAttentionOptions(node.id, condition.options, outputs);
+  const declared = attentionOptions({ form: condition.form, options }).map(option => option.id);
+  // The output contract already held, so a string stub is one JSON document. A parse
+  // failure is an empty decision or decision list, which chooses nothing.
+  const parsed = attentionAnswerSchema.safeParse(
+    typeof answer === 'string' ? JSON.parse(answer) : answer
+  );
+  const choose = !parsed.success
+    ? []
+    : 'decisions' in parsed.data
+      ? parsed.data.decisions
+      : 'decision' in parsed.data
+        ? [parsed.data.decision]
+        : [];
+  const problem = attentionChoiceProblem(condition.form, declared, choose);
+  if (problem !== undefined)
+    throw new Error(`Stub for node '${node.id}' (form '${condition.form}') ${problem}`);
 }
 
 /** The completion channels a simulated loop may declare. */
@@ -1205,6 +1223,28 @@ async function simulateNode(
       const condition = waitCondition(node.wait);
       const resolvedText =
         condition.kind === 'attention' ? resolveText(condition.message, ctx, outputs) : undefined;
+      // An authored stub answers an attention wait, as an answer completes it in a real
+      // run. Without one the simulation stops where the run would pause.
+      const answer =
+        condition.kind === 'attention' && Object.hasOwn(ctx.stubs, node.id)
+          ? stubFor(node, ctx)
+          : undefined;
+      if (answer !== undefined) {
+        if (condition.kind === 'attention')
+          assertStubAnswerChoosesDeclared(node, condition, answer, outputs);
+        const hydrated = completedOutput(node, answer);
+        outputs.set(node.id, hydrated);
+        ctx.trace.push({
+          nodeId: node.id,
+          nodeType: 'wait',
+          state: 'stubbed',
+          reason: 'answered by stub',
+          resolvedText,
+          output: hydrated.output,
+          ...(iteration ? { iteration } : {}),
+        });
+        return;
+      }
       outputs.set(node.id, { state: 'pending', output: '' });
       ctx.trace.push({
         nodeId: node.id,
@@ -1339,7 +1379,13 @@ async function simulateNode(
     );
     const stub = stubFor(node, ctx);
     if (stub === undefined && isExecNode(node) && ctx.execCode) {
-      const executed = await executeCodeNode(node, resolvedText, ctx, nodeBindings, execution);
+      const executed = await executeCodeNode(
+        node,
+        resolvedText,
+        ctx,
+        inputEnvVars(node, bindingShellContext(ctx, outputs), ctx.inputs),
+        execution
+      );
       if ('error' in executed) {
         recordFailed(node, outputs, ctx, executed.error, resolvedText, iteration);
       } else {

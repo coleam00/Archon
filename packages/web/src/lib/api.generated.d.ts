@@ -2084,6 +2084,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Resource busy; the run keeps its state */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -2328,6 +2337,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -2399,6 +2417,15 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -4142,6 +4169,8 @@ export interface components {
                 /** @enum {string} */
                 source: 'provider';
                 value: number;
+                /** @enum {boolean} */
+                partial?: true;
               }
             | {
                 /** @enum {string} */
@@ -4469,9 +4498,11 @@ export interface components {
       kinds: ('api_key' | 'subscription' | 'ambient')[];
       /** @enum {string|null} */
       connected: 'api_key' | 'oauth' | null;
+      connectionConsumed: boolean;
       subscriptionAvailable: boolean;
       installEnv: boolean;
       ambientConfigured?: boolean;
+      usable: boolean;
     };
     ProviderKeySetResponse: {
       success: boolean;
@@ -4735,6 +4766,10 @@ export interface components {
       };
       evidence_policy?: {
         required: boolean;
+      };
+      budget?: {
+        max_work_units?: number;
+        max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
@@ -5507,6 +5542,8 @@ export interface components {
                   /** @enum {string} */
                   source: 'provider';
                   value: number;
+                  /** @enum {boolean} */
+                  partial?: true;
                 }
               | {
                   /** @enum {string} */
@@ -5859,6 +5896,7 @@ export interface components {
         | 'node_error'
         | 'unhandled_error'
         | 'evidence_missing'
+        | 'budget_refused'
         | 'source_unavailable'
         | 'not_finalized'
         | 'process_terminated'
@@ -6148,17 +6186,31 @@ export interface components {
     };
     ApproveWorkflowRunBody: {
       comment?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RejectWorkflowRunBody: {
       reason?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RespondWorkflowRunBody: {
       decision: string;
       text?: string;
-      expectedGate?: {
-        nodeId: string;
-        pauseId: string;
-      };
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     AnswerWorkflowRunBody: {
       occurrence: string;
@@ -6584,7 +6636,6 @@ export interface components {
         maxConversations: number;
       };
       defaults: {
-        copyDefaults: boolean;
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };

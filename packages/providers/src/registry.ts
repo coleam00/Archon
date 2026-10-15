@@ -16,6 +16,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import {
   EFFORT_LADDER,
+  assertProviderRegistrationAllowed,
   type ProviderRegistry,
   parseProviderRunModel as parseRegisteredRunModel,
   UnknownProviderError,
@@ -62,33 +63,31 @@ export function setDeprecationReporter(report: DeprecationReporter): void {
   reportDeprecation = report;
 }
 
-function assertValidCapabilities(entry: ProviderRegistration): void {
-  if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
-    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
-  }
-}
-
-export function assertProviderRegistrationAllowed(
-  entry: ProviderRegistration,
-  existing: Iterable<ProviderRegistration>
-): void {
-  const registrations = [...existing];
-  if (registrations.some(provider => provider.id === entry.id)) {
-    throw new Error(`Provider '${entry.id}' is already registered`);
-  }
-  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
-  if (entry.ownsUnprefixedModelRefs && owner) {
-    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
-  }
-  assertValidCapabilities(entry);
-}
-
 /**
  * Register a provider. Throws on duplicate registration.
  */
 export function registerProvider(entry: ProviderRegistration): void {
   assertProviderRegistrationAllowed(entry, registry.values());
-  registry.set(entry.id, entry);
+  const registration: ProviderRegistration = {
+    ...entry,
+    factory: () => {
+      const provider = entry.factory();
+      const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
+      const diagnose = provider.diagnose?.bind(provider);
+      const listModels = provider.listModels?.bind(provider);
+      const adapter = {
+        checkCredential: provider.checkCredential.bind(provider),
+        sendQuery: provider.sendQuery.bind(provider),
+        getType: provider.getType.bind(provider),
+        getCapabilities: () => registration.capabilities,
+        ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
+        ...(diagnose ? { diagnose } : {}),
+        ...(listModels ? { listModels } : {}),
+      } satisfies IAgentProvider;
+      return adapter satisfies Record<Exclude<keyof IAgentProvider, keyof typeof adapter>, never>;
+    },
+  };
+  registry.set(entry.id, registration);
   unavailableProviders.delete(entry.id);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }

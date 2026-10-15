@@ -84,6 +84,7 @@ async function seedRunAt(path: string | null, status: string): Promise<string> {
 }
 
 const track = trackTempRoots();
+const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
 let root: string;
 let repo: string;
 let codebaseId: string;
@@ -170,6 +171,7 @@ test.each(['active', 'destroyed'] as const)(
 beforeEach(async () => {
   setPlatformPolicies([]);
   root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-release-'))));
+  process.env.GIT_CONFIG_GLOBAL = join(root, '.gitconfig');
   repo = join(root, 'repo');
   await initRepo(repo);
   await writeFile(join(repo, '.gitignore'), '*.secret\n');
@@ -230,6 +232,8 @@ beforeEach(async () => {
 
 // A test may leave a read-only directory behind; make it removable for cleanup.
 afterEach(async () => {
+  if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
   if (existsSync(root)) await Bun.spawn(['chmod', '-R', 'u+w', root]).exited;
 });
 

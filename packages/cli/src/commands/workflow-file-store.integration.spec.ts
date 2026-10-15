@@ -372,13 +372,14 @@ nodes:
   expect(first.status).toBe('admitted');
   if (first.status !== 'admitted') throw new Error('First timer was not admitted');
   await paused(first.runId);
+  // The paused run gave back its slot but still holds the directory, so later fires for it
+  // wait in the queue instead of failing the path lock.
   const queued = await fire(queueConfig);
   expect(queued).toMatchObject({ status: 'queued', blocker: { kind: 'run', id: first.runId } });
   const skipped = await fire(skipConfig);
-  expect(skipped).toMatchObject({
-    status: 'skipped',
-    blocker: { kind: 'request', id: queued.requestId },
-  });
+  expect(skipped).toMatchObject({ status: 'skipped', blocker: { kind: 'run', id: first.runId } });
+  const held = await cli(f, ['trigger', 'drain', '--host', 'timer-host']);
+  expect(held, held.output + held.error).toMatchObject({ code: 0 });
   expect(existsSync(join(f.home, 'store/runs', queued.requestId))).toBe(false);
   expect(existsSync(join(f.home, 'store/runs', skipped.requestId))).toBe(false);
   const cancelled = await cli(f, ['workflow', 'abandon', first.runId]);

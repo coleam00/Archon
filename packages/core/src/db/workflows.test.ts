@@ -912,7 +912,7 @@ describe('workflows database', () => {
       });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("(metadata->'scheduled_resume'->>'attempt')::integer = $5");
+      expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
       expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null]);
     });
 
@@ -1860,6 +1860,7 @@ describe('workflows database', () => {
           error: null,
           stop_reason: null,
           continuation_retry_at: null,
+          capacity_wait: null,
         }),
       ]);
       // Third call: SELECT
@@ -1912,6 +1913,7 @@ describe('workflows database', () => {
           error: null,
           stop_reason: null,
           continuation_retry_at: null,
+          capacity_wait: null,
         }),
       ]);
     });
@@ -2218,13 +2220,15 @@ describe('workflows database', () => {
       expect(runsSql).toContain("status IN ('completed', 'failed', 'cancelled')");
     });
 
-    test('uses PostgreSQL INTERVAL syntax', async () => {
+    test('binds the age as a parameter of the dialect cutoff', async () => {
       mockQuery.mockResolvedValue(createQueryResult([], 0));
 
       await deleteOldWorkflowRuns(7);
 
-      const [eventsSql] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(eventsSql).toContain("INTERVAL '7 days'");
+      for (const [sql, params] of mockQuery.mock.calls as [string, unknown[]][]) {
+        expect(sql).toContain(`started_at < ${mockPostgresDialect.nowMinusDays(1)}`);
+        expect(params).toEqual([7]);
+      }
     });
 
     test('validates olderThanDays is a non-negative integer', async () => {

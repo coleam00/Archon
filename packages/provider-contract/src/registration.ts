@@ -124,6 +124,31 @@ export type ProviderCredentialCatalog =
     }
   | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
 
+/** How a user's stored credential was connected: a pasted key, or a subscription login. */
+export const STORED_CREDENTIAL_KINDS = ['api_key', 'oauth'] as const;
+
+export type StoredCredentialKind = (typeof STORED_CREDENTIAL_KINDS)[number];
+
+const CONSUMED_KIND: Record<StoredCredentialKind, CredentialKind> = {
+  api_key: 'api_key',
+  oauth: 'subscription',
+};
+
+/**
+ * Whether a provider can use a stored `vendor` credential connected as `kind`. A dynamic
+ * catalog declares no vendors, so it consumes no stored credential.
+ */
+export function consumesStoredCredential(
+  catalog: { kind: 'static'; specs: readonly CredentialSpec[] } | { kind: 'dynamic' },
+  vendor: string,
+  kind: StoredCredentialKind
+): boolean {
+  return (
+    catalog.kind === 'static' &&
+    catalog.specs.some(spec => spec.vendor === vendor && spec.kinds.includes(CONSUMED_KIND[kind]))
+  );
+}
+
 /**
  * Registration entry for a provider in the provider registry.
  * Each entry carries metadata, a factory, and model-compatibility logic.
@@ -139,7 +164,7 @@ export interface ProviderRegistration {
   /** Instantiate a provider */
   factory: () => IAgentProvider;
 
-  /** Static capability declaration — used for dag-executor warnings */
+  /** Static capability declaration — owns engine capability decisions */
   capabilities: ProviderCapabilities;
 
   /** Whether this is a built-in (maintained by core team) or community provider */
@@ -169,6 +194,31 @@ export interface ProviderRegistration {
 
   /** Accepts vendor/model refs without an agent prefix; at most one registry entry owns them. */
   ownsUnprefixedModelRefs?: true;
+}
+
+export function hasValidProviderCapabilities(capabilities: ProviderCapabilities): boolean {
+  return capabilities.sessionFork !== true || capabilities.sessionResume;
+}
+
+function assertValidCapabilities(entry: ProviderRegistration): void {
+  if (!hasValidProviderCapabilities(entry.capabilities)) {
+    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
+  }
+}
+
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
+    throw new Error(`Provider '${entry.id}' is already registered`);
+  }
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
+  if (entry.ownsUnprefixedModelRefs && owner) {
+    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
+  }
+  assertValidCapabilities(entry);
 }
 
 /**
@@ -216,6 +266,28 @@ export function requireProvider(registry: ProviderRegistry, id: string): Provide
       missingProviderMessage(registry, id)
     );
   return provider;
+}
+
+/**
+ * Why `providerId` cannot use the user's stored `vendor` credential, naming the providers
+ * that can. Preflight and `doctor` both report it, so the advice cannot drift apart.
+ */
+export function unconsumedStoredCredentialReason(
+  registry: ProviderRegistry,
+  providerId: string,
+  vendor: string,
+  kind: StoredCredentialKind
+): string {
+  const consumers = registry
+    .list()
+    .filter(p => consumesStoredCredential(p.credentials, vendor, kind))
+    .map(p => `\`provider: ${p.id}\``)
+    .join(' or ');
+  const stored = `the ${vendor} ${kind === 'oauth' ? 'subscription' : 'API key'} connected in Archon`;
+  const fix = `give ${providerId} its own ${vendor} API key`;
+  return consumers
+    ? `${stored} runs on ${consumers}, not on ${providerId}. Use ${consumers}, or ${fix}.`
+    : `${stored} cannot be used by ${providerId}. To use ${providerId}, ${fix}.`;
 }
 
 export function parseProviderRunModel(provider: ProviderDescriptor, model: string): string {

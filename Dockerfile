@@ -173,10 +173,10 @@ USER root
 RUN mkdir -p /home/appuser/.codex && chown appuser:appuser /home/appuser/.codex
 
 # Configure git to trust Archon directories (as appuser)
-RUN gosu appuser git config --global --add safe.directory '/.archon/workspaces' && \
-    gosu appuser git config --global --add safe.directory '/.archon/workspaces/*' && \
-    gosu appuser git config --global --add safe.directory '/.archon/worktrees' && \
-    gosu appuser git config --global --add safe.directory '/.archon/worktrees/*'
+RUN gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/workspaces' '/.archon/workspaces' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/workspaces/*' '/.archon/workspaces/*' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/worktrees' '/.archon/worktrees' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/worktrees/*' '/.archon/worktrees/*'
 
 # Copy entrypoint script (fixes volume permissions, drops to appuser)
 # sed strips Windows CRLF in case .gitattributes eol=lf was bypassed

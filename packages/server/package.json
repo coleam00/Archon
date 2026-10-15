@@ -108,7 +108,8 @@
     ],
     [
       "src/boot/claude-auth-posture.test.ts",
-      "src/boot/codex-auth-posture.test.ts"
+      "src/boot/codex-auth-posture.test.ts",
+      "src/boot/cleanup-env.test.ts"
     ],
     [
       "src/github-auth-bootstrap.test.ts"
@@ -172,6 +173,12 @@
     ],
     [
       "src/services/attention-router.integration.test.ts"
+    ],
+    [
+      "src/chat-host/attention-destination.test.ts"
+    ],
+    [
+      "src/chat-host/attention-route.integration.test.ts"
     ]
   ]
 }

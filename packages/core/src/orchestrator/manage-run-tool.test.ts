@@ -221,7 +221,7 @@ describe('manage_run — progressive disclosure', () => {
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'help' });
     expect(out).toContain('manage_run');
-    for (const a of ['list', 'get', 'start', 'resume', 'cancel', 'abandon', 'approve', 'reject']) {
+    for (const a of ['list', 'get', 'resume', 'cancel', 'abandon', 'approve', 'reject']) {
       expect(out).toContain(a);
     }
   });
@@ -483,38 +483,6 @@ describe('manage_run — label', () => {
   });
 });
 
-describe('manage_run — start', () => {
-  test('start delegates to the injected closure with workflow + message', async () => {
-    const startWorkflow = mock((_w: string, _m: string) => Promise.resolve('dispatched'));
-    const tool = buildManageRunTool({
-      actor: operator,
-      operations,
-      codebaseId: CODEBASE_ID,
-      startWorkflow,
-    });
-    const out = await tool.handler({ action: 'start', workflow: 'plan', message: 'add dark mode' });
-    expect(out).toBe('dispatched');
-    expect(startWorkflow).toHaveBeenCalledWith('plan', 'add dark mode');
-  });
-
-  test('start without a dispatch context is rejected', async () => {
-    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
-    expect(await tool.handler({ action: 'start', workflow: 'plan' })).toContain('not available');
-  });
-
-  test('start requires a workflow name', async () => {
-    const startWorkflow = mock((_w: string, _m: string) => Promise.resolve('x'));
-    const tool = buildManageRunTool({
-      actor: operator,
-      operations,
-      codebaseId: CODEBASE_ID,
-      startWorkflow,
-    });
-    expect(await tool.handler({ action: 'start' })).toContain('requires a workflow');
-    expect(startWorkflow).not.toHaveBeenCalled();
-  });
-});
-
 describe('manage_run — destructive confirmation gate', () => {
   // Every destructive action must preview (and NOT mutate) without confirm.
   // This covers the whole DESTRUCTIVE_ACTIONS set so dropping a member is caught.
@@ -705,12 +673,12 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no', operator, { via: 'manage_run' });
   });
 
-  test('reject with no message defaults the rejection text to "Rejected"', async () => {
+  test('reject with no message leaves the default reason to rejectWorkflow', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockReject.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
-    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected', operator, {
+    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', '', operator, {
       via: 'manage_run',
     });
   });
@@ -790,7 +758,7 @@ describe('manage_run — destructive confirmation gate', () => {
       confirm: true,
       occurrence: 'pause-one',
     });
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', undefined, operator, {
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', '', operator, {
       via: 'manage_run',
       expectedGate: { nodeId: 'review', pauseId: 'pause-one' },
     });
@@ -813,7 +781,7 @@ describe('manage_run — destructive confirmation gate', () => {
       occurrence: '  ',
     });
     // An expected gate no pause can match, so the operation refuses it as stale, as the CLI does.
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', undefined, operator, {
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', '', operator, {
       via: 'manage_run',
       expectedGate: { nodeId: 'review', pauseId: '' },
     });
@@ -907,6 +875,7 @@ describe('manage_run — gate continuation', () => {
             completedNodeOutputs: new Map(),
             fanOutSnapshots: new Map(),
             unresolvedNodeStarts: new Set<string>(),
+            budget: { workUnits: 0, spendUsd: 0 },
             costUsd: 0,
           }),
           listWorkflowRunNodeSessions: async () => [],

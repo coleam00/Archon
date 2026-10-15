@@ -70,25 +70,5 @@ export function resolveGithubTokenOverrides(
   };
 }
 
-/**
- * Apply token overrides to an owned ProcessEnv (a subprocess env we built
- * ourselves). Empty-string overrides delete the key outright — cleaner than
- * passing an empty value when we control the dict.
- */
-export function applyGithubTokenOverridesToProcessEnv(
-  baseEnv: NodeJS.ProcessEnv,
-  overrides: Record<string, string>
-): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v === '') {
-      Reflect.deleteProperty(out, k);
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
-
 /** Exported for tests + audit logging — never inject these as user data. */
 export const GITHUB_TOKEN_KEYS: readonly string[] = SENSITIVE_KEYS;

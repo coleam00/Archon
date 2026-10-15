@@ -491,7 +491,7 @@ The container runs as `appuser` with `$HOME=/home/appuser`. The base compose mou
 | `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, projects (conversation history), memory, OAuth state, keybindings, file-history |
 | `~/.codex/` | Codex auth (`auth.json` from interactive `codex login`; the env-var path via `setup-auth` overwrites this on every container start) |
 | `~/.pi/agent/` | Pi `auth.json` from interactive `pi /login`, plus `models.json`, global settings (`~/.pi/agent/settings.json`), and sessions (Archon's Pi adapter reads `auth.json` and `settings.json` on every request) |
-| `~/.gitconfig` | Author identity, signing config, custom aliases, plus the `safe.directory` entries baked into the image |
+| `~/.gitconfig` | Author identity, signing config, custom aliases, plus `safe.directory` entries from the image and runtime setup |
 | `~/.bash_history` | Shell history when you `docker compose exec app bash` |
 | `~/.config/gh/` | GitHub CLI auth from interactive `gh auth login` (the `GH_TOKEN` env-var path works without it) |
 
@@ -513,6 +513,8 @@ The entrypoint fixes ownership on every container start, touching only files who
 :::caution
 Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
 :::
+
+Runtime `safe.directory` grants also persist in this home volume across restarts and rebuilds. A grant remains if clone or worktree setup fails, adoption is rejected, or the checkout is removed; Git will still trust a later checkout at that path. Archon leaves removal to the operator because concurrent setup may rely on the same grant. See [Git directory trust](/reference/security/#git-directory-trust).
 
 If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
 
@@ -583,7 +585,11 @@ instead.
 docker compose exec app gh auth login
 ```
 
-When `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
+Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
+
+In GitHub App mode (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. An incomplete App configuration leaves the PAT helper in place. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
+
+The entrypoint decides the mode from the container environment (`env_file: .env` or `environment:` in compose), not from `/.archon/.env`, which only the server loads. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the container environment. If they are set only in `/.archon/.env`, the server and the entrypoint disagree on the mode: in App mode the PAT helper stays and clones keep using the old PAT.
 
 ### Plugins
 

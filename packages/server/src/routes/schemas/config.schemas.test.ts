@@ -13,7 +13,7 @@ const safeConfig = {
     'other-chat': 'batch',
   },
   concurrency: { maxConversations: 10 },
-  defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+  defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
 } as const;
 
 test('config API retains legacy and new platform streaming keys', () => {

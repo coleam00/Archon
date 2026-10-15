@@ -1,4 +1,4 @@
-import type { App, BlockButtonAction, ButtonAction } from '@slack/bolt';
+import type { App, BlockAction, BlockElementAction, ViewSubmitAction } from '@slack/bolt';
 import type { SlackMessageEvent } from '../adapter';
 
 type Post = Parameters<App['client']['chat']['postMessage']>[0];
@@ -9,10 +9,16 @@ type Command = Parameters<App['command']>[1];
 type EventHandler = (args: {
   event: SlackMessageEvent & { channel_type?: string; bot_id?: string };
 }) => Promise<void>;
+type Open = Parameters<App['client']['views']['open']>[0];
 type ActionHandler = (args: {
   ack: () => Promise<void>;
-  body: BlockButtonAction;
-  action: ButtonAction;
+  body: BlockAction;
+  action: BlockElementAction;
+}) => Promise<void>;
+type ViewHandler = (args: {
+  ack: () => Promise<void>;
+  body: ViewSubmitAction;
+  view: ViewSubmitAction['view'];
 }) => Promise<void>;
 
 export class StubSlack {
@@ -24,6 +30,8 @@ export class StubSlack {
   events = new Map<string, EventHandler>();
   commands = new Map<string, Command>();
   actions: { pattern: RegExp; handler: ActionHandler }[] = [];
+  views = new Map<string, ViewHandler>();
+  opened: Open[] = [];
   userLookups = 0;
   historyLookups = 0;
   displayName = 'Alice';
@@ -32,6 +40,7 @@ export class StubSlack {
   failUpdate?: Error;
   failUser?: Error;
   failHistory?: Error;
+  failOpen?: Error;
   missingTs = false;
   started = false;
   stopped = false;
@@ -63,6 +72,13 @@ export class StubSlack {
       },
       postEphemeral: async (args: Ephemeral) => {
         this.ephemerals.push(args);
+        return { ok: true };
+      },
+    },
+    views: {
+      open: async (args: Open) => {
+        if (this.failOpen) throw this.failOpen;
+        this.opened.push(args);
         return { ok: true };
       },
     },
@@ -101,9 +117,17 @@ export class StubSlack {
   action(pattern: RegExp, handler: ActionHandler): void {
     this.actions.push({ pattern, handler });
   }
+  view(callbackId: string, handler: ViewHandler): void {
+    this.views.set(callbackId, handler);
+  }
   error(): void {}
   async start(): Promise<void> {
-    if (this.events.size !== 2 || this.commands.size !== 2 || this.actions.length !== 2)
+    if (
+      this.events.size !== 2 ||
+      this.commands.size !== 2 ||
+      this.actions.length !== 3 ||
+      this.views.size !== 1
+    )
       throw new Error('handlers must register before start');
     this.started = true;
   }

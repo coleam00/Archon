@@ -41,7 +41,12 @@ const CODEBASE_NAME = 'acme/widgets';
 const TASK_BRANCH = 'feature/login';
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const proc = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    env: { ...process.env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -52,6 +57,18 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   }
   return stdout;
 }
+
+const trackConfigRoot = trackTempRoots();
+let previousGlobalConfig: string | undefined;
+beforeEach(async () => {
+  previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  const home = trackConfigRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-config-')));
+  process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
+});
+afterEach(() => {
+  if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+});
 
 describe('missing registered project directory', () => {
   const trackTempRoot = trackTempRoots();
@@ -217,6 +234,39 @@ describe('WorktreeProvider against real git', () => {
   afterEach(() => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  test('new and reused checkouts work when Git requires explicit ownership trust', async () => {
+    const config = process.env.GIT_CONFIG_GLOBAL;
+    if (!config) throw new Error('Scratch global config missing');
+    await writeFile(
+      config,
+      `[safe]\n directory = ${JSON.stringify(repoPath)}\n directory = ${JSON.stringify(worktreePath)}\n directory = \n directory = ${JSON.stringify(repoPath)}\n`
+    );
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\ngit status --porcelain >/dev/null\n',
+      { mode: 0o755 }
+    );
+    const previousOwnerCheck = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+    process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+    try {
+      const created = await provider.create(request);
+      expect(created.workingPath).toBe(worktreePath);
+      const adopted = await provider.create(request);
+      expect(adopted.metadata.adopted).toBe(true);
+      expect(await provider.adopt(worktreePath)).not.toBeNull();
+      const { stdout } = await execFileAsync('git', [
+        'config',
+        '--global',
+        '--get-all',
+        'safe.directory',
+      ]);
+      expect(stdout.trim().split('\n')).toEqual([repoPath, '', repoPath, worktreePath]);
+    } finally {
+      if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
+    }
   });
 
   test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {
@@ -881,7 +931,10 @@ describe('WorktreeProvider against real git', () => {
     expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
   });
 
-  test('marker write failure rolls back the locked setup', async () => {
+  test('marker write failure rolls back the locked setup and retains trust', async () => {
+    const config = process.env.GIT_CONFIG_GLOBAL;
+    if (!config) throw new Error('Scratch global config missing');
+    await writeFile(config, '[safe]\n directory = /workspace/other\n');
     await git(repoPath, 'remote', 'add', 'origin', repoPath);
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),
@@ -901,6 +954,9 @@ describe('WorktreeProvider against real git', () => {
     await expect(provider.create(freshRequest)).rejects.toThrow();
     expect(existsSync(path)).toBe(false);
     expect(await registeredWorktrees()).not.toContain(resolve(path));
+    expect(
+      (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
+    ).toEqual(['/workspace/other', path]);
   });
 
   describe('a new-branch request naming a branch that already exists', () => {

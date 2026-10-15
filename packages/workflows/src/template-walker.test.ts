@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { DagNode } from './schemas';
 import {
   bindingDirectiveSchema,

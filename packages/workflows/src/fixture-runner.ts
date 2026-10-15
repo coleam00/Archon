@@ -31,7 +31,7 @@
 import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import {

@@ -399,8 +399,9 @@ Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard
 
 Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
 
+For Anthropic models, use `provider: claude` with your Claude Pro/Max subscription, or give Pi an `ANTHROPIC_API_KEY`. Claude Pro/Max OAuth through Pi, including a native `pi /login` session, is not a supported Anthropic path: Pi's default system prompt can be rejected by Anthropic for subscription tokens. Archon preserves Pi's native credentials but does not deliver its stored Claude subscription to Pi.
+
 **OAuth subscriptions (run `pi /login` locally):**
-- Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro
 - GitHub Copilot
 - Google Gemini CLI
@@ -410,7 +411,7 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 
 | Pi provider id | Env var |
 |---|---|
-| `anthropic` | `ANTHROPIC_OAUTH_TOKEN` (subscription, read first) or `ANTHROPIC_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
 | `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
@@ -716,7 +717,7 @@ nodes:
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists, so a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers). An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
-| In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
+| In-process native tools | ✅ | none — Archon's `invoke_workflow` and `register_project` tools are auto-injected in every chat, and `manage_run` in project-scoped chat, via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
@@ -863,7 +864,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). An `anthropic` subscription runs only on Claude Code, so it does not make the Pi card ready; One credential is stored per vendor, so connecting an Anthropic API key would replace the subscription; Pi's Anthropic row marks the subscription as used by another agent and points at the env channel instead (`ANTHROPIC_API_KEY` in the install or codebase env). Disconnect the subscription from the Claude Code card. Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
 - **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
 
 ### Per-user model preferences ("Just me")

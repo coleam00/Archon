@@ -412,7 +412,7 @@ export async function commit<T>(
     await redo(root);
     const rows =
       runIds === 'all'
-        ? await listWith(root, id => readSnapshot(root, id))
+        ? await listRunSnapshots(root)
         : await Promise.all(runIds.map(id => readSnapshot(root, id)));
     const runs = new Map(rows.flatMap(run => (run ? [[run.id, run] as const] : [])));
     const { result, changes } = await decide(runs);
@@ -449,6 +449,11 @@ export async function commit<T>(
     await apply(root, intent);
     return result;
   });
+}
+
+/** Every run's last committed row. The caller holds the lock, as for `readSnapshot`. */
+export function listRunSnapshots(root: string): Promise<WorkflowRun[]> {
+  return listWith(root, id => readSnapshot(root, id));
 }
 
 // The caller holds the lock. The last committed row suffices; never fold event history here.

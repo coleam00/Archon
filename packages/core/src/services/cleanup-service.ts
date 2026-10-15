@@ -33,6 +33,7 @@ import {
   isPatchEquivalent,
   localBranchExists,
   isRevCoveredBy,
+  countCommitsMissingFromRemotes,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
@@ -77,10 +78,31 @@ async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<R
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
-// Configuration constants (configurable via env vars)
-const STALE_THRESHOLD_DAYS = parseInt(process.env.STALE_THRESHOLD_DAYS ?? '14', 10);
-const CLEANUP_INTERVAL_HOURS = parseInt(process.env.CLEANUP_INTERVAL_HOURS ?? '6', 10);
-const SESSION_RETENTION_DAYS = parseInt(process.env.SESSION_RETENTION_DAYS ?? '30', 10);
+function readPositiveIntegerEnv(
+  name: string,
+  defaultValue: number,
+  maximum = Number.MAX_SAFE_INTEGER
+): number {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  const parsed = /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) {
+    const limit = maximum === Number.MAX_SAFE_INTEGER ? '' : `; maximum is ${String(maximum)}`;
+    throw new Error(
+      `${name} must be a positive integer; received ${JSON.stringify(value)}${limit}`
+    );
+  }
+  return parsed;
+}
+
+const STALE_THRESHOLD_DAYS = readPositiveIntegerEnv('STALE_THRESHOLD_DAYS', 14);
+// Runtime timers clamp delays above the signed 32-bit millisecond limit to 1 ms.
+const CLEANUP_INTERVAL_HOURS = readPositiveIntegerEnv(
+  'CLEANUP_INTERVAL_HOURS',
+  6,
+  Math.floor(2_147_483_647 / (60 * 60 * 1000))
+);
+const SESSION_RETENTION_DAYS = readPositiveIntegerEnv('SESSION_RETENTION_DAYS', 30);
 
 // Export configuration for use by other modules
 export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS };
@@ -93,6 +115,8 @@ export interface CleanupReport {
   skipped: { id: string; reason: string }[];
   errors: { id: string; error: string }[];
   sessionsDeleted: number;
+  /** Removed environments that a failed run no longer locked, keyed by env id. */
+  releasedFailedRuns: ({ id: string } & ReleasedFailedRun)[];
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +242,9 @@ export async function cleanupContainerEnvironments(
     // Same lock the worktree sweeps use. getRunByIsolationEnvId, which this replaced,
     // took the newest run row BEFORE filtering status, so a newer terminal run could
     // shadow an older claimable one and the container would be reaped underneath it.
-    let liveRun: Awaited<ReturnType<typeof isolationEnvDb.getLiveRunOwningEnv>>;
+    let liveRun: LiveRunBlocker | null;
     try {
-      liveRun = await isolationEnvDb.getLiveRunOwningEnv(row.id);
+      liveRun = await getLiveRunBlocker(row.id);
     } catch (err) {
       report.errors.push({
         id: row.id,
@@ -230,10 +254,7 @@ export async function cleanupContainerEnvironments(
       continue;
     }
     if (liveRun) {
-      report.skipped.push({
-        id: row.id,
-        reason: `run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
-      });
+      report.skipped.push({ id: row.id, reason: liveRun.display });
       continue;
     }
     if (row.days_since_created < daysStale) {
@@ -317,9 +338,12 @@ export async function onConversationClosed(
   // read before the null-out below: a top-level run attaches to its env ONLY
   // through this conversation's reference, so clearing first would erase the
   // pin and let the env be removed under a running or paused run.
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
+  const liveRun = await getLiveRunBlocker(envId);
   if (liveRun) {
-    getLog().info({ envId, runId: liveRun.id, runStatus: liveRun.status }, 'env_has_live_run');
+    getLog().info(
+      { envId, runId: liveRun.runId, runStatus: liveRun.runStatus },
+      'env_has_live_run'
+    );
     return;
   }
 
@@ -499,35 +523,150 @@ export async function cleanupToMakeRoom(
   return cleanupMergedWorktrees(codebaseId, mainRepoPath);
 }
 
+export interface LiveRunBlocker {
+  reason: 'live_run';
+  display: string;
+  runId: string;
+  runStatus: string;
+}
+
 /**
- * Returns the reason the environment cannot be removed, or null if it is safe to remove.
- * Checks uncommitted changes first (avoids a DB query when changes are present),
- * then live work: a workflow run that can still claim the environment.
+ * The live-run lock removers report: a workflow run that can still claim the
+ * environment — running, pending, paused, or failed-but-resumable (see
+ * getLiveRunOwningEnv) — with the refusal text chat, the CLI, and the sweeps share.
+ * Historical conversation references are data, not locks. A lookup failure throws;
+ * callers must refuse removal rather than read it as "no run".
  */
+export async function getLiveRunBlocker(envId: string): Promise<LiveRunBlocker | null> {
+  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
+  return liveRun ? toLiveRunBlocker(liveRun) : null;
+}
+
+function toLiveRunBlocker(run: { id: string; status: string }): LiveRunBlocker {
+  return {
+    reason: 'live_run',
+    display: `run ${run.id.slice(0, 8)} is ${run.status}`,
+    runId: run.id,
+    runStatus: run.status,
+  };
+}
+
+/**
+ * What a cleanup sweep has established about an environment's outcome. A failed
+ * run's lock lasts only until one of these holds.
+ */
+export type CleanupSettlement =
+  | { kind: 'merged' }
+  | { kind: 'pr-closed' }
+  | { kind: 'stale'; staleDays: number };
+
+export type FailedRunReleaseReason = 'merged' | 'PR closed' | 'stale';
+
+export interface ReleasedFailedRun {
+  runId: string;
+  reason: FailedRunReleaseReason;
+}
+
+export type CleanupRunLock =
+  | { kind: 'free' }
+  | { kind: 'locked'; blocker: LiveRunBlocker }
+  | ({ kind: 'released' } & ReleasedFailedRun)
+  | { kind: 'unpushed'; runId: string; commits: number };
+
+const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason> = {
+  merged: 'merged',
+  'pr-closed': 'PR closed',
+  stale: 'stale',
+};
+
+/**
+ * The run lock a cleanup sweep must respect. Running, pending, and paused runs
+ * always lock. A failed run locks until the sweep's settlement releases it (#4090):
+ * a merged or closed PR, or inactivity past the stale window. The run row is left
+ * as it is.
+ *
+ * Removal force-deletes a branch Archon created, so a stale release also requires
+ * every commit on the worktree HEAD and the branch to be on a remote. The merged
+ * verdict already proved the PR head or the base covers both.
+ */
+export async function getCleanupRunLock(
+  env: { id: string; working_path: string; branch_name: string | null },
+  repoPath: RepoPath,
+  settlement: CleanupSettlement
+): Promise<CleanupRunLock> {
+  const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
+  if (!owner) return { kind: 'free' };
+  if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
+    return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
+  }
+  const lock = await isolationEnvDb.getLiveRunOwningEnv(
+    env.id,
+    settlement.kind === 'stale' ? settlement : { kind: 'settled' }
+  );
+  if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
+  if (settlement.kind === 'stale') {
+    const commits = await countUnpushedCommits(env, repoPath);
+    if (commits > 0) return { kind: 'unpushed', runId: owner.id, commits };
+  }
+  return { kind: 'released', runId: owner.id, reason: RELEASE_REASONS[settlement.kind] };
+}
+
+async function countUnpushedCommits(
+  env: { working_path: string; branch_name: string | null },
+  repoPath: RepoPath
+): Promise<number> {
+  const branchRevs =
+    env.branch_name && (await localBranchExists(repoPath, toBranchName(env.branch_name)))
+      ? [`refs/heads/${env.branch_name}`]
+      : [];
+  const worktreePath = toWorktreePath(env.working_path);
+  if (await worktreeExists(worktreePath)) {
+    return countCommitsMissingFromRemotes(worktreePath, ['HEAD', ...branchRevs]);
+  }
+  return countCommitsMissingFromRemotes(repoPath, branchRevs);
+}
+
+/** Why an environment cannot be removed. */
 type RemovalBlocker =
   | { reason: 'uncommitted_changes'; display: string }
-  | { reason: 'live_run'; display: string; runId: string; runStatus: string };
+  | LiveRunBlocker
+  | { reason: 'unpushed_commits'; display: string; runId: string };
 
-async function getRemovalBlocker(env: {
-  id: string;
-  working_path: string;
-}): Promise<RemovalBlocker | null> {
+type RemovalCheck =
+  | { blocker: RemovalBlocker }
+  | { blocker: null; released: ReleasedFailedRun | null };
+
+/**
+ * Whether a sweep may remove the environment. Checks uncommitted changes first
+ * (avoids a DB query when changes are present), then the run lock. Historical
+ * conversation references are data, not locks; see getLiveRunOwningEnv.
+ */
+async function checkRemoval(
+  env: { id: string; working_path: string; branch_name: string },
+  repoPath: RepoPath,
+  settlement: CleanupSettlement
+): Promise<RemovalCheck> {
   const hasChanges = await hasUncommittedChanges(toWorktreePath(env.working_path));
-  if (hasChanges) return { reason: 'uncommitted_changes', display: 'has uncommitted changes' };
-  // Live work is the only lock: a run that can still claim the env blocks removal —
-  // running, pending, paused, or failed-but-resumable. Historical conversation
-  // references are data, not locks (same rule the merged cleanup sweep follows) —
-  // see getLiveRunOwningEnv.
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-  if (liveRun) {
-    return {
-      reason: 'live_run',
-      display: `run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
-      runId: liveRun.id,
-      runStatus: liveRun.status,
-    };
+  if (hasChanges) {
+    return { blocker: { reason: 'uncommitted_changes', display: 'has uncommitted changes' } };
   }
-  return null;
+  const lock = await getCleanupRunLock(env, repoPath, settlement);
+  switch (lock.kind) {
+    case 'free':
+      return { blocker: null, released: null };
+    case 'released':
+      return { blocker: null, released: { runId: lock.runId, reason: lock.reason } };
+    case 'locked':
+      return { blocker: lock.blocker };
+    case 'unpushed':
+      return {
+        blocker: {
+          reason: 'unpushed_commits',
+          display: `failed run ${lock.runId.slice(0, 8)} has ${String(lock.commits)} unpushed commit(s)`,
+          runId: lock.runId,
+        },
+      };
+  }
 }
 
 /**
@@ -548,9 +687,16 @@ async function getRemovalBlocker(env: {
  * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
  * deleted and no PR answers for the branch; 'pr-unavailable' is a PR lookup that
  * failed. Either way the worktree stays, and the caller reports it rather than
- * letting it read as ordinary unmerged work.
+ * letting it read as ordinary unmerged work. 'merged' and 'pr-closed' are the two
+ * reclaimable verdicts; a closed PR is reclaimable only with `includeClosed`.
  */
-type MergeVerdict = 'reclaimable' | 'open-pr' | 'unmerged' | 'unjudgeable' | 'pr-unavailable';
+type MergeVerdict =
+  | 'merged'
+  | 'pr-closed'
+  | 'open-pr'
+  | 'unmerged'
+  | 'unjudgeable'
+  | 'pr-unavailable';
 
 async function judgeBranchForRemoval(input: {
   repoPath: RepoPath;
@@ -583,7 +729,7 @@ async function judgeBranchForRemoval(input: {
       !hasWorktree ||
       (await isPatchEquivalent(worktreePath, 'HEAD', baseRef, { throwOnExpectedError: true }))
     ) {
-      return 'reclaimable';
+      return 'merged';
     }
   }
 
@@ -604,11 +750,11 @@ async function judgeBranchForRemoval(input: {
   ) {
     return 'unmerged';
   }
-  return 'reclaimable';
+  return pr.state === 'CLOSED' ? 'pr-closed' : 'merged';
 }
 
 /** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */
-function skipReasonFor(verdict: Exclude<MergeVerdict, 'reclaimable'>): string | null {
+function skipReasonFor(verdict: Exclude<MergeVerdict, 'merged' | 'pr-closed'>): string | null {
   switch (verdict) {
     case 'open-pr':
       return 'PR is open (active review)';
@@ -630,7 +776,18 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
   // Fail before any sweep can mutate rows, even when there are no environments.
   getRegisteredPlatformPolicies();
   getLog().info('cleanup_started');
-  const report: CleanupReport = { removed: [], skipped: [], errors: [], sessionsDeleted: 0 };
+  const report: CleanupReport = {
+    removed: [],
+    skipped: [],
+    errors: [],
+    sessionsDeleted: 0,
+    releasedFailedRuns: [],
+  };
+  const recordRelease = (envId: string, released: ReleasedFailedRun | null): void => {
+    if (!released) return;
+    report.releasedFailedRuns.push({ id: envId, ...released });
+    getLog().info({ envId, ...released }, 'failed_run_lock_released');
+  };
 
   try {
     // Get all active environments with their codebase info
@@ -655,27 +812,27 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
         const pathExists = await worktreeExists(toWorktreePath(env.working_path));
         if (!pathExists) {
           // Even with the directory gone, marking the env destroyed invalidates
-          // the live run's resume handle — same lock as the merged/stale branches.
-          const liveRun = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-          if (liveRun) {
-            report.skipped.push({
-              id: env.id,
-              reason: `path missing but run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
-            });
+          // the live run's resume handle. A failed run's lock is instead settled by
+          // the merged and stale checks below, which handle a missing worktree.
+          const liveRun = await getLiveRunBlocker(env.id);
+          if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.runStatus)) {
+            report.skipped.push({ id: env.id, reason: `path missing but ${liveRun.display}` });
             getLog().info(
-              { envId: env.id, runId: liveRun.id, runStatus: liveRun.status },
+              { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
               'skip_path_missing_live_run'
             );
             continue;
           }
-          // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
-          const removeResult = await removeEnvironment(env.id, { force: false });
-          if (removeResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (path missing)`);
+          if (!liveRun) {
+            // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
+            const removeResult = await removeEnvironment(env.id, { force: false });
+            if (removeResult.skippedReason) {
+              report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
+            } else {
+              report.removed.push(`${env.id} (path missing)`);
+            }
+            continue;
           }
-          continue;
         }
 
         // Same merged decision the `--merged` sweep uses, PR state included: this
@@ -699,9 +856,10 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           worktreePath: toWorktreePath(env.working_path),
         });
 
-        if (verdict === 'reclaimable') {
-          const blocker = await getRemovalBlocker(env);
-          if (blocker) {
+        if (verdict === 'merged' || verdict === 'pr-closed') {
+          const check = await checkRemoval(env, mainRepoPath, { kind: verdict });
+          if (check.blocker) {
+            const { blocker } = check;
             report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });
             if (blocker.reason === 'live_run') {
               getLog().info(
@@ -723,14 +881,18 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             report.skipped.push({ id: env.id, reason: mergedResult.skippedReason });
           } else {
             report.removed.push(`${env.id} (merged)`);
+            recordRelease(env.id, check.released);
           }
           continue;
         }
 
         // The staleness sweep below deletes the branch on age alone, so only work
         // git or the PR settled as unmerged may reach it. An open PR or an
-        // unverifiable merge state is reported and kept.
-        const skipReason = skipReasonFor(verdict);
+        // unverifiable merge state is reported and kept. The exception is a failed
+        // run's environment with both worktree and branch gone: nothing local is
+        // left to lose, so only the stale window settles its lock.
+        const nothingLocalLeft = !pathExists && verdict === 'unjudgeable';
+        const skipReason = nothingLocalLeft ? null : skipReasonFor(verdict);
         if (skipReason) {
           report.skipped.push({ id: env.id, reason: skipReason });
           continue;
@@ -743,16 +905,29 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
         // Check if environment is stale
         const isStale = await isEnvironmentStale(env, STALE_THRESHOLD_DAYS);
         if (isStale) {
-          const blocker = await getRemovalBlocker(env);
-          if (blocker) {
+          const check = await checkRemoval(env, mainRepoPath, {
+            kind: 'stale',
+            staleDays: STALE_THRESHOLD_DAYS,
+          });
+          if (check.blocker) {
+            const { blocker } = check;
             report.skipped.push({ id: env.id, reason: `stale but ${blocker.display}` });
-            if (blocker.reason === 'live_run') {
-              getLog().info(
-                { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
-                'skip_stale_live_run'
-              );
-            } else {
-              getLog().warn({ envId: env.id }, 'skip_stale_uncommitted_changes');
+            switch (blocker.reason) {
+              case 'live_run':
+                getLog().info(
+                  { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
+                  'skip_stale_live_run'
+                );
+                break;
+              case 'unpushed_commits':
+                getLog().warn(
+                  { envId: env.id, runId: blocker.runId },
+                  'skip_stale_unpushed_commits'
+                );
+                break;
+              case 'uncommitted_changes':
+                getLog().warn({ envId: env.id }, 'skip_stale_uncommitted_changes');
+                break;
             }
             continue;
           }
@@ -762,6 +937,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
           } else {
             report.removed.push(`${env.id} (stale)`);
+            recordRelease(env.id, check.released);
           }
         }
       } catch (error) {
@@ -831,6 +1007,8 @@ async function isEnvironmentStale(
 export interface CleanupOperationResult {
   removed: string[];
   skipped: { branchName: string; reason: string }[];
+  /** Removed environments that a failed run no longer locked. */
+  releasedFailedRuns: ({ branchName: string } & ReleasedFailedRun)[];
 }
 
 /**
@@ -926,9 +1104,10 @@ export async function getWorktreeStatusBreakdown(
  */
 export async function cleanupStaleWorktrees(
   codebaseId: string,
-  _mainRepoPath: string
+  mainRepoPath: string
 ): Promise<CleanupOperationResult> {
-  const result: CleanupOperationResult = { removed: [], skipped: [] };
+  const result: CleanupOperationResult = { removed: [], skipped: [], releasedFailedRuns: [] };
+  const repoPath = toRepoPath(mainRepoPath);
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
     env => env.provider === 'worktree'
@@ -945,20 +1124,23 @@ export async function cleanupStaleWorktrees(
     // Check if stale
     if (env.days_since_activity < STALE_THRESHOLD_DAYS) continue;
 
-    // Check for uncommitted changes or a live owning run
-    const blocker = await getRemovalBlocker(env);
-    if (blocker) {
-      result.skipped.push({ branchName: env.branch_name, reason: blocker.display });
-      continue;
-    }
-
-    // Safe to remove
     try {
+      const check = await checkRemoval(env, repoPath, {
+        kind: 'stale',
+        staleDays: STALE_THRESHOLD_DAYS,
+      });
+      if (check.blocker) {
+        result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
+        continue;
+      }
       const removeResult = await removeEnvironment(env.id);
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
         result.removed.push(env.branch_name);
+        if (check.released) {
+          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
+        }
       }
     } catch (error) {
       const err = error as Error;
@@ -984,7 +1166,12 @@ export async function cleanupMergedWorktrees(
   );
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
-  const result: MergedCleanupResult = { removed: [], skipped: [], baseRef: remoteMainRef };
+  const result: MergedCleanupResult = {
+    removed: [],
+    skipped: [],
+    releasedFailedRuns: [],
+    baseRef: remoteMainRef,
+  };
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrLookup>();
 
@@ -1019,26 +1206,26 @@ export async function cleanupMergedWorktrees(
       });
       continue;
     }
-    if (verdict !== 'reclaimable') {
+    if (verdict !== 'merged' && verdict !== 'pr-closed') {
       const reason = skipReasonFor(verdict);
       if (reason) result.skipped.push({ branchName: env.branch_name, reason });
       continue;
     }
 
-    // Check for uncommitted changes or a live owning run
-    const blocker = await getRemovalBlocker(env);
-    if (blocker) {
-      result.skipped.push({ branchName: env.branch_name, reason: blocker.display });
-      continue;
-    }
-
-    // Safe to remove (also delete remote branch since it's merged)
     try {
+      const check = await checkRemoval(env, repoPath, { kind: verdict });
+      if (check.blocker) {
+        result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
+        continue;
+      }
       const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
         result.removed.push(env.branch_name);
+        if (check.released) {
+          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
+        }
       }
     } catch (error) {
       const err = error as Error;
@@ -1087,13 +1274,6 @@ export function stopCleanupScheduler(): void {
     cleanupIntervalId = null;
     getLog().info('scheduler_stopped');
   }
-}
-
-/**
- * Check if scheduler is running (for testing)
- */
-export function isSchedulerRunning(): boolean {
-  return cleanupIntervalId !== null;
 }
 
 export interface ReleasedWorktree {

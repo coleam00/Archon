@@ -1,17 +1,19 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, a quick route agent picks the lenses the change
-  earns — seams, code, tests, errors, docs — with seams on unless the change
-  clearly touches no type, contract, state or boundary. Reviews a PR when given
-  one, otherwise the working diff. Every round also holds the change to the
+  verdict. On every round but a light one, a quick route agent picks the lenses
+  the change earns — seams, code, tests, errors, docs — with seams on unless the
+  change clearly touches no type, contract, state or boundary. Reviews a PR when
+  given one, otherwise the working diff. Every round also holds the change to the
   accepted contract: each stated acceptance item, invariant, and steering
-  constraint is met with cited evidence or raised as a blocking finding.
+  constraint is met with cited evidence or raised as a blocking finding. Given a
+  part assignment, items that only later parts own are deferred, not unmet.
   Advisory and read-only: it judges, it never edits. Given the previous round's
-  report, the same lenses review only the correction delta since the reviewed
-  commit, judging whether each prior finding was resolved or validly declined
-  (`light` runs the general code reviewer alone, for a CI fix), and one
-  continuation reviewer carries the prior findings forward.
+  report, the lenses the previous round ran, plus any the route agent finds the
+  delta needs, review only the correction delta since the reviewed commit,
+  judging whether each prior finding was resolved or validly declined (`light`
+  runs the general code reviewer alone, for a CI fix), and one continuation
+  reviewer carries the prior findings forward.
 
   When reviewing a PR, the final synthesized report is posted to it as one
   canonical comment, edited in place on re-review.
@@ -46,6 +48,15 @@ inputs:
     description: >-
       "true" when this continuation follows a correction for CI rather than for
       review: the general code lens alone reviews the delta.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this change delivers, as JSON
+      naming the delivered part and each part's contract items, quoted:
+      `{"delivers": 1, "parts": [{"part": 1, "items": ["..."]}, {"part": 2, "items": ["..."]}]}`.
+      A contract item that only later parts list is deferred, not unmet.
+      Empty reviews against the whole contract. The `mode` node's
+      `output_format` owns and enforces the shape.
   # Error review can be forced on or off; `auto` leaves it to the route agent.
   errors:
     default: "auto"
@@ -63,30 +74,54 @@ nodes:
   # every push after the PR opens. publish refuses a report about any other
   # commit. The node also turns the input into the routable fact the lenses gate
   # on: an include's inputs are substituted as text at load time and cannot be
-  # compared in a `when:`.
+  # compared in a `when:`. For the same reason it carries the part assignment, so
+  # scope and synthesis read a value certified against its schema, not raw text.
   - id: mode
     script: review-round
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
       light: "$INPUTS.light"
+      part: "$INPUTS.part"
     output_format:
       type: object
       properties:
         continuation: { type: boolean }
+        # A continuation after a CI correction: the code lens alone, and no routing.
+        light: { type: boolean }
         head: { type: string, minLength: 1 }
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
         # This node's engine identity, so synthesis counts only this round's lenses.
         execution: { type: object }
-        # A continuation's lenses; all false on a first round, where route decides.
+        # The lenses a continuation reruns: the previous round's, or code alone on a
+        # light round. All false on a first round, where route alone decides.
         seams: { type: boolean }
         code: { type: boolean }
         tests: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
-      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs]
+        # The run's part assignment, null when the run delivers the whole contract.
+        # This schema is the one owner of the shape; ship and deliver forward the
+        # input as-is.
+        part:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            delivers: { type: integer, minimum: 1 }
+            parts:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  part: { type: integer, minimum: 1 }
+                  items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
+                required: [part, items]
+          required: [delivers, parts]
+      required: [continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
 
   - id: scope
     command: review-scope
@@ -124,15 +159,16 @@ nodes:
       required: [pr, report]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
-  # summary and the work order and answers, with seams on by default. Only a first
-  # round decides; a continuation reruns what mode read back.
+  # summary and the work order and answers, with seams on by default. Every round
+  # but a light one routes; on a continuation route judges the delta, and the round
+  # runs its selection together with the lenses the previous round recorded.
   - id: route
     command: route-review
     model: small
     context: fresh
     mutates_checkout: false
     depends_on: [mode]
-    when: "$mode.output.continuation == false"
+    when: "$mode.output.light == false"
     output_format:
       type: object
       properties:
@@ -148,16 +184,16 @@ nodes:
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
   # mislead the others. `&&` binds tighter than `||` and short-circuits, so a
-  # round that skipped the route node never reads it.
+  # light round, which skips the route node, never reads it.
   - id: seams
     output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    # A later round skips route; scope alone must have succeeded.
+    # A light round skips route; scope alone must have succeeded.
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.continuation == false && $route.output.seams == true || $mode.output.seams == true"
+    when: "$mode.output.light == false && $route.output.seams == true || $mode.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -167,7 +203,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.continuation == false && $route.output.code == true || $mode.output.code == true"
+    when: "$mode.output.light == false && $route.output.code == true || $mode.output.code == true"
 
   - id: tests
     output_type: review-lens
@@ -176,7 +212,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.continuation == false && $route.output.tests == true || $mode.output.tests == true"
+    when: "$mode.output.light == false && $route.output.tests == true || $mode.output.tests == true"
 
   - id: errors
     output_type: review-lens
@@ -185,7 +221,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.continuation == false && $route.output.errors == true || $mode.output.errors == true"
+    when: "$mode.output.light == false && $route.output.errors == true || $mode.output.errors == true"
 
   - id: docs
     output_type: review-lens
@@ -194,7 +230,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.continuation == false && $route.output.docs == true || $mode.output.docs == true"
+    when: "$mode.output.light == false && $route.output.docs == true || $mode.output.docs == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted. The deciding

@@ -1,12 +1,13 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
-import { getRegisteredProviders } from '@archon/providers';
+import { getRegisteredProviders, PI_PROVIDER_ENV_VARS } from '@archon/providers';
 import {
   getVendorCatalog,
   listConnectableVendors,
   isConnectableVendor,
   buildAgentCredentialMatrix,
+  type AgentCredentialStatus,
 } from './catalog';
 
 import {
@@ -58,6 +59,11 @@ describe('credentials/catalog', () => {
     expect(anthropic!.agents).toContain('pi');
     expect(anthropic!.kinds).toContain('api_key');
     expect(anthropic!.kinds).toContain('subscription');
+    // The subscription comes from Claude Code: Pi consumes only an Anthropic API key.
+    const pi = getRegisteredProviders().find(reg => reg.id === 'pi')!.credentials;
+    expect(
+      pi.kind === 'static' && pi.specs.find(spec => spec.vendor === 'anthropic')?.kinds
+    ).toEqual(['api_key']);
     // Pi-only backends carry only Pi.
     expect(catalog.get('openrouter')?.agents).toEqual(['pi']);
     // Ambient-only vendors are present but not api_key-connectable.
@@ -146,6 +152,74 @@ describe('credentials/catalog', () => {
       expect(pi.credentials.find(s => s.vendor === 'openrouter')!.connected).toBe('api_key');
       expect(pi.credentials.find(s => s.vendor === 'anthropic')!.connected).toBe('oauth');
       expect(pi.ready).toBe(true);
+    });
+
+    /** Runs `fn` with every credential env var the matrix reads unset, then `env` applied. */
+    function withCredentialEnv(env: Record<string, string>, fn: () => void): void {
+      const keys = [
+        ...Object.values(PI_PROVIDER_ENV_VARS),
+        'CLAUDE_API_KEY',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'ANTHROPIC_OAUTH_TOKEN',
+        'AWS_PROFILE',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_BEARER_TOKEN_BEDROCK',
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+        'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+        'AWS_WEB_IDENTITY_TOKEN_FILE',
+        'GOOGLE_CLOUD_PROJECT',
+        'GCLOUD_PROJECT',
+      ];
+      const saved = keys.map(key => [key, process.env[key]] as const);
+      for (const key of keys) delete process.env[key];
+      Object.assign(process.env, env);
+      try {
+        fn();
+      } finally {
+        for (const [key, value] of saved) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    }
+
+    function anthropicRow(
+      matrix: ReturnType<typeof buildAgentCredentialMatrix>,
+      agentId: string
+    ): { ready: boolean; row: AgentCredentialStatus } {
+      const agent = matrix.find(a => a.id === agentId)!;
+      return { ready: agent.ready, row: agent.credentials.find(s => s.vendor === 'anthropic')! };
+    }
+
+    test('a Claude subscription makes Claude Code ready, not Pi', () => {
+      withCredentialEnv({}, () => {
+        const matrix = buildAgentCredentialMatrix([{ provider: 'anthropic', kind: 'oauth' }]);
+        const claude = anthropicRow(matrix, 'claude');
+        expect(claude.ready).toBe(true);
+        expect(claude.row).toMatchObject({ connectionConsumed: true, usable: true });
+        const pi = anthropicRow(matrix, 'pi');
+        expect(pi.row).toMatchObject({
+          connected: 'oauth',
+          connectionConsumed: false,
+          subscriptionAvailable: false,
+          usable: false,
+        });
+        expect(pi.ready).toBe(false);
+      });
+    });
+
+    test('install env counts only the variables the agent itself reads', () => {
+      withCredentialEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'test-token' }, () => {
+        const matrix = buildAgentCredentialMatrix([]);
+        expect(anthropicRow(matrix, 'claude').ready).toBe(true);
+        expect(anthropicRow(matrix, 'pi').row.installEnv).toBe(false);
+        expect(anthropicRow(matrix, 'pi').ready).toBe(false);
+      });
+      withCredentialEnv({ ANTHROPIC_OAUTH_TOKEN: 'test-token' }, () => {
+        const pi = anthropicRow(buildAgentCredentialMatrix([]), 'pi');
+        expect(pi.row.installEnv).toBe(false);
+        expect(pi.ready).toBe(false);
+      });
     });
 
     test('subscriptionAvailable: all three subscription vendors connectable (#1924 gate lifted)', () => {

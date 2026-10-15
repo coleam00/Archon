@@ -28,6 +28,7 @@ export const chatPluginDescriptorSchema = z.object({
   displayName: z.string().min(1),
   version: z.string().min(1),
   capabilities: z.object({
+    attentionNotices: z.literal(true).optional(),
     canDetachProject: z.literal(true).optional(),
     defaultWorkflowDispatch: z.enum(['foreground', 'background']),
     resultFooter: z.literal(true).optional(),

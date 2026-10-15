@@ -159,14 +159,36 @@ import {
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { buildAiNodeEnvironment, buildExecNodeEnvironment } from './exec-environment';
+import {
+  buildAiNodeEnvironment,
+  buildExecNodeEnvironment,
+  type ExecNodeEnvironmentContext,
+} from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
 } from './store';
-import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
+import type {
+  DagResumeSnapshot,
+  FanOutCancelReason,
+  GatePauseEventInput,
+  PersistedNodeOutput,
+} from './store';
+import {
+  RUN_BUDGET_REFUSED_EVENT_TYPE,
+  RunBudgetRefusedError,
+  admitRunBudgetAttempt,
+  createRunBudgetLedger,
+  describeRunBudgetRefusal,
+  runBudgetRefusalEventData,
+  runBudgetStartRefusal,
+  runBudgetWorkUnitEvent,
+  settleRunBudgetAttempt,
+  type RunBudgetLedger,
+  type RunBudgetRefusal,
+} from './run-budget';
 import {
   createAttemptEventSequence,
   createProviderEventHandler,
@@ -287,26 +309,33 @@ export interface ShellInputContext {
 }
 
 /**
- * Env-var bag delivering named inputs to a bash/script node as `INPUTS_<UPPER_SNAKE>`.
+ * Env-var bag delivering named inputs to a node shell as `INPUTS_<UPPER_SNAKE>`.
  *
- * Two sources, in precedence order:
+ * Sources, in precedence order:
  *   - the RUN's own inputs (#2470) — a `workflow:` sub-run child carries them in metadata.
  *   - the node's COMPOSED inputs (#1764) — the contract-resolved `inputs:` of the workflow
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
- *     These win: a node's own file is the nearer contract, and it is the only channel a
- *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
- *     serves inline bodies can never reach it).
+ *     These win: a node's own file is the nearer contract. This bag is their only channel
+ *     into a shell or script: the include `$INPUTS` macro rewrites a bash body to a quoted
+ *     reference to it and refuses an inline script body (#2115).
+ *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
  * (NOT shell-safe: these become env values, never shell source) and `$node.output` refs —
  * resolved here rather than at load because a value may hold
  * `$ARTIFACTS_DIR` or a ref that only exists at run time. Values are never shell-escaped:
  * the env bag is itself the injection-safe channel (#2115), which is why they never touch
- * the script source. Both shell env sites call this one function so the bag and its
- * ordering cannot diverge between them.
+ * the script source.
+ *
+ * `runInputs` is explicit for the same reason as in {@link resolveNodeBindings}: the
+ * dry-run simulator builds the bag with this function and passes its effective input map,
+ * so the preview cannot drift from the real run.
  */
-function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv {
-  const runInputs = resolveRunInputs(ctx.workflowRun);
+export function inputEnvVars(
+  node: DagNode,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined = resolveRunInputs(ctx.workflowRun)
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(runInputs ?? {})) {
     // Canonical text (#2637): env vars are text, so a typed input rides its one
@@ -332,6 +361,20 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
     }
   }
   return env;
+}
+
+/** Project env cannot shadow inputs or engine-owned delivery keys (#2115). */
+function buildNodeShellEnvironment(
+  node: DagNode,
+  ctx: ShellInputContext,
+  envVars: NodeJS.ProcessEnv | undefined,
+  executionContext: ExecNodeEnvironmentContext
+): NodeJS.ProcessEnv {
+  return {
+    ...envVars,
+    ...inputEnvVars(node, ctx),
+    ...buildExecNodeEnvironment(executionContext),
+  };
 }
 
 /**
@@ -1060,6 +1103,40 @@ function retryableFailureClass(
   if (retryClass === 'fatal') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
+}
+
+/**
+ * Run one governed attempt under the run budget: admit and reserve a work unit, write
+ * its durable record, run the attempt, then charge its spend. The reservation precedes
+ * the first await so parallel siblings cannot share the last unit; the record precedes
+ * the attempt so a crash over-counts rather than under-counts.
+ */
+async function runBudgetedAttempt(
+  ctx: RunLayersContext,
+  node: AgentNode | ExecNode,
+  attempt: () => Promise<NodeExecutionResult>
+): Promise<NodeExecutionResult> {
+  const ledger = ctx.runBudget;
+  if (ledger === undefined) return attempt();
+  const path = ctx.stepNamePrefix + node.id;
+  const refusal = admitRunBudgetAttempt(ledger, path);
+  if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
+  await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  const executionBefore = ctx.currentExecution;
+  let result: NodeExecutionResult;
+  try {
+    result = await attempt();
+  } catch (error) {
+    // An agent attempt that started and then threw never reported its cost. One that
+    // threw before starting made no provider call.
+    if (node.kind === 'agent' && ctx.currentExecution !== executionBefore) {
+      ledger.usage.costUnavailable ??= { path, reason: 'interrupted' };
+    }
+    throw error;
+  }
+  const settlement = settleRunBudgetAttempt(ledger, node.kind, path, result.execution);
+  if (settlement !== undefined) throw new RunBudgetRefusedError(settlement);
+  return result;
 }
 
 /**
@@ -2293,12 +2370,9 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
+  const capabilities = requireProvider(deps.providers, provider).capabilities;
   const aiClient = deps.getAgentProvider(provider);
-  const nodeMcp = await resolveNodeMcp(
-    node.mcp,
-    requireProvider(deps.providers, provider).capabilities,
-    cwd
-  );
+  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2306,7 +2380,7 @@ async function executeNodeInternal(
       tier: resolvedTier,
       effort: resolvedEffort,
       sessionId: resumeSessionId,
-      capabilities: aiClient.getCapabilities(),
+      capabilities,
       checkoutStart: await observeNodeCheckout(ctx),
     }),
     diagnostics: {
@@ -2346,6 +2420,10 @@ async function executeNodeInternal(
   let nodeTokens: TokenUsage | undefined;
   let nodeTokensUnknown = false;
   let nodeCostUsd: number | undefined;
+  // Attempt-wide: some stream pass ended without a result, or a result without a
+  // finite cost, so `nodeCostUsd` is at most a floor of what the attempt spent.
+  let costReportMissing = false;
+  let passSawResult = false;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
@@ -2356,7 +2434,7 @@ async function executeNodeInternal(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string; providerFailure?: ProviderFailure } = {}
+    extras: { output?: string; providerFailure?: ProviderFailure; providerNotCalled?: boolean } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
@@ -2375,10 +2453,12 @@ async function executeNodeInternal(
           tokens: nodeTokens,
           tokensUnknown: nodeTokensUnknown,
           costUsd: nodeCostUsd,
+          costPartial: costReportMissing,
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
           sessionId: newSessionId,
+          providerNotCalled: extras.providerNotCalled,
         }
       )
     );
@@ -2386,6 +2466,10 @@ async function executeNodeInternal(
     lastNodeActivityUpdate.delete(nodeKey);
     return result;
   };
+  // The provider is bound but was never called, so the attempt records no spend rather
+  // than unreported spend that would refuse a spend-limited run.
+  const failBeforeProviderCall = (error: string): Promise<NodeExecutionResult> =>
+    failAgentNode(error, 'config', { providerNotCalled: true });
 
   // Load prompt
   let rawPrompt: string;
@@ -2401,7 +2485,7 @@ async function executeNodeInternal(
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
-      return failAgentNode(errMsg, 'config');
+      return failBeforeProviderCall(errMsg);
     }
     rawPrompt = resolveIncludeOutputAliases(node, promptResult.content);
   } else {
@@ -2450,7 +2534,7 @@ async function executeNodeInternal(
   } catch (error) {
     const err = error as Error;
     getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_prompt_substitution_failed');
-    const result = await failAgentNode(err.message, 'config');
+    const result = await failBeforeProviderCall(err.message);
     await safeSendMessage(
       platform,
       conversationId,
@@ -2499,8 +2583,7 @@ async function executeNodeInternal(
   // structured-output validation miss, re-run the stream with the schema errors
   // appended. Enforced providers and non-output_format nodes get 0 reasks.
   const maxReasks =
-    requireProvider(ctx.deps.providers, provider).capabilities.structuredOutput === 'best-effort' &&
-    nodeOptions?.outputFormat
+    capabilities.structuredOutput === 'best-effort' && nodeOptions?.outputFormat
       ? STRUCTURED_OUTPUT_MAX_REASKS
       : 0;
   let accumulatedCostUsd: number | undefined;
@@ -2523,6 +2606,7 @@ async function executeNodeInternal(
     }
     batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
+    passSawResult = false;
     nodeTokens = undefined;
     nodeIdleTimedOut = false;
     streamSettled = false;
@@ -2532,7 +2616,7 @@ async function executeNodeInternal(
     const providerEvents = createProviderEventHandler({
       toolAttention: ctx.toolAttention.createStream({
         nodeId: stepName,
-        reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+        reportedBackgroundWork: capabilities.backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
         env: {
@@ -2623,7 +2707,7 @@ async function executeNodeInternal(
         },
         () =>
           providerEvents.hasOpenTools() ||
-          (aiClient.getCapabilities().backgroundWork === 'reported' &&
+          (capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0),
         shouldStopStream
       )) {
@@ -2657,6 +2741,8 @@ async function executeNodeInternal(
               nodeId: node.id,
             });
           }
+          passSawResult = true;
+          if (msg.cost === undefined || !Number.isFinite(msg.cost)) costReportMissing = true;
           if (msg.cost !== undefined) {
             if (Number.isFinite(msg.cost)) {
               nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
@@ -2717,7 +2803,7 @@ async function executeNodeInternal(
           }
         } else if (msg.type === 'settled') {
           streamSettled =
-            aiClient.getCapabilities().backgroundWork !== 'reported' ||
+            capabilities.backgroundWork !== 'reported' ||
             providerEvents.liveSubtaskIds().length === 0;
           break;
         } else {
@@ -2797,6 +2883,7 @@ async function executeNodeInternal(
         );
       } finally {
         await watchdogResets.flush();
+        if (!passSawResult) costReportMissing = true;
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
@@ -3055,6 +3142,7 @@ async function executeNodeInternal(
         tokens: nodeTokens,
         tokensUnknown: nodeTokensUnknown,
         costUsd: nodeCostUsd,
+        costPartial: costReportMissing,
         stopReason: nodeStopReason,
         numTurns: nodeNumTurns,
         resolvedModel: nodeResolvedModel?.id,
@@ -3452,35 +3540,21 @@ async function executeBashNode(
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
-  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
-  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow the
-  // values this node delivers (that IS the injection-safe delivery channel, #2115).
-  // The GitHub-token scrub keys (GH_TOKEN/GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are
-  // disjoint from the reserved set and stay in the bag, still overriding the ambient
-  // host token via runSubprocess's process.env layering — the scrub is unaffected.
-  const subprocessEnv: NodeJS.ProcessEnv = {
-    ...(envVars ?? {}),
-    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
-    // (#2470/#1764). Spread after envVars so a configured project env var can never
-    // shadow an input's delivery, and before the engine-reserved keys so those still
-    // win (same ordering rationale).
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment({
-      artifactsDir,
-      stateDir,
-      logDir,
-      workflowId: workflowRun.id,
-      baseBranch,
-      userMessage: workflowRun.user_message,
-      loopUserInput,
-      loopPrevOutput: '',
-      rejectionReason: '',
-      issueContext,
-      adoptedRunDir: currentAdoptedRunDir(),
-      typedArtifactsFile,
-      nodeExecution: execution,
-    }),
-  };
+  const subprocessEnv: NodeJS.ProcessEnv = buildNodeShellEnvironment(node, ctx, envVars, {
+    artifactsDir,
+    stateDir,
+    logDir,
+    workflowId: workflowRun.id,
+    baseBranch,
+    userMessage: workflowRun.user_message,
+    loopUserInput,
+    loopPrevOutput: '',
+    rejectionReason: '',
+    issueContext,
+    adoptedRunDir: currentAdoptedRunDir(),
+    typedArtifactsFile,
+    nodeExecution: execution,
+  });
 
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
@@ -3734,17 +3808,8 @@ async function executeScriptNode(
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
   // sanctioned injection-safe channel, matching executeBashNode (#2115).
-  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
-  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow this
-  // delivery channel. The GitHub-token scrub keys are disjoint from the reserved set
-  // and still override the ambient host token via runSubprocess (scrub unaffected).
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...(envVars ?? {}),
-    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
-    // (#2470/#1764) — same ordering rationale as executeBashNode: after envVars,
-    // before the engine-reserved keys.
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment({
+    ...buildNodeShellEnvironment(node, ctx, envVars, {
       artifactsDir,
       stateDir,
       logDir,
@@ -3794,7 +3859,7 @@ async function executeScriptNode(
     // permissions)" branch — that branch is for execFileAsync EACCES.
     let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
     try {
-      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots);
+      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]));
     } catch (discoveryErr) {
       const err = discoveryErr as Error;
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
@@ -4598,24 +4663,21 @@ async function executeLoopGroupBody(
               nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
               label: '<until_bash>',
             },
-            env: {
-              ...(config.envVars ?? {}),
-              ...buildExecNodeEnvironment({
-                artifactsDir,
-                stateDir,
-                logDir,
-                workflowId: workflowRun.id,
-                baseBranch,
-                userMessage: workflowRun.user_message,
-                loopUserInput: '',
-                loopPrevOutput: '',
-                rejectionReason: '',
-                issueContext,
-                adoptedRunDir: currentAdoptedRunDir(),
-                typedArtifactsFile,
-                nodeExecution: ctx.currentExecution ?? null,
-              }),
-            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: '',
+              loopPrevOutput: '',
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: ctx.currentExecution ?? null,
+            }),
           });
           resumedBashComplete = true;
         } catch (e) {
@@ -5067,30 +5129,21 @@ async function executeLoopGroupBody(
             nodeId: `${node.id}-iteration-${String(i)}`,
             label: '<until_bash>',
           },
-          // Archon-managed env only (no process.env spread) — runSubprocess
-          // layers the host env for host runs, or delivers ONLY this bag into
-          // the container. Configured project env spreads FIRST so the reserved
-          // workflow vars below win over any colliding codebase env var (#2115);
-          // the token-scrub keys are disjoint and still override the ambient host
-          // token via runSubprocess, so the unconnected-user scrub is unaffected.
-          env: {
-            ...(config.envVars ?? {}),
-            ...buildExecNodeEnvironment({
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-              loopPrevOutput: prevIterationOutput,
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: ctx.currentExecution ?? null,
-            }),
-          },
+          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+            artifactsDir,
+            stateDir,
+            logDir,
+            workflowId: workflowRun.id,
+            baseBranch,
+            userMessage: workflowRun.user_message,
+            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+            loopPrevOutput: prevIterationOutput,
+            rejectionReason: '',
+            issueContext,
+            adoptedRunDir: currentAdoptedRunDir(),
+            typedArtifactsFile,
+            nodeExecution: ctx.currentExecution ?? null,
+          }),
         });
         bashComplete = true;
       } catch (e) {
@@ -5230,7 +5283,7 @@ async function executeLoopGroupBody(
         deps,
         workflowRun.id,
         approvalContext,
-        { suspension: serializeNodeStateRecord(suspended) }
+        { event: serializeNodeStateRecord(suspended) }
       );
       if (!paused)
         return {
@@ -5523,7 +5576,9 @@ async function executeLoopNode(
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
+  let capabilities: ProviderCapabilities;
   try {
+    capabilities = requireProvider(deps.providers, workflowProvider).capabilities;
     aiClient = deps.getAgentProvider(workflowProvider);
   } catch (error) {
     const err = error as Error;
@@ -5543,7 +5598,7 @@ async function executeLoopNode(
     model: resolvedModel,
     tier: resolvedTier,
     effort: resolvedEffort,
-    capabilities: aiClient.getCapabilities(),
+    capabilities,
     checkoutStart: await observeNodeCheckout(ctx),
   });
   if (savedExecution !== undefined) {
@@ -5833,7 +5888,7 @@ async function executeLoopNode(
         createProviderEventHandler({
           toolAttention: ctx.toolAttention.createStream({
             nodeId: stepName,
-            reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+            reportedBackgroundWork: capabilities.backgroundWork === 'reported',
             provider: workflowProvider,
             thresholdMs:
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
@@ -5899,9 +5954,7 @@ async function executeLoopNode(
       let reaskErrors: string[] = [];
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
       const maxReasks =
-        wantsStructured &&
-        requireProvider(ctx.deps.providers, workflowProvider).capabilities.structuredOutput ===
-          'best-effort'
+        wantsStructured && capabilities.structuredOutput === 'best-effort'
           ? STRUCTURED_OUTPUT_MAX_REASKS
           : 0;
 
@@ -6038,7 +6091,7 @@ async function executeLoopNode(
               },
               () =>
                 providerEvents.hasOpenTools() ||
-                (aiClient.getCapabilities().backgroundWork === 'reported' &&
+                (capabilities.backgroundWork === 'reported' &&
                   providerEvents.liveSubtaskIds().length > 0),
               shouldStopStream
             )) {
@@ -6141,7 +6194,7 @@ async function executeLoopNode(
                 // AI-node stream loop for the full rationale.
               } else if (msg.type === 'settled') {
                 iterationSettled =
-                  aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                  capabilities.backgroundWork !== 'reported' ||
                   providerEvents.liveSubtaskIds().length === 0;
                 break;
               } else {
@@ -6593,33 +6646,21 @@ async function executeLoopNode(
             nodeId: `${node.id}-iteration-${String(i)}`,
             label: '<until_bash>',
           },
-          // Archon-managed env only (no process.env spread) — runSubprocess
-          // layers the host env for host runs, or delivers ONLY this bag into
-          // the container. Configured project env (managed per-project vars +
-          // per-user GitHub token overrides incl. the unconnected-user scrub)
-          // spreads FIRST so the reserved workflow vars below win over any
-          // colliding codebase env var (#2115). The scrub keys (GH_TOKEN/
-          // GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are disjoint from the reserved set
-          // and stay in the bag, so they still override the server's ambient GH
-          // token via runSubprocess's process.env layering — scrub unaffected.
-          env: {
-            ...(config.envVars ?? {}),
-            ...buildExecNodeEnvironment({
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-              loopPrevOutput: prevIterationOutput,
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: execution,
-            }),
-          },
+          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+            artifactsDir,
+            stateDir,
+            logDir,
+            workflowId: workflowRun.id,
+            baseBranch,
+            userMessage: workflowRun.user_message,
+            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+            loopPrevOutput: prevIterationOutput,
+            rejectionReason: '',
+            issueContext,
+            adoptedRunDir: currentAdoptedRunDir(),
+            typedArtifactsFile,
+            nodeExecution: execution,
+          }),
         });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
@@ -6809,7 +6850,7 @@ async function executeLoopNode(
         deps,
         workflowRun.id,
         approvalContext,
-        { suspension: serializeNodeStateRecord(suspended) }
+        { event: serializeNodeStateRecord(suspended) }
       );
       if (!paused) {
         if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined || loopTokensUnknown) {
@@ -6907,23 +6948,24 @@ async function sendPauseNotice(
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
- * Returns the persisted context, including its minted `pauseId`; undefined when the gate
- * did not pause.
+ * `event` commits with the pause, so every gate pause reaches the event feed the
+ * attention watch follows. Returns the persisted context, including its minted
+ * `pauseId`; undefined when the gate did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext,
   options: {
+    event: GatePauseEventInput;
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
-    suspension?: ReturnType<typeof serializeNodeStateRecord>;
-  } = {}
+  }
 ): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
   approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.suspension);
+    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
     let status: WorkflowRunStatus | null;
@@ -7100,7 +7142,7 @@ async function executeWaitNode(
     if (message === '') {
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
-    const options = resolveAttentionOptions(node.id, condition.options, ctx);
+    const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs);
     const labels =
       condition.labels === undefined
         ? undefined
@@ -7234,14 +7276,14 @@ async function executeWaitNode(
  * reference is read here and must pass the same rules as literal options; the node fails,
  * naming the producer, rather than pausing with options nobody can answer.
  */
-function resolveAttentionOptions(
+export function resolveAttentionOptions(
   nodeId: string,
   options: AttentionOption[] | string | undefined,
-  ctx: RunLayersContext
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): AttentionOption[] | undefined {
   if (typeof options !== 'string') return options;
   const ref = parseWholeOutputRef(options);
-  const producer = ref === undefined ? undefined : ctx.nodeOutputs.get(ref.nodeId);
+  const producer = ref === undefined ? undefined : nodeOutputs.get(ref.nodeId);
   if (ref === undefined || producer === undefined) {
     throw new Error(
       `Wait node '${nodeId}' options '${options}' name no node that has produced output`
@@ -7409,21 +7451,23 @@ async function executeApprovalNode(
       execContext
     );
 
-    const output = await executeNodeInternal(
-      ctx,
-      syntheticNode,
-      provider,
-      nodeOptions,
-      undefined, // fresh session
-      resolvedNodeModel,
-      resolvedTier,
-      resolvedEffort,
-      stepNamePrefix,
-      iteration,
-      undefined, // synthetic on_reject node never carries a session checkpoint
-      typedArtifactsFile,
-      'ordinary',
-      rejectionReason
+    const output = await runBudgetedAttempt(ctx, syntheticNode, () =>
+      executeNodeInternal(
+        ctx,
+        syntheticNode,
+        provider,
+        nodeOptions,
+        undefined, // fresh session
+        resolvedNodeModel,
+        resolvedTier,
+        resolvedEffort,
+        stepNamePrefix,
+        iteration,
+        undefined, // synthetic on_reject node never carries a session checkpoint
+        typedArtifactsFile,
+        'ordinary',
+        rejectionReason
+      )
     );
 
     if (output.state === 'failed') {
@@ -7485,7 +7529,7 @@ async function executeApprovalNode(
     deps,
     workflowRun.id,
     approvalContext,
-    { suspension: serializeNodeStateRecord(suspended) }
+    { event: serializeNodeStateRecord(suspended) }
   );
   if (!paused) return serializeNodeOutput(execution);
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -7723,33 +7767,26 @@ async function executeWorkflowNode(
     // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
-    const paused = await pauseGateRespectingExternalTransition(deps, parentRun.id, {
-      message: approveChild({}),
-      nodeId: executionNodeId,
-      type: 'child_workflow',
-      childRunId,
-    });
-    if (paused) {
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
-        msgContext
-      );
-    } else {
-      return serializeNodeOutput(execution);
-    }
-    return recordNodeState(
-      { store: deps.store, logDir: ctx.logDir },
-      finishNodeExecution(
-        execution,
-        { status: 'suspended', point: 'child_workflow' },
-        {
-          output: { text: '' },
-          diagnostics: { childRunId },
-        }
-      )
+    const suspended = finishNodeExecution(
+      execution,
+      { status: 'suspended', point: 'child_workflow' },
+      { output: { text: '' }, diagnostics: { childRunId } }
     );
+    const paused = await pauseGateRespectingExternalTransition(
+      deps,
+      parentRun.id,
+      { message: approveChild({}), nodeId: executionNodeId, type: 'child_workflow', childRunId },
+      { event: serializeNodeStateRecord(suspended) }
+    );
+    if (!paused) return serializeNodeOutput(execution);
+    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+      msgContext
+    );
+    return serializeNodeOutput(suspended);
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
@@ -8390,7 +8427,8 @@ async function executeFanOutWorkflowNode(
   //    window get no run row until a held child finishes and the parent continues.
   //
   //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
-  //    child fails still runs every remaining child. A run-tree budget ceiling is #1961.
+  //    child fails still runs every remaining child. The workflow `budget:` does not cover
+  //    fan-out yet; a budgeted workflow rejects it at load (#2815).
   const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
     // A rolled-back cancellation has not released the child's working-path lock.
     // Let claimed siblings settle, but do not start another child against that lock.
@@ -8506,7 +8544,7 @@ async function executeFanOutWorkflowNode(
         childRunIds: held.map(([, id]) => id),
         unspawnedItems,
       },
-      { suspension: serializeNodeStateRecord(suspended) }
+      { event: serializeNodeStateRecord(suspended) }
     );
     if (!paused) return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -9395,6 +9433,8 @@ interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  /** The run budget's live ledger; set only when the workflow declares `budget:`. */
+  runBudget?: RunBudgetLedger;
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: GraphPlan['layers'];
@@ -9583,6 +9623,7 @@ function settledValuesOrThrow<T>(
   const selected =
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
     failures[0];
   if (selected === undefined) return values;
   for (const failure of failures) {
@@ -9993,15 +10034,17 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.deps.store,
                     ctx.stepNamePrefix + node.id,
                     () =>
-                      executeBashNode(
-                        ctx,
-                        node,
-                        ctx.config.envVars,
-                        ctx.config.protectedEnvKeys,
-                        ctx.config.protectedCredentialValues,
-                        ctx.stepNamePrefix,
-                        iteration,
-                        ctx.bodyLoopUserInput ?? ''
+                      runBudgetedAttempt(ctx, node, () =>
+                        executeBashNode(
+                          ctx,
+                          node,
+                          ctx.config.envVars,
+                          ctx.config.protectedEnvKeys,
+                          ctx.config.protectedCredentialValues,
+                          ctx.stepNamePrefix,
+                          iteration,
+                          ctx.bodyLoopUserInput ?? ''
+                        )
                       ),
                     iteration
                   );
@@ -10035,15 +10078,17 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.deps.store,
                   ctx.stepNamePrefix + node.id,
                   () =>
-                    executeScriptNode(
-                      ctx,
-                      node,
-                      ctx.config.envVars,
-                      ctx.config.protectedEnvKeys,
-                      ctx.config.protectedCredentialValues,
-                      ctx.stepNamePrefix,
-                      iteration,
-                      ctx.bodyLoopUserInput ?? ''
+                    runBudgetedAttempt(ctx, node, () =>
+                      executeScriptNode(
+                        ctx,
+                        node,
+                        ctx.config.envVars,
+                        ctx.config.protectedEnvKeys,
+                        ctx.config.protectedCredentialValues,
+                        ctx.stepNamePrefix,
+                        iteration,
+                        ctx.bodyLoopUserInput ?? ''
+                      )
                     ),
                   iteration
                 );
@@ -10325,7 +10370,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   `Node '${node.id}' cannot resume '${sourceNodeId}': source provider '${sourceHandle.provider}' does not match resolved provider '${provider}'.`
                 );
               }
-              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
+              const caps = requireProvider(ctx.deps.providers, provider).capabilities;
               if (
                 !caps.sessionResume ||
                 (resumeIntent === 'source-fork' && caps.sessionFork !== true)
@@ -10379,12 +10424,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             const usesPersistedScope = nodeUsesPersistedScope(node, ctx.workflowPersistSessions);
 
             if (usesPersistedScope) {
-              // Runtime capability guard via the resolved provider instance (catches the
-              // case where provider was resolved from .archon/config.yaml defaults).
-              // Uses the instance's getCapabilities() rather than the static registry so
-              // tests can substitute mock providers with different caps without registering.
               const handling = persistedSessionHandling(
-                ctx.deps.getAgentProvider(provider).getCapabilities()
+                requireProvider(ctx.deps.providers, provider).capabilities
               );
               if (handling === 'unsupported') {
                 throw new Error(
@@ -10475,30 +10516,31 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.deps.store,
               ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
-              async () => {
-                // Fresh per attempt: an attempt after a transient failure observes
-                // artifacts published in the interval, and never reuses the
-                // listing handed to AI-configuration substitution above.
-                const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
-                  ctx.artifactsDir,
-                  ctx.workflowRun.id
-                );
-                return executeNodeInternal(
-                  ctx,
-                  node,
-                  provider,
-                  nodeOptions,
-                  resumeSessionId,
-                  resolvedNodeModel,
-                  resolvedTier,
-                  resolvedEffort,
-                  ctx.stepNamePrefix,
-                  iteration,
-                  checkpointSessionForProvider(provider),
-                  attemptTypedArtifactsFile,
-                  resumeIntent
-                );
-              },
+              () =>
+                runBudgetedAttempt(ctx, node, async () => {
+                  // Fresh per attempt: an attempt after a transient failure observes
+                  // artifacts published in the interval, and never reuses the
+                  // listing handed to AI-configuration substitution above.
+                  const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
+                    ctx.artifactsDir,
+                    ctx.workflowRun.id
+                  );
+                  return executeNodeInternal(
+                    ctx,
+                    node,
+                    provider,
+                    nodeOptions,
+                    resumeSessionId,
+                    resolvedNodeModel,
+                    resolvedTier,
+                    resolvedEffort,
+                    ctx.stepNamePrefix,
+                    iteration,
+                    checkpointSessionForProvider(provider),
+                    attemptTypedArtifactsFile,
+                    resumeIntent
+                  );
+                }),
               { state: 'failed', output: '', error: 'Node did not execute' },
               iteration
             );
@@ -10608,8 +10650,13 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output, sessionProvider: provider };
           } catch (error) {
             // This dispatch boundary also owns provider/binding preparation failures.
-            // Durable-write rejection must reach run recovery without becoming a node outcome.
-            if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+            // Durable-write rejection and a budget refusal must reach run recovery
+            // without becoming a node outcome: a refused node never started.
+            if (
+              error instanceof TerminalStatusWriteError ||
+              error instanceof NodeEventWriteError ||
+              error instanceof RunBudgetRefusedError
+            )
               throw error;
 
             const err = error as Error;
@@ -11058,13 +11105,15 @@ type ContainerLifecyclePhase =
   | 'writeback_applied'
   | 'writeback_discarded';
 
-/** DB `workflow_events.event_type` values for container lifecycle. */
+/**
+ * DB `workflow_events.event_type` values written best-effort beside the lifecycle signal.
+ * `writeback_requested` is not one: it commits with the write-back pause.
+ */
 type ContainerLifecycleDbEvent =
   | 'container_created'
   | 'container_stopped'
   | 'container_resumed'
   | 'container_destroyed'
-  | 'writeback_requested'
   | 'writeback_applied'
   | 'writeback_discarded';
 
@@ -11369,30 +11418,31 @@ async function raiseWriteBackGate(
   // teardown-preserve logic keeps the overlay volume for a retry), so it rethrows
   // instead of tolerating the CAS miss the way the other four gate types do. This also
   // emits the `approval_pending` live pause signal on success (same event the approval
-  // node emits, so the existing pause UI shows approve/reject) — the lifecycle event
-  // below now fires just after it instead of just before; both are best-effort,
-  // fire-and-forget emits with no ordering contract.
+  // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
+  // row commits with the pause, so the pause reaches the event feed; only the live
+  // container-lifecycle signal follows it.
   await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
     {
+      event: {
+        workflow_run_id: runId,
+        event_type: 'writeback_requested',
+        step_name: 'container',
+        data: { total_count: summary?.totalCount ?? 0 },
+      },
       extraMetadata: {
         pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) },
       },
       failClosed: true,
     }
   );
-  emitContainerLifecycleEvent(
-    deps,
+  getWorkflowEventEmitter().emit({
+    type: 'container_lifecycle',
     runId,
-    'writeback_requested',
-    'writeback_requested',
-    undefined,
-    {
-      total_count: summary?.totalCount ?? 0,
-    }
-  );
+    phase: 'writeback_requested',
+  });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
   await safeSendMessage(platform, conversationId, message, { workflowId: runId });
 }
@@ -11713,13 +11763,22 @@ export async function executeDagWorkflow(
   // step_names are the raw node ids (identical to pre-refactor behavior). Fields stay
   // explicit because spreading options would also copy executor-only state into this
   // context without an excess-property check.
+  // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
+  // run can arrive without prior usage, and a reset ledger would replay spent work.
+  const resumeSnapshot =
+    priorCompletedNodes !== undefined || workflow.budget !== undefined
+      ? await deps.store.getDagResumeSnapshot(workflowRun.id)
+      : undefined;
   const unfinishedInvocations =
-    priorCompletedNodes === undefined
-      ? undefined
-      : (await deps.store.getDagResumeSnapshot(workflowRun.id)).unfinishedInvocations;
+    priorCompletedNodes === undefined ? undefined : resumeSnapshot?.unfinishedInvocations;
+  const runBudget =
+    workflow.budget !== undefined && resumeSnapshot !== undefined
+      ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
+      : undefined;
   const runCtx: RunLayersContext = {
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    runBudget,
     deps,
     platform,
     conversationId,
@@ -11895,6 +11954,56 @@ export async function executeDagWorkflow(
     return scheduled;
   };
 
+  /**
+   * Fail the run on a budget refusal. Returns normally, like the other engine refusals,
+   * so the outer executor catch does not emit a second failure. A run paused or cancelled
+   * meanwhile keeps its status; its next pass rebuilds the ledger and refuses again.
+   */
+  const failRunForBudget = async (
+    ledger: RunBudgetLedger,
+    refusal: RunBudgetRefusal
+  ): Promise<void> => {
+    if (await skipIfStatusChanged('dag.run_budget_refusal_status_changed')) return;
+    const failMsg = describeRunBudgetRefusal(refusal, workflow.name);
+    getLog().error({ workflowRunId: workflowRun.id, refusal }, 'dag.run_budget_refused');
+    await deps.store.createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: RUN_BUDGET_REFUSED_EVENT_TYPE,
+      step_name: refusal.path,
+      data: runBudgetRefusalEventData(refusal, ledger.limits, ledger.usage),
+    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg, {
+      ...(runCtx.totalCostUsd !== undefined ? { cost_usd: runCtx.totalCostUsd } : {}),
+      ...(runCtx.totalTokens !== undefined ? { tokens: runCtx.totalTokens } : {}),
+    }).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitter = getWorkflowEventEmitter();
+    emitter.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: failMsg,
+    });
+    emitter.unregisterRun(workflowRun.id);
+    await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'budget_refused' }),
+      { workflowRunId: workflowRun.id, site: 'dag.run_budget_refused_fail' }
+    );
+  };
+
+  const startRefusal = runBudget && runBudgetStartRefusal(runBudget);
+  if (runBudget !== undefined && startRefusal !== undefined) {
+    await failRunForBudget(runBudget, startRefusal);
+    return;
+  }
+
   await persistAuthoredOutcome();
   try {
     await runLayers(runCtx);
@@ -11903,7 +12012,26 @@ export async function executeDagWorkflow(
     // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
-    // execution error already in flight.
+    // execution error already in flight. A run-budget refusal also escapes the join; it
+    // fails the run here instead of propagating.
+    if (error instanceof RunBudgetRefusedError) {
+      // The refused node's thunk threw, so spend its attempts already made never reached
+      // the in-memory totals. The durable rows hold all of it.
+      try {
+        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+        // The fold sums to 0 when nothing reported cost; keep a run with no AI usage absent.
+        if (runCtx.totalCostUsd !== undefined || durable.costUsd !== 0) {
+          runCtx.totalCostUsd = durable.costUsd;
+        }
+        runCtx.totalTokens = durable.tokens;
+        runCtx.totalTokensUnknown = durable.tokensUnknown;
+      } catch (readError) {
+        getLog().error(
+          { err: readError as Error, workflowRunId: workflowRun.id },
+          'dag.run_budget_usage_refresh_failed'
+        );
+      }
+    }
     await persistRunUsage();
     try {
       await persistAuthoredOutcome();
@@ -11912,6 +12040,10 @@ export async function executeDagWorkflow(
         { err: outcomeError as Error, workflowRunId: workflowRun.id },
         'dag.authored_outcome_persist_failed_during_unwind'
       );
+    }
+    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
+      await failRunForBudget(runBudget, error.refusal);
+      return;
     }
     throw error;
   } finally {

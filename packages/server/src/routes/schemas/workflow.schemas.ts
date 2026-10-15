@@ -35,8 +35,9 @@ import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
-export const workflowDefinitionSchema =
-  engineWorkflowDefinitionSchema.openapi('WorkflowDefinition');
+export const workflowDefinitionSchema = engineWorkflowDefinitionSchema.meta({
+  id: 'WorkflowDefinition',
+});
 
 /** A workflow load error entry returned in GET /api/workflows `errors` field. */
 export const workflowLoadErrorSchema = z
@@ -51,7 +52,7 @@ export const workflowLoadErrorSchema = z
  * Workflow source — project-defined, bundled default, or home-scoped (global).
  * Precedence for same-named entries: `bundled` < `global` < `project`.
  */
-export const workflowSourceSchema = engineWorkflowSourceSchema.openapi('WorkflowSource');
+export const workflowSourceSchema = engineWorkflowSourceSchema.meta({ id: 'WorkflowSource' });
 
 /** A workflow entry in the list response, including its source. */
 export const workflowListEntrySchema = z
@@ -145,11 +146,12 @@ export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema
   .openapi('WorkflowRunOutcome');
 
 /** Persisted durable-wait cursor exposed to API clients without erasing its discriminants. */
-export const workflowWaitContextSchema =
-  engineWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
+export const workflowWaitContextSchema = engineWorkflowWaitContextSchema.meta({
+  id: 'WorkflowWaitContext',
+});
 
 /** Why a run stopped, as the engine recorded it on the run row. */
-export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
+export const runStopReasonSchema = engineRunStopReasonSchema.meta({ id: 'RunStopReason' });
 
 /**
  * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
@@ -227,8 +229,9 @@ export const workflowRunDetailSchema = z
  * envelope, with its run and node. Derived from the engine schema the store validates
  * against, so the served shape cannot drift from the persisted one.
  */
-export const providerEventRecordSchema =
-  engineProviderEventRecordSchema.openapi('ProviderEventRecord');
+export const providerEventRecordSchema = engineProviderEventRecordSchema.meta({
+  id: 'ProviderEventRecord',
+});
 
 /** GET /api/workflows/runs/:runId/provider-events query. */
 export const providerEventsQuerySchema = z
@@ -273,12 +276,12 @@ export const workflowRunActionResponseSchema = z
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
-  .object({ comment: z.string().optional() })
+  .object({ comment: z.string().optional(), expectedGate: expectedApprovalGateSchema.optional() })
   .openapi('ApproveWorkflowRunBody');
 
 /** POST /api/workflows/runs/:runId/reject request body. */
 export const rejectWorkflowRunBodySchema = z
-  .object({ reason: z.string().optional() })
+  .object({ reason: z.string().optional(), expectedGate: expectedApprovalGateSchema.optional() })
   .openapi('RejectWorkflowRunBody');
 
 /**
@@ -365,13 +368,13 @@ export const attentionQueueQuerySchema = z.object({
 export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
-    items: z.array(attentionQueueItemSchema.openapi('AttentionQueueItem')),
+    items: z.array(attentionQueueItemSchema.meta({ id: 'AttentionQueueItem' })),
   })
   .openapi('RunsNeedingAttentionResponse');
 
 /** GET /api/runs/attention response when `countBy` is given. */
 export const attentionQueueCountsResponseSchema = z
-  .object({ counts: attentionQueueCountsSchema.openapi('AttentionQueueCounts') })
+  .object({ counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }) })
   .openapi('AttentionQueueCountsResponse');
 
 /** GET /api/runs/{runId}/attention response: null when the run needs no one now. */

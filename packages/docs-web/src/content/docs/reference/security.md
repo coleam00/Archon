@@ -53,6 +53,14 @@ Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI a
 Because `bypassPermissions` grants full file and shell access, only run Archon in environments where the AI agent is trusted with the repository contents. Do not expose Archon to untrusted users without adapter-level authorization (see below).
 :::
 
+## Git directory trust
+
+Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
+
+If Git evaluates the same file more than once, for example through an include or symlinked XDG and home config files, its effective config can still list that single physical grant multiple times. Archon preserves those includes and symlinks.
+
+These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
+
 ## Tool Restrictions
 
 Workflow nodes support `allowed_tools` and `denied_tools` to restrict which tools the AI can use at each step. This is useful for creating sandboxed steps that can only read code (not modify it) or preventing specific tool usage.
@@ -156,7 +164,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 **Per-user provider credentials:**
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
-- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) carry no secrets and work without an identity on solo installs. They follow the general API authentication gate when it is enabled. Credential routes require identity even when that gate is off.
 
 ### Target repo `.env` isolation
 

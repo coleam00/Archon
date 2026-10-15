@@ -3,6 +3,8 @@ import type { ExecuteWorkflowOptions } from './executor';
 import {
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,
+  type AttentionWatch,
+  type AttentionWatchOptions,
   type IWorkflowEngine,
   type WorkflowEngineSubmitInput,
   type WorkflowResumeInput,
@@ -12,6 +14,11 @@ import {
   type WorkflowRunSubscriptionOptions,
 } from './engine-port';
 import { subscribeToRunTree } from './run-subscription';
+import {
+  watchAttentionQueue,
+  type AttentionStreamLine,
+  type AttentionWatchHost,
+} from './attention-watch';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -29,7 +36,11 @@ function rejectOptions(
 }
 
 export class InProcessWorkflowEngine implements IWorkflowEngine {
-  constructor(private readonly deps: WorkflowDeps) {}
+  /** `attention` is the host's side of `watchAttention`; engines built without it refuse to watch. */
+  constructor(
+    private readonly deps: WorkflowDeps,
+    private readonly attention?: AttentionWatchHost
+  ) {}
 
   async submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult> {
     rejectOptions(input.options, FRESH_RUN_FORBIDDEN_OPTIONS, 'submit');
@@ -103,5 +114,14 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     options?: WorkflowRunSubscriptionOptions
   ): Promise<WorkflowRunSubscription> {
     return subscribeToRunTree(this.deps.store, runId, listener, options);
+  }
+
+  watchAttention(
+    listener: (line: AttentionStreamLine) => void | Promise<void>,
+    options: AttentionWatchOptions
+  ): Promise<AttentionWatch> {
+    if (this.attention === undefined)
+      return Promise.reject(new Error('This engine was built without an attention-watch host.'));
+    return watchAttentionQueue(this.deps.store, this.attention, listener, options);
   }
 }

@@ -21,26 +21,22 @@ const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>
   Promise.resolve([])
 );
 const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
-const mockGetLiveRunOwningEnv = mock<typeof IsolationDb.getLiveRunOwningEnv>(() =>
-  Promise.resolve(null)
-);
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
   updateStatus: mockUpdateStatus,
-  getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
 }));
 
-const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [] })
-);
 const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [], baseRef: MERGED_BASE_REF })
+  Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [], baseRef: MERGED_BASE_REF })
+);
+const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+  Promise.resolve(null)
 );
 mock.module('../services/cleanup-service', () => ({
-  cleanupStaleWorktrees: mockCleanupStale,
   cleanupMergedWorktrees: mockCleanupMerged,
+  getLiveRunBlocker: mockGetLiveRunBlocker,
 }));
 
 const mockLogger = {
@@ -56,8 +52,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Import AFTER mocks
-const { listEnvironments, cleanupStaleEnvironments, cleanupMergedEnvironments } =
-  await import('./isolation-operations');
+const { listEnvironments, cleanupMergedEnvironments } = await import('./isolation-operations');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -106,8 +101,8 @@ describe('listEnvironments', () => {
     mockLstat.mockReset();
     mockLstat.mockImplementation(() => Promise.resolve());
     mockUpdateStatus.mockClear();
-    mockGetLiveRunOwningEnv.mockClear();
-    mockGetLiveRunOwningEnv.mockImplementation(() => Promise.resolve(null));
+    mockGetLiveRunBlocker.mockClear();
+    mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
   });
@@ -174,8 +169,13 @@ describe('listEnvironments', () => {
     const env = makeEnvWithAge({ id: 'env-owned', working_path: '/worktrees/gone' });
     mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
     mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockGetLiveRunOwningEnv.mockImplementation(() =>
-      Promise.resolve({ id: 'run-abcdef12', status: 'failed' })
+    mockGetLiveRunBlocker.mockImplementation(() =>
+      Promise.resolve({
+        reason: 'live_run',
+        display: 'run run-abcd is failed',
+        runId: 'run-abcdef12',
+        runStatus: 'failed',
+      })
     );
 
     const result = await listEnvironments();
@@ -234,43 +234,6 @@ describe('listEnvironments', () => {
   });
 });
 
-describe('cleanupStaleEnvironments', () => {
-  beforeEach(() => {
-    mockListAllActiveWithCodebase.mockClear();
-    mockLstat.mockReset();
-    mockCleanupStale.mockClear();
-  });
-
-  test('does not reconcile a missing container during stale cleanup', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv({ provider: 'container' })]);
-    mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockUpdateStatus.mockClear();
-    await cleanupStaleEnvironments('cb-1', '/main');
-    expect(mockLstat).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
-  });
-
-  test('reconciles ghosts then delegates to cleanupStaleWorktrees', async () => {
-    // listAllActiveWithCodebase returns envs with codebase_id matching 'cb-1'
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      {
-        ...makeActiveEnv({ codebase_id: 'cb-1' }),
-        id: 'env-1',
-        working_path: '/worktrees/feat',
-        branch_name: 'feat',
-        workflow_id: 'wf-1',
-      },
-    ]);
-    mockLstat.mockResolvedValueOnce(undefined); // not a ghost
-    mockCleanupStale.mockResolvedValueOnce({ removed: ['feat'], skipped: [] });
-
-    const result = await cleanupStaleEnvironments('cb-1', '/main');
-
-    expect(mockCleanupStale).toHaveBeenCalledWith('cb-1', '/main');
-    expect(result.removed).toEqual(['feat']);
-  });
-});
-
 describe('cleanupMergedEnvironments', () => {
   beforeEach(() => {
     mockCleanupMerged.mockClear();
@@ -280,6 +243,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat-a', 'feat-b'],
       skipped: [],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -293,6 +257,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -305,6 +270,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat'],
       skipped: [],
+      releasedFailedRuns: [],
       baseRef: MERGED_BASE_REF,
     });
 

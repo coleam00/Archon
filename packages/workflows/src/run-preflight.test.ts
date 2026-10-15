@@ -8,7 +8,7 @@ import type {
   CodexProviderDefaults,
   IAgentProvider,
 } from '@archon/providers/types';
-import type { WorkflowConfig } from './deps';
+import type { StoredProviderCredential, WorkflowConfig } from './deps';
 import type { WorkflowRun } from './schemas';
 import { makeTestResolvedWorkflow, makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
@@ -54,11 +54,9 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     }),
     async *sendQuery() {},
   };
-  const getUserProviderCredentialStatus = mock(
-    async (_userId: string, _vendor: string): Promise<CredentialStatus> => ({
-      state: 'not_connected',
-      source: 'archon',
-    })
+  const getUserProviderCredential = mock(
+    async (_userId: string, _vendor: string): Promise<StoredProviderCredential | undefined> =>
+      undefined
   );
   return {
     checkCredential,
@@ -69,7 +67,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
       store: { getCodebaseEnvVars: mock(async () => ({ DB_SETTING: 'db' })) },
       getAgentProvider: mock(() => provider),
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus,
+      getUserProviderCredential,
     },
   };
 }
@@ -141,7 +139,7 @@ describe('run credential preflight', () => {
     });
     await assertRunCredentials(deps, await prepareRunAiConfiguration(deps, workflow, '/p'));
     expect(checkCredential).not.toHaveBeenCalled();
-    expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+    expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -153,13 +151,16 @@ describe('run credential preflight', () => {
     async status => {
       const workflow = makeTestResolvedWorkflow({ name: 'ai' });
       const { deps, checkCredential } = fixture();
-      deps.getUserProviderCredentialStatus.mockResolvedValue(status);
+      deps.getUserProviderCredential.mockResolvedValue({
+        kind: 'api_key',
+        getStatus: async () => status,
+      });
       const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
       await expect(assertRunCredentials(deps, prepared)).rejects.toThrow(
         "provider 'claude' (vendor 'anthropic')"
       );
       expect(checkCredential).not.toHaveBeenCalled();
-      expect(deps.getUserProviderCredentialStatus).toHaveBeenCalledWith('origin', 'anthropic');
+      expect(deps.getUserProviderCredential).toHaveBeenCalledWith('origin', 'anthropic');
     }
   );
 
@@ -172,16 +173,16 @@ describe('run credential preflight', () => {
       ],
     });
     const { deps, checkCredential } = fixture();
-    deps.getUserProviderCredentialStatus.mockImplementation(async (_user, vendor) =>
-      vendor === 'anthropic'
-        ? { state: 'usable', source: 'archon' }
-        : { state: 'unusable', source: 'archon', evidence: 'dead' }
+    const getStatus = mock(
+      async (): Promise<CredentialStatus> => ({ state: 'usable', source: 'archon' })
     );
+    deps.getUserProviderCredential.mockImplementation(async () => ({ kind: 'api_key', getStatus }));
     await assertRunCredentials(
       deps,
       await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' })
     );
-    expect(deps.getUserProviderCredentialStatus).toHaveBeenCalledTimes(1);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(deps.getUserProviderCredential).toHaveBeenCalledTimes(1);
     expect(checkCredential).not.toHaveBeenCalled();
   });
 
@@ -222,9 +223,9 @@ describe('run credential preflight', () => {
   test('a stored connection removed after launch cannot switch to native authentication', async () => {
     const workflow = makeTestResolvedWorkflow({ name: 'ai' });
     const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
-    deps.getUserProviderCredentialStatus.mockResolvedValueOnce({
-      state: 'usable',
-      source: 'archon',
+    deps.getUserProviderCredential.mockResolvedValueOnce({
+      kind: 'api_key',
+      getStatus: async () => ({ state: 'usable', source: 'archon' }),
     });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
     await assertRunCredentials(deps, prepared);
@@ -232,6 +233,70 @@ describe('run credential preflight', () => {
       "provider 'claude' (vendor 'anthropic'): no usable login"
     );
     expect(checkCredential).not.toHaveBeenCalled();
+  });
+
+  test.each(['pi', 'claude'])(
+    'only a consumer resolves stored credential health: %s',
+    async provider => {
+      const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+      const getStatus = mock(async (): Promise<CredentialStatus> => {
+        throw new Error('vault key unavailable');
+      });
+      deps.getUserProviderCredential.mockResolvedValue({ kind: 'oauth', getStatus });
+      const prepared = await prepareRunAiConfiguration(
+        deps,
+        makeTestResolvedWorkflow({ name: 'credential-health', provider }),
+        '/p',
+        { userId: 'origin' }
+      );
+      const check = assertRunCredentials(deps, prepared);
+      if (provider === 'pi') {
+        await check;
+        expect(getStatus).not.toHaveBeenCalled();
+        expect(checkCredential).toHaveBeenCalledTimes(1);
+        expect(prepared.connectedVendors.size).toBe(0);
+      } else {
+        await expect(check).rejects.toThrow('could not verify the stored credential');
+        expect(getStatus).toHaveBeenCalledTimes(1);
+        expect(checkCredential).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  test('a Pi node cannot use a stored Claude subscription and fails preflight naming provider: claude', async () => {
+    const workflow = makeTestResolvedWorkflow({ name: 'pi', provider: 'pi' });
+    const { deps, checkCredential } = fixture({ state: 'not_connected', source: 'native' });
+    deps.getUserProviderCredential.mockResolvedValue({
+      kind: 'oauth',
+      getStatus: async () => ({ state: 'usable', source: 'archon' }),
+    });
+    const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
+    await expect(assertRunCredentials(deps, prepared)).rejects.toThrow(
+      "provider 'pi' (vendor 'anthropic'): the anthropic subscription connected in Archon runs on `provider: claude`, not on pi. Use `provider: claude`, or give pi its own anthropic API key."
+    );
+    expect(checkCredential).toHaveBeenCalledTimes(1);
+    expect(prepared.connectedVendors.has('anthropic')).toBe(false);
+  });
+
+  test('a Pi node with its own native Anthropic login runs beside a stored Claude subscription', async () => {
+    const workflow = makeTestResolvedWorkflow({
+      name: 'mixed',
+      nodes: [
+        { id: 'a', prompt: 'a', provider: 'claude' },
+        { id: 'b', prompt: 'b', provider: 'pi' },
+      ],
+    });
+    const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+    deps.getUserProviderCredential.mockResolvedValue({
+      kind: 'oauth',
+      getStatus: async () => ({ state: 'usable', source: 'archon' }),
+    });
+    const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
+    await assertRunCredentials(deps, prepared);
+    // The Claude node consumes the stored subscription; only the Pi node checks natively.
+    expect(prepared.connectedVendors.has('anthropic')).toBe(true);
+    expect(checkCredential.mock.calls.map(([r]) => r.model)).toEqual(['anthropic/sonnet']);
+    expect(deps.getUserProviderCredential).toHaveBeenCalledTimes(1);
   });
 
   test('native checks receive each model, assistant settings and effective env', async () => {
@@ -258,10 +323,9 @@ describe('run credential preflight', () => {
     const { deps, provider, checkCredential } = fixture();
     deps.loadConfig.mockResolvedValue({ ...config, assistants: { claude: {}, codex: {}, pi: {} } });
     provider.resolveCredentialModel = mock(async () => 'openai/native-model');
-    deps.getUserProviderCredentialStatus.mockResolvedValue({
-      state: 'unusable',
-      source: 'archon',
-      evidence: 'dead',
+    deps.getUserProviderCredential.mockResolvedValue({
+      kind: 'api_key',
+      getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'dead' }),
     });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/project', {
       userId: 'origin',
@@ -514,7 +578,7 @@ test('files reject stored per-user credential reads, while native credentials an
   const refused = assertRunCredentials(files, prepared);
   await expect(refused).rejects.toBeInstanceOf(FileStoreUnsupportedError);
   await expect(refused).rejects.toThrow('store: database');
-  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+  expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
   expect(checkCredential).not.toHaveBeenCalled();
   await assertRunCredentials(files, await prepareRunAiConfiguration(files, ai, '/p'));
   expect(checkCredential).toHaveBeenCalledTimes(1);
@@ -523,7 +587,7 @@ test('files reject stored per-user credential reads, while native credentials an
     files,
     await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
   );
-  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+  expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
 });
 
 test('a run needing an unset default fails in preflight before provider execution', async () => {

@@ -13,7 +13,7 @@ import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:te
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -178,6 +178,7 @@ import {
   inspectResumableRun,
   resolveProjectPaths,
   resolveScopeArtifactsDir,
+  resolveWorkflowGithubEnvironment,
 } from './executor';
 import { resolveWorkflow } from './graph-plan';
 import { keepAwake } from './utils/keep-awake';
@@ -236,6 +237,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
+      throw new Error('Unexpected hasStartReceiptForDelivery');
+    }),
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
@@ -275,6 +279,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+      Promise.resolve({ released: false })
+    ),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
@@ -342,6 +349,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
       unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),
@@ -387,7 +395,10 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
+    getUserProviderCredential: mock(async () => ({
+      kind: 'api_key' as const,
+      getStatus: async () => ({ state: 'usable' as const, source: 'archon' as const }),
+    })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,
@@ -844,6 +855,27 @@ describe('executeWorkflow', () => {
 
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a budgeted workflow whose loop the run budget cannot count before creating a run', async () => {
+    const workflow = resolveWorkflow(
+      workflowDefinitionSchema.parse({
+        name: 'budgeted-loop',
+        description: 'loop under a run budget',
+        budget: { max_work_units: 5 },
+        nodes: [{ id: 'spin', loop: { until: 'done', max_iterations: 2, prompt: 'p' } }],
+      })
+    );
+    const store = makeStore();
+
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp/ops', workflow, 'msg', {
+        conversationId: 'db-conv-1',
+      })
+    ).rejects.toThrow("node 'spin' is a loop node");
+
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -1573,7 +1605,7 @@ describe('executeWorkflow', () => {
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(sentMessage).toContain('archon-implement');
       expect(sentMessage).toContain('abc12345');
-      expect(sentMessage).toContain('2m 5s');
+      expect(sentMessage).toContain('2m5s');
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
@@ -3589,6 +3621,7 @@ describe('executeWorkflow', () => {
           completedNodeOutputs,
           fanOutSnapshots: new Map(),
           unresolvedNodeStarts: new Set<string>(),
+          budget: { workUnits: 0, spendUsd: 0 },
           tokens,
           costUsd,
         })),
@@ -3674,6 +3707,61 @@ describe('executeWorkflow', () => {
         throw new Error('Expected completed workflow result');
       }
       expect(result.summary).toBeUndefined();
+    });
+  });
+
+  describe('paused exit', () => {
+    const pausedAt = (approval: Record<string, unknown>) =>
+      makeRun({ status: 'paused', metadata: { approval } });
+    const run = (store: IWorkflowStore) =>
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      });
+
+    it('gives back the resource slot of a pause the host continues', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const result = await run(
+        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(releasePausedRunSlot.mock.calls).toEqual([
+        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
+      ]);
+    });
+
+    it('keeps the slot of a parent blocked on its child', async () => {
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const paused = pausedAt({
+        type: 'child_workflow',
+        nodeId: 'child',
+        message: '',
+        pauseId: 'p1',
+        childRunId: 'child-run',
+      });
+      await run(makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot }));
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+    });
+
+    it('still reports the pause when the release fails', async () => {
+      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
+      const result = await run(
+        makeStore({
+          getWorkflowRun: mock(async () => paused),
+          releasePausedRunSlot: mock(async () => {
+            throw new Error('database unavailable');
+          }),
+        })
+      );
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowRunId: paused.id }),
+        'workflow.paused_slot_release_failed'
+      );
     });
   });
 
@@ -3976,7 +4064,10 @@ describe('executeWorkflow', () => {
       });
       const deps: WorkflowDeps = {
         ...makeDeps(store),
-        resolveBotGitHubToken: mock(async () => 'bot-token'),
+        githubApp: {
+          resolveInstallationToken: mock(async () => 'bot-token'),
+          installCliShim: () => '/archon/bin/gh-shim',
+        },
         isPerUserGitHubEnabled: () => true,
         getUserGithubToken: mock(async () => 'user-token'),
         getUserGithubAuthor: mock(async () => ({
@@ -4033,7 +4124,7 @@ describe('executeWorkflow', () => {
       ['https://gitlab.com/acme/demo', 'inherit'],
     ] as const) {
       it(`resolves the App token for ${repositoryUrl} as ${expected}`, async () => {
-        const resolveBotGitHubToken = mock(async () => 'bot-token');
+        const resolveInstallationToken = mock(async () => 'bot-token');
         const deps: WorkflowDeps = {
           ...makeDeps(
             makeStore({
@@ -4046,7 +4137,7 @@ describe('executeWorkflow', () => {
               })),
             })
           ),
-          resolveBotGitHubToken,
+          githubApp: { resolveInstallationToken, installCliShim: () => '/archon/bin/gh-shim' },
         };
 
         const result = await executeWorkflow(
@@ -4064,20 +4155,123 @@ describe('executeWorkflow', () => {
           // A github.com remote without a resolvable owner/repo must not run on
           // whatever GitHub credential the host process happens to hold.
           expect(result.success).toBe(false);
-          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(resolveInstallationToken).not.toHaveBeenCalled();
           expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
           return;
         }
         const envVars = mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars;
         if (expected === 'token') {
-          expect(resolveBotGitHubToken).toHaveBeenCalledWith('acme', 'demo');
+          expect(resolveInstallationToken).toHaveBeenCalledWith('acme', 'demo');
           expect(envVars).toMatchObject({ GH_TOKEN: 'bot-token', GITHUB_TOKEN: 'bot-token' });
         } else {
-          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(resolveInstallationToken).not.toHaveBeenCalled();
           expect(envVars).not.toHaveProperty('GH_TOKEN');
         }
       });
     }
+
+    describe('gh shim activation', () => {
+      let previousPort: string | undefined;
+      beforeEach(() => {
+        previousPort = process.env.ARCHON_PORT;
+      });
+      afterEach(() => {
+        if (previousPort === undefined) delete process.env.ARCHON_PORT;
+        else process.env.ARCHON_PORT = previousPort;
+      });
+
+      function githubDeps(perUser?: { token: string | undefined }): Parameters<
+        typeof resolveWorkflowGithubEnvironment
+      >[0] & {
+        githubApp: { installCliShim: ReturnType<typeof mock> };
+      } {
+        return {
+          store: {
+            getCodebase: mock(async () => ({
+              id: 'codebase-1',
+              name: 'demo',
+              repository_url: 'https://github.com/acme/demo',
+              default_cwd: '/tmp',
+              kind: 'repo' as const,
+            })),
+          },
+          githubApp: {
+            resolveInstallationToken: mock(async () => 'ghs_dispatch'),
+            installCliShim: mock(() => '/archon/bin/gh-shim'),
+          },
+          isPerUserGitHubEnabled: () => perUser !== undefined,
+          getUserGithubToken: mock(async () => perUser?.token),
+        };
+      }
+
+      it.skipIf(process.platform === 'win32')(
+        'puts the shim first on PATH when ARCHON_PORT names the App server',
+        async () => {
+          process.env.ARCHON_PORT = '3090';
+          const deps = githubDeps();
+          const environment = await resolveWorkflowGithubEnvironment(
+            deps,
+            'codebase-1',
+            undefined,
+            {
+              envVars: { PATH: '/run/bin' },
+            }
+          );
+          expect(environment.envVars).toEqual({
+            GH_TOKEN: 'ghs_dispatch',
+            GITHUB_TOKEN: 'ghs_dispatch',
+            PATH: `/archon/bin/gh-shim${delimiter}/run/bin`,
+            ARCHON_PORT: '3090',
+            ARCHON_GITHUB_APP_REPO: 'acme/demo',
+          });
+          expect(environment.protectedEnvKeys).toEqual(['GH_TOKEN', 'GITHUB_TOKEN']);
+        }
+      );
+
+      it.skipIf(process.platform === 'win32')(
+        'keeps the dispatch token and warns once without ARCHON_PORT',
+        async () => {
+          delete process.env.ARCHON_PORT;
+          const deps = githubDeps();
+          mockLogFn.mockClear();
+          const environment = await resolveWorkflowGithubEnvironment(
+            deps,
+            'codebase-1',
+            undefined,
+            {}
+          );
+          expect(environment.envVars).toEqual({
+            GH_TOKEN: 'ghs_dispatch',
+            GITHUB_TOKEN: 'ghs_dispatch',
+          });
+          expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
+          const warnings = (mockLogFn.mock.calls as unknown[][]).filter(
+            call => call[1] === 'workflow.gh_token_refresh_unavailable'
+          );
+          expect(warnings).toEqual([
+            [
+              { repo: 'acme/demo', reason: 'archon_port_unset' },
+              'workflow.gh_token_refresh_unavailable',
+            ],
+          ]);
+        }
+      );
+
+      for (const [name, token, expected] of [
+        ['a per-user token', 'gho_user', 'gho_user'],
+        ['the per-user scrub', undefined, ''],
+      ] as const) {
+        it(`leaves ${name} unrefreshed`, async () => {
+          process.env.ARCHON_PORT = '3090';
+          const deps = githubDeps({ token });
+          const environment = await resolveWorkflowGithubEnvironment(deps, 'codebase-1', 'u-1', {});
+          expect(environment.envVars?.GH_TOKEN).toBe(expected);
+          expect(environment.envVars).not.toHaveProperty('PATH');
+          expect(environment.envVars).not.toHaveProperty('ARCHON_GITHUB_APP_REPO');
+          expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
+        });
+      }
+    });
 
     it('removes stale credential files before a credential refresh failure', async () => {
       const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');
@@ -4238,6 +4432,29 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('blocking message status awareness', () => {
+    it.each([
+      [500, '500ms'],
+      [1500, '1.5s'],
+      [90000, '1m30s'],
+      [119500, '2m0s'],
+    ])('shows the shared duration policy for a blocker at %s ms', async (elapsed, expected) => {
+      const now = Date.UTC(2026, 9, 15, 12);
+      const clock = spyOn(Date, 'now').mockReturnValue(now);
+      const platform = makePlatform();
+      const sendMessage = spyOn(platform, 'sendMessage').mockResolvedValue(undefined);
+      try {
+        const run = makeRun({ status: 'running', started_at: new Date(now - elapsed) });
+        const deps = makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => run) }));
+        await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+          conversationId: 'db-conv-1',
+        });
+        expect(sendMessage.mock.calls[0]?.[1]).toContain(`running ${expected},`);
+      } finally {
+        clock.mockRestore();
+        sendMessage.mockRestore();
+      }
+    });
+
     it('uses paused-specific copy when blocker is paused', async () => {
       const pausedRun = makeRun({
         id: 'paused-run-id',
@@ -5158,6 +5375,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
       })),
@@ -5182,6 +5400,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
       })),
@@ -5223,6 +5442,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5255,6 +5475,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots,
         unresolvedNodeStarts: new Set(['fan__instance-a']),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5281,6 +5502,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5329,6 +5551,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5369,6 +5592,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5403,6 +5627,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5429,6 +5654,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5458,6 +5684,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
         fanOutSnapshots: new Map(),
         unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -5997,13 +6224,16 @@ describe('credential preflight lifecycle', () => {
       const deps = makeDeps(store);
       deps.isPerUserProviderKeysEnabled = () => true;
       const getStatus = mock(
-        async (): Promise<import('@archon/provider-contract').CredentialStatus> => ({
-          state: 'unusable',
-          source: 'archon',
-          evidence: 'stored credential unreadable',
+        async (): Promise<import('./deps').StoredProviderCredential> => ({
+          kind: 'api_key',
+          getStatus: async () => ({
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'stored credential unreadable',
+          }),
         })
       );
-      deps.getUserProviderCredentialStatus = getStatus;
+      deps.getUserProviderCredential = getStatus;
       mockExecuteDagWorkflow.mockClear();
       const result = await executeWorkflow(
         deps,
@@ -6033,17 +6263,54 @@ describe('credential preflight lifecycle', () => {
     }
   );
 
+  it('a Pi-only run with its own login neither refreshes nor delivers a stored Claude subscription', async () => {
+    const deps = makeDeps(makeStore());
+    deps.isPerUserProviderKeysEnabled = () => true;
+    const storedStatus = mock(async (): Promise<never> => {
+      throw new Error('unused credential must not be refreshed');
+    });
+    deps.getUserProviderCredential = mock(
+      async () =>
+        ({
+          kind: 'oauth',
+          getStatus: storedStatus,
+        }) as const
+    );
+    deps.getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential: mock(async () => ({ state: 'usable', source: 'native' })),
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    const getUserProviderEnv = mock(async (): Promise<never> => {
+      throw new Error('delivery must not be asked for an unconsumed credential');
+    });
+    deps.getUserProviderEnv = getUserProviderEnv;
+    mockExecuteDagWorkflow.mockClear();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv',
+      '/tmp',
+      makeWorkflow({ provider: 'pi', model: 'anthropic/claude-sonnet-4-5' }),
+      'start',
+      { conversationId: 'db', userId: 'origin' },
+      {}
+    );
+    expect(result.success).toBe(true);
+    expect(storedStatus).not.toHaveBeenCalled();
+    expect(getUserProviderEnv).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
     deps.isPerUserProviderKeysEnabled = () => true;
     const { StoredCredentialDeliveryError } = await import('./run-preflight');
-    deps.getUserProviderCredentialStatus = mock(
-      async () =>
-        ({
-          state: 'usable',
-          source: 'archon',
-        }) as const
+    deps.getUserProviderCredential = mock<NonNullable<WorkflowDeps['getUserProviderCredential']>>(
+      async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({ state: 'usable', source: 'archon' }),
+      })
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
       expect(vendors).toEqual(['anthropic']);

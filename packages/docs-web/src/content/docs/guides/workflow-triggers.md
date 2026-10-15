@@ -38,6 +38,40 @@ Disable the toggle to unsubscribe this browser. Expired subscriptions are remove
 
 Archon generates VAPID keys once in `ARCHON_HOME/web-push-vapid.json`, with owner-only file permissions. Preserve that file with the install's state: replacing it invalidates existing browser subscriptions. Browser vendors carry the encrypted minimal push payload; Archon needs outbound HTTPS access to their push services.
 
+## Get notified in chat
+
+An installed chat plugin that declares the `attentionNotices` capability can post to a
+channel when a run needs attention. Add a route to `~/.archon/config.yaml`; repository
+config cannot carry routes:
+
+```yaml
+attentionNotices:
+  - platform: slack
+    destination: C0123456789
+```
+
+`destination` is passed to the plugin unchanged; its meaning, such as a channel id, belongs
+to the plugin. Restart the server after changing routes. A route whose platform has no
+installed plugin, or whose plugin lacks the capability, is logged at startup and shows as
+`misconfigured` in `/api/health`; the server still starts.
+
+Each route receives one message per approval gate or `wait: attention` pause occurrence,
+across scans and server restarts, including runs started by the CLI or triggers. The message
+carries the gate's decisions or the wait's form and options, so the plugin can offer them as
+actions. A re-ask of the same gate is a new occurrence and gets a new message. A notified run
+gets one follow-up when it finishes, in the conversation the plugin returned for its notice.
+Runs started from a chat thread whose plugin renders run events are excluded: they already
+show in that thread. Archon sends before recording delivery, so a crash can cause a duplicate.
+
+A route records pauses that are already open as a baseline instead of sending them. Until the
+route has delivered or baselined anything, it baselines again at each startup, so a pause
+that opens while the server is down is not sent for a route that has never had a pause.
+
+Actions from chat go through the plugin's allowlist, its identity resolution and the same
+authorization as every surface: the run's starter or an admin may act. A chat member acts as
+the Archon user their platform identity resolves to; link it to your existing user with
+`archon user link <id> slack:U123` to act on runs you started elsewhere.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:
@@ -158,7 +192,11 @@ The `overlap` setting controls a request that arrives while the resource is full
 - `skip` records the blocking run and retains no promise to execute later.
 - `queue` retains the prepared request in durable FIFO order.
 
-A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work. Different resources can run concurrently. Pending, running, and paused root runs continue to hold their resource; a run releases it when it completes, fails, or is cancelled.
+A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.
+
+A paused run gives back its resource only when the engine itself will continue it. Once its process stops at a time or event wait, or at an approval gate or attention wait, the run releases its slot and later work can be admitted. Its continuation takes a slot again before it executes, ahead of queued new starts, because the run never lost its admission. When the resource is full, the run stays `paused`, keeps any answer it was given, and waits for capacity: `archon workflow wake` reports it as `waiting_for_capacity`, and a continuation host retries it about once a minute. Paused runs that wait for capacity take free slots in the order they were first refused. A refused resume keeps the run's place once it is ready to continue, its wait due or signaled or its pause answered, whichever surface resumed it. A refused resume of a run that is not ready records no place, so it holds no capacity. A parent blocked on a child workflow, a container write-back, and any container run keep their slot until they continue, because no continuation host retries them. A continuation host must run for a released run to continue: `archon serve`, or [`archon workflow wake --watch`](/reference/cli/#workflow-wake). Runs paused before this behavior existed keep their slot until they continue.
+
+A run admitted on a resource holds its checkout until it completes, fails, or is cancelled, including while it is paused and has given back its slot. Admission therefore passes over a queued request that would run in a checkout another run admitted on the same resource holds: the same `in-place` directory, or the same explicit worktree `branch` in that codebase. The request keeps its place in the queue, and the free slot goes to the next request that can run. When that run ends, the request is admitted ahead of later requests for that checkout, one request per checkout at a time. A new request for a held checkout queues, or with `skip` is skipped, with the holding run as its blocker. A worktree lane without a `branch` gets its own checkout and is never held back this way. Admission does not see runs started outside this resource, such as a manual run in the same directory; a request admitted while one holds its checkout is cancelled when it starts.
 
 A drain processes untouched queued requests assigned to one host and admits them while the resource has free capacity. The server drains its own host continuously. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. Neither recovers a request that was already admitted to a run.
 
@@ -405,7 +443,7 @@ The final drain also advances queued work on ticks with no items. On CLI-only ho
 
 `--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
 
-An identical key and inputs reuse the original receipt and still drain the retained receipt's host. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
+An identical key and inputs reuse the original receipt and still drain the retained receipt's host, even if the binding's run-as user has since been removed. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
 
 ### Server host
 

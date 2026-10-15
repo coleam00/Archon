@@ -15,6 +15,28 @@ export const streamingModeSchema = z.enum(['stream', 'batch']);
 export const platformStreamingSchema = z.record(identityPlatformSchema, streamingModeSchema);
 export type PlatformStreaming = z.infer<typeof platformStreamingSchema>;
 
+/** An install-level chat route for attention notices. `destination` is opaque to Archon. */
+export const attentionNoticeRouteSchema = z.object({
+  platform: identityPlatformSchema,
+  destination: z.string().min(1),
+});
+export type AttentionNoticeRoute = z.infer<typeof attentionNoticeRouteSchema>;
+/** The id a route's ledger rows and health entry carry; a platform cannot contain ':'. */
+export function attentionNoticeRouteId(route: AttentionNoticeRoute): string {
+  return `${route.platform}:${route.destination}`;
+}
+export const attentionNoticeRoutesSchema = z
+  .array(attentionNoticeRouteSchema)
+  .superRefine((routes, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, route] of routes.entries()) {
+      const id = attentionNoticeRouteId(route);
+      if (seen.has(id))
+        ctx.addIssue({ code: 'custom', path: [index], message: `duplicate route '${id}'` });
+      seen.add(id);
+    }
+  });
+
 /**
  * Global configuration (non-secret user preferences)
  * Located at ~/.archon/config.yaml
@@ -156,21 +178,10 @@ export interface GlobalConfig {
   streaming?: PlatformStreaming;
 
   /**
-   * Directory preferences (usually not needed - defaults work well)
+   * Chat routes that receive a notice when a run needs attention, and a follow-up
+   * when it ends. Global only: repository config never carries routes.
    */
-  paths?: {
-    /**
-     * Override workspaces directory
-     * @default '~/.archon/workspaces'
-     */
-    workspaces?: string;
-
-    /**
-     * Override worktrees directory
-     * @default '~/.archon/worktrees'
-     */
-    worktrees?: string;
-  };
+  attentionNotices?: AttentionNoticeRoute[];
 
   /**
    * Concurrency limits
@@ -288,14 +299,6 @@ export interface RepoConfig {
    */
   defaults?: {
     /**
-     * Copy bundled default commands and workflows on clone
-     * Set to false to skip copying defaults
-     * @default true
-     * @deprecated Use loadDefaultCommands/loadDefaultWorkflows instead
-     */
-    copyDefaults?: boolean;
-
-    /**
      * Load app's bundled default commands at runtime
      * Set to false to only use repo-specific commands
      * @default true
@@ -330,10 +333,7 @@ export interface MergedConfig {
    */
   tiers?: RawTiersConfig;
   streaming: PlatformStreaming;
-  paths: {
-    workspaces: string;
-    worktrees: string;
-  };
+  attentionNotices: AttentionNoticeRoute[];
   concurrency: {
     maxConversations: number;
   };
@@ -347,7 +347,6 @@ export interface MergedConfig {
     autoLoad: boolean;
   };
   defaults: {
-    copyDefaults: boolean;
     loadDefaultCommands: boolean;
     loadDefaultWorkflows: boolean;
   };
@@ -395,11 +394,7 @@ export interface SafeConfig {
   concurrency: {
     maxConversations: number;
   };
-  defaults: {
-    copyDefaults: boolean;
-    loadDefaultCommands: boolean;
-    loadDefaultWorkflows: boolean;
-  };
+  defaults: MergedConfig['defaults'];
   /** Configured small/medium/large tier presets (merged repo > global). */
   tiers?: RawTiersConfig;
   /**

@@ -136,6 +136,16 @@ run events. The plugin renders progress, decisions, reactions and cost footers.
 GitHub device flow. Installing the Slack receipt replaces the bundled Slack transport
 and bridge on restart. Removing it restores the bundled adapter for this transition.
 
+The plugin declares `attentionNotices`. A route's `destination` is a channel id the bot
+has joined, or `channel:thread_ts` to post inside an existing thread. Each notice offers
+the gate's decisions or the wait's form as controls: a button per decision or option, a
+menu and Submit for a multi-select, and an answer modal for a message wait or a reply to an
+interactive loop, which needs Interactivity enabled in the Slack app. A wait without a
+`pauseId` offers Resume. A forbidden action is shown only to the member who clicked; a
+refused one, such as an answer to a pause that is no longer open, is posted in the
+notice's thread. The run's follow-up posts in that thread and, unless the plugin restarted
+since the notice, closes its controls.
+
 The package tests run `runChatConformance` against the source process with a stubbed
 Slack client. Linux CI also compiles that entry point with test-only Slack and driver
 module substitutions and runs the same suite against the binary. The unmodified release
@@ -224,7 +234,19 @@ Without a matching receipt, bundled adapters continue to work as before.
 The host enforces the descriptor's allowlist for messages and run actions before creating
 an Archon identity. Run actions require the run's starter or an admin. Run events go only
 to the plugin that owns the run's conversation, for runs executing in the server process.
-There is no webhook ingress for chat plugins.
+Attention notices go to the chat routes configured in `attentionNotices`, for runs from any
+process. There is no webhook ingress for chat plugins.
+
+A plugin that declares the `attentionNotices` capability receives `chat/attention_notice`
+for each configured route on its platform. The request carries the route's `destination`
+unchanged and a typed notice: a `gate` with its decisions, an `attention` wait with its form
+and options, or a `terminal` follow-up for a run the route was told about. Return
+`{conversationId}` when the plugin can thread the follow-up there; the terminal request then
+carries it back. Answer an `attention` notice with the `answer` run action, naming the notice's
+`nodeId` and `pauseId` and the chosen option ids. A wait without a `pauseId` paused before
+answers existed; continue it with the `resume` run action. The host refuses an answer to an
+occurrence that is no longer open, so a stale button reports the run's current state instead
+of answering a later pause.
 
 Crashes and retryable start failures restart with backoff from one to thirty seconds.
 A non-retryable start failure requires a server restart after correcting the configuration.

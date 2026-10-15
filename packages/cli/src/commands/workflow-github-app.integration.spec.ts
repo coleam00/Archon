@@ -94,7 +94,7 @@ async function run(
 }
 async function fixture(
   options: {
-    wait?: 'event' | 'timer';
+    wait?: 'event' | 'timer' | 'attention';
     fail?: boolean;
     mintFailure?: boolean;
     git?: boolean;
@@ -263,7 +263,7 @@ if (process.argv[2] === 'seed') {
         ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
         : deliveryMode === 'user'
           ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
-          : "process.env.GH_TOKEN?.startsWith('stub-installation-') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN";
+          : `process.env.GH_TOKEN === require('node:fs').readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN`;
   writeFileSync(
     join(project, '.archon/workflows/app.yaml'),
     `name: app
@@ -279,7 +279,13 @@ ${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allo
         ? `  - id: pause
     depends_on: [bash]
     wait:
-${options.wait === 'event' ? '      event: ready\n      deadline_ms: 60000' : '      duration_ms: 1000'}
+${
+  options.wait === 'attention'
+    ? '      attention: Decide\n      form: message'
+    : options.wait === 'event'
+      ? '      event: ready\n      deadline_ms: 60000'
+      : '      duration_ms: 1000'
+}
 `
         : ''
     }  - id: script
@@ -387,6 +393,29 @@ for (const mode of ['user', 'scrub', 'fallback'] as const) {
 test('wait auto-resume re-resolves through the same process provider', async () => {
   const f = await fixture({ wait: 'timer' });
   expect((await run(f, runArgs)).code).toBe(0);
+  expect(markers(f)).toBe('bash\nscript\nai\n');
+  expect(readFileSync(join(f.root, 'mint'), 'utf8')).toBe('minted\nminted\n');
+}, 30000);
+
+test('inline attention answer initializes App auth for the resumed script and AI nodes', async () => {
+  const f = await fixture({ wait: 'attention' });
+  expect((await run(f, runArgs)).code).toBe(0);
+  const paused = row(f);
+  if (!paused) throw new Error('Fixture run missing');
+  expect(paused.status).toBe('paused');
+  expect(markers(f)).toBe('bash\n');
+  const { wait } = JSON.parse(paused.metadata) as { wait: { pauseId: string } };
+  const answered = await run(f, [
+    'workflow',
+    'answer',
+    paused.id,
+    '--occurrence',
+    wait.pauseId,
+    '--text',
+    'ship it',
+  ]);
+  expect(answered.code, answered.output).toBe(0);
+  expect(row(f)?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
   expect(readFileSync(join(f.root, 'mint'), 'utf8')).toBe('minted\nminted\n');
 }, 30000);

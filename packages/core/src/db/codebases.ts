@@ -7,15 +7,14 @@ import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
-import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
 import {
-  createLogger,
-  captureCodebaseRegistered,
-  getProjectStoragePaths,
-  isPathInside,
-  resolveProjectStorageKey,
-} from '@archon/paths';
-import { getWorktreeBase, toRepoPath } from '@archon/git';
+  codebaseUpdateFields,
+  type Codebase,
+  type CreateCodebaseInput,
+  type UpdateCodebaseInput,
+} from '../schemas/codebase';
+import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
   assertAbsoluteDefaultCwd(row.default_cwd, row.name);
@@ -109,16 +108,6 @@ export async function getCodebaseCommands(
   return { ...parsed };
 }
 
-export async function registerCommand(
-  id: string,
-  name: string,
-  command: { path: string; description: string }
-): Promise<void> {
-  const commands = await getCodebaseCommands(id);
-  commands[name] = command;
-  await updateCodebaseCommands(id, commands);
-}
-
 export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
@@ -193,19 +182,11 @@ export async function updateCodebase(
   const values: (string | null)[] = [];
   let paramIndex = 1;
 
-  if (data.default_cwd !== undefined) {
-    updates.push(`default_cwd = $${paramIndex++}`);
-    values.push(data.default_cwd);
-  }
-
-  if (data.repository_url !== undefined) {
-    updates.push(`repository_url = $${paramIndex++}`);
-    values.push(data.repository_url);
-  }
-
-  if (data.default_branch !== undefined) {
-    updates.push(`default_branch = $${paramIndex++}`);
-    values.push(data.default_branch);
+  for (const field of codebaseUpdateFields) {
+    const value = data[field];
+    if (value === undefined) continue;
+    updates.push(`${field} = $${paramIndex++}`);
+    values.push(value);
   }
 
   if (updates.length === 0) return;
@@ -220,6 +201,32 @@ export async function updateCodebase(
   if ((result.rowCount ?? 0) === 0) {
     throw new CodebaseNotFoundError(target.id);
   }
+}
+
+export async function repairCodebaseRegistration(
+  id: string,
+  replacement: Pick<Codebase, 'default_cwd' | 'kind'>
+): Promise<void> {
+  const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases WHERE id = $1', [
+    id,
+  ]);
+  const current = result.rows[0];
+  if (!current) throw new CodebaseNotFoundError(id);
+  assertAbsoluteDefaultCwd(replacement.default_cwd, current.name);
+  const currentPaths = await getProjectLocations(current);
+  const replacementPaths = await getProjectLocations({ ...current, ...replacement });
+  const moved = currentPaths.findIndex((path, i) => path !== replacementPaths[i]);
+  if (moved !== -1 || currentPaths.length !== replacementPaths.length) {
+    throw new Error(
+      `Repairing "${current.name}" would move its Archon storage (worktrees, state, logs, artifacts). ` +
+        'Nothing was changed; use a replacement path and kind that keep the same storage location.'
+    );
+  }
+  const updated = await pool.query(
+    `UPDATE remote_agent_codebases SET default_cwd = $1, kind = $2, updated_at = ${getDialect().now()} WHERE id = $3`,
+    [replacement.default_cwd, replacement.kind, id]
+  );
+  if ((updated.rowCount ?? 0) === 0) throw new CodebaseNotFoundError(id);
 }
 
 export class CodebaseNameTakenError extends Error {
@@ -246,20 +253,6 @@ export class CodebaseStorageIdentityChangeError extends Error {
 }
 
 /**
- * Every Archon-managed location derived from a codebase's name. Storage and
- * worktrees are resolved by separate functions that do not always agree (the
- * worktree base also reads owner/repo from a path inside the workspaces tree),
- * so a rename must leave both unchanged.
- */
-function nameDerivedLocations(codebase: Codebase): string[] {
-  const storageRoot = getProjectStoragePaths(
-    resolveProjectStorageKey(codebase, codebase.default_cwd)
-  ).root;
-  if (codebase.kind === 'folder') return [storageRoot];
-  return [storageRoot, getWorktreeBase(toRepoPath(codebase.default_cwd), codebase.name).base];
-}
-
-/**
  * Names the transaction-scoped advisory lock that serializes codebase renames
  * on PostgreSQL. Hashed like the state-document locks, so no numeric key has to
  * be kept apart from the others by hand.
@@ -269,11 +262,8 @@ const CODEBASE_RENAME_LOCK = JSON.stringify(['codebase-rename']);
 /**
  * Change a codebase's display name.
  *
- * The name doubles as the project's storage identity (see
- * `resolveProjectStorageKey` and `getWorktreeBase`): worktrees, `$STATE_DIR`,
- * logs and artifacts of future runs live under roots derived from it. A rename
- * that would change any of them is refused rather than silently splitting the
- * project across two trees.
+ * Refuse changes to managed locations rather than splitting existing state
+ * and future runs across different roots.
  *
  * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
  * for `--project` and `/update-project`, so a duplicate is refused too. The
@@ -288,8 +278,8 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
   if (!current) throw new CodebaseNotFoundError(id);
   if (current.name === name) return current;
 
-  const currentPaths = nameDerivedLocations(current);
-  const requestedPaths = nameDerivedLocations({ ...current, name });
+  const currentPaths = await getProjectLocations(current);
+  const requestedPaths = await getProjectLocations({ ...current, name });
   const moved = currentPaths.findIndex((path, i) => path !== requestedPaths[i]);
   if (moved !== -1) {
     throw new CodebaseStorageIdentityChangeError(

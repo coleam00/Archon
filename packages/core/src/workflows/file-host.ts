@@ -18,13 +18,15 @@ import {
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
-import { codebaseRowSchema, type Codebase } from '../schemas/codebase';
+import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { createWorkflowDeps } from './store-adapter';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
+import { runOwnerLossWatch } from '../services/run-attention-watch';
+import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
@@ -136,7 +138,12 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         return codebaseRowSchema.parse(row);
       },
       updateCodebase: (target, input) =>
-        updateCodebase(target.id, row => Object.assign(row, input)),
+        updateCodebase(target.id, row => {
+          for (const field of codebaseUpdateFields) {
+            const value = input[field];
+            if (value !== undefined) Object.assign(row, { [field]: value });
+          }
+        }),
       getCodebaseCommands: async id => (await records.codebases.getCodebase(id))?.commands ?? {},
       updateCodebaseCommands: (id, commands) =>
         updateCodebase(id, row => {
@@ -254,7 +261,10 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   return {
     records,
     deps,
-    engine: new InProcessWorkflowEngine(deps),
+    engine: new InProcessWorkflowEngine(deps, {
+      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+      ownerLoss: runOwnerLossWatch(store),
+    }),
     operations: createWorkflowOperations({
       store,
       hostStore: records,
