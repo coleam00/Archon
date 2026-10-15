@@ -45,6 +45,7 @@ import {
   hardChecks,
   loadSet,
   prepareCase,
+  type ReviewItem,
   runCost,
   validateJudgement,
 } from '../../workflows/sdlc/review-eval/scripts/bench';
@@ -349,7 +350,7 @@ describe('hard checks decide whether a sample counts', () => {
     };
   }
 
-  const item = { lenses: ['code', 'simplify'], findings: true };
+  const item: ReviewItem = { lenses: ['code', 'simplify'], findingsProblem: null };
   const judge = (detail: RunDetail, output = item) => hardChecks(detail, resolved, output, { base_branch: 'dev' });
 
   it('pass a completed run on the version it names', () => {
@@ -384,7 +385,7 @@ describe('hard checks decide whether a sample counts', () => {
   });
 
   it('fail a completed run that left no review output', () => {
-    const verdict = judge(run(), { lenses: [], findings: false });
+    const verdict = judge(run(), { lenses: [], findingsProblem: 'the run left no review/findings.json' });
     expect(verdict.passed).toBe(false);
     expect(verdict.checks.output.problems).toEqual([
       'the run left no lens file',
@@ -456,12 +457,13 @@ describe('collectItem', () => {
     );
   });
 
-  it('names lens files, not the review\'s own files, and sees findings.json', () => {
+  it('names lens files, not the review\'s own files, and reads findings.json', () => {
     const root = track(mkdtempSync(join(tmpdir(), 'archon-bench-item-')));
     const artifacts = getRunArtifactsDirForRoot(root, 'r1');
-    for (const file of ['code.md', 'scope.md', 'report.md', 'discoveries.md', 'code-round-1.md', 'findings.json']) {
+    for (const file of ['code.md', 'scope.md', 'report.md', 'discoveries.md', 'code-round-1.md']) {
       write(artifacts, `review/${file}`, 'x');
     }
+    write(artifacts, 'review/findings.json', '[]');
     write(artifacts, 'shape.md', 'x');
     const detail: RunDetail = {
       id: 'r1',
@@ -474,7 +476,7 @@ describe('collectItem', () => {
       nodes: [],
     };
     const itemDir = join(root, 'item');
-    expect(collectItem(detail, itemDir)).toEqual({ lenses: ['code', 'simplify'], findings: true });
+    expect(collectItem(detail, itemDir)).toEqual({ lenses: ['code', 'simplify'], findingsProblem: null });
     expect(existsSync(join(itemDir, 'review', 'code-round-1.md'))).toBe(true);
     expect(existsSync(join(itemDir, 'shape.md'))).toBe(true);
   });
@@ -530,6 +532,20 @@ describe('judgement validation', () => {
       valid: false,
       reason: 'shape_unmatched is not a count',
     });
+  });
+
+  it("accepts the judge fixture's output, whose fields are exactly the judge schema's", () => {
+    const dir = join(import.meta.dir, '../../workflows/sdlc/review-eval-judge');
+    const workflow = Bun.YAML.parse(readFileSync(join(dir, 'archon-review-eval-judge.yaml'), 'utf8')) as {
+      nodes: { id: string; output_format?: { properties: { defects: { items: { properties: object; required: string[] } } } } }[];
+    };
+    const schema = workflow.nodes.find(node => node.id === 'judge')?.output_format?.properties.defects.items;
+    const stub = Bun.YAML.parse(readFileSync(join(dir, 'fixtures/judge.stubs.yaml'), 'utf8')) as { judge: unknown };
+    const judgement = validateJudgement(stub.judge, { ...item, known_defects: [] }, findings);
+    if (!judgement.valid) throw new Error(judgement.reason);
+    const fields = Object.keys(judgement.defects[0]).sort();
+    expect(Object.keys(schema?.properties ?? {}).sort()).toEqual(fields);
+    expect([...(schema?.required ?? [])].sort()).toEqual(fields);
   });
 });
 
@@ -789,6 +805,24 @@ describe('bench run', () => {
     expect(judged.sort()).toEqual(['run-1 by run-2', 'run-1 by run-5', 'run-3 by run-4', 'run-3 by run-6']);
     expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([marked, finding]);
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
+  });
+
+  it('heads the page FAILED and judges nothing when a sample fails a hard check', () => {
+    const unreadable = (root: string) => {
+      const detail = passing(root);
+      write(getRunArtifactsDirForRoot(root, 'run-1'), 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', claim: 'No sources.', status: 'open' }]));
+      return detail;
+    };
+    const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, unreadable);
+    run('--variant', 'v1');
+    expect(existsSync(join(cli, 'argv-2.json'))).toBe(false);
+
+    const batch = join(out, 'batches', 'counting');
+    const page = readFileSync(join(batch, 'page.md'), 'utf8');
+    expect(page.startsWith('FAILED: 1 sample(s) failed a hard check')).toBe(true);
+    expect(page).toContain('`v #1` v1 (run run-1): output: review/findings.json does not read:');
+    expect(page).toContain('| Judgement | not judged: hard checks failed |');
+    expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toEqual([]);
   });
 
   it('records a judgement that credits a lens with no output as invalid, and leaves nothing to mark', () => {

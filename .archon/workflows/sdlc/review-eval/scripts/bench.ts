@@ -475,7 +475,7 @@ export interface HardChecks {
 
 /**
  * Whether a finished sample counts: the run completed with no failed node, every lens
- * the route selected left its file, the review left its `findings.json`, the run diffed
+ * the route selected left its file, the review left a readable `findings.json`, the run diffed
  * against the case's base branch (the rest of the seal is checked before launch), and
  * every lens ran on the version's tiers.
  */
@@ -494,7 +494,7 @@ export function hardChecks(
       output.push(`lens ${lens} ran but left no ${lensFile(lens)}`);
     }
   }
-  if (!item.findings) output.push(`the run left no ${FINDINGS_FILE}`);
+  if (item.findingsProblem !== null) output.push(item.findingsProblem);
   const checks = {
     completed: check(completedProblems(run)),
     output: check(output),
@@ -506,8 +506,8 @@ export function hardChecks(
 
 export interface ReviewItem {
   readonly lenses: readonly string[];
-  /** Whether the review wrote its machine-readable `review/findings.json`. */
-  readonly findings: boolean;
+  /** What is wrong with the review's machine-readable `review/findings.json`, or null when it reads. */
+  readonly findingsProblem: string | null;
 }
 
 /**
@@ -528,7 +528,17 @@ export function collectItem(run: RunDetail, itemDir: string): ReviewItem {
     cpSync(join(artifacts, shape), join(itemDir, shape));
     lenses.push('simplify');
   }
-  return { lenses: lenses.sort(), findings: existsSync(join(itemDir, FINDINGS_FILE)) };
+  return { lenses: lenses.sort(), findingsProblem: findingsProblem(itemDir) };
+}
+
+function findingsProblem(itemDir: string): string | null {
+  if (!existsSync(join(itemDir, FINDINGS_FILE))) return `the run left no ${FINDINGS_FILE}`;
+  try {
+    readFindings(itemDir);
+    return null;
+  } catch (error) {
+    return `${FINDINGS_FILE} does not read: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
@@ -872,7 +882,8 @@ function batchSamples(outDir: string, caseId: string, spec: string): BatchSample
     .map(line => {
       const itemDir = line.item === null ? null : join(outDir, line.item);
       const item = itemDir !== null && existsSync(join(itemDir, ITEM_FILE)) ? readItem(itemDir) : null;
-      const findings = itemDir !== null && existsSync(join(itemDir, FINDINGS_FILE)) ? readFindings(itemDir) : [];
+      // Only a passed sample is judged, and passing proved its findings read.
+      const findings = itemDir !== null && line.passed ? readFindings(itemDir) : [];
       const recorded = judgements.get(line.run_id);
       // A recorded valid judgement is checked again against the item it judged.
       const judgement =
@@ -1057,9 +1068,9 @@ export function writeBatch(outDir: string, caseId: string, judge: string): void 
   const dir = join(outDir, 'batches', caseId);
   mkdirSync(dir, { recursive: true });
   const samples = batchSamples(outDir, caseId, judge);
+  writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
   const marks = join(dir, 'marks.yaml');
   const merged = mergeMarks(marks, markEntries(samples));
-  writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
   writeFileSync(marks, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
 }
