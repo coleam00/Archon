@@ -118,8 +118,9 @@ nodes:
             # checks against this PR's remote head before publishing.
             scope: "$pr.output"
             # A later round reviews only the delta since the previous round's
-            # published report: the same lenses after review findings, the general
-            # code reviewer alone after a CI fix.
+            # published report: the previous round's lenses, plus any the delta
+            # needs, after review findings; the general code reviewer alone after a
+            # CI fix.
             prior_report: "$LOOP_PREV.round.output.prior_report"
             light: "$LOOP_PREV.round.output.light_review"
             work_order: "$INPUTS.work"

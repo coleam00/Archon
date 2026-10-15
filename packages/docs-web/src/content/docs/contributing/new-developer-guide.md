@@ -306,7 +306,7 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 
 ## Parallel Agents: The PR Review Example
 
-On a first round, a quick route agent picks which specialist lenses the change earns, and `archon-review` runs them in fresh sessions as shown below. The code lens uses the configured `large` model tier.
+A quick route agent picks which specialist lenses the change earns, and `archon-review` runs them in fresh sessions as shown below. The code lens uses the configured `large` model tier.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐

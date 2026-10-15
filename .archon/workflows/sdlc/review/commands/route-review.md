@@ -10,6 +10,12 @@ one watches this run; your structured answer is all the next nodes read.
 - The work order (may be empty for a standalone review): $INPUTS.work_order. When it
   names a file such as `$ARTIFACTS_DIR/plan.md`, read that file's summary and steps,
   not the whole repository.
+- The previous round's reviewed commit, `$mode.output.cursor` (empty on a first
+  round), and the commit under review, `$mode.output.head` (a two-dot
+  `git diff --stat <reviewed>..<head>` covers what lies between them). When the
+  reviewed commit is not empty, this round continues an earlier review: judge only
+  that correction delta and the hunks you need. The lenses the previous round ran
+  review the delta whatever you answer; answer for what the delta itself needs.
 
 Lenses:
 
@@ -33,4 +39,6 @@ tweak — rarely earns errors or docs. Depth follows what a change can break, no
 size: do not economize on real risk, and do not invent it.
 
 Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`) and
-`reason`: one or two sentences citing what in the diff decided it.
+`reason`: one or two sentences citing what in the diff decided it. If you cannot read
+the diff, select every lens and say so in `reason`; never answer that no lens runs
+because a command failed.
