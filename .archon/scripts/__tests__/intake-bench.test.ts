@@ -540,19 +540,44 @@ describe('bench run', () => {
     expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
   });
 
+  it('flags a lookup of the judged issue that the server answered live, beside one it answered at creation', () => {
+    const { run, cli } = bench({ lookupIssue: 11, lookupLiteral: true });
+    const { lines } = run('base');
+    const triaged = lines.find(line => line.row === '11');
+    const n = Number(triaged?.run_id?.slice('run-'.length));
+    expect(JSON.parse(readFileSync(join(cli, `lookup-literal-run-${String(n)}.json`), 'utf8'))).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
+    expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
+    expect(triaged?.leak).toEqual(['lookup server: POST /graphql was answered live']);
+  });
+
   it('records the merged pull requests on the base that reference the row issue', () => {
-    const { run, repo, cli } = bench();
+    const { runWith, repo, cli } = bench();
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the base');
     const refs = [
-      { url: 'https://github.com/o/r/pull/30', merged: true, oid: ok(repo, 'rev-parse', 'HEAD') },
-      { url: 'https://github.com/o/r/pull/31', merged: true, oid: 'f'.repeat(40) },
+      { url: 'https://github.com/o/r/pull/30', merged: true, oid: ok(repo, 'rev-parse', 'HEAD~1') },
+      { url: 'https://github.com/o/r/pull/31', merged: true, oid: ok(repo, 'rev-parse', 'HEAD') },
       { url: 'https://github.com/o/r/pull/32', merged: false, oid: null },
     ];
     writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
-    const { status, lines } = run('base');
+    const { status, lines } = runWith(['--base', 'HEAD~1'], 'base');
     expect(status).toBe(0);
     expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30']);
     expect(lines.find(line => line.row === '12-outside')?.merged_on_base).toEqual([]);
+  });
+
+  it('does not run a row whose merged base PRs git cannot place, and runs the rest', () => {
+    const { run, cli } = bench();
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    const refs = [{ url: 'https://github.com/o/r/pull/31', merged: true, oid: 'f'.repeat(40) }];
+    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
+    const { status, lines, checks } = run('base');
+    expect(status).toBe(1);
+    const unread = lines.find(line => line.row === '11');
+    expect([unread?.run_id, unread?.status, unread?.passed]).toEqual([null, 'not_started', false]);
+    expect(unread?.problems).toEqual([expect.stringContaining('github.com/o/r#11: is https://github.com/o/r/pull/31 on the base? git merge-base failed')]);
+    expect(lines.find(line => line.row === '12-outside')?.status).toBe('completed');
+    expect(checks[0].checks.finished.ok).toBe(false);
   });
 
   it('fails the batch when a trust: outside row runs an agent node', () => {
@@ -579,7 +604,7 @@ describe('hard checks', () => {
   });
 
   it('fail the batch on a posted comment', () => {
-    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '', views: new Map(), mergedOnBase: new Map() } as const;
+    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '', views: new Map(), unread: new Map(), mergedOnBase: new Map() } as const;
     const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted']);
     expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted'] }]);
   });
@@ -711,7 +736,15 @@ describe('leaks', () => {
       event({ type: 'tool_call', toolCallId: 'a', name: 'Bash', rawInput: { command: heredoc } }),
       event({ type: 'tool_call', toolCallId: 'b', name: 'Bash', rawInput: { command: `gh issue view 4 > /tmp/i && ${heredoc}` } }),
     ].join('\n');
-    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(['triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md \ncat /runs/1/triage.md']);
+    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(["triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md <<'EOF'\ncat /runs/1/triage.md"]);
+  });
+  it('flag a here-document that a command runs, and a lookup after a here-string', () => {
+    const event = (id: string, command: string) => JSON.stringify({ type: 'provider_event', step: 'triage', event: { type: 'tool_call', toolCallId: id, name: 'Bash', rawInput: { command } } });
+    const python = "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['gh', 'api', 'repos/o/r/issues/4'])\nEOF";
+    const piped = 'cat <<EOF | bash\ngh issue view 4\nEOF';
+    const herestring = 'cat <<< done\ngh issue view 4\nEOF';
+    const transcript = [event('a', python), event('b', piped), event('c', herestring)].join('\n');
+    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual([`triage: ${python}`, `triage: ${piped}`, `triage: ${herestring}`]);
   });
 });
 
@@ -805,8 +838,28 @@ describe('lookups', () => {
 
   it('count a gh lookup as answered only when the run reached the server, and a fetch never', () => {
     const lookups = ['triage: gh issue view 4 --repo o/r', 'triage: gh api repos/o/r/issues/4/events', 'triage: https://github.com/o/r/issues/4'];
-    expect(splitLookups(lookups, true)).toEqual({ answered: lookups.slice(0, 2), leak: lookups.slice(2) });
-    expect(splitLookups(lookups, false)).toEqual({ answered: [], leak: lookups });
+    expect(splitLookups(lookups, true, [])).toEqual({ answered: lookups.slice(0, 2), leak: lookups.slice(2) });
+    expect(splitLookups(lookups, false, [])).toEqual({ answered: [], leak: lookups });
+    expect(splitLookups(lookups.slice(0, 1), true, ['POST /graphql'])).toEqual({ answered: lookups.slice(0, 1), leak: ['lookup server: POST /graphql was answered live'] });
+  });
+
+  it('report a request that names a batch issue but is answered live', async () => {
+    const upstream = async (_url: string, init: RequestInit): Promise<Response> => {
+      const asked = JSON.parse(String(init.body)) as { variables?: unknown };
+      const issue = asked.variables === undefined ? { state: 'CLOSED' } : { id: 'I_4', number: 4, state: 'CLOSED' };
+      return Response.json({ data: { repository: { issue } } });
+    };
+    const graphql = (body: unknown) => new Request('http://api.github.com/graphql', { method: 'POST', headers: { host: 'api.github.com' }, body: JSON.stringify(body) });
+    const scoped = await answerLookup(graphql({ query: 'query($owner: String!, $repo: String!, $number: Int!) { x }', variables: { owner: 'o', repo: 'r', number: 4 } }), REPO, views, upstream);
+    expect([scoped.answered, scoped.live]).toEqual([[4], []]);
+    const literal = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { state } } }' }), REPO, views, upstream);
+    expect([await literal.response.json(), literal.answered, literal.live]).toEqual([{ data: { repository: { issue: { state: 'CLOSED' } } } }, [], [4]]);
+    const rest = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/reactions'), REPO, views, async () => Response.json([{ content: '+1' }]));
+    expect([rest.answered, rest.live]).toEqual([[], [4]]);
+    const refused = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { projectItems { id } } } }' }), REPO, views, async () =>
+      Response.json({ errors: [{ type: 'INSUFFICIENT_SCOPES' }] })
+    );
+    expect([refused.answered, refused.live]).toEqual([[], []]);
   });
 });
 

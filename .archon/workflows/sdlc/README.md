@@ -381,8 +381,11 @@ are the operator's and stay outside the pack and the repository.
   (gh's `http_unix_socket`, set in a throwaway `GH_CONFIG_DIR`). It answers a batch
   issue as it was at creation: its pinned title and body, the labels its author set
   at creation, no comments, open. A batch issue's comments, events and timeline
-  answer as empty; anything else answers as live. Each line also records the merged
-  pull requests on the base that reference the row's issue.
+  answer as empty; anything else answers as live. A request that names a batch
+  issue by its REST path or a GraphQL `number` but that the server answered live is a
+  leak. Each line also records the merged pull requests on the base that reference
+  the row's issue; a row whose issue or those pull requests cannot be read does not
+  run, and its line says why.
 - **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no

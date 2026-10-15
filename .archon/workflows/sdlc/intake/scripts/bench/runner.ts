@@ -461,7 +461,11 @@ export function readBatchIssue(repo: Repo, row: Row, repoRoot: string, base: str
     const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;
     if (!isObject(pr) || pr.merged !== true || typeof pr.url !== 'string' || !isObject(pr.mergeCommit)) continue;
     const oid = pr.mergeCommit.oid;
-    if (typeof oid === 'string' && git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base).code === 0) merged.add(pr.url);
+    if (typeof oid !== 'string') continue;
+    // 1 is "not an ancestor"; anything else (an unfetched merge commit, a bad base) leaves the answer unknown.
+    const ancestry = git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base);
+    if (ancestry.code !== 0 && ancestry.code !== 1) throw new Error(`${where}: is ${pr.url} on the base? git merge-base failed: ${ancestry.stderr}`);
+    if (ancestry.code === 0) merged.add(pr.url);
   }
   return {
     view: {
@@ -579,8 +583,16 @@ export function issueTokens(repo: Repo, number: number): RegExp[] {
   ];
 }
 
-/** A shell command without its here-documents' bodies, which are text a command writes, not runs. */
-function withoutHeredocs(command: string): string {
+const HEREDOC = /(?<!<)<<(?!<)-?[ \t]*['"\\]*([A-Za-z_]\w*)['"\\]*/;
+/** `cat > file`, `cat <<EOF > file` or `tee file`, once the here-document operator is cut out. */
+const WRITES_FILE = /^(?:cat\s*>>?\s*[^\s;&|<>]+|tee(?:\s+-a)?\s+[^\s;&|<>]+(?:\s*>\s*\/dev\/null)?)$/;
+
+/**
+ * A shell command without the bodies of here-documents it writes to a file: text a
+ * command writes, not runs. A body fed to any other command, such as `python3 -` or
+ * `bash`, may run a lookup and is kept.
+ */
+function withoutWrittenHeredocs(command: string): string {
   const kept: string[] = [];
   let terminator: string | undefined;
   for (const line of command.split('\n')) {
@@ -588,9 +600,13 @@ function withoutHeredocs(command: string): string {
       if (line.trim() === terminator) terminator = undefined;
       continue;
     }
-    const opened = /<<-?[ \t]*['"\\]*([A-Za-z_]\w*)['"\\]*/.exec(line);
-    if (opened !== null) terminator = opened[1];
-    kept.push(opened === null ? line : line.slice(0, opened.index) + line.slice(opened.index + opened[0].length));
+    const opened = HEREDOC.exec(line);
+    if (opened !== null) {
+      const segment = line.slice(0, opened.index).split(/&&|\|\||[;|(]/).pop() ?? '';
+      const writer = `${segment} ${line.slice(opened.index + opened[0].length)}`.trim().replace(/\s+/g, ' ');
+      if (WRITES_FILE.test(writer)) terminator = opened[1];
+    }
+    kept.push(line);
   }
   return kept.join('\n');
 }
@@ -600,16 +616,16 @@ function withoutHeredocs(command: string): string {
  * the query it searched. A tool call carries these as its input; Codex records a
  * shell command it runs through unified exec as a `command_execution` subtask, whose
  * start and end both name it. A file write is no lookup, though the report it writes
- * may cite the issue, and neither is a here-document a shell command writes it with.
+ * may cite the issue, and neither is a here-document a shell command writes it to.
  */
 function lookupOf(event: Record<string, unknown>): { id: string; text: string } | undefined {
   if (event.type === 'tool_call' && isObject(event.rawInput)) {
     const { command, url, query } = event.rawInput;
-    const text = [typeof command === 'string' ? withoutHeredocs(command) : command, url, query].filter(value => typeof value === 'string').join('\n');
+    const text = [typeof command === 'string' ? withoutWrittenHeredocs(command) : command, url, query].filter(value => typeof value === 'string').join('\n');
     return text === '' ? undefined : { id: String(event.toolCallId), text };
   }
   if (event.type === 'subtask' && event.taskType === 'command_execution' && typeof event.description === 'string') {
-    return { id: String(event.taskId), text: withoutHeredocs(event.description) };
+    return { id: String(event.taskId), text: withoutWrittenHeredocs(event.description) };
   }
   return undefined;
 }
@@ -639,13 +655,19 @@ const GH_LOOKUP = /\bgh\s+(?:issue\s+view|api)\b/;
  * covered and the leaks. A `gh issue view` or `gh api` lookup is covered when the
  * run's lookup server answered the row's issue at creation at least once; a URL
  * fetch, curl or search never is. The server cannot tell which of the run's gh calls
- * a request came from, so in an intake run, whose own facts read goes through it
- * too, the check proves the run's gh reached the server, not each call. A shell line
- * that both runs gh and curls the issue counts as covered.
+ * a request came from, so it reports each request that named the issue and went out
+ * live itself, and each is a leak whatever the transcript shows.
  */
-export function splitLookups(lookups: readonly string[], answeredRowIssue: boolean): { answered: string[]; leak: string[] } {
+export function splitLookups(
+  lookups: readonly string[],
+  answeredRowIssue: boolean,
+  answeredLive: readonly string[]
+): { answered: string[]; leak: string[] } {
   const answered = answeredRowIssue ? lookups.filter(lookup => GH_LOOKUP.test(lookup)) : [];
-  return { answered, leak: lookups.filter(lookup => !answered.includes(lookup)) };
+  return {
+    answered,
+    leak: [...lookups.filter(lookup => !answered.includes(lookup)), ...answeredLive.map(request => `lookup server: ${request} was answered live`)],
+  };
 }
 
 const nonEmpty = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
@@ -715,6 +737,8 @@ export interface BatchContext {
   readonly outDir: string;
   /** Each batch issue as it was at creation, by number: what an eval run's lookups answer with. */
   readonly views: ReadonlyMap<number, CreationView>;
+  /** Why a batch issue could not be read, by number; its rows do not run. */
+  readonly unread: ReadonlyMap<number, string>;
   /** Merged pull requests on the base that reference each row's issue, by row id. */
   readonly mergedOnBase: ReadonlyMap<string, readonly string[]>;
 }
@@ -769,6 +793,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   let decided: { path: IntakePath | null; verdict: Verdict | null } = { path: null, verdict: null };
   let lookups: LookupServer | undefined;
   try {
+    const unread = context.unread.get(row.number);
+    if (unread !== undefined) throw new Error(unread);
     // Live runs judge scratch copies, which hold no outcome to hide.
     if (run.live === undefined) lookups = serveLookups(context.set.repo, context.views);
     runId = await launch({
@@ -827,7 +853,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   } catch (error) {
     fail(error);
   }
-  const { answered, leak } = splitLookups(lookedUp, (lookups?.answered(row.number) ?? 0) > 0);
+  const { answered, leak } = splitLookups(lookedUp, (lookups?.answered(row.number) ?? 0) > 0, lookups?.answeredLive(row.number) ?? []);
   const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
 
   const line: Line = {
@@ -962,8 +988,14 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const { set, rows, outDir, live } = options;
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
   const issues = new Map<number, BatchIssue>();
+  const unread = new Map<number, string>();
   for (const row of rows) {
-    if (!issues.has(row.number)) issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));
+    if (issues.has(row.number) || unread.has(row.number)) continue;
+    try {
+      issues.set(row.number, readBatchIssue(set.repo, row, options.repoRoot, options.base));
+    } catch (error) {
+      unread.set(row.number, error instanceof Error ? error.message : String(error));
+    }
   }
   const context: BatchContext = {
     set,
@@ -972,6 +1004,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
     base: options.base,
     outDir,
     views: new Map([...issues].map(([number, issue]) => [number, issue.view])),
+    unread,
     mergedOnBase: new Map(rows.map(row => [row.id, issues.get(row.number)?.merged_on_base ?? []])),
   };
   const runs = options.versions.map(({ resolved, checkout }) =>

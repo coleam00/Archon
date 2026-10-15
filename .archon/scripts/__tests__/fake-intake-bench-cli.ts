@@ -13,8 +13,10 @@
  *
  * A run whose launch named a `GH_CONFIG_DIR` acts as an agent that looks an issue up:
  * on `workflow wait` it sends gh's `issue view` query to that directory's
- * `http_unix_socket` and keeps the answer in `lookup-run-<n>.json`. Upstream of that
- * socket, `fetch` to the tracker answers each issue as it is now.
+ * `http_unix_socket` and keeps the answer in `lookup-run-<n>.json`; with
+ * `lookupLiteral` it then asks for the issue's state with a literal GraphQL query, as
+ * `gh api graphql` would, and keeps that answer in `lookup-literal-run-<n>.json`.
+ * Upstream of that socket, `fetch` to the tracker answers each issue as it is now.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -66,6 +68,8 @@ export interface FakeConfig {
   readonly searches?: Record<string, number[]>;
   /** Every run's agent runs `gh issue view` on this issue. */
   readonly lookupIssue?: number;
+  /** After that lookup, the agent asks for the issue's state with literals only. */
+  readonly lookupLiteral?: true;
 }
 
 const verdict = {
@@ -152,6 +156,14 @@ async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<v
     }),
   });
   writeFileSync(join(dir, `lookup-${runId}.json`), await response.text());
+  if (config.lookupLiteral !== true) return;
+  const literal = await fetch('http://api.github.com/graphql', {
+    unix: settings.http_unix_socket,
+    method: 'POST',
+    headers: { host: 'api.github.com', 'content-type': 'application/json' },
+    body: JSON.stringify({ query: `{ repository(owner: "${owner}", name: "${repo}") { issue(number: ${String(config.lookupIssue)}) { state } } }` }),
+  });
+  writeFileSync(join(dir, `lookup-literal-${runId}.json`), await literal.text());
 }
 
 /** The tracker as it is now, as the lookup server forwards to it. */
@@ -175,7 +187,10 @@ function upstream(dir: string, url: string, body: string | undefined): Response 
   };
   const { pathname } = new URL(url);
   if (pathname === '/graphql') {
-    const request = JSON.parse(body ?? '{}') as { variables?: { number?: number } };
+    const request = JSON.parse(body ?? '{}') as { query: string; variables?: { number?: number } };
+    // A query with literals gets only the field it asks for, as the tracker answers it.
+    const literal = /number: (\d+)\) \{ state \}/.exec(request.query);
+    if (literal !== null) return Response.json({ data: { repository: { issue: { state: now(Number(literal[1]))?.state ?? null } } } });
     return Response.json({ data: { repository: { issue: now(Number(request.variables?.number)) ?? null } } });
   }
   const rest = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(pathname);

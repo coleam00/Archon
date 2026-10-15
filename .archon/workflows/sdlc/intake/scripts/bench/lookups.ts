@@ -14,8 +14,11 @@
  *
  * A batch issue is recognised by machine identifiers only: its GraphQL node id or web
  * URL anywhere in an answer, and, for a GraphQL request whose variables name the set's
- * repository, its number. A raw GraphQL query with literals that asks for none of
- * those passes live; so does a lookup outside `gh`, which the transcript scan reports.
+ * repository, its number. A request that names a batch issue by its REST path or a
+ * GraphQL `number`, but whose answer the server could not rewrite, is answered live and
+ * recorded, so the run's line reports it as a leak. A request that names the issue in
+ * no such way, such as a text search, passes live unrecorded; so does a lookup outside
+ * `gh`, which the transcript scan reports.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -166,23 +169,54 @@ function scopeOf(body: string | undefined, repo: Repo): LookupScope {
   return repoScoped && typeof variables.number === 'number' ? { repoScoped, forcedNumber: variables.number } : { repoScoped };
 }
 
+/**
+ * The batch issues a request names by machine identifier: an issue path under the set's
+ * repository, or a GraphQL `number` variable or literal. A literal `number` of another
+ * repository's object also matches; that errs toward reporting.
+ */
+function namedIssues(path: string, body: string | undefined, repo: Repo, views: ReadonlyMap<number, CreationView>): number[] {
+  const named = new Set<number>();
+  const rest = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/.exec(path);
+  if (rest !== null && sameText(rest[1], repo.path)) named.add(Number(rest[2]));
+  if (path.endsWith('/graphql') && body !== undefined) {
+    let request: unknown;
+    try {
+      request = JSON.parse(body);
+    } catch {
+      request = undefined;
+    }
+    if (isObject(request) && isObject(request.variables) && typeof request.variables.number === 'number') named.add(request.variables.number);
+    const query = isObject(request) && typeof request.query === 'string' ? request.query : body;
+    for (const literal of query.matchAll(/\bnumber\s*:\s*(\d+)/g)) named.add(Number(literal[1]));
+  }
+  return [...named].filter(number => views.has(number));
+}
+
 const DROPPED_REQUEST_HEADERS = ['host', 'accept-encoding', 'connection', 'content-length'];
 const DROPPED_RESPONSE_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding'];
 
-/** Answer one request a run's `gh` sent, and the batch issue numbers the answer covered. */
+export interface Answer {
+  readonly response: Response;
+  /** Batch issues the answer gave as they were at creation. */
+  readonly answered: number[];
+  /** Batch issues the request named that the answer gave as they are now. */
+  readonly live: number[];
+}
+
+/** Answer one request a run's `gh` sent. */
 export async function answerLookup(
   request: Request,
   repo: Repo,
   views: ReadonlyMap<number, CreationView>,
   upstream: (url: string, init: RequestInit) => Promise<Response>
-): Promise<{ response: Response; answered: number[] }> {
+): Promise<Answer> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/v3(?=\/)/, '');
   const history = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/(comments|events|timeline|labels)$/.exec(path);
   const local = history !== null && sameText(history[1], repo.path) ? views.get(Number(history[2])) : undefined;
   if (request.method === 'GET' && local !== undefined && history !== null) {
     const answer = history[3] === 'labels' ? local.labels.map(name => ({ name })) : [];
-    return { response: Response.json(answer), answered: [local.number] };
+    return { response: Response.json(answer), answered: [local.number], live: [] };
   }
 
   const host = request.headers.get('host') ?? url.host;
@@ -194,7 +228,9 @@ export async function answerLookup(
   for (const name of DROPPED_RESPONSE_HEADERS) responseHeaders.delete(name);
   const bytes = await forwarded.arrayBuffer();
   const init = { status: forwarded.status, statusText: forwarded.statusText, headers: responseHeaders };
-  const unchanged = { response: new Response(bytes, init), answered: [] };
+  // A refused request, such as a GraphQL query missing a token scope, carries no issue.
+  const named = forwarded.ok ? namedIssues(path, body, repo, views) : [];
+  const unchanged = { response: new Response(bytes, init), answered: [], live: named };
   if (!(forwarded.headers.get('content-type') ?? '').includes('json')) return unchanged;
   let parsed: unknown;
   try {
@@ -202,9 +238,11 @@ export async function answerLookup(
   } catch {
     return unchanged;
   }
-  const rewritten = atCreation(parsed, views, url.pathname.endsWith('/graphql') ? scopeOf(body, repo) : { repoScoped: false });
-  if (rewritten.answered.size === 0) return unchanged;
-  return { response: new Response(JSON.stringify(rewritten.value), init), answered: [...rewritten.answered] };
+  const refused = isObject(parsed) && parsed.data == null && 'errors' in parsed;
+  const rewritten = atCreation(parsed, views, path.endsWith('/graphql') ? scopeOf(body, repo) : { repoScoped: false });
+  if (rewritten.answered.size === 0) return refused ? { ...unchanged, live: [] } : unchanged;
+  const answered = [...rewritten.answered];
+  return { response: new Response(JSON.stringify(rewritten.value), init), answered, live: named.filter(number => !answered.includes(number)) };
 }
 
 /** The operator's gh configuration directory, in gh's own order of precedence. */
@@ -220,6 +258,8 @@ export interface LookupServer {
   readonly env: { readonly GH_CONFIG_DIR: string };
   /** How many requests the server answered with this batch issue's creation view. */
   answered(number: number): number;
+  /** The requests that named this batch issue and were answered live, by method and path. */
+  answeredLive(number: number): readonly string[];
   stop(): void;
 }
 
@@ -240,12 +280,14 @@ export function serveLookups(repo: Repo, views: ReadonlyMap<number, CreationView
     writeFileSync(join(dir, 'config.yml'), Bun.YAML.stringify({ ...config, http_unix_socket: socket }, null, 2));
     if (existsSync(join(operator, 'hosts.yml'))) symlinkSync(join(operator, 'hosts.yml'), join(dir, 'hosts.yml'));
     const counts = new Map<number, number>();
+    const live = new Map<number, string[]>();
     const server = Bun.serve({
       unix: socket,
       async fetch(request) {
-        const { response, answered } = await answerLookup(request, repo, views, (url, init) => fetch(url, init));
-        for (const number of answered) counts.set(number, (counts.get(number) ?? 0) + 1);
-        return response;
+        const answer = await answerLookup(request, repo, views, (url, init) => fetch(url, init));
+        for (const number of answer.answered) counts.set(number, (counts.get(number) ?? 0) + 1);
+        for (const number of answer.live) live.set(number, [...(live.get(number) ?? []), `${request.method} ${new URL(request.url).pathname}`]);
+        return answer.response;
       },
       error(error) {
         return new Response(`the bench lookup server could not answer: ${error.message}`, { status: 502 });
@@ -254,6 +296,7 @@ export function serveLookups(repo: Repo, views: ReadonlyMap<number, CreationView
     return {
       env: { GH_CONFIG_DIR: dir },
       answered: number => counts.get(number) ?? 0,
+      answeredLive: number => live.get(number) ?? [],
       stop() {
         void server.stop(true);
         rmSync(dir, { recursive: true, force: true });
