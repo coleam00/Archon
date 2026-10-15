@@ -35,13 +35,18 @@ export interface ItemRecord {
   readonly lenses: Readonly<Record<string, string>>;
 }
 
+export const FINDING_VALUES = {
+  severity: ['blocking', 'note'],
+  status: ['open', 'fixed', 'declined', 'disproved'],
+} as const;
+
 /** One record of the review's `findings.json`. */
 export interface Finding {
   readonly id: string;
-  readonly severity: string;
+  readonly severity: (typeof FINDING_VALUES.severity)[number];
   readonly sources: readonly string[];
   readonly claim: string;
-  readonly status: string;
+  readonly status: (typeof FINDING_VALUES.status)[number];
   readonly round: number;
 }
 
@@ -79,6 +84,8 @@ export function readFindings(dir: string): Finding[] {
   const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
   const isFinding = (record: unknown): record is Finding =>
     texts(record, 'id', 'severity', 'claim', 'status') &&
+    FINDING_VALUES.severity.some(value => value === record.severity) &&
+    FINDING_VALUES.status.some(value => value === record.status) &&
     typeof record.round === 'number' &&
     Number.isInteger(record.round) &&
     record.round >= 1 &&

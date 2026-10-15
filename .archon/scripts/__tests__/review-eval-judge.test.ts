@@ -37,13 +37,15 @@ it('sends saved defects and named lens mechanisms to the judge provider', async 
   const run = await store.createWorkflowRun({ workflow_name: workflow.name, user_message: '', metadata: { inputs: { item } } });
   await store.claimPendingWorkflowRun(run.id, root);
   const prompts: string[] = [];
+  const options: Parameters<IAgentProvider['sendQuery']>[3][] = [];
   const capabilities = providerRegistry.get('claude')?.capabilities;
   if (!capabilities) throw new Error('Claude descriptor missing');
   const provider: IAgentProvider = {
     getType: () => 'claude', getCapabilities: () => capabilities,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
-    async *sendQuery(prompt): AsyncGenerator<MessageChunk> {
+    async *sendQuery(prompt, _cwd, _resume, sentOptions): AsyncGenerator<MessageChunk> {
       prompts.push(prompt);
+      options.push(sentOptions);
       yield { type: 'result', structuredOutput: { defects: [{ id: 'PLANTED-123', caught_by: ['code'], finding: null, evidence: 'States the mechanism.' }], shape_unmatched: 0 } };
       yield { type: 'settled' };
     },
@@ -58,6 +60,7 @@ it('sends saved defects and named lens mechanisms to the judge provider', async 
     workflowSourceRoots: liveSourceRoots(source),
   });
   expect(prompts).toHaveLength(1);
+  expect(options[0]?.nodeConfig?.allowed_tools).toEqual([]);
   expect(prompts[0]).toContain('PLANTED-123');
   expect(prompts[0]).toContain('<lens name="code" file="review/code.md">');
   expect(prompts[0]).toContain(mechanism);

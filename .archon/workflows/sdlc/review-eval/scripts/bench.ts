@@ -1112,6 +1112,9 @@ export function writeBatch(outDir: string, caseId: string, judge: Judge): void {
     rmSync(staging, { force: true });
   }
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
+  if (samples.some(sample => !sample.line.passed || sample.judgement?.valid === false)) {
+    throw new Error(`batch ${caseId} has failed hard checks or invalid judgements; see its page`);
+  }
 }
 
 // git prints forward slashes on Windows; resolve() returns the native form every other path here uses.
@@ -1149,6 +1152,7 @@ async function main(argv: readonly string[]): Promise<void> {
     if (values.judge === undefined) throw new Error(`${command} needs --judge <spec>`);
     const judge = resolveJudge(values.judge);
     const samples = readSamples(outDir, values.batch).filter(line => command === 'render' || line.passed);
+    if (samples.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)}${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);
     if (command === 'judge') {
       const judged = samples.flatMap(line => (line.item === null ? [] : [{ ...line, item: line.item }]));
       if (judged.length === 0) throw new Error(`no sample in ${join(outDir, SAMPLES_FILE)} passed its hard checks${values.batch === undefined ? '' : ` in batch ${values.batch}`}`);

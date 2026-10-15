@@ -54,7 +54,7 @@ import {
   writeBatch,
   readSamples,
 } from '../../workflows/sdlc/review-eval/scripts/bench';
-import { type Finding, type ItemRecord, readFindings, writeItem } from '../../workflows/sdlc/.shared/review-item';
+import { FINDING_VALUES, type Finding, type ItemRecord, readFindings, writeItem } from '../../workflows/sdlc/.shared/review-item';
 import { MARKS as INTAKE_MARKS } from '../../workflows/sdlc/intake/scripts/bench/score';
 
 const track = trackTempRoots();
@@ -499,7 +499,7 @@ describe('saved review evidence', () => {
 
   it('rejects a finding without its first review round', () => {
     const dir = track(mkdtempSync(join(tmpdir(), 'archon-finding-')));
-    const finding = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open' };
+    const finding: Omit<Finding, 'round'> = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open' };
     for (const round of [undefined, '1', 0, -1, 1.5]) {
       write(dir, 'review/findings.json', JSON.stringify([{ ...finding, round }]));
       expect(() => readFindings(dir)).toThrow('is not a list of findings');
@@ -508,9 +508,17 @@ describe('saved review evidence', () => {
     expect(readFindings(dir)).toEqual([{ ...finding, round: 2 }]);
   });
 
+  it.each([{ severity: 'critical' }, { status: 'ignored' }])('rejects forbidden finding values: %j', invalid => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'archon-finding-values-')));
+    write(dir, 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'blocking', sources: ['contract'], claim: 'Wrong.', status: 'open', round: 1, ...invalid }]));
+    expect(() => readFindings(dir)).toThrow('is not a list of findings');
+  });
+
   it('conforms to the synthesizer’s persisted finding contract', () => {
     const finding: Finding = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open', round: 1 };
     const prompt = readFileSync(join(import.meta.dir, '../../workflows/sdlc/review/commands/review-synthesize.md'), 'utf8');
+    expect(prompt).toContain(`\`severity\` is ${FINDING_VALUES.severity.map(value => `\`${value}\``).join(' or ')}`);
+    expect(prompt).toContain(`\`status\` is \`${FINDING_VALUES.status[0]}\`, \`${FINDING_VALUES.status[1]}\`, \`${FINDING_VALUES.status[2]}\` (a note the owner declined with a reason), or \`${FINDING_VALUES.status[3]}\``);
     expect(prompt).toContain(`A JSON array of \`{${Object.keys(finding).join(', ')}}\``);
     const dir = track(mkdtempSync(join(tmpdir(), 'archon-finding-contract-')));
     write(dir, 'review/findings.json', JSON.stringify([finding]));
@@ -585,7 +593,7 @@ describe('the batch page and marks', () => {
     const sample = { case: 'counting', variant: 'v1', run_id: 'run-1', version: { label: 'v' }, passed: false };
     appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 1, cost_usd: 1.5, cost_partial: true });
     appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 2, run_id: 'run-2', cost_usd: 2, cost_partial: false });
-    writeBatch(out, 'counting', testJudge);
+    expect(() => writeBatch(out, 'counting', testJudge)).toThrow('failed hard checks');
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Cost | at least $1.50 | $2.00 |');
   });
 
@@ -634,7 +642,7 @@ describe('the batch page and marks', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-selected-page-')));
     appendLine(join(out, 'samples.jsonl'), { case: 'damaged', version: {} });
     appendLine(join(out, 'samples.jsonl'), { case: 'healthy', variant: 'clean', sample: 1, run_id: 'good', version: { label: 'v' }, passed: false });
-    writeBatch(out, 'healthy', testJudge);
+    expect(() => writeBatch(out, 'healthy', testJudge)).toThrow('failed hard checks');
     expect(readFileSync(join(out, 'batches/healthy/page.md'), 'utf8')).toContain('good');
     expect(() => readSamples(out)).toThrow('samples.jsonl:1');
   });
@@ -743,12 +751,24 @@ describe('judgement validation', () => {
   it("accepts the judge fixture's output, whose fields are exactly the judge schema's", () => {
     const dir = join(import.meta.dir, '../../workflows/sdlc/review-eval-judge');
     const workflow = Bun.YAML.parse(readFileSync(join(dir, 'archon-review-eval-judge.yaml'), 'utf8')) as {
-      nodes: { id: string; output_format?: { properties: { defects: { items: { properties: object; required: string[] } } } } }[];
+      nodes: { id: string; output_format?: { type: string; additionalProperties: boolean; required: string[]; properties: { defects: { type: string; items: { properties: object; required: string[] } }; shape_unmatched: object } } }[];
     };
-    const schema = workflow.nodes.find(node => node.id === 'judge')?.output_format?.properties.defects.items;
+    const output = workflow.nodes.find(node => node.id === 'judge')?.output_format;
+    const schema = output?.properties.defects.items;
+    expect(output?.type).toBe('object');
+    expect(output?.additionalProperties).toBe(false);
+    expect(output?.properties.defects.type).toBe('array');
+    expect(output?.properties.shape_unmatched).toEqual({ type: 'integer', minimum: 0 });
+    for (const shape_unmatched of [undefined, null, '0', -1, 0.5]) {
+      expect(validateJudgement({ defects: [entry('D1'), entry('K1')], shape_unmatched }, item, findings).valid).toBe(false);
+    }
+    expect(validateJudgement({ shape_unmatched: 0 }, item, findings).valid).toBe(false);
     const stub = Bun.YAML.parse(readFileSync(join(dir, 'fixtures/judge.stubs.yaml'), 'utf8')) as { judge: unknown };
     const judgement = validateJudgement(stub.judge, { ...item, known_defects: [] }, findings);
     if (!judgement.valid) throw new Error(judgement.reason);
+    const topFields = Object.keys(judgement).filter(key => key !== 'valid').sort();
+    expect(Object.keys(output?.properties ?? {}).sort()).toEqual(topFields);
+    expect([...(output?.required ?? [])].sort()).toEqual(topFields);
     const fields = Object.keys(judgement.defects[0]).sort();
     expect(Object.keys(schema?.properties ?? {}).sort()).toEqual(fields);
     expect([...(schema?.required ?? [])].sort()).toEqual(fields);
@@ -1011,6 +1031,46 @@ describe('bench run', () => {
     expect(readLines(join(out, 'judgements.jsonl'))[1]).toMatchObject({ valid: false, reason: 'run run-4 returned no value: {"availability":"unavailable","reason":"node_failed"}' });
   });
 
+  it.each(['failed', 'cancelled'])('rejects a %s judge even with a schema-valid saved return', status => {
+    const { out, cli, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
+    const value = { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 };
+    judgeReturns('run-2', value);
+    expect(run('--variant', 'v1').status).toBe(0);
+    writeFileSync(join(out, 'judgements.jsonl'), '');
+    write(out, 'batches/counting/marks.yaml', '[]');
+    judgeReturns('run-3', value);
+    writeFileSync(join(cli, 'wait.json'), JSON.stringify({ attention: { kind: 'terminal', status } }));
+    expect(judge('--batch', 'counting').status).toBe(1);
+    expect(readLines(join(out, 'judgements.jsonl'))).toMatchObject([{ judge_run: 'run-3', valid: false, reason: `the judge run run-3 is ${status}` }]);
+    expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
+  });
+
+  it('refuses rendering an absent batch', () => {
+    const { render } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
+    const result = render('--batch', 'missing');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('no sample');
+  });
+
+  it.each(['hard check', 'judgement'])('renders diagnostics but fails for a saved failed %s', failure => {
+    const { out, cli, run, render, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
+    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 });
+    expect(run('--variant', 'v1').status).toBe(0);
+    if (failure === 'hard check') {
+      const [sample] = readLines(join(out, 'samples.jsonl'));
+      writeFileSync(join(out, 'samples.jsonl'), JSON.stringify({ ...sample, passed: false, problems: ['wrong binding'] }) + '\n');
+    } else {
+      const [judgement] = readLines(join(out, 'judgements.jsonl'));
+      appendLine(join(out, 'judgements.jsonl'), { ...judgement, valid: false, reason: 'bad return' });
+    }
+    const result = render('--batch', 'counting');
+    expect(result.status).toBe(1);
+    const page = readFileSync(join(out, 'batches/counting/page.md'), 'utf8');
+    expect(page).toContain(failure === 'hard check' ? 'FAILED' : 'invalid: bad return');
+    if (failure === 'judgement') expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
+    expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
+  });
+
   it('re-judges recorded samples without touching a marked entry, and lists a clean finding to mark', () => {
     const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
     judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['code'], finding: 'R1', evidence: 'Stated.' }], shape_unmatched: 0 });
@@ -1071,7 +1131,7 @@ describe('bench run', () => {
     appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'v1', sample: 3, run_id: 'old', version, passed: false });
     judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Missed.' }], shape_unmatched: 0 });
     const result = run('--variant', 'v1');
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(result.lines.at(-1)).toMatchObject({ case: 'counting', sample: 4, passed: true });
     expect(readFileSync(join(out, 'batches/counting/page.md'), 'utf8')).toContain('run-1');
   });
