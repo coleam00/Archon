@@ -546,7 +546,7 @@ describe('cloneRepository', () => {
                 cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
               ).rejects.toThrow('registration failed');
               const target = getGitCloneCall()?.[1];
-              expect(spyFsRm.mock.calls.some(call => call[0] === target)).toBe(true);
+              expect(spyFsRm.mock.calls.some((call: unknown[]) => call[0] === target)).toBe(true);
             } finally {
               syntax.mockRestore();
               remote.mockRestore();
