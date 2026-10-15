@@ -13,8 +13,8 @@ one watches this run; your structured answer is all the next nodes read.
   round), and the commit under review, `$mode.output.head`. When the reviewed commit
   is not empty, this round continues an earlier review: judge only that correction
   delta and the hunks you need. The delta leaves out code a merge of the base
-  brought in. Take the base from the requested scope's record, or the current
-  branch's pull request, and read the delta with
+  brought in. Use the certified target's base and qualified repository, and read
+  the delta with
   `tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <head>)" <reviewed> | head -1)`
   then `git diff --stat "$tree" <head>`.
 - On a continuation, the code lens reviews the delta whatever you answer. Select
