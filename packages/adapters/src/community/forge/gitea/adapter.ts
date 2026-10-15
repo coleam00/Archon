@@ -542,6 +542,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}.git`;
 
     const token = process.env.GITEA_TOKEN;
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
@@ -574,8 +575,6 @@ export class GiteaAdapter implements IPlatformAdapter {
       const unhandled: never = cloneResult.error;
       throw new Error(`Unhandled clone error: ${JSON.stringify(unhandled)}`);
     }
-
-    await addSafeDirectory(toRepoPath(repoPath));
   }
 
   /**

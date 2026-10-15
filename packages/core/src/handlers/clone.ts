@@ -15,6 +15,7 @@ import type { Codebase } from '../types';
 import {
   cloneRepository as cloneGitRepository,
   execFileAsync,
+  addSafeDirectory,
   toRepoPath,
   validateCloneUrl,
   type CloneCredentials,
@@ -513,6 +514,7 @@ export async function cloneRepository(
   // Create project structure (source/, worktrees/, artifacts/, logs/)
   await ensureProjectStructure(ownerName, repoName);
 
+  await addSafeDirectory(toRepoPath(targetPath));
   const cloneResult = await cloneGitRepository(
     workingUrl,
     toRepoPath(targetPath),
@@ -541,6 +543,7 @@ export async function cloneRepository(
   }
 
   try {
+    getLog().debug({ path: targetPath }, 'safe_directory_added');
     if (appSource) await setupAppRepository(targetPath);
     await validateRegistrationChoice(targetPath, options);
   } catch (error) {
@@ -548,10 +551,6 @@ export async function cloneRepository(
     await rm(targetPath, { recursive: true });
     throw error;
   }
-
-  // Add to git safe.directory
-  await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
-  getLog().debug({ path: targetPath }, 'safe_directory_added');
 
   const result = await registerRepoAtPath(
     codebases,

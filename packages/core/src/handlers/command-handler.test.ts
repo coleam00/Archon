@@ -1557,6 +1557,21 @@ describe('CommandHandler', () => {
           );
         });
 
+        test('fails before registration when safe.directory configuration fails', async () => {
+          mockIsolationCreate.mockRejectedValueOnce(new Error('config locked'));
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth',
+            operator
+          );
+
+          expect(result.success).toBe(false);
+          expect(mockIsolationCreate).toHaveBeenCalled();
+          expect(mockIsolationEnvDbCreate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+        });
+
         test.each([
           'Submodule initialization failed: no network',
           'post-checkout hook: already exists',

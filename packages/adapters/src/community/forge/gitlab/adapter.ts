@@ -475,6 +475,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     const urlObj = new URL(this.gitlabUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(repoUrl, toRepoPath(repoPath), {
       credentials: { username: 'oauth2', password: this.token },
     });
@@ -499,8 +500,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         cloneResult.error.code === 'unknown' ? cloneResult.error.message : cloneResult.error.code;
       throw new Error(`Failed to clone ${projectPath}: ${detail}`);
     }
-
-    await addSafeDirectory(toRepoPath(repoPath));
   }
 
   private async autoDetectAndLoadCommands(repoPath: string, codebaseId: string): Promise<void> {
