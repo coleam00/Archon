@@ -72,8 +72,6 @@ export const workflowWorktreePolicySchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema>;
-
 /**
  * Per-workflow container-backend policy (FOLDER projects only). Mirrors the
  * worktree policy: a narrow per-workflow toggle; the runner image / caps live in
@@ -103,8 +101,6 @@ export const workflowContainerPolicySchema = z.object({
    */
   write_back: z.enum(['approve', 'auto']).optional(),
 });
-
-export type WorkflowContainerPolicy = z.infer<typeof workflowContainerPolicySchema>;
 
 // ---------------------------------------------------------------------------
 // Workflow-level evidence policy (#2230)

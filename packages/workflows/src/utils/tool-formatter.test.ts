@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { formatToolCall, formatThinking } from './tool-formatter';
+import { formatToolCall } from './tool-formatter';
 
 describe('tool-formatter', () => {
   describe('formatToolCall', () => {
@@ -104,31 +104,6 @@ describe('tool-formatter', () => {
         const result = formatToolCall('SomeTool', {});
         expect(result).toBe('🔧 SOMETOOL\n{}');
       });
-    });
-  });
-
-  describe('formatThinking', () => {
-    test('formats thinking under 200 chars', () => {
-      const thinking = 'I need to analyze this code';
-      const result = formatThinking(thinking);
-      expect(result).toBe(`💭 ${thinking}`);
-    });
-
-    test('formats thinking at exactly 200 chars', () => {
-      const thinking = 'a'.repeat(200);
-      const result = formatThinking(thinking);
-      expect(result).toBe(`💭 ${thinking}`);
-    });
-
-    test('truncates thinking over 200 chars', () => {
-      const thinking = 'a'.repeat(250);
-      const result = formatThinking(thinking);
-      expect(result).toBe(`💭 ${'a'.repeat(200)}...`);
-    });
-
-    test('handles empty string', () => {
-      const result = formatThinking('');
-      expect(result).toBe('💭 ');
     });
   });
 });

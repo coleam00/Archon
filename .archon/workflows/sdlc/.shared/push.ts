@@ -6,6 +6,7 @@
  * the head branch — so git never picks an upstream. It never forces: a remote that moved refuses, and the refusal is
  * the evidence. A fork head no local remote names is pushed by its HTTPS URL, which
  * its author permits only when they allowed maintainer edits; the forge enforces that.
+ * A nonzero push exit gets one retry after 20 seconds for transient remote failures.
  * After the push, the remote ref is read back and must equal HEAD.
  */
 
@@ -28,7 +29,11 @@ export function pushHead(target: PushTarget): string {
     ? (findRemote(headRepo) ?? `https://${headRepo.host}/${headRepo.path}.git`)
     : remoteFor(headRepo);
   const ref = `refs/heads/${target.head}`;
-  const pushed = git('push', destination, `HEAD:${ref}`);
+  let pushed = git('push', destination, `HEAD:${ref}`);
+  if (pushed.code !== 0) {
+    Bun.sleepSync(20_000);
+    pushed = git('push', destination, `HEAD:${ref}`);
+  }
   if (pushed.code !== 0) throw new Error(`git push ${destination} HEAD:${ref} refused: ${pushed.stderr}`);
   const landed = gitOrThrow('ls-remote', destination, ref).split(/\s+/)[0] ?? '';
   if (landed !== head) {

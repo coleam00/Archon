@@ -1265,13 +1265,6 @@ export function stopCleanupScheduler(): void {
   }
 }
 
-/**
- * Check if scheduler is running (for testing)
- */
-export function isSchedulerRunning(): boolean {
-  return cleanupIntervalId !== null;
-}
-
 export interface ReleasedWorktree {
   path: string;
   branch: string;

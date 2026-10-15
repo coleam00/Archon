@@ -1,3 +1,4 @@
+import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
 import {
@@ -4003,18 +4004,6 @@ function formatAge(startedAt: Date | string): string {
   if (hours < 24) return `${hours}h ${mins % 60}m`;
   const days = Math.floor(hours / 24);
   return `${days}d ${hours % 24}h`;
-}
-
-/**
- * Format a duration in milliseconds as a compact string.
- */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.round(ms / 100) / 10;
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = Math.round(secs % 60);
-  return `${mins}m${remSecs}s`;
 }
 
 export interface NodeSummary {

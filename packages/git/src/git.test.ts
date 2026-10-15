@@ -1,5 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm } from 'fs/promises';
+import {
+  writeFile,
+  mkdir as realMkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  chmod,
+  stat,
+  realpath,
+} from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
@@ -3254,6 +3263,197 @@ branch refs/heads/feature/auth
         { timeout: 10000 }
       );
     });
+    test('times out a hung initial config read before any write', async () => {
+      execSpy.mockRestore();
+      const realExec = git.execFileAsync;
+      let killed = false;
+      execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_file, args, options) => {
+        expect(args).toContain('--get-all');
+        try {
+          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], options);
+        } catch (error) {
+          killed = error instanceof Error && 'killed' in error && error.killed === true;
+          throw error;
+        }
+      });
+      await expect(git.addSafeDirectory(repo('/workspace/repo'))).rejects.toThrow(
+        'Failed to add safe directory'
+      );
+      expect(killed).toBe(true);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    test.each([false, true])(
+      'reset repair preserves accepted trust (write fails: %s)',
+      async fail => {
+        execSpy.mockRestore();
+        const realExec = git.execFileAsync;
+        const root = trackTempRoot(
+          (await mkdtemp(join(tmpdir(), 'git-safe-atomic-'))).replaceAll('\\', '/')
+        );
+        const config = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = config;
+        try {
+          await realExec('git', ['init', root]);
+          await writeFile(config, `[safe]\n directory = ${JSON.stringify(root)}\n directory = \n`);
+          if (process.platform !== 'win32') await chmod(config, 0o660);
+          const configMode = (await stat(config)).mode;
+          const checkTrust = async (): Promise<void> => {
+            await realExec('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
+          };
+          let checkedIntermediate = false;
+          execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
+            if (args?.includes('--get-all')) {
+              const snapshot = await realExec(file, args, options);
+              // Another setup completes after this reader took its snapshot.
+              await realExec('git', [
+                'config',
+                '--global',
+                '--fixed-value',
+                '--unset-all',
+                'safe.directory',
+                root,
+              ]);
+              await realExec('git', [
+                'config',
+                '--global',
+                '--fixed-value',
+                '--replace-all',
+                'safe.directory',
+                root,
+                root,
+              ]);
+              await realExec('git', ['config', '--global', 'test.concurrent', 'retained']);
+              await checkTrust();
+              return snapshot;
+            }
+            if (args?.includes('--unset-all')) {
+              const result = await realExec(file, args, options);
+              await checkTrust();
+              checkedIntermediate = true;
+              return result;
+            }
+            if (fail && args?.includes('--replace-all'))
+              throw new Error('injected replacement failure');
+            return realExec(file, args, options);
+          });
+          if (fail)
+            await expect(git.addSafeDirectory(repo(root))).rejects.toThrow(
+              'injected replacement failure'
+            );
+          else await git.addSafeDirectory(repo(root));
+          expect(checkedIntermediate).toBe(true);
+          await checkTrust();
+          expect(
+            (await realExec('git', ['config', '--global', '--null', '--get-all', 'safe.directory']))
+              .stdout
+          ).toBe(`\0${root}\0`);
+          expect(
+            (await realExec('git', ['config', '--global', 'test.concurrent'])).stdout.trim()
+          ).toBe('retained');
+          expect(await Bun.file(`${config}.lock`).exists()).toBe(false);
+          expect((await stat(config)).mode).toBe(configMode);
+        } finally {
+          execSpy.mockRestore();
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
+
+    test('preserves the config failure when lock cleanup also fails', async () => {
+      execSpy.mockRestore();
+      const realExec = git.execFileAsync;
+      const root = trackTempRoot(
+        await realpath(await mkdtemp(join(tmpdir(), 'git-safe-cleanup-')))
+      );
+      const config = join(root, 'gitconfig');
+      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = config;
+      try {
+        await writeFile(config, '[safe]\n\tdirectory = /workspace/repo\n\tdirectory = \n');
+        execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
+          if (args?.includes('--unset-all')) {
+            await rm(`${config}.lock`);
+            throw new Error('injected configuration failure');
+          }
+          return realExec(file, args, options);
+        });
+        mockLogger.error.mockClear();
+
+        await expect(git.addSafeDirectory(repo('/workspace/repo'))).rejects.toThrow(
+          'injected configuration failure'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          { err: expect.objectContaining({ code: 'ENOENT' }), lockPath: `${config}.lock` },
+          'safe_directory_lock_cleanup_failed'
+        );
+        expect(await readFile(config, 'utf8')).toBe(
+          '[safe]\n\tdirectory = /workspace/repo\n\tdirectory = \n'
+        );
+      } finally {
+        execSpy.mockRestore();
+        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+      }
+    });
+
+    test.each(['include-reset', 'two-globals'])(
+      'repairs effective global trust across %s',
+      async layout => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(
+          (await realpath(await mkdtemp(join(tmpdir(), 'git-safe-sources-')))).replaceAll('\\', '/')
+        );
+        const saved = {
+          HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+          GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+        };
+        Object.assign(process.env, { HOME: root, XDG_CONFIG_HOME: join(root, 'xdg') });
+        delete process.env.GIT_CONFIG_GLOBAL;
+        try {
+          await realMkdir(join(root, 'xdg/git'), { recursive: true });
+          await git.execFileAsync('git', ['init', root]);
+          const grant = `[safe]\n directory = "${root}"\n`;
+          await writeFile(
+            join(root, 'xdg/git/config'),
+            `${grant}[safe]\n directory = /workspace/other\n`
+          );
+          await writeFile(
+            join(root, '.gitconfig'),
+            layout === 'two-globals' ? grant : `${grant}[include]\n path = reset\n`
+          );
+          await writeFile(join(root, 'reset'), `${grant}[safe]\n directory = \n`);
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await git.addSafeDirectory(repo(root));
+            const { stdout } = await git.execFileAsync('git', [
+              'config',
+              '--includes',
+              '--null',
+              '--get-all',
+              'safe.directory',
+            ]);
+            expect(stdout.split('\0').filter(value => value === root)).toHaveLength(1);
+            expect(stdout.split('\0').filter(value => value === '/workspace/other')).toEqual([
+              '/workspace/other',
+            ]);
+            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
+          }
+        } finally {
+          for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        }
+      }
+    );
+
     test('repeated setup keeps one exact safe-directory entry and preserves other paths', async () => {
       execSpy.mockRestore();
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-directory-')));

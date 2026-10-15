@@ -1,7 +1,7 @@
 /**
  * Zod schemas for configuration API endpoints.
  */
-import { platformStreamingSchema } from '@archon/core/config';
+import { platformStreamingSchema, type SafeConfig } from '@archon/core/config';
 import { z } from '@hono/zod-openapi';
 import { effortLevelSchema, rejectRetiredThinking } from '@archon/workflows/schemas/effort';
 
@@ -51,9 +51,10 @@ export const safeConfigSchema = z
     streaming: platformStreamingSchema,
     concurrency: z.object({ maxConversations: z.number() }),
     defaults: z.object({
-      copyDefaults: z.boolean(),
       loadDefaultCommands: z.boolean(),
       loadDefaultWorkflows: z.boolean(),
+    } satisfies {
+      [K in keyof SafeConfig['defaults']]: z.ZodType<SafeConfig['defaults'][K]>;
     }),
     // Configured small/medium/large tiers (merged repo > global). Absent keys
     // fall back to `tierDefaults` (built-in presets for the default provider).
@@ -61,6 +62,8 @@ export const safeConfigSchema = z
     tierDefaults: tiersConfigSchema.optional(),
     // Configured @custom model aliases (merged repo > global). Not secrets.
     aliases: z.record(z.string(), tierEntrySchema).optional(),
+  } satisfies {
+    [K in keyof SafeConfig]-?: z.ZodType<SafeConfig[K]>;
   })
   .openapi('SafeConfig');
 
