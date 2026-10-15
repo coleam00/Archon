@@ -3644,7 +3644,7 @@ async function executeBashNode(
           status: 'failed',
           error: errorMsg,
           failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
-          ...(contractFailure ? { retryable: false as const } : {}),
+          ...(contractFailure || err.cleanupError ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
       )
@@ -3982,7 +3982,7 @@ async function executeScriptNode(
           status: 'failed',
           error: errorMsg,
           failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
-          ...(contractFailure ? { retryable: false as const } : {}),
+          ...(contractFailure || err.cleanupError ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
       )

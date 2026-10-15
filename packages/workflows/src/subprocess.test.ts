@@ -1,5 +1,5 @@
 import * as git from '@archon/git';
-import * as pluginProcess from '@archon/paths/plugin-process';
+import * as windowsTree from '@archon/paths/windows-process-tree';
 import { expect, test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -173,7 +173,7 @@ test('Windows owner interruption reports unproved cleanup between root exit and 
     unref: { value: () => child },
   });
   const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
-  const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockRejectedValue(
+  const taskkill = spyOn(windowsTree, 'terminateWindowsProcessTree').mockRejectedValue(
     new Error('must not target an exited root')
   );
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -316,7 +316,15 @@ for (const recorded of [false, true]) {
       worker,
       `import {writeFileSync} from 'node:fs';
       writeFileSync(${JSON.stringify(ready)}, String(process.pid));
-      setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+      const parent = process.ppid;
+      const watch = setInterval(() => {
+        try { process.kill(parent, 0); }
+        catch (error) {
+          if (error.code !== 'ESRCH') throw error;
+          clearInterval(watch);
+          setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);
+        }
+      }, 25);`
     );
     const trees = recorded ? recordNodeProcessTrees() : undefined;
     try {
@@ -369,7 +377,15 @@ test('ending recorded node bodies stops a live wrapper and its grandchild', asyn
   const worker = join(dir, 'worker.js');
   writeFileSync(
     worker,
-    `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+    `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); const parent = process.ppid;
+        const watch = setInterval(() => {
+          try { process.kill(parent, 0); }
+          catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+            clearInterval(watch);
+            setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);
+          }
+        }, 25);`
   );
   const trees = recordNodeProcessTrees();
   const node = runNode(
@@ -600,7 +616,7 @@ for (const fails of [false, true]) {
     const taskkillError = Object.assign(new Error('taskkill could not prove cleanup'), {
       code: 'ENOENT',
     });
-    const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockImplementation(
+    const taskkill = spyOn(windowsTree, 'terminateWindowsProcessTree').mockImplementation(
       async pid => {
         process.kill(pid, 'SIGKILL');
         await Bun.sleep(50);
@@ -736,7 +752,7 @@ test('Windows taskkill success without an observed root exit is a bounded cleanu
   const platform = process.platform;
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-timeout-unconfirmed-')));
   const ready = join(dir, 'ready');
-  const taskkill = spyOn(pluginProcess, 'forceTerminateWindowsTree').mockResolvedValue(undefined);
+  const taskkill = spyOn(windowsTree, 'terminateWindowsProcessTree').mockResolvedValue(undefined);
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
   try {
     const started = Date.now();
@@ -752,3 +768,71 @@ test('Windows taskkill success without an observed root exit is a bounded cleanu
     if (existsSync(ready)) process.kill(Number(readFileSync(ready, 'utf8')), 'SIGKILL');
   }
 });
+
+for (const denied of [false, true]) {
+  test(`Windows timeout confirms descendants spawned during taskkill (kill denied=${denied})`, async () => {
+    const platform = process.platform;
+    const child = new childProcess.ChildProcess();
+    const root = 123456;
+    const descendant = root + 1;
+    Object.defineProperties(child, {
+      pid: { value: root },
+      stdin: { value: null },
+      stdout: { value: null },
+      stderr: { value: null },
+      unref: { value: () => child },
+    });
+    let rootAlive = true;
+    let descendantAlive = false;
+    let listings = 0;
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+    const execFile = spyOn(windowsTree.windowsProcessCommands, 'execFile').mockImplementation(
+      async command => {
+        if (command === 'taskkill') {
+          rootAlive = false;
+          descendantAlive = true;
+          child.emit('exit', 1, null);
+          return { stdout: 'SUCCESS', stderr: '' };
+        }
+        listings++;
+        return {
+          stdout: JSON.stringify({
+            takenAt: String(listings * 100),
+            rows: [
+              ...(rootAlive ? [{ pid: root, parentPid: 1, created: '10' }] : []),
+              ...(descendantAlive ? [{ pid: descendant, parentPid: root, created: '150' }] : []),
+            ],
+          }),
+          stderr: '',
+        };
+      }
+    );
+    const kill = spyOn(process, 'kill').mockImplementation(pid => {
+      expect(pid).toBe(descendant);
+      if (denied) throw Object.assign(new Error('descendant kill denied'), { code: 'EPERM' });
+      descendantAlive = false;
+      return true;
+    });
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const error = await runNode('unused', 1).catch((e: unknown) => e as RawSubprocessRejection);
+      expect(error).toMatchObject({ timedOut: true, observedExit: { code: 1, signal: null } });
+      expect(kill).toHaveBeenCalled();
+      expect(descendantAlive).toBe(denied);
+      if (denied) {
+        expect((error as RawSubprocessRejection).cleanupError?.message).toContain('still running');
+        expect((error as RawSubprocessRejection).cleanupError?.message).toContain(
+          'descendant kill denied'
+        );
+      } else {
+        expect((error as RawSubprocessRejection).cleanupError).toBeUndefined();
+        expect(listings).toBe(3);
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      spawn.mockRestore();
+      execFile.mockRestore();
+      kill.mockRestore();
+    }
+  });
+}

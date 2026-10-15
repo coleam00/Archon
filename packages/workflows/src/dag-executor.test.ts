@@ -22423,7 +22423,7 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
   );
 
   it.each(['sh', 'bun'] as const)(
-    '%s cleanup failure retains authored on_error: all retries',
+    '%s cleanup failure prevents overlapping on_error: all retries',
     async runtime => {
       let attempts = 0;
       const execSpy = spyOn(hostNodeSubprocess, 'exec').mockImplementation(async () => {
@@ -22457,9 +22457,9 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
             },
           })
         );
-        expect(attempts).toBe(2);
+        expect(attempts).toBe(1);
         expect(persistedEvents(store)).toContainEqual(
-          expect.objectContaining({ event_type: 'node_completed', step_name: 'slow' })
+          expect.objectContaining({ event_type: 'node_failed', step_name: 'slow' })
         );
       } finally {
         execSpy.mockRestore();
@@ -22476,7 +22476,15 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
       const wrapper = join(testDir, 'wrapper.cjs');
       await writeFile(
         worker,
-        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);`
+        `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); const parent = process.ppid;
+        const watch = setInterval(() => {
+          try { process.kill(parent, 0); }
+          catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+            clearInterval(watch);
+            setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'leaked'), 1600);
+          }
+        }, 25);`
       );
       await writeFile(
         wrapper,

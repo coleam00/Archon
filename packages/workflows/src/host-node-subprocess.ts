@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { forceTerminateWindowsTree } from '@archon/paths/plugin-process';
+import { terminateWindowsProcessTree } from '@archon/paths/windows-process-tree';
 import { TERMINATION_GRACE_MS, TERMINATION_CONFIRM_MS } from './host-node-stop-bounds';
 import {
   confirmGroupGone,
@@ -42,9 +42,12 @@ async function execNodeBody(
   const terminate = async (): Promise<void> => {
     if (pid === undefined) return;
     if (!posix) {
-      if (observedExit)
-        throw new Error(`Process ${pid} exited before tree termination could be proved`);
-      await forceTerminateWindowsTree(pid);
+      const assertRootOwned = (): void => {
+        if (observedExit)
+          throw new Error(`Process ${pid} exited before tree termination could be proved`);
+      };
+      assertRootOwned();
+      await terminateWindowsProcessTree(pid, assertRootOwned);
       const deadline = Date.now() + TERMINATION_CONFIRM_MS;
       while (!observedExit) {
         if (Date.now() >= deadline) throw new Error(`Process ${pid} did not exit after taskkill`);

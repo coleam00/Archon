@@ -1,5 +1,5 @@
 import { HOST_NODE_TERMINATION_MAX_MS } from '@archon/workflows/host-node-stop-bounds';
-import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from './windows-process-tree';
+import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from '@archon/paths/windows-process-tree';
 
 /*
  * How long stopping a detached run owner can take, shared by the controller that stops it

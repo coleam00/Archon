@@ -4,7 +4,7 @@ import {
   type RunLiveOwnerStopRefusal,
 } from './run-live-owner';
 import { TERMINATION_CONFIRM_MS, TERMINATION_GRACE_MS } from './run-stop-bounds';
-import { terminateWindowsProcessTree } from './windows-process-tree';
+import { terminateWindowsProcessTree } from '@archon/paths/windows-process-tree';
 
 /*
  * The one path that stops a detached run owner: prove the exact-run owner through its
@@ -109,7 +109,13 @@ async function terminateDetachedProcessTree(
   }
 
   if (process.platform === 'win32') {
-    await terminateWindowsProcessTree(pid, ownsLiveLease);
+    await terminateWindowsProcessTree(pid, () => {
+      if (!ownsLiveLease()) {
+        throw new Error(
+          `Detached workflow owner ${String(pid)} released its termination lease before it was stopped`
+        );
+      }
+    });
     return;
   }
 

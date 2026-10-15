@@ -1,16 +1,23 @@
-import { execFile } from 'node:child_process';
+import { execFile, type ExecFileOptions } from 'node:child_process';
 import { promisify } from 'node:util';
 
+const execFileAsync = promisify(execFile);
+export const windowsProcessCommands = {
+  execFile: async (
+    command: string,
+    args: string[],
+    options: Pick<ExecFileOptions, 'timeout' | 'windowsHide' | 'maxBuffer'>
+  ) => await execFileAsync(command, args, options),
+};
+
 /*
- * Stopping a detached run owner's whole process tree on Windows, and proving it stopped.
+ * Stopping an owned process tree on Windows, and proving it stopped.
  *
  * Windows has no process group to signal, so `taskkill /T` kills the tree it can see
  * when it starts. A descendant spawned while that walk runs survives it. The proof here
  * is the process table itself, read through `Get-CimInstance Win32_Process` as JSON:
- * the stop returns only when no member of the owner's tree is listed any more.
+ * the stop returns only when no member of the root's tree is listed any more.
  */
-
-const execFileAsync = promisify(execFile);
 
 /** Upper bound on one `taskkill` or process listing. The first CIM query on a machine can take seconds. */
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -154,7 +161,7 @@ export function parseWindowsProcessListing(json: string): WindowsProcessListing 
 }
 
 async function listWindowsProcesses(): Promise<WindowsProcessListing> {
-  const { stdout } = await execFileAsync(
+  const { stdout } = await windowsProcessCommands.execFile(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', LIST_PROCESSES_ENCODED],
     { timeout: COMMAND_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }
@@ -164,13 +171,13 @@ async function listWindowsProcesses(): Promise<WindowsProcessListing> {
 
 /**
  * Kill `pid`'s process tree and return only once a listing shows no member of it.
- * Throws when that cannot be shown, so the caller leaves the run as it was.
+ * Throws when that cannot be shown.
  *
- * `ownsLiveLease` reports whether the owner still holds its termination lease open.
+ * `assertRootOwned` must throw if the root exited during the initial listing.
  */
 export async function terminateWindowsProcessTree(
   pid: number,
-  ownsLiveLease: () => boolean
+  assertRootOwned: () => void
 ): Promise<void> {
   const before = await listWindowsProcesses();
   const tree = WindowsProcessTree.fromRoot(pid, before);
@@ -183,22 +190,16 @@ export async function terminateWindowsProcessTree(
     const claimants = before.rows.filter(row => row.parentPid === pid).map(row => row.pid);
     if (claimants.length > 0) {
       throw new Error(
-        `Could not confirm detached workflow process tree ${String(pid)} exited: its root ` +
+        `Could not confirm process tree ${String(pid)} exited: its root ` +
           `was already gone, and processes ${claimants.join(', ')} name it as their parent`
       );
     }
     return;
   }
 
-  // The owner's lease socket closes when the owner exits, so a lease still open after
-  // the listing proves the listed root is the owner and not a later holder of its PID.
-  // The first listing can take seconds; the lease has no idle timeout, so only the
-  // owner's exit or its own shutdown closes it in that time.
-  if (!ownsLiveLease()) {
-    throw new Error(
-      `Detached workflow owner ${String(pid)} released its termination lease before it was stopped`
-    );
-  }
+  // The initial listing can take seconds. The caller's live child handle or owner
+  // lease must still pin the root identity before taskkill targets its PID.
+  assertRootOwned();
 
   // `taskkill /T` does most of the work in one call. Its exit code is not the proof:
   // it is non-zero whenever a member exited during the walk, and zero even when a
@@ -206,7 +207,7 @@ export async function terminateWindowsProcessTree(
   // and a failure is kept only as evidence for the error they may end in.
   let killFailure: string | undefined;
   try {
-    await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    await windowsProcessCommands.execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
       timeout: COMMAND_TIMEOUT_MS,
       windowsHide: true,
     });
@@ -232,7 +233,7 @@ export async function terminateWindowsProcessTree(
     }
   }
   throw new Error(
-    `Could not confirm detached workflow process tree ${String(pid)} exited: ` +
+    `Could not confirm process tree ${String(pid)} exited: ` +
       `processes ${survivors.join(', ')} are still running` +
       (killFailure ? ` (${killFailure})` : '')
   );
