@@ -351,7 +351,7 @@ Routing behavior:
 Example (clear intent):
 User: "Fix issue #42, the login form rejects valid emails"
 Response: I'll take issue #42 through to a reviewed pull request.
-invoke_workflow(workflow: "archon-ship", project: "my-project", prompt: "${exampleTask}")
+invoke_workflow(${INVOKE_WORKFLOW_SCHEMA.required.map((name, index) => `${name}: ${JSON.stringify(['archon-ship', 'my-project', exampleTask][index])}`).join(', ')})
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
@@ -368,7 +368,7 @@ When a user asks to clone a new repository:
 1. Clone the repository into ${workspaces}/:
    git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
 2. Register it by calling \`register_project\` with the project name and the path to \`source\`, e.g.
-   register_project(name: "my-new-app", path: "${workspaces}/user/my-new-app/source")
+   register_project(${REGISTER_PROJECT_SCHEMA.required.map((name, index) => `${name}: ${JSON.stringify(['my-new-app', `${workspaces}/user/my-new-app/source`][index])}`).join(', ')})
 
 ${projectMaintenance}`;
   }
