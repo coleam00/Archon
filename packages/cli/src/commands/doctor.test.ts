@@ -1161,9 +1161,13 @@ describe('doctorCommand', () => {
     throw new Error(`${label} blew up`);
   };
 
+  const summary = (): string | undefined =>
+    logSpy.mock.calls.map(args => String(args[0] ?? '')).at(-1);
+
   it('returns 0 when every check passes', async () => {
     const exit = await doctorCommand([passing('A'), passing('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('All checks passed.');
   });
 
   it('returns 0 when checks are pass + skip (skip is not a failure)', async () => {
@@ -1199,6 +1203,7 @@ describe('doctorCommand', () => {
     // must still reach the operator rather than being swallowed.
     const exit = await doctorCommand([passing('A'), warning('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('No check failed; 1 warning(s) above.');
 
     const warnLine = logSpy.mock.calls
       .map(args => String(args[0] ?? ''))

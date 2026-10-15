@@ -996,6 +996,7 @@ export async function doctorCommand(
   const settled = await Promise.allSettled(promises);
 
   let failures = 0;
+  let warnings = 0;
   for (const s of settled) {
     if (s.status === 'rejected') {
       failures++;
@@ -1006,13 +1007,16 @@ export async function doctorCommand(
     }
     for (const result of Array.isArray(s.value) ? s.value : [s.value]) {
       if (result.status === 'fail') failures++;
+      if (result.status === 'warn') warnings++;
       console.log(renderResult(result));
     }
   }
 
   console.log('');
   if (failures === 0) {
-    console.log('All checks passed.');
+    console.log(
+      warnings === 0 ? 'All checks passed.' : `No check failed; ${warnings} warning(s) above.`
+    );
     getLog().info('doctor.run_completed');
     return 0;
   }
