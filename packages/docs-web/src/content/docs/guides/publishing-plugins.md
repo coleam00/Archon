@@ -136,6 +136,16 @@ run events. The plugin renders progress, decisions, reactions and cost footers.
 GitHub device flow. Installing the Slack receipt replaces the bundled Slack transport
 and bridge on restart. Removing it restores the bundled adapter for this transition.
 
+The plugin declares `attentionNotices`. A route's `destination` is a channel id the bot
+has joined, or `channel:thread_ts` to post inside an existing thread. Each notice offers
+the gate's decisions or the wait's form as controls: a button per decision or option, a
+menu and Submit for a multi-select, and an answer modal for a message wait or a reply to an
+interactive loop, which needs Interactivity enabled in the Slack app. A wait without a
+`pauseId` offers Resume. A forbidden action is shown only to the member who clicked; a
+refused one, such as an answer to a pause that is no longer open, is posted in the
+notice's thread. The run's follow-up posts in that thread and, unless the plugin restarted
+since the notice, closes its controls.
+
 The package tests run `runChatConformance` against the source process with a stubbed
 Slack client. Linux CI also compiles that entry point with test-only Slack and driver
 module substitutions and runs the same suite against the binary. The unmodified release

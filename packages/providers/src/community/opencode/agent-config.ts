@@ -32,10 +32,6 @@ export function listNamedAgents(
   }));
 }
 
-export function hasMultipleAgents(agents: Record<string, AgentConfig> | undefined): boolean {
-  return listNamedAgents(agents).length > 1;
-}
-
 export function getOrderedAgents(nodeConfig?: NodeConfig): NamedAgentConfig[] {
   return listNamedAgents(nodeConfig?.agents);
 }
@@ -95,33 +91,6 @@ export function resolvePromptForAgent(
   // by name. The node prompt is the user's task — sending the agent prompt here
   // would duplicate it (once in the agent file, once in the prompt body).
   return nodePrompt;
-}
-
-/**
- * @deprecated Use selectSingleAgent instead. Kept for backward compatibility.
- */
-export function selectPrimaryAgent(agents: Record<string, AgentConfig>): string | undefined {
-  const selected = selectSingleAgent(agents);
-  return selected?.key;
-}
-
-/**
- * @deprecated Use adaptNamedAgentForOpencode instead. Kept for backward compatibility.
- */
-export function adaptAgentConfigForOpencode(nodeConfig?: NodeConfig):
-  | {
-      agent?: string;
-      model?: { providerID: string; modelID: string };
-      tools?: Record<string, boolean>;
-    }
-  | undefined {
-  const agents = nodeConfig?.agents;
-  if (!agents) return undefined;
-
-  const selected = selectSingleAgent(agents);
-  if (!selected) return undefined;
-
-  return adaptNamedAgentForOpencode(selected);
 }
 
 export function toKebabCase(name: string): string {

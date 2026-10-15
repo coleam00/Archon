@@ -3,6 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
+import { INVOKE_WORKFLOW_SCHEMA, REGISTER_PROJECT_SCHEMA } from './chat-tools';
 import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
@@ -330,14 +331,24 @@ To remove a registered project:
 IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
 
   if (channel === 'tools') {
+    const invokeExample = {
+      workflow: 'archon-ship',
+      project: 'my-project',
+      prompt: exampleTask,
+    } satisfies Record<keyof typeof INVOKE_WORKFLOW_SCHEMA.properties, string>;
+    const registerExample = {
+      name: 'my-new-app',
+      path: `${workspaces}/user/my-new-app/source`,
+      folder: false,
+    } satisfies Record<keyof typeof REGISTER_PROJECT_SCHEMA.properties, string | boolean>;
     return `${routingRules}
 
 ## Invoking a Workflow
 
 To invoke a workflow, call the \`invoke_workflow\` tool with:
-- \`workflow\`: the exact workflow name from Available Workflows.
-- \`project\`: the project NAME (e.g., "my-project"), not an ID or path.
-- \`prompt\`: the task for the run.
+${Object.entries(INVOKE_WORKFLOW_SCHEMA.properties)
+  .map(([name, property]) => `- \`${name}\`: ${property.description}`)
+  .join('\n')}
 
 Rules:
 ${promptRules('`prompt`')}
@@ -350,7 +361,7 @@ Routing behavior:
 Example (clear intent):
 User: "Fix issue #42, the login form rejects valid emails"
 Response: I'll take issue #42 through to a reviewed pull request.
-invoke_workflow(workflow: "archon-ship", project: "my-project", prompt: "${exampleTask}")
+invoke_workflow(${INVOKE_WORKFLOW_SCHEMA.required.map(name => `${name}: "${invokeExample[name]}"`).join(', ')})
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
@@ -358,7 +369,7 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 
 ## Project Setup
 
-When a user asks to register an existing local directory, call the \`register_project\` tool with \`name\` and \`path\`.
+When a user asks to register an existing local directory, call the \`register_project\` tool with ${REGISTER_PROJECT_SCHEMA.required.map(name => `\`${name}\``).join(' and ')}.
 Pass \`folder: true\` when the user wants Archon to run in place without managing git.
 A folder project may itself be a git repository. Git belongs to the user and agent.
 Without \`folder\`, git paths are repo projects and non-git paths are folder projects.
@@ -367,7 +378,7 @@ When a user asks to clone a new repository:
 1. Clone the repository into ${workspaces}/:
    git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
 2. Register it by calling \`register_project\` with the project name and the path to \`source\`, e.g.
-   register_project(name: "my-new-app", path: "${workspaces}/user/my-new-app/source")
+   register_project(${REGISTER_PROJECT_SCHEMA.required.map(name => `${name}: "${registerExample[name]}"`).join(', ')})
 
 ${projectMaintenance}`;
   }

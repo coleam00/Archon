@@ -2075,6 +2075,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Resource busy; the run keeps its state */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -2319,6 +2328,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -2390,6 +2408,15 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -6150,17 +6177,31 @@ export interface components {
     };
     ApproveWorkflowRunBody: {
       comment?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RejectWorkflowRunBody: {
       reason?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RespondWorkflowRunBody: {
       decision: string;
       text?: string;
-      expectedGate?: {
-        nodeId: string;
-        pauseId: string;
-      };
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     AnswerWorkflowRunBody: {
       occurrence: string;
@@ -6586,7 +6627,6 @@ export interface components {
         maxConversations: number;
       };
       defaults: {
-        copyDefaults: boolean;
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };

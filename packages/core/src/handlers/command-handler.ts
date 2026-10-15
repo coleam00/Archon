@@ -356,14 +356,6 @@ async function handleWorktreeCommand(
           createdByPlatform: conversation.platform_type,
         });
 
-        await execFileAsync('git', [
-          'config',
-          '--global',
-          '--add',
-          'safe.directory',
-          env.workingPath,
-        ]);
-
         await db.updateConversation(conversation.id, {
           isolation_env_id: envId,
           cwd: env.workingPath,

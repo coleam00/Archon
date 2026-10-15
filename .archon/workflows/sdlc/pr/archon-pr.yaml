@@ -75,8 +75,8 @@ nodes:
   - id: publish
     script: publish-pr
     runtime: bun
-    timeout: 30000
-    retry: { max_attempts: 2, delay_ms: 20000 }
+    # pushHead owns retries; rerunning this node would restart its two-push budget.
+    timeout: 180000
     depends_on: [prepare]
     with:
       repo: { from: "$prepare.output.repo" }

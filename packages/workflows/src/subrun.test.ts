@@ -300,6 +300,9 @@ class InMemoryStore implements IWorkflowStore {
   deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
     throw new Error('Unexpected deferWorkflowContinuation');
   };
+  releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
+    released: false,
+  });
   answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
     throw new Error('Unexpected answerAttentionWait');
   };
@@ -2209,13 +2212,13 @@ nodes:
       const deps = makeDeps(store);
       if (failure === 'credential') {
         deps.isPerUserProviderKeysEnabled = () => true;
-        deps.getUserProviderCredentialStatus = async () => ({
+        deps.getUserProviderCredential = async () => ({
           kind: 'api_key',
-          status: {
+          getStatus: async () => ({
             state: 'unusable',
             source: 'archon',
             evidence: 'credential cannot be decrypted',
-          },
+          }),
         });
       }
       const resolve = mock(async () => ({ cwd: '/never', envId: 'never', branchName: 'never' }));

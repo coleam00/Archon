@@ -2,8 +2,10 @@ import { resolveRunSourceCapture, WorkflowSourceIntegrityError } from '@archon/w
 import type { WorkflowHost } from './host-store';
 import {
   WorkflowNotResumableError,
+  WorkflowResourceBusyError,
   resumeCursorMatches,
   type IWorkflowStore,
+  type ResumeRefusal,
 } from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
@@ -15,6 +17,7 @@ import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
+  isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
@@ -33,6 +36,20 @@ type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
   | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
   | { kind: 'not-accepted' }
+  /** The run's resource is full; it stays paused and keeps its place as a capacity waiter. */
+  | {
+      kind: 'waiting_for_capacity';
+      blocker: WorkflowResourceBusyError['blocker'];
+      /** The refusal as an operator reads it (`WorkflowResourceBusyError`). */
+      message: string;
+    }
+  /** The run's resource is full; it stays failed or not-ready paused and holds no place. */
+  | {
+      kind: 'resource_busy';
+      blocker: WorkflowResourceBusyError['blocker'];
+      refusal: Exclude<ResumeRefusal, 'waiting'>;
+      message: string;
+    }
   | { kind: 'unavailable'; reason: string; sourceError?: WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -59,7 +76,7 @@ export async function resumeWorkflowContinuation(
     };
   }
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
-  if (run.metadata.isolation === 'container') {
+  if (isContainerRun(run)) {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };
   }
   const context = await resolveContext(run);
@@ -128,6 +145,12 @@ export async function resumeWorkflowContinuation(
       error instanceof RunLiveOwnerAlreadyOwnedError
     )
       return { kind: 'not-accepted' };
+    if (error instanceof WorkflowResourceBusyError) {
+      const { blocker, refusal, message } = error;
+      return refusal === 'waiting'
+        ? { kind: 'waiting_for_capacity', blocker, message }
+        : { kind: 'resource_busy', blocker, refusal, message };
+    }
     throw error;
   }
 }
@@ -198,6 +221,11 @@ export async function wakeDueWorkflowContinuations(
           log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
       }
+      if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy')
+        log.info(
+          { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
+          'workflow_continuation_capacity_refused'
+        );
       const sourceError =
         outcome.kind === 'unavailable'
           ? outcome.sourceError

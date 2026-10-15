@@ -207,6 +207,22 @@ export async function checkProviderDiagnostics(
 }
 
 export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  try {
+    const { loadGitHubAppConfig } = await import('@archon/core');
+    if (loadGitHubAppConfig(env)) {
+      return {
+        label: 'GitHub App',
+        status: 'pass',
+        message: 'App mode configured (local configuration valid; GitHub access not checked)',
+      };
+    }
+  } catch (error) {
+    return {
+      label: 'GitHub App',
+      status: 'fail',
+      message: error instanceof Error ? error.message : 'Invalid GitHub App configuration.',
+    };
+  }
   const label = 'gh CLI';
   // Skip for users without GitHub configured — gh auth is irrelevant
   // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.

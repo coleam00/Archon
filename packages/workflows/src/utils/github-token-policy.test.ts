@@ -1,9 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import {
-  resolveGithubTokenOverrides,
-  applyGithubTokenOverridesToProcessEnv,
-  isOrgTokenFallbackAllowed,
-} from './github-token-policy';
+import { resolveGithubTokenOverrides, isOrgTokenFallbackAllowed } from './github-token-policy';
 
 describe('resolveGithubTokenOverrides', () => {
   test('no-op when per-user mode is disabled (solo install)', () => {
@@ -38,27 +34,6 @@ describe('resolveGithubTokenOverrides', () => {
     expect(resolveGithubTokenOverrides(true, 'user-1', null, env)).toEqual({});
     const env1 = { ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: '1' } as NodeJS.ProcessEnv;
     expect(resolveGithubTokenOverrides(true, 'user-1', null, env1)).toEqual({});
-  });
-});
-
-describe('applyGithubTokenOverridesToProcessEnv', () => {
-  test('sets non-empty values and deletes empty ones', () => {
-    const base = { GH_TOKEN: 'org', GITHUB_TOKEN: 'org', PATH: '/bin' } as NodeJS.ProcessEnv;
-    const out = applyGithubTokenOverridesToProcessEnv(base, {
-      GH_TOKEN: 'user',
-      GITHUB_TOKEN: '',
-      COPILOT_GITHUB_TOKEN: '',
-    });
-    expect(out.GH_TOKEN).toBe('user');
-    expect('GITHUB_TOKEN' in out).toBe(false);
-    expect('COPILOT_GITHUB_TOKEN' in out).toBe(false);
-    expect(out.PATH).toBe('/bin'); // untouched
-  });
-
-  test('does not mutate the input env', () => {
-    const base = { GH_TOKEN: 'org' } as NodeJS.ProcessEnv;
-    applyGithubTokenOverridesToProcessEnv(base, { GH_TOKEN: '' });
-    expect(base.GH_TOKEN).toBe('org');
   });
 });
 

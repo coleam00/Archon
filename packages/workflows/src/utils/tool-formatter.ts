@@ -68,17 +68,3 @@ export function formatToolInputBrief(toolName: string, toolInput: unknown): stri
   }
   return toolInputStr;
 }
-
-/**
- * Format thinking/reasoning for display (optional)
- *
- * @param thinking - Thinking text from AI
- * @returns Formatted thinking message
- */
-export function formatThinking(thinking: string): string {
-  const maxLength = 200;
-  if (thinking.length > maxLength) {
-    return `💭 ${thinking.substring(0, maxLength)}...`;
-  }
-  return `💭 ${thinking}`;
-}

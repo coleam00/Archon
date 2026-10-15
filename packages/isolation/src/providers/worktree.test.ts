@@ -102,6 +102,7 @@ import { IsolationResolver } from '../resolver';
 describe('WorktreeProvider', () => {
   let provider: WorktreeProvider;
   let mockConfigLoader: RepoConfigLoader;
+  let addSafeDirectorySpy: Mock<typeof git.addSafeDirectory>;
   let execSpy: Mock<typeof git.execFileAsync>;
   let mkdirSpy: Mock<typeof git.mkdirAsync>;
   let worktreeExistsSpy: Mock<typeof git.worktreeExists>;
@@ -120,6 +121,7 @@ describe('WorktreeProvider', () => {
       baseBranch: git.toBranchName('main'),
     });
     provider = new WorktreeProvider(mockConfigLoader);
+    addSafeDirectorySpy = spyOn(git, 'addSafeDirectory').mockResolvedValue(undefined);
     execSpy = spyOn(git, 'execFileAsync');
     mkdirSpy = spyOn(git, 'mkdirAsync');
     worktreeExistsSpy = spyOn(git, 'worktreeExists');
@@ -192,6 +194,7 @@ describe('WorktreeProvider', () => {
   });
 
   afterEach(() => {
+    addSafeDirectorySpy.mockRestore();
     execSpy.mockRestore();
     mkdirSpy.mockRestore();
     worktreeExistsSpy.mockRestore();
@@ -397,6 +400,51 @@ describe('WorktreeProvider', () => {
       expect(addedBeforeRefresh).toBe(true);
     });
 
+    test('trusts a new checkout before Git reads, submodules, refresh, and identity', async () => {
+      const access = mockAccess.getMockImplementation();
+      if (!access) throw new Error('Missing filesystem fixture');
+      mockAccess.mockImplementation(async path => {
+        if (typeof path === 'string' && path.endsWith('.gitmodules')) return;
+        await access(path);
+      });
+      const assertTrusted = (path: string): void => {
+        expect(addSafeDirectorySpy).toHaveBeenCalledWith(git.toRepoPath(path));
+      };
+      execSpy.mockImplementation(async (_command, args) => {
+        if (args[0] === '-C' && args[1] !== baseRequest.canonicalRepoPath) {
+          assertTrusted(args[1]);
+        }
+        return { stdout: '', stderr: '' };
+      });
+      refreshWorktreeIndexSpy.mockImplementation(async path => assertTrusted(path));
+      getGitCheckoutIdentitySpy.mockImplementation(async path => {
+        assertTrusted(path);
+        return { gitDir: '/git/worktrees/test', commonGitDir: '/git', linkedWorktree: true };
+      });
+
+      const env = await provider.create(baseRequest);
+      expect(addSafeDirectorySpy.mock.calls).toEqual([[git.toRepoPath(env.workingPath)]]);
+      expect(execSpy.mock.calls.some(([, args]) => args.includes('submodule'))).toBe(true);
+      expect(refreshWorktreeIndexSpy).toHaveBeenCalled();
+      expect(getGitCheckoutIdentitySpy).toHaveBeenCalled();
+    });
+
+    test('safe directory failure prevents setup and environment return', async () => {
+      addSafeDirectorySpy.mockRejectedValueOnce(new Error('config locked'));
+      await expect(provider.create(baseRequest)).rejects.toThrow('config locked');
+      expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
+      expect(getGitCheckoutIdentitySpy).not.toHaveBeenCalled();
+    });
+
+    test('trusts an existing checkout before ownership verification', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      verifyWorktreeOwnershipSpy.mockImplementation(async path => {
+        expect(addSafeDirectorySpy).toHaveBeenCalledWith(git.toRepoPath(path));
+      });
+      const env = await provider.create(baseRequest);
+      expect(env.metadata.adopted).toBe(true);
+    });
+
     test('a failed index refresh still creates the worktree', async () => {
       refreshWorktreeIndexSpy.mockRejectedValue(new Error('index.lock exists'));
 
@@ -538,6 +586,9 @@ describe('WorktreeProvider', () => {
         },
       ]);
 
+      verifyWorktreeOwnershipSpy.mockImplementation(async path => {
+        expect(addSafeDirectorySpy).toHaveBeenCalledWith(git.toRepoPath(path));
+      });
       const env = await provider.create(request);
 
       expect(verifyWorktreeOwnershipSpy).toHaveBeenCalledWith(
@@ -2916,7 +2967,10 @@ describe('WorktreeProvider', () => {
   describe('adopt', () => {
     test('adopts existing worktree', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
-      getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
+      getCanonicalRepoPathSpy.mockImplementation(async path => {
+        expect(addSafeDirectorySpy).toHaveBeenCalledWith(git.toRepoPath(path));
+        return git.toRepoPath('/workspace/repo');
+      });
       listWorktreesSpy.mockResolvedValue([
         { path: git.toWorktreePath('/workspace/repo'), branch: git.toBranchName('main') },
         {
@@ -2931,6 +2985,16 @@ describe('WorktreeProvider', () => {
       expect(result?.provider).toBe('worktree');
       expect(result?.branchName).toBe(git.toBranchName('feature/auth'));
       expect(result?.metadata).toHaveProperty('adopted', true);
+    });
+
+    test('public adoption rejects a required trust-write failure', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      addSafeDirectorySpy.mockRejectedValueOnce(new Error('config locked'));
+      await expect(provider.adopt('/workspace/worktrees/repo/feature-auth')).rejects.toThrow(
+        'config locked'
+      );
+      expect(getCanonicalRepoPathSpy).not.toHaveBeenCalled();
+      expect(listWorktreesSpy).not.toHaveBeenCalled();
     });
 
     test('refuses a registered worktree whose setup never finished', async () => {
@@ -3750,6 +3814,9 @@ describe('WorktreeProvider', () => {
       expect(() =>
         provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
       ).toThrow(/must be relative to the repo root/);
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
+      ).toThrow(/omit worktree.path/);
     });
 
     test('rejects a worktree.path that escapes the repo root via `..`', () => {

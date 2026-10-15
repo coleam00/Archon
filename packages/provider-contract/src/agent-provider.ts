@@ -170,15 +170,13 @@ export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 /**
  * Build a NativeToolInputSchema while tying `required` to the property keys: a
  * name that is not a declared property is a compile error, where the erased
- * interface alone would accept any string. Returns the erased shape so
- * `NativeTool` stays non-generic — a `keyof P` constraint on the interface
- * itself would make the schema invariant in `P` and break assignment to
- * `SendQueryOptions.nativeTools`.
+ * interface alone would accept any string. Preserve the property keys for typed
+ * consumers while keeping `NativeTool` itself non-generic.
  */
 export function defineNativeToolInputSchema<P extends Record<string, NativeToolProperty>>(input: {
   properties: P;
   required: readonly (keyof P & string)[];
-}): NativeToolInputSchema {
+}): typeof input {
   return input;
 }
 

@@ -282,6 +282,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 }
 
 export interface ScriptOptions {
+  /** Additional subprocess preload code; `{ARTIFACTS}` resolves as in inputs. */
+  readonly preload?: string;
   readonly source?: string;
   readonly gh?: GhFake;
   readonly forge?: ForgeFake;
@@ -333,7 +335,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
   const preload = join(root, 'preload.ts');
-  writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
+  writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog) + resolveArtifacts(options.preload ?? ''));
 
   // The engine hands every exec node a typed-artifact listing; an empty one by default.
   const listing = join(root, 'typed-artifacts.json');

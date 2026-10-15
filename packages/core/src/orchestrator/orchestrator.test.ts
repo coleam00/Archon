@@ -336,7 +336,6 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
     attentionNotices: [],
-    paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
@@ -344,7 +343,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
       quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
-    defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+    defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
   })
 );
 
@@ -543,9 +542,6 @@ mock.module('../db/workflows', () => ({
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
 
 import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
-
-// Also import wrapCommandForExecution which still lives in orchestrator.ts
-import { wrapCommandForExecution } from './orchestrator';
 
 // ─── Test Fixtures ──────────────────────────────────────────────────────────
 
@@ -812,14 +808,6 @@ describe('parseOrchestratorCommands', () => {
   });
 });
 
-describe('wrapCommandForExecution', () => {
-  test('wraps command with tags', () => {
-    const result = wrapCommandForExecution('plan', 'Plan the feature');
-    expect(result).toContain('plan');
-    expect(result).toContain('Plan the feature');
-  });
-});
-
 describe('orchestrator-agent handleMessage', () => {
   let platform: MockPlatformAdapter;
 
@@ -1083,7 +1071,6 @@ describe('orchestrator-agent handleMessage', () => {
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         attentionNotices: [],
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
@@ -1091,7 +1078,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1125,7 +1112,6 @@ describe('orchestrator-agent handleMessage', () => {
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         attentionNotices: [],
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
@@ -1133,7 +1119,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       const codexSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
@@ -1171,7 +1157,6 @@ describe('orchestrator-agent handleMessage', () => {
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         attentionNotices: [],
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
@@ -1179,7 +1164,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       mockClient.sendQuery.mockImplementation(async function* () {

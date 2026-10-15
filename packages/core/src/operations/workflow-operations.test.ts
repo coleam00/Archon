@@ -107,6 +107,7 @@ const {
   assertRejectable,
   ChildRunRedirectError,
   expectedGateForOccurrence,
+  StaleGateAnswerError,
 } = await import('./workflow-operations');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
 const isolationStore: IIsolationStore = {
@@ -1674,6 +1675,16 @@ describe('respondToWorkflow', () => {
       expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toBe('earlier');
     }
   );
+
+  test('a lost race stays a stale answer when the run cannot be re-read', async () => {
+    mockGetWorkflowRun
+      .mockResolvedValueOnce(makePausedRun())
+      .mockRejectedValueOnce(new Error('connection reset'));
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+    await expect(
+      approveWorkflow('run-1', undefined, operator, { via: 'cli', expectedGate: 'review' })
+    ).rejects.toBeInstanceOf(StaleGateAnswerError);
+  });
 
   test('delegates approve/reject to the dedicated functions unchanged', async () => {
     mockGetWorkflowRun.mockResolvedValue(makePausedRun());
