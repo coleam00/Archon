@@ -4,7 +4,7 @@ import type {
   PiModelInfo,
   ProviderInfo,
   ProviderKeyList,
-  SafeConfigTiers,
+  SafeConfig,
   TiersForm,
   TierName,
   TierRowForm,
@@ -24,7 +24,7 @@ import { SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
 
 /** Seed the editable tier form from a tier map (configured tiers only). */
-function seedTiers(tiers: SafeConfigTiers['tiers']): TiersForm {
+function seedTiers(tiers: SafeConfig['tiers']): TiersForm {
   const row = (t: TierName): TierRowForm => {
     const set = tiers?.[t];
     return { provider: set?.provider ?? '', model: set?.model ?? '', effort: set?.effort ?? '' };
@@ -39,7 +39,7 @@ function seedTiers(tiers: SafeConfigTiers['tiers']): TiersForm {
  * claude and codex ship built-ins — for any other provider an unset tier
  * resolves to nothing, and the hint must say so instead of implying a fallback.
  */
-function defaultHint(cfg: SafeConfigTiers, t: TierName, scope: SettingsScope): string {
+function defaultHint(cfg: SafeConfig, t: TierName, scope: SettingsScope): string {
   if (scope === 'user') {
     const installSet = cfg.tiers?.[t];
     if (installSet) return `${installSet.provider}/${installSet.model}`;
@@ -90,10 +90,7 @@ export function ModelTiersPanel(): ReactElement {
   useEffect(() => {
     if (config === undefined) return;
     if (scope === 'user' && userPrefs === undefined) return;
-    const seeded =
-      scope === 'user'
-        ? seedTiers(userPrefs?.tiers)
-        : seedTiers((config.config as SafeConfigTiers).tiers);
+    const seeded = scope === 'user' ? seedTiers(userPrefs?.tiers) : seedTiers(config.config.tiers);
     setForm(seeded);
     baselineRef.current = JSON.stringify(seeded);
   }, [config, userPrefs, scope]);
@@ -120,7 +117,7 @@ export function ModelTiersPanel(): ReactElement {
     );
   }
 
-  const cfg = config.config as SafeConfigTiers;
+  const cfg = config.config;
   const dirty = JSON.stringify(form) !== baselineRef.current;
 
   const setRow = (t: TierName, partial: Partial<TierRowForm>): void => {

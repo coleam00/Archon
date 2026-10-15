@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -185,4 +185,28 @@ test('a typed usage limit without a reset still fails the run', async () => {
   expect(failed?.status).toBe('failed');
   expect(failed?.metadata.wait).toBeUndefined();
   expect(await wake(engine, store, new Date(Date.now() + 86_400_000))).toEqual([]);
+});
+
+test('a rejected quota pause write fails the run without leaving a durable wait', async () => {
+  const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+  const { engine, store, calls } = harness([{ resetAt }]);
+  const pause = spyOn(store, 'pauseWorkflowRunForWait').mockRejectedValue(
+    new Error('quota pause write failed')
+  );
+  try {
+    const runId = await submit(engine);
+    expect(pause).toHaveBeenCalledWith(
+      runId,
+      expect.objectContaining({ kind: 'quota', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'implement' }
+    );
+    const failed = await store.getWorkflowRun(runId);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.metadata.error).toBe('quota pause write failed');
+    expect(failed?.metadata.wait).toBeUndefined();
+    expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000))).toEqual([]);
+    expect(calls()).toBe(1);
+  } finally {
+    pause.mockRestore();
+  }
 });

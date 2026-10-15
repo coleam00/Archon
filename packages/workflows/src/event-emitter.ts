@@ -12,7 +12,7 @@ import type { NodeExecutionMetadata } from './schemas/node-execution';
  * - Conversation-scoped subscriptions via registerRun() mapping
  */
 import { EventEmitter } from 'events';
-import type { ArtifactType, EffortLevel, NodeSkipReason, SkipCause } from './schemas';
+import type { ArtifactType, EffortLevel, NodeSkipReason, SkipCause, TierName } from './schemas';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import { createLogger } from '@archon/paths';
 
@@ -91,7 +91,7 @@ interface NodeStartedEvent {
   nodeName: string; // command name or node.id for inline prompts
   provider?: string; // resolved AI provider (absent for bash/script nodes)
   model?: string; // resolved model string (absent for bash/script nodes)
-  tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
+  tier?: TierName; // only set when node.model was a tier keyword
   effort?: EffortLevel; // resolved AI effort (absent when unset or unsupported)
 }
 

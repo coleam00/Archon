@@ -297,7 +297,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'approval_requested',
   'approval_received',
   // A paused run's inline notice could not be delivered. The run stays paused; the
-  // attention queue is where it is answered. `data` carries `nodeId` and `platform`.
+  // attention queue is where it is answered. `data` carries `nodeId`, `platform` and the
+  // pause `occurrence` (absent on events from before it was recorded), which the push router matches.
   'pause_notice_undelivered',
   'wait_started',
   // A resumed run paused again at the same wait, which has not fired or been answered:

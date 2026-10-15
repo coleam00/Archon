@@ -11,6 +11,7 @@ import {
   checkTriggerRule,
   loopBodyScope,
   inputEnvVars,
+  certifyExecOutput,
   nodeTemplateReferences,
   resolveNodeBindings,
   resolveAttentionOptions,
@@ -755,7 +756,7 @@ async function executeCodeNode(
   /** The executor's own `INPUTS_<UPPER_SNAKE>` bag: run, composed and node-local inputs. */
   inputEnv: NodeJS.ProcessEnv,
   execution?: NodeExecutionMetadata
-): Promise<{ output: string } | { error: string }> {
+): Promise<ReturnType<typeof certifyExecOutput> | { error: string }> {
   try {
     let command: string;
     let args: string[];
@@ -813,7 +814,9 @@ async function executeCodeNode(
         }),
       },
     });
-    return { output: result.stdout.replace(/\n$/, '') };
+    // The real run's gate, so a fixture cannot pass a node whose stdout the engine would reject.
+    // The simulator has no credential set to redact from the quoted stdout.
+    return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), []);
   } catch (error) {
     const err = error as Error & { stderr?: string };
     return { error: err.stderr?.trim() || err.message };
@@ -1389,7 +1392,7 @@ async function simulateNode(
       if ('error' in executed) {
         recordFailed(node, outputs, ctx, executed.error, resolvedText, iteration);
       } else {
-        outputs.set(node.id, { state: 'completed', output: executed.output });
+        outputs.set(node.id, { state: 'completed', ...executed });
         ctx.trace.push({
           nodeId: node.id,
           nodeType: nodeType(node),

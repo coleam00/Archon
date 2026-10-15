@@ -334,6 +334,19 @@ describe('conversations', () => {
       );
     });
 
+    test('rejects a platform id shared by multiple platforms in either row order', async () => {
+      const slack = { ...cliConversation, id: 'conv-slack', platform_type: 'slack' };
+      for (const rows of [
+        [cliConversation, slack],
+        [slack, cliConversation],
+      ]) {
+        mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+        await expect(findConversationByPlatformId('cli-1234-abc')).rejects.toThrow(
+          'Ambiguous conversation platform ID'
+        );
+      }
+    });
+
     test('returns null when no conversation matches', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 

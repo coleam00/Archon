@@ -3,7 +3,7 @@ import type {
   AttentionNoticeData,
   AttentionNoticeKind,
 } from '@archon/workflows/schemas/attention-notice';
-import type { AttentionNoticeRecord } from '../db/workflow-events';
+import { undeliveredNoticeKey, type AttentionNoticeRecord } from '../db/workflow-events';
 
 export interface AttentionNotice {
   run: WorkflowRun;
@@ -21,15 +21,24 @@ export function selectAttentionNotices(input: {
   initialized: ReadonlySet<string>;
   conversationPlatforms: ReadonlyMap<string, string>;
   inlinePlatforms: ReadonlySet<string>;
+  /** `undeliveredNoticeKey`s of pauses whose inline chat notice failed to post. */
+  undeliveredNotices: ReadonlySet<string>;
 }): { pushes: AttentionNotice[]; baselines: AttentionNoticeRecord[] } {
   const pushes: AttentionNotice[] = [];
   const baselines: AttentionNoticeRecord[] = [];
   for (const destination of input.destinations) {
     for (const run of input.runs) {
-      const platform = input.conversationPlatforms.get(run.id);
-      if (platform !== undefined && input.inlinePlatforms.has(platform)) continue;
       const attention = runAttention(run);
       if (attention?.kind !== 'awaiting_response' && attention?.kind !== 'attention') continue;
+      // An inline platform tells its own users about a pause, so a push would duplicate it.
+      // When that notice failed, nobody was told, and the pause is pushed like any other.
+      const platform = input.conversationPlatforms.get(run.id);
+      if (
+        platform !== undefined &&
+        input.inlinePlatforms.has(platform) &&
+        !input.undeliveredNotices.has(undeliveredNoticeKey(run.id, attention.occurrence))
+      )
+        continue;
       const nodeId =
         attention.kind === 'awaiting_response' ? attention.respondTo.nodeId : attention.nodeId;
       const key = `${nodeId}:${attention.occurrence}`;
