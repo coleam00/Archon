@@ -428,6 +428,25 @@ describe('toRun — durable wait', () => {
       label: 'Waiting for action',
     },
     {
+      name: 'node usage limit',
+      wait: {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince,
+        resumeAt,
+      },
+      expected: {
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince,
+        resumeAt,
+      },
+      label: 'Waiting for usage limit reset',
+    },
+    {
       name: 'loop-group time',
       wait: {
         owner: 'loop_group',

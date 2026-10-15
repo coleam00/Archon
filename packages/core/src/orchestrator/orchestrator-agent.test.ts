@@ -1520,8 +1520,6 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
     defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },

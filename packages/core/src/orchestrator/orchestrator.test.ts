@@ -339,8 +339,6 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
     defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
@@ -1074,8 +1072,6 @@ describe('orchestrator-agent handleMessage', () => {
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
         defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
@@ -1115,8 +1111,6 @@ describe('orchestrator-agent handleMessage', () => {
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
         defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
@@ -1160,8 +1154,6 @@ describe('orchestrator-agent handleMessage', () => {
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
         defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },

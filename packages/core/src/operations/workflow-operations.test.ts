@@ -1975,6 +1975,26 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
+  test('a usage-limit wait is refused by both verbs', () => {
+    // Rejecting it would cancel the run under an approval audit trail for a gate
+    // that never existed; cancel and abandon are the ways to stop it.
+    const waiting = {
+      wait: {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince: '2026-08-28T10:00:00.000Z',
+        resumeAt: '2026-08-28T15:00:00.000Z',
+      },
+    };
+    for (const assertFn of [assertApprovable, assertRejectable]) {
+      expect(() => assertFn(withMeta(waiting))).toThrow(
+        'Run run-1 is waiting for a provider usage limit to reset at 2026-08-28T15:00:00.000Z'
+      );
+    }
+  });
+
   test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {

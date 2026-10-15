@@ -5096,6 +5096,48 @@ describe('workflowStatusCommand', () => {
     }
   });
 
+  it.each([false, true])('shows a usage-limit wait with its reset time (json=%s)', async json => {
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'limited',
+          workflow_name: 'implement',
+          working_path: '/repo',
+          status: 'paused',
+          started_at: new Date(),
+          active_nodes: [],
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'implement',
+              kind: 'quota',
+              pauseId: 'limit-1',
+              waitingSince: '2026-10-15T09:00:00.000Z',
+              resumeAt: '2026-10-15T14:00:00.000Z',
+            },
+          },
+        },
+      ])
+    );
+    await workflowStatusCommand(createTestWorkflowHost(), '/repo', { json, all: true });
+    if (json)
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        runs: [
+          {
+            attention: {
+              kind: 'usage_limit',
+              nodeId: 'implement',
+              resumeAt: '2026-10-15T14:00:00.000Z',
+            },
+          },
+        ],
+      });
+    else
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "  Wait:   provider usage limit at 'implement' — continues after it resets at 2026-10-15T14:00:00.000Z"
+      );
+  });
+
   it('scopes active runs to the cwd-resolved codebase', async () => {
     const codebaseDb = await import('@archon/core/db/codebases');
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -6660,7 +6702,7 @@ describe('workflowGetCommand', () => {
     );
   });
 
-  it('prints durable wait and scheduled quota continuation state', async (): Promise<void> => {
+  it('prints durable wait, usage-limit wait and scheduled quota continuation state', async (): Promise<void> => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
       .mockResolvedValueOnce({
@@ -6678,6 +6720,24 @@ describe('workflowGetCommand', () => {
             event: 'checks.complete',
             waitingSince: '2026-08-24T10:00:00.000Z',
             resumeAt: '2026-08-25T10:00:00.000Z',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        id: 'run-limit-human',
+        checkout_baseline: null,
+        workflow_name: 'deliver',
+        status: 'paused',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'implement',
+            kind: 'quota',
+            pauseId: 'limit-1',
+            waitingSince: '2026-08-24T10:00:00.000Z',
+            resumeAt: '2026-08-25T12:00:00.000Z',
           },
         },
       })
@@ -6701,10 +6761,14 @@ describe('workflowGetCommand', () => {
       });
 
     await workflowGetCommand(createTestWorkflowHost(), 'run-wait-human');
+    await workflowGetCommand(createTestWorkflowHost(), 'run-limit-human');
     await workflowGetCommand(createTestWorkflowHost(), 'run-quota-human');
 
     expect(consoleSpy).toHaveBeenCalledWith(
       "  Wait:   event 'checks.complete' until 2026-08-25T10:00:00.000Z"
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "  Wait:   provider usage limit at 'implement' — continues after it resets at 2026-08-25T12:00:00.000Z"
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       '  Resume: scheduled for 2026-08-25T11:00:00.000Z (attempt 1/2)'

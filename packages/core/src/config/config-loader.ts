@@ -2,7 +2,11 @@ import { validateWorktreePostCreate } from '@archon/isolation';
 import { installedProviders, missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import type { OpencodeProviderDefaults } from '@archon/providers/types';
-import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
+import {
+  DEFAULT_TOOL_CALL_ATTENTION_MS,
+  deprecatedQuotaPolicyWarning,
+  liveWorkflowPolicy,
+} from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
  *
@@ -309,6 +313,10 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
       .join('; ');
     throw new InvalidConfigError('Invalid workflows config', configPath, issues);
   }
+  const warning = deprecatedQuotaPolicyWarning(result.data);
+  if (warning !== undefined) {
+    getLog().warn({ configPath, warning }, 'config.workflows_quota_keys_deprecated');
+  }
   config.workflows = result.data;
 }
 
@@ -585,9 +593,7 @@ function getDefaults(): MergedConfig {
     },
     workflows: {
       toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
-      autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 24 * 60 * 60 * 1000,
+      autoResumeOnQuotaReset: true,
     },
     commands: {
       folder: undefined,
@@ -699,7 +705,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   }
 
   if (global.workflows) {
-    result.workflows = { ...result.workflows, ...global.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(global.workflows) };
   }
 
   // Container backend defaults (folder projects)
@@ -736,7 +742,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   result.tiers = mergeTiers(result.tiers, repo.tiers);
 
   if (repo.workflows) {
-    result.workflows = { ...result.workflows, ...repo.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(repo.workflows) };
   }
 
   // Commands config
