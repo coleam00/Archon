@@ -59,6 +59,7 @@ import type * as MessageDb from '../db/messages';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as UserProviderKeyStore from '../db/user-provider-key-store';
+import type { ResolvedCredential } from '../credentials/delivery';
 import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
@@ -433,19 +434,26 @@ const providerRegistry: ProviderRegistry = {
   list: () => [],
 };
 
+// The vendor a chat turn's provider needs; per-test overrides pick another.
+const mockChatVendor = mock((_model?: string): string | undefined => 'anthropic');
+const mockIsRegisteredProvider = mock((_provider: string): boolean => true);
 mock.module('@archon/providers', () => ({
   providerRegistry,
-  getRegistration: () => ({
-    parseConfig: (raw: Record<string, unknown>) => raw,
-    credentials: { vendorFor: () => 'anthropic' },
-  }),
+  getRegistration: (provider: string) => {
+    // The real registry throws for an unknown id.
+    if (!mockIsRegisteredProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+    return {
+      parseConfig: (raw: Record<string, unknown>) => raw,
+      credentials: { vendorFor: (model?: string) => mockChatVendor(model) },
+    };
+  },
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
   getProviderCapabilities: mockGetProviderCapabilities,
-  isRegisteredProvider: mock(() => true),
+  isRegisteredProvider: (provider: string) => mockIsRegisteredProvider(provider),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (the chat inject tests deliver through it).
@@ -703,17 +711,36 @@ mock.module('../credentials/config', () => ({
   isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
 }));
 
-const mockListDecryptedUserProviderCredentials = mock<
-  typeof UserProviderKeyStore.listDecryptedUserProviderCredentials
->(async () => []);
+// The user's stored credentials: a usable credential, or the status a broken one reports.
+type StoredFixture =
+  | { provider: string; cred: ResolvedCredential }
+  | {
+      provider: string;
+      status: Exclude<UserProviderKeyStore.StoredCredential, { state: 'usable' }>;
+    };
+const mockStoredProviderCredentials = mock<(userId: string) => Promise<StoredFixture[]>>(
+  async () => []
+);
+const mockListUserProviderKeys = mock(async (userId: string) =>
+  (await mockStoredProviderCredentials(userId)).map(row => ({
+    provider: row.provider,
+    kind: 'cred' in row ? row.cred.kind : ('api_key' as const),
+    label: null,
+  }))
+);
 mock.module('../db/user-provider-key-store', () => ({
-  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
   saveUserProviderKey: mock(() => Promise.resolve()),
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
-  listUserProviderKeys: mock(() => Promise.resolve([])),
+  listUserProviderKeys: mockListUserProviderKeys,
   deleteUserProviderKey: mock(() => Promise.resolve()),
-  getDecryptedProviderCredential: mock(() =>
-    Promise.resolve({ state: 'not_connected', source: 'archon' })
+  getDecryptedProviderCredential: mock(
+    async (userId: string, provider: string): Promise<UserProviderKeyStore.StoredCredential> => {
+      const row = (await mockStoredProviderCredentials(userId)).find(r => r.provider === provider);
+      if (!row) return { state: 'not_connected', source: 'archon' };
+      return 'cred' in row
+        ? { state: 'usable', source: 'archon', credential: row.cred }
+        : row.status;
+    }
   ),
 }));
 
@@ -6052,8 +6079,13 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     );
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
-    mockListDecryptedUserProviderCredentials.mockReset();
-    mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+    mockStoredProviderCredentials.mockReset();
+    mockStoredProviderCredentials.mockImplementation(async () => []);
+    mockChatVendor.mockReset();
+    mockListUserProviderKeys.mockClear();
+    mockChatVendor.mockImplementation(() => 'anthropic');
+    mockIsRegisteredProvider.mockReset();
+    mockIsRegisteredProvider.mockImplementation(() => true);
     mockIsPerUserProviderKeysEnabled.mockReset();
     mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
     mockGenerateAndSetTitle.mockReset();
@@ -6061,7 +6093,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('injects api_key env vars from a connected provider', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
@@ -6076,7 +6108,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('a Claude subscription reaches chat only as CLAUDE_CODE_OAUTH_TOKEN; Pi gets no ANTHROPIC_OAUTH_TOKEN', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'anthropic',
         cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
@@ -6096,7 +6128,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     mockGetOrCreateConversation.mockImplementation(() =>
       Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
     );
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'anthropic',
         cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
@@ -6113,7 +6145,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('a ChatGPT subscription reaches chat as the in-memory Codex login env, with no CODEX_HOME', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'openai',
         cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok', accountId: 'acct' } },
@@ -6137,7 +6169,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
 
   test('skips one broken credential but includes remaining providers', async () => {
     // 'mystery-broken' is not in KNOWN_PROVIDERS → deliverCredential throws.
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'mystery-broken', cred: { kind: 'api_key', apiKey: 'x' } },
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
@@ -6147,39 +6179,146 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
   });
 
-  test('does not throw when listDecryptedUserProviderCredentials rejects', async () => {
-    mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+  test('refuses the turn when the connected credentials cannot be listed', async () => {
+    // Without the list, the turn cannot tell whether the user has a credential of their
+    // own, and running it would use the host login.
+    mockStoredProviderCredentials.mockRejectedValue(new Error('db gone'));
     const platform = makePlatform();
     await expect(
       handleMessage(platform, 'conv-1', 'hello', { actor: operator })
     ).resolves.toBeUndefined();
+    expect(mockSendQuery).not.toHaveBeenCalled();
+  });
+
+  const sentText = (platform: ReturnType<typeof makePlatform>): string =>
+    platform.sendMessage.mock.calls.map(call => String(call[1])).join('\n');
+
+  test('refuses a Codex turn whose connected subscription cannot be delivered (#4245)', async () => {
+    mockChatVendor.mockReturnValue('openai');
+    // No ChatGPT account id: delivery throws, and the turn would otherwise run Codex on
+    // the host's own login.
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: 'sub-access', rawCreds: { access: 'sub-access' } },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    const sent = sentText(platform);
+    expect(sent).toContain('Your connected openai credential cannot be used');
+    expect(sent).toContain('reconnect it with `archon ai login openai`');
+    expect(sent).not.toContain('sub-access');
+  });
+
+  test('refuses a turn whose connected credential is unusable', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        status: {
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'The vendor rejected the refresh.',
+        },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(sentText(platform)).toContain(
+      'Your connected anthropic credential cannot be used: The vendor rejected the refresh.'
+    );
+  });
+
+  test('a credential check that could not decide asks the user to retry, not reconnect', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        status: { state: 'check_failed', source: 'archon', evidence: 'The vendor timed out.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(sentText(platform)).toContain('The vendor timed out. Try again in a moment');
+  });
+
+  test('skips the title when the title model’s credential failed, and still runs the turn', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    // The chat model is on anthropic; the `small` title model is on openai.
+    mockChatVendor.mockReturnValueOnce('anthropic').mockReturnValueOnce('openai');
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('a title tier on an unregistered provider keeps its fallback when a credential failed', async () => {
+    // Title generation falls back to a truncated title for an unknown provider; the
+    // credential check must not throw first and fail the user's turn.
+    mockIsRegisteredProvider.mockImplementation(provider => provider !== 'ghost');
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({ tiers: { small: { provider: 'ghost', model: 'ghost-model' } } })
+    );
+    mockStoredProviderCredentials.mockResolvedValue([
+      { provider: 'openai', status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle.mock.calls[0]?.[2]).toBe('ghost');
+  });
+
+  test('runs on the host login when the user connected nothing for the turn vendor', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        status: { state: 'unusable', source: 'archon', evidence: 'Unrelated vendor.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
   test('skips injection when feature is disabled', async () => {
     // Persistent (not Once): the flag is install-level and read more than once
     // per turn (creator-fallback warn guard + the env seam itself).
     mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
+    expect(mockListUserProviderKeys).not.toHaveBeenCalled();
   });
 
   test('resolves credentials from the SENDER, not the conversation creator (#1976)', async () => {
     // beforeEach sets the conversation row's user_id to 'u-test' (the creator).
     // A different sender on this turn must use their OWN credentials — never
     // the creator's.
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'sender-key' } },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', {
       actor: { kind: 'user', userId: 'sender-2' },
     });
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
-    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalledWith('u-test');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('sender-2');
+    expect(mockListUserProviderKeys).not.toHaveBeenCalledWith('u-test');
   });
 
   test('falls back to the conversation creator for credentials when no sender (S1)', async () => {
@@ -6188,7 +6327,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     // `undefined` would slip through the mock unnoticed.
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('u-test');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('u-test');
   });
 
   test('prefs and credentials resolve to the SAME identity in a single turn (S1)', async () => {
@@ -6200,7 +6339,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       actor: { kind: 'user', userId: 'sender-2' },
     });
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('sender-2');
   });
 });
 

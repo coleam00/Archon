@@ -33,6 +33,7 @@
     "./pi/model-ref": "./src/community/pi/model-ref.ts",
     "./pi/config": "./src/community/pi/config.ts",
     "./pi/descriptor": "./src/community/pi/descriptor.ts",
+    "./pi/auth-path-env": "./src/community/pi/auth-path-env.ts",
     "./pi": "./src/community/pi/index.ts",
     "./in-process": "./src/in-process.ts"
   },

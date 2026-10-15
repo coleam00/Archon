@@ -20,9 +20,10 @@ import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallRespo
 import { toolResponse } from './native-tools';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
+import type { ServerRequest } from './protocol/ServerRequest';
+import type { CodexBinary } from './binary-resolver';
 
 const TOOL_CALL_METHOD = 'item/tool/call';
-import type { CodexBinary } from './binary-resolver';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -61,6 +62,15 @@ export type ConnectionEnd =
 const STDERR_BUFFER_CHARS = 8000;
 const STDERR_EVIDENCE_LINES = 10;
 const STDERR_EVIDENCE_CHARS = 1000;
+
+/**
+ * Codex asks for a new ChatGPT token after its access token is rejected. Archon mints the
+ * token from the user's stored subscription when a run starts, and has no way to mint
+ * another mid-turn, so it declines in words the turn's auth failure can carry.
+ */
+const CHATGPT_TOKEN_REFRESH = 'account/chatgptAuthTokens/refresh' satisfies ServerRequest['method'];
+const CHATGPT_TOKEN_REFRESH_DECLINED =
+  'Archon cannot refresh the delivered ChatGPT token during a turn';
 
 /**
  * The evidence form of a stderr buffer: credentials redacted, then cut to its last lines.
@@ -327,7 +337,14 @@ export class AppServerConnection {
       // runs with approvals off and handles none of them, and an unanswered request
       // stalls the turn, so each gets an error reply at once.
       getLog().warn({ method }, 'codex.app_server_request_declined');
-      this.send({ id, error: { code: -32601, message: `Archon does not handle ${method}` } });
+      this.send({
+        id,
+        error:
+          method === CHATGPT_TOKEN_REFRESH
+            ? // The method exists; Archon only has no newer token than the one it delivered.
+              { code: -32000, message: CHATGPT_TOKEN_REFRESH_DECLINED }
+            : { code: -32601, message: `Archon does not handle ${method}` },
+      });
       return;
     }
     this.queue.push(message as unknown as ServerNotification);

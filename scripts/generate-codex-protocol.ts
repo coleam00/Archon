@@ -22,6 +22,8 @@ const OUTPUT_DIR = join(REPO_ROOT, 'packages/providers/src/codex/protocol');
 const ROOTS = [
   'ClientRequest',
   'ServerNotification',
+  // Requests Codex sends the client; Archon answers the ChatGPT token refresh by name.
+  'ServerRequest',
   'v2/DynamicToolCallParams',
   // Response shapes: the test fake builds its replies against them.
   'InitializeResponse',
