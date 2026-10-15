@@ -45,7 +45,12 @@ import { homedir } from 'os';
 import { randomBytes, createPrivateKey } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
-import { GITHUB_PAT_KEYS, selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import {
+  GITHUB_APP_CREDENTIAL_KEYS,
+  GITHUB_APP_PRIVATE_KEY_KEYS,
+  GITHUB_PAT_KEYS,
+  selectGitHubAuthMode,
+} from '@archon/core/utils/github-auth-mode';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
@@ -206,14 +211,6 @@ type GitHubConfig = {
     }
 );
 
-const GITHUB_APP_PRIVATE_KEY_KEYS = [
-  'GITHUB_APP_PRIVATE_KEY',
-  'GITHUB_APP_PRIVATE_KEY_PATH',
-] as const;
-export const GITHUB_APP_CREDENTIAL_KEYS = [
-  'GITHUB_APP_ID',
-  ...GITHUB_APP_PRIVATE_KEY_KEYS,
-] as const;
 export const GITHUB_APP_KEYS = [
   ...GITHUB_APP_CREDENTIAL_KEYS,
   'GITHUB_APP_CLIENT_ID',
@@ -2411,14 +2408,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
       ...(scope === 'project' ? otherGitHubEnv : selected),
       ...(scope === 'project' ? selected : otherGitHubEnv),
     };
+    const mode = selectGitHubAuthMode(effective);
     if (
       config.github?.mode === 'app' ||
       (!config.github &&
+        mode.kind !== 'pat' &&
         [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
           GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
         ))
     ) {
-      const mode = selectGitHubAuthMode(effective);
       if (mode.kind !== 'app') {
         throw new Error(
           mode.kind === 'conflict'

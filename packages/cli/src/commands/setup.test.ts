@@ -15,11 +15,13 @@ import { join, dirname, relative, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
 import * as git from '@archon/git';
-import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import {
+  GITHUB_APP_CREDENTIAL_KEYS,
+  selectGitHubAuthMode,
+} from '@archon/core/utils/github-auth-mode';
 import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import {
   GITHUB_APP_KEYS,
-  GITHUB_APP_CREDENTIAL_KEYS,
   bootstrapProjectConfig,
   selectSetupProviders,
   collectAIConfig,
@@ -1444,15 +1446,6 @@ describe('GitHub setup wizard', () => {
       for (const match of source.matchAll(/\benv\.(GITHUB_APP_[A-Z_]+)\b/g)) readKeys.add(match[1]);
     }
     expect([...readKeys].sort()).toEqual([...GITHUB_APP_KEYS].sort());
-    const selector = readFileSync(
-      join(import.meta.dir, '../../../core/src/utils/github-auth-mode.ts'),
-      'utf8'
-    );
-    const activationKeys = Array.from(
-      selector.matchAll(/\benv\.(GITHUB_APP_[A-Z_]+)\b/g),
-      match => match[1]
-    );
-    expect([...new Set(activationKeys)].sort()).toEqual([...GITHUB_APP_CREDENTIAL_KEYS].sort());
   });
 
   it.each(['0', '-1', 'abc', '1.2', '   '])(
@@ -1765,6 +1758,86 @@ describe('GitHub setup wizard', () => {
       platforms.mockRestore();
     }
   });
+
+  const effectivePatCases = GITHUB_APP_CREDENTIAL_KEYS.flatMap(key => [
+    ...(['add', 'update', 'fresh'] as const).flatMap(mode =>
+      (['home', 'project'] as const).map(selectedScope => ({
+        key,
+        mode,
+        selectedScope,
+        layer: 'inherited' as const,
+      }))
+    ),
+    ...(['update', 'fresh'] as const).flatMap(mode => [
+      { key, mode, selectedScope: 'project' as const, layer: 'home-partial' as const },
+      { key, mode, selectedScope: 'home' as const, layer: 'home-complete' as const },
+    ]),
+  ]);
+  it.each(effectivePatCases)(
+    'preserves effective PAT over $layer $key ($mode, $selectedScope)',
+    async scenario => {
+      scope = scenario.selectedScope;
+      setupMode = scenario.mode;
+      target = resolveScopedEnvPath(scope, root);
+      const credential = {
+        [scenario.key]:
+          scenario.key === 'GITHUB_APP_PRIVATE_KEY'
+            ? privateKey
+            : scenario.key === 'GITHUB_APP_PRIVATE_KEY_PATH'
+              ? keyPath
+              : '123',
+      };
+      const inheritedEnv = scenario.layer === 'inherited' ? credential : {};
+      const home =
+        scenario.layer === 'home-complete'
+          ? {
+              GITHUB_APP_ID: '123',
+              GITHUB_APP_PRIVATE_KEY: privateKey,
+              WEBHOOK_SECRET: webhookSecret,
+              ...credential,
+            }
+          : scenario.layer === 'home-partial'
+            ? credential
+            : {};
+      const savedPat = {
+        GITHUB_TOKEN: pat,
+        WEBHOOK_SECRET: webhookSecret,
+        GITHUB_APP_ID: '',
+        GITHUB_APP_PRIVATE_KEY: '',
+        GITHUB_APP_PRIVATE_KEY_PATH: '',
+        CUSTOM_KEY: 'keep',
+      };
+      const homePath = resolveScopedEnvPath('home', root);
+      const projectPath = resolveScopedEnvPath('project', root);
+      writeFileSync(
+        homePath,
+        serializeEnv(scenario.layer === 'inherited' && scope === 'home' ? savedPat : home)
+      );
+      writeFileSync(projectPath, serializeEnv(savedPat));
+      const original = readFileSync(target, 'utf8');
+      const otherPath = scope === 'home' ? projectPath : homePath;
+      const otherOriginal = readFileSync(otherPath, 'utf8');
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        expect(await setupCommand({ repoPath: root, scope, providers: [], inheritedEnv })).toBe(0);
+        const effective = {
+          ...inheritedEnv,
+          ...parseDotenv(readFileSync(homePath, 'utf8')),
+          ...parseDotenv(readFileSync(projectPath, 'utf8')),
+        };
+        expect(selectGitHubAuthMode(effective)).toEqual({ kind: 'pat' });
+        expect(loadGitHubAppConfig(effective)).toBeNull();
+        expect(effective.GITHUB_TOKEN).toBe(pat);
+        expect(effective.CUSTOM_KEY).toBe('keep');
+        expect(readFileSync(otherPath, 'utf8')).toBe(otherOriginal);
+        const backups = Array.from(new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target)));
+        expect(backups).toHaveLength(1);
+        expect(readFileSync(join(dirname(target), backups[0]), 'utf8')).toBe(original);
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
 
   it.each([false, true])(
     'previews a PAT switch from the startup environment (inherited PAT=%j)',

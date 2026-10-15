@@ -1,3 +1,12 @@
+export const GITHUB_APP_PRIVATE_KEY_KEYS = [
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_APP_PRIVATE_KEY_PATH',
+] as const;
+export const GITHUB_APP_CREDENTIAL_KEYS = [
+  'GITHUB_APP_ID',
+  ...GITHUB_APP_PRIVATE_KEY_KEYS,
+] as const;
+
 export const GITHUB_PAT_KEYS = ['GITHUB_TOKEN', 'GH_TOKEN'] as const;
 
 export type GitHubAuthModeDecision =
@@ -10,14 +19,12 @@ export type GitHubAuthModeDecision =
 export function selectGitHubAuthMode(env: NodeJS.ProcessEnv): GitHubAuthModeDecision {
   const hasGitHubApp = Boolean(
     env.GITHUB_APP_ID &&
-    (env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_APP_PRIVATE_KEY_PATH) &&
+    GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key])) &&
     env.WEBHOOK_SECRET
   );
   const hasGitHubPat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
 
-  const hasAppCredential = Boolean(
-    env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_APP_PRIVATE_KEY_PATH
-  );
+  const hasAppCredential = GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(env[key]));
   if (hasAppCredential && env.GITHUB_TOKEN) {
     return {
       kind: 'conflict',

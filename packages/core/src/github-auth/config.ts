@@ -16,7 +16,11 @@ import { loadAppPrivateKey } from './private-key';
 import { AppPrivateKeyError } from './errors';
 import type { GitHubAppConfig } from './types';
 import { getEncryptionKey } from '../utils/token-crypto';
-import { GITHUB_PAT_KEYS, selectGitHubAuthMode } from '../utils/github-auth-mode';
+import {
+  GITHUB_APP_CREDENTIAL_KEYS,
+  GITHUB_PAT_KEYS,
+  selectGitHubAuthMode,
+} from '../utils/github-auth-mode';
 
 export interface DeviceFlowConfig {
   /** GitHub App client id (the `Iv1.`/`Iv23…` value, distinct from GITHUB_APP_ID). */
@@ -30,9 +34,7 @@ export function resolveGitHubTokenFromEnv(
 }
 
 export function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): GitHubAppConfig | null {
-  if (
-    ![env.GITHUB_APP_ID, env.GITHUB_APP_PRIVATE_KEY, env.GITHUB_APP_PRIVATE_KEY_PATH].some(Boolean)
-  ) {
+  if (!GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(env[key]))) {
     return null;
   }
   const mode = selectGitHubAuthMode(env);
