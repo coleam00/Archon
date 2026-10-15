@@ -5,7 +5,7 @@
  * Types are derived from schemas via `z.infer<typeof Schema>` (WorkflowDefinition
  * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader.ts).
  *
- * Import `z` from `@hono/zod-openapi` in all schema files (project convention).
+ * Import `z` from plain `zod`; name OpenAPI components with `.meta({ id })`.
  */
 
 // Retry configuration
@@ -191,6 +191,7 @@ export {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowRunBudgetSchema,
   workflowInputSpecSchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
@@ -203,6 +204,7 @@ export type {
   WebSearchMode,
   WorkflowRequirement,
   WorkflowEvidencePolicy,
+  WorkflowRunBudget,
   WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,

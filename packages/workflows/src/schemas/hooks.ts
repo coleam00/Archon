@@ -1,7 +1,7 @@
 /**
  * Zod schemas for per-node hook configuration.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /**
  * Supported hook events for per-node hooks.

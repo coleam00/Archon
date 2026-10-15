@@ -23,6 +23,12 @@ inputs:
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this run delivers, forwarded
+      unchanged to delivery's reviews. archon-review's `part` input owns its
+      shape. Empty delivers the whole contract.
   publish:
     default: "false"
     description: >-
@@ -84,6 +90,7 @@ nodes:
     include: archon-deliver
     with:
       errors: "$INPUTS.errors"
+      part: "$INPUTS.part"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work

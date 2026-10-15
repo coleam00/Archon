@@ -890,6 +890,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         resolveAndCancelApprovalGate: (...args) =>
           operationWorkflowDb.resolveAndCancelApprovalGate(...args),
         answerAttentionWait: (...args) => operationWorkflowDb.answerAttentionWait(...args),
+        labelAttentionWait: (...args) => operationWorkflowDb.labelAttentionWait(...args),
         cancelResumableRunsForConversation: (...args) =>
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
         deleteWorkflowNodeSessions: (...args) =>

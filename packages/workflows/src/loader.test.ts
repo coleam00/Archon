@@ -580,6 +580,118 @@ describe('Workflow Loader', () => {
       expect(result.errors[0].error).toContain('required: boolean');
     });
 
+    describe('run budget (#2814)', () => {
+      const budgeted = (nodes: string, budget = 'budget:\n  max_spend_usd: 2.5\n'): string =>
+        `name: budgeted\ndescription: d\n${budget}nodes:\n${nodes}`;
+
+      it('parses a budget declaring either ceiling or both', () => {
+        for (const [yaml, expected] of [
+          ['budget:\n  max_work_units: 3\n', { max_work_units: 3 }],
+          ['budget:\n  max_spend_usd: 2.5\n', { max_spend_usd: 2.5 }],
+          [
+            'budget:\n  max_work_units: 3\n  max_spend_usd: 2.5\n',
+            { max_work_units: 3, max_spend_usd: 2.5 },
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error).toBeNull();
+          expect(result.workflow?.budget).toEqual(expected);
+        }
+      });
+
+      it('rejects a malformed budget instead of running without a ceiling', () => {
+        for (const yaml of [
+          'budget: {}\n',
+          'budget:\n  max_spend_usd: 0\n',
+          'budget:\n  max_work_units: 1.5\n',
+          'budget:\n  max_spend: 5\n',
+          'budget:\n  max_work_units: 3\n  max_spend: 5\n',
+          'budget: lots\n',
+        ]) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain('Invalid budget');
+        }
+      });
+
+      it('rejects loops, workflow: children and fan-out under a budget', () => {
+        for (const [nodeYaml, kind] of [
+          ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+          [
+            '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+            'loop_group',
+          ],
+          ['    workflow: child', 'workflow'],
+          ['    workflow: child\n    fan_out:\n      items: \'["a"]\'\n      as: item', 'workflow'],
+          [
+            '    include: block\n    fan_out:\n      items: \'["a"]\'\n      as: item',
+            'include with fan_out',
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`), `${kind}.yaml`);
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain(`node 'x' is a ${kind} node`);
+          // The same shape without a budget is not refused for this reason.
+          const unbudgeted = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`, ''), 'u.yaml');
+          expect(unbudgeted.error?.error ?? '').not.toContain('budget');
+        }
+      });
+
+      it('rejects a loop that reaches a budgeted workflow through include:', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'looping-block.yaml',
+          'name: looping-block\ndescription: block\nnodes:\n  - id: spin\n    loop:\n      until: done\n      max_iterations: 2\n      prompt: p\n'
+        );
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-parent.yaml',
+          budgeted('  - id: blk\n    include: looping-block\n')
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        const err = result.errors.find(e => e.filename === 'budgeted-parent.yaml');
+        expect(err?.error).toContain("node 'blk__spin' is a loop node");
+        expect(result.workflows.some(w => w.workflow.name === 'looping-block')).toBe(true);
+      });
+
+      it('loads a budgeted workflow of ordinary nodes, gates, waits and halts', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-ordinary.yaml',
+          budgeted(
+            [
+              '  - id: plan',
+              '    prompt: p',
+              '  - id: check',
+              '    bash: echo ok',
+              '    depends_on: [plan]',
+              '  - id: tool',
+              '    script: console.log(1)',
+              '    runtime: bun',
+              '    depends_on: [plan]',
+              '  - id: review',
+              '    approval:',
+              '      message: ok?',
+              '      on_reject:',
+              '        prompt: fix it',
+              '    depends_on: [check, tool]',
+              '  - id: pause',
+              '    wait:',
+              '      duration_ms: 1000',
+              '    depends_on: [review]',
+              '  - id: stop',
+              '    cancel: done',
+              '    depends_on: [pause]',
+              '',
+            ].join('\n')
+          )
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect(result.workflows[0].workflow.budget).toEqual({ max_spend_usd: 2.5 });
+      });
+    });
+
     it('should omit container block when not present', async () => {
       const yaml = `name: plain\ndescription: none\nnodes:\n  - id: n\n    prompt: p\n`;
       await writeWorkflowFile(testDir, 'plain.yaml', yaml);
@@ -8739,6 +8851,10 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'evidence_policy:\n  required: true',
       present: w => w.evidence_policy?.required === true,
     },
+    budget: {
+      yaml: 'budget:\n  max_work_units: 3',
+      present: w => w.budget?.max_work_units === 3,
+    },
     mutates_checkout: {
       yaml: 'mutates_checkout: false',
       present: w => w.mutates_checkout === false,
@@ -9674,6 +9790,40 @@ nodes:
     '$a.output == true',
   ])('loads supported syntax: %s', when => {
     expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
+  });
+});
+
+describe('attention wait labels', () => {
+  const parseLabels = (labels: string, dependsOn = '[plan]'): ParseResult =>
+    parseWorkflow(
+      `name: labeled
+description: Labels on an attention wait
+nodes:
+  - id: plan
+    bash: echo '{}'
+  - id: other
+    bash: echo '{}'
+  - id: ask
+    depends_on: ${dependsOn}
+    wait:
+      attention: CI is red. Retry?
+      labels: ${labels}
+`,
+      'labeled.yaml'
+    );
+
+  it('loads literal labels and labels that reference an upstream output', () => {
+    expect(parseLabels('{ ci: "$plan.output.cause", area: delivery }').error).toBeNull();
+  });
+
+  it('rejects a label key a CLI filter could not name', () => {
+    expect(parseLabels('{ "ci=x": other }').error).not.toBeNull();
+  });
+
+  it('rejects a label that references a node the wait does not depend on', () => {
+    expect(parseLabels('{ ci: "$other.output.cause" }').error?.error).toContain(
+      "field 'wait.labels.ci' references '$other.output', which is not an upstream dependency"
+    );
   });
 });
 
