@@ -606,8 +606,7 @@ function holdCheckout(hold: string, checkout: string): void {
   }
 }
 
-/** Run one version's samples; each judge it starts joins `judging`, still running. */
-async function runVersion(options: RunOptions, resolved: ResolvedVersion, judging: Promise<boolean>[]): Promise<void> {
+async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promise<void> {
   const { bench, prepared, outDir } = options;
   const { version } = resolved;
   const samplesFile = join(outDir, SAMPLES_FILE);
@@ -696,7 +695,7 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion, judgin
         console.log(`${name}: ${run.status}, lenses ${item.lenses.join(', ') || 'none'}, hard checks ${passed ? 'passed' : 'FAILED'}`);
         if (passed) {
           const judged = { case: bench.id, variant, sample, run_id: runId, label: version.label, item: relative(outDir, itemDir) };
-          judging.push(judgeSample(judged, options));
+          await judgeSample(judged, options);
         } else {
           process.exitCode = 1;
         }
@@ -1213,8 +1212,7 @@ async function main(argv: readonly string[]): Promise<void> {
   if (repeated !== undefined) throw new Error(`two versions are labelled ${repeated}`);
 
   const options: RunOptions = { bench, prepared, variants, samples, savedSamples, outDir, repoRoot, judge };
-  const judging: Promise<boolean>[] = [];
-  const results = await Promise.allSettled(resolved.map(entry => runVersion(options, entry, judging)));
+  const results = await Promise.allSettled(resolved.map(entry => runVersion(options, entry)));
   for (const [index, result] of results.entries()) {
     if (result.status === 'rejected') {
       const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
@@ -1222,7 +1220,6 @@ async function main(argv: readonly string[]): Promise<void> {
       process.exitCode = 1;
     }
   }
-  await Promise.all(judging);
   writeBatch(outDir, bench.id, judge);
 }
 
