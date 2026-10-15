@@ -223,6 +223,41 @@ describe('installCredentialHelper', () => {
     expect(result.error.message).toBe('path config rejected');
   });
 
+  test('returns failed when listing remote URLs fails', async () => {
+    execSpy.mockImplementation(async (_file, args) => {
+      if (args.includes('--get-regexp')) {
+        throw Object.assign(new Error('bad config file'), { code: 128 });
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await installCredentialHelper('/tmp/some-worktree');
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error.message).toBe('bad config file');
+  });
+
+  test('returns failed without the token when rewriting a remote URL fails', async () => {
+    const pat = 'ghp_stalePersonalAccessToken';
+    execSpy.mockImplementation(async (_file, args) => {
+      if (args.includes('--get-regexp')) {
+        return {
+          stdout: `remote.origin.url\nhttps://x-access-token:${pat}@github.com/owner/repo.git\0`,
+          stderr: '',
+        };
+      }
+      if (args.includes('--replace-all')) {
+        // Git's failure message repeats the command line.
+        throw new Error(`Command failed: git ${args.join(' ')}`);
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await installCredentialHelper('/tmp/some-worktree');
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') throw new Error('unreachable');
+    expect(result.error.message).toContain('https://github.com/owner/repo.git');
+    expect(result.error.message).not.toContain(pat);
+  });
+
   test.skipIf(process.platform === 'win32' || skipCompiledBinaryTests())(
     'loads from Docker source packaging and embeds in a compiled binary',
     async () => {
