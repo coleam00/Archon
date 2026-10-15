@@ -1574,7 +1574,7 @@ function makeIsolationEnvironment(
     working_path: '/wt/from-branch',
     branch_name: 'feature/adopted',
     status: 'active',
-    created_at: new Date(),
+    created_at: new Date('2026-01-01'),
     created_by_platform: 'web',
     created_by_user_id: null,
     metadata: {},
@@ -2512,8 +2512,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2549,7 +2548,10 @@ describe('workflow dispatch routing', () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
     mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
-    const lane = { kind: 'reuse-worktree' as const, workingPath: '/wt/adopted', envId: 'env-1' };
+    const lane = {
+      kind: 'reuse-worktree' as const,
+      environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+    };
     mockResolveWorkflowAdoption.mockResolvedValueOnce({
       adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
       lane,
@@ -2580,7 +2582,7 @@ describe('workflow dispatch routing', () => {
     ).toHaveLength(1);
   });
 
-  test.each(['missing', 'mismatched'] as const)(
+  test.each(['missing', 'mismatched', 'replaced'] as const)(
     'foreground adoption refuses a %s environment before capture',
     async reason => {
       mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -2588,10 +2590,20 @@ describe('workflow dispatch routing', () => {
       mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
       mockResolveWorkflowAdoption.mockResolvedValueOnce({
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
-        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted', envId: 'env-1' },
+        lane: {
+          kind: 'reuse-worktree',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+        },
       });
       mockAdoptedEnvironment.mockResolvedValueOnce(
-        reason === 'missing' ? null : makeIsolationEnvironment()
+        reason === 'missing'
+          ? null
+          : reason === 'replaced'
+            ? makeIsolationEnvironment({
+                working_path: '/wt/adopted',
+                metadata: { worktree_registration_id: 'replacement' },
+              })
+            : makeIsolationEnvironment()
       );
       mockPrepareWorkflowSource.mockClear();
       mockAdoptionMetadata.mockClear();
@@ -2604,7 +2616,11 @@ describe('workflow dispatch routing', () => {
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'conv-1',
         expect.stringContaining(
-          reason === 'missing' ? 'Isolation environment env-1 not found' : 'does not match'
+          reason === 'missing'
+            ? 'Isolation environment env-1 not found'
+            : reason === 'replaced'
+              ? 'changed during adoption'
+              : 'does not match'
         )
       );
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
@@ -2705,8 +2721,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2924,8 +2939,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );
@@ -2956,8 +2970,7 @@ describe('workflow dispatch routing', () => {
         adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
         lane: {
           kind: 'reuse-worktree',
-          workingPath: '/wt/adopted',
-          envId: 'env-1',
+          environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       })
     );

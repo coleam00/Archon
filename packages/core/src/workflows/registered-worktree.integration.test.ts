@@ -296,3 +296,45 @@ for (const replacementPath of ['same', 'different'] as const) {
     expect((await store.getById(replacement.id))?.metadata.adopted).toBe(true);
   });
 }
+
+for (const changed of ['working_path', 'branch_name', 'created_at', 'metadata'] as const) {
+  test(`legacy tokenless adoption refuses a concurrent ${changed} replacement`, async () => {
+    git('worktree', 'add', '-qb', 'legacy', join(root, 'legacy'));
+    const created = await isolation.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'legacy',
+      working_path: join(root, 'legacy'),
+      branch_name: toBranchName('legacy'),
+    });
+    await db.query('UPDATE remote_agent_isolation_environments SET metadata = $1 WHERE id = $2', [
+      '{}',
+      created.id,
+    ]);
+    const observed = (await isolation.getById(created.id))!;
+    const values = {
+      working_path: join(root, 'other'),
+      branch_name: 'other',
+      created_at: '2000-01-01 00:00:00',
+      metadata: '{"legacy":true}',
+    };
+    const racingStore = {
+      updateMetadata: async (...args: Parameters<typeof isolation.updateMetadata>) => {
+        await db.query(
+          `UPDATE remote_agent_isolation_environments SET ${changed} = $1 WHERE id = $2`,
+          [values[changed], created.id]
+        );
+        await isolation.updateMetadata(...args);
+      },
+    };
+    events.length = 0;
+    await expect(recordWorktreeAdoption(racingStore, observed, repo)).rejects.toThrow(
+      'changed during adoption'
+    );
+    const replacement = (await isolation.getById(created.id))!;
+    expect(replacement.metadata.adopted).toBeUndefined();
+    expect(events.filter(event => event.msg === 'worktree_adopted')).toHaveLength(0);
+    await isolation.updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await isolation.getById(replacement.id))?.metadata.adopted).toBe(true);
+  });
+}

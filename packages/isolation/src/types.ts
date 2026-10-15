@@ -6,6 +6,7 @@
  * enables future strategies (containers, VMs).
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type {
@@ -357,6 +358,19 @@ export interface IsolationEnvironmentRow {
   /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver. */
   created_by_user_id: string | null;
   metadata: Record<string, unknown>;
+}
+
+export function sameWorktreeRegistration(
+  current: IsolationEnvironmentRow,
+  observed: IsolationEnvironmentRow
+): boolean {
+  if (current.provider !== 'worktree' || current.status !== 'active') return false;
+  const token = observed.metadata[WORKTREE_REGISTRATION_ID];
+  return typeof token === 'string'
+    ? current.id === observed.id &&
+        current.working_path === observed.working_path &&
+        current.metadata[WORKTREE_REGISTRATION_ID] === token
+    : isDeepStrictEqual(current, observed);
 }
 
 // --- Config Injection ---

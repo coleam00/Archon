@@ -242,19 +242,45 @@ export async function updateMetadata(
   observed?: IsolationEnvironmentRow
 ): Promise<void> {
   const dialect = getDialect();
+  // Older writers do not rotate a token; fence those rows with the observed snapshot.
+  const legacy = observed && typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
      SET metadata = ${dialect.jsonMerge('metadata', 1)}
      WHERE id = $2${
        observed
          ? ` AND provider = 'worktree' AND status = 'active'
-       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3`
+       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3
+       AND working_path = $4${
+         legacy
+           ? `
+       AND branch_name = $5
+       AND ${getDatabaseType() === 'sqlite' ? 'julianday(created_at) = julianday($6)' : "date_trunc('milliseconds', created_at) = $6::timestamptz"}
+       AND ${getDatabaseType() === 'sqlite' ? 'json(metadata) = json($7)' : 'metadata = $7::jsonb'}
+       AND codebase_id = $8 AND workflow_type = $9 AND workflow_id = $10
+       AND created_by_platform IS NOT DISTINCT FROM $11 AND created_by_user_id IS NOT DISTINCT FROM $12`
+           : ''
+       }`
          : ''
      }`,
     [
       JSON.stringify(metadata),
       id,
-      ...(observed ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? ''] : []),
+      ...(observed
+        ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? '', observed.working_path]
+        : []),
+      ...(legacy
+        ? [
+            observed.branch_name,
+            observed.created_at.toISOString(),
+            JSON.stringify(observed.metadata),
+            observed.codebase_id,
+            observed.workflow_type,
+            observed.workflow_id,
+            observed.created_by_platform,
+            observed.created_by_user_id,
+          ]
+        : []),
     ]
   );
 

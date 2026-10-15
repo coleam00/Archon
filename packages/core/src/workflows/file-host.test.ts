@@ -163,3 +163,38 @@ test('file adoption metadata refuses a replaced registration, including the same
     expect((await store.getById(replacement.id))?.metadata.adopted).toBe(true);
   }
 });
+
+test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'legacy-adoption-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const {
+    records: { isolation: store },
+  } = await createFileWorkflowHost(root);
+  const created = await store.create({
+    codebase_id: 'cb',
+    workflow_type: 'task',
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  });
+  const observed = { ...created, metadata: {} };
+  for (const replacement of [
+    { ...observed, working_path: join(home, 'other') },
+    { ...observed, branch_name: 'other' },
+    { ...observed, created_at: new Date(0) },
+    { ...observed, metadata: { legacy: true } },
+  ]) {
+    await commit(root, [], async () => ({
+      result: undefined,
+      changes: { documents: { 'host/isolation.json': [replacement] } },
+    }));
+    await expect(store.updateMetadata(observed.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await store.getById(created.id)).toEqual(replacement);
+    await store.updateMetadata(replacement.id, { adopted: true }, replacement);
+  }
+});

@@ -11,6 +11,7 @@
  * Naming note: "adopt" already exists in the executor for capture staging
  * (`withCapturedSource`); these run-level names are deliberately distinct.
  */
+import { sameWorktreeRegistration, type IsolationEnvironmentRow } from '@archon/isolation/types';
 import { existsSync } from 'fs';
 import { getCurrentBranchStrict, localBranchExists, toBranchName, toRepoPath } from '@archon/git';
 import {
@@ -45,8 +46,7 @@ export type ExistingTaskBranchSelection = Extract<TaskBranchSelection, { kind: '
 export type AdoptionLane =
   | {
       kind: 'reuse-worktree';
-      workingPath: string;
-      envId: string;
+      environment: IsolationEnvironmentRow;
     }
   | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };
@@ -55,11 +55,16 @@ export async function resolveRegisteredWorktree(
   store: Pick<IIsolationStore, 'getById'>,
   lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>
 ) {
-  const env = await store.getById(lane.envId);
-  if (!env) throw new Error(`Isolation environment ${lane.envId} not found`);
-  if (env.working_path !== lane.workingPath) {
+  const env = await store.getById(lane.environment.id);
+  if (!env) throw new Error(`Isolation environment ${lane.environment.id} not found`);
+  if (env.working_path !== lane.environment.working_path) {
     throw new WorkflowAdoptionError(
-      `Cannot adopt: worktree path '${lane.workingPath}' does not match isolation environment ${env.id} at '${env.working_path}'.`
+      `Cannot adopt: worktree path '${lane.environment.working_path}' does not match isolation environment ${env.id} at '${env.working_path}'.`
+    );
+  }
+  if (!sameWorktreeRegistration(env, lane.environment)) {
+    throw new WorkflowAdoptionError(
+      `Worktree ${env.id} changed during adoption; inspect it and retry`
     );
   }
   return env;
@@ -201,8 +206,7 @@ export async function resolveWorkflowAdoption(
       adoptedRun,
       lane: {
         kind: 'reuse-worktree',
-        workingPath: adoptedRun.working_path,
-        envId: environment.id,
+        environment,
       },
     };
   }

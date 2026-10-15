@@ -2496,7 +2496,7 @@ async function runWorkflowWithOwnedSource(
       // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
-          ? detachedAdoptionLane.workingPath
+          ? detachedAdoptionLane.environment.working_path
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
@@ -2813,7 +2813,7 @@ async function runWorkflowWithOwnedSource(
         // and silently cut a fresh worktree from base over the inherited one.
         wantsIsolation = false;
         console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'checkout-branch') {
         adoptedTaskBranch = lane.taskBranch;

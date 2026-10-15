@@ -1045,7 +1045,7 @@ describe('dispatchBackgroundWorkflow', () => {
     mockAdoptedEnv.mockResolvedValueOnce(env);
     await dispatchBackgroundWorkflow(
       makeRoutingCtx({
-        adoptionLane: { kind: 'reuse-worktree', workingPath: env.working_path, envId: env.id },
+        adoptionLane: { kind: 'reuse-worktree', environment: env },
       }),
       makeWorkflow()
     );
@@ -1062,7 +1062,10 @@ describe('dispatchBackgroundWorkflow', () => {
     await expect(
       dispatchBackgroundWorkflow(
         makeRoutingCtx({
-          adoptionLane: { kind: 'reuse-worktree', workingPath: '/missing', envId: 'missing' },
+          adoptionLane: {
+            kind: 'reuse-worktree',
+            environment: makeEnvRow({ id: 'missing', working_path: '/missing' }),
+          },
         }),
         makeWorkflow()
       )
@@ -1083,11 +1086,41 @@ describe('dispatchBackgroundWorkflow', () => {
     await expect(
       dispatchBackgroundWorkflow(
         makeRoutingCtx({
-          adoptionLane: { kind: 'reuse-worktree', workingPath: '/foreign/worktree', envId: env.id },
+          adoptionLane: {
+            kind: 'reuse-worktree',
+            environment: { ...env, working_path: '/foreign/worktree' },
+          },
         }),
         makeWorkflow()
       )
     ).rejects.toThrow('does not match');
+    expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockAdoptionMetadata).not.toHaveBeenCalled();
+    expect(
+      mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
+    ).toHaveLength(0);
+  });
+
+  test('background adoption refuses a same-path replacement before capture', async () => {
+    const selected = makeEnvRow({ metadata: { worktree_registration_id: 'selected' } });
+    mockAdoptedEnv.mockResolvedValueOnce({
+      ...selected,
+      metadata: { worktree_registration_id: 'replacement' },
+    });
+    mockAdoptionMetadata.mockClear();
+    mockLogger.warn.mockClear();
+    await expect(
+      dispatchBackgroundWorkflow(
+        makeRoutingCtx({
+          adoptionLane: {
+            kind: 'reuse-worktree',
+            environment: selected,
+          },
+        }),
+        makeWorkflow()
+      )
+    ).rejects.toThrow('changed during adoption');
     expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockAdoptionMetadata).not.toHaveBeenCalled();
@@ -1146,7 +1179,7 @@ describe('dispatchBackgroundWorkflow', () => {
     await expect(
       dispatchBackgroundWorkflow(
         makeRoutingCtx({
-          adoptionLane: { kind: 'reuse-worktree', workingPath: worktree, envId: env.id },
+          adoptionLane: { kind: 'reuse-worktree', environment: env },
         }),
         makeWorkflow()
       )

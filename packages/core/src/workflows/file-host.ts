@@ -16,7 +16,11 @@ import {
   ownedWorktreeSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { WORKTREE_REGISTRATION_ID, type IsolationEnvironmentRow } from '@archon/isolation/types';
+import {
+  WORKTREE_REGISTRATION_ID,
+  sameWorktreeRegistration,
+  type IsolationEnvironmentRow,
+} from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
@@ -231,13 +235,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           const rows = await environments();
           const row = rows.find(row => row.id === id);
           if (!row) throw new Error(`Isolation environment ${id} not found`);
-          if (
-            observed &&
-            (row.provider !== 'worktree' ||
-              row.status !== 'active' ||
-              (row.metadata[WORKTREE_REGISTRATION_ID] ?? '') !==
-                (observed.metadata[WORKTREE_REGISTRATION_ID] ?? ''))
-          ) {
+          if (observed && !sameWorktreeRegistration(row, observed)) {
             throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
           }
           row.metadata = { ...row.metadata, ...metadata };

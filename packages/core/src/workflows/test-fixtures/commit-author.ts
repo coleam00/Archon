@@ -196,7 +196,7 @@ await import(${JSON.stringify(resolve(import.meta.dir, '../../../../cli/src/cli.
           branch_name: toBranchName('adopted'),
           created_by_platform: 'cli',
         });
-        adoptionLane = { kind: 'reuse-worktree', workingPath: cwd, envId: env.id };
+        adoptionLane = { kind: 'reuse-worktree', environment: env };
       }
       await dispatchBackgroundWorkflow(
         {

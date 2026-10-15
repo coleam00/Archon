@@ -1141,7 +1141,9 @@ async function dispatchOrchestratorWorkflowOwned(
   // config apply. An adopted worktree stays the estate. The run records the result, and
   // every continuation reuses that record.
   const launchConfigCwd =
-    adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : codebase.default_cwd;
+    adoptionLane?.kind === 'reuse-worktree'
+      ? adoptionLane.environment.working_path
+      : codebase.default_cwd;
   const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
     prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
       codebaseId: codebase.id,

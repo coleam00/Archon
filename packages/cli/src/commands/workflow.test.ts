@@ -8679,7 +8679,10 @@ describe('workflowRunCommand — detach', () => {
     ]);
     (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/test/worktree' },
-      lane: { kind: 'reuse-worktree', workingPath: '/test/worktree', envId: 'env-detached' },
+      lane: {
+        kind: 'reuse-worktree',
+        environment: { id: 'env-detached', working_path: '/test/worktree' },
+      },
     });
 
     const child = createDetachedChildFixture();
@@ -14037,11 +14040,27 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     consoleSpy.mockRestore();
   });
 
+  function adoptedEnvironment(): import('@archon/isolation').IsolationEnvironmentRow {
+    return {
+      id: 'env-9',
+      codebase_id: 'cb-adopt',
+      workflow_type: 'task',
+      workflow_id: 'adopt',
+      provider: 'worktree',
+      working_path: '/wt/adopted',
+      branch_name: 'feature/adopted',
+      status: 'active',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      created_by_platform: 'cli',
+      created_by_user_id: null,
+    };
+  }
+
   function setupAdoptMocks(
     lane: Exclude<AdoptionLane, { kind: 'in-place' }> = {
       kind: 'reuse-worktree',
-      workingPath: '/wt/adopted',
-      envId: 'env-9',
+      environment: adoptedEnvironment(),
     }
   ): void {
     const discoverMock = require('@archon/workflows/workflow-discovery')
@@ -14085,18 +14104,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       (
         require('@archon/core/db/isolation-environments').getById as ReturnType<typeof mock>
       ).mockResolvedValueOnce({
-        id: lane.envId,
-        codebase_id: 'cb-adopt',
-        workflow_type: 'task',
-        workflow_id: 'adopt',
-        provider: 'worktree',
-        working_path: lane.workingPath,
-        branch_name: 'feature/adopted',
-        status: 'active',
-        metadata: {},
-        created_at: new Date(),
-        created_by_platform: 'cli',
-        created_by_user_id: null,
+        ...lane.environment,
       });
     }
     const adoption = require('@archon/core/operations/workflow-adoption');
@@ -14225,7 +14233,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
-  it.each(['missing', 'mismatched'] as const)(
+  it.each(['missing', 'mismatched', 'replaced'] as const)(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
       setupAdoptMocks();
@@ -14235,12 +14243,14 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       getById.mockResolvedValueOnce(
         reason === 'missing'
           ? null
-          : {
-              id: 'env-9',
-              provider: 'worktree',
-              working_path: '/foreign/worktree',
-              metadata: {},
-            }
+          : reason === 'replaced'
+            ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
+            : {
+                id: 'env-9',
+                provider: 'worktree',
+                working_path: '/foreign/worktree',
+                metadata: {},
+              }
       );
       (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
       const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
@@ -14250,7 +14260,11 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           adoptRunId: 'run-old',
         })
       ).rejects.toThrow(
-        reason === 'missing' ? 'Isolation environment env-9 not found' : 'does not match'
+        reason === 'missing'
+          ? 'Isolation environment env-9 not found'
+          : reason === 'replaced'
+            ? 'changed during adoption'
+            : 'does not match'
       );
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
