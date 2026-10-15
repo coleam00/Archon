@@ -604,9 +604,9 @@ describe('origin-free continuations stay headless', () => {
     ]);
     expect(seeded.status).toBe('paused');
 
-    const approved = await captureWorkflowCommand(fixture.archonHome, host =>
-      workflowApproveCommand(host, seeded.id, undefined, false, fixture.repo)
-    );
+    const approved = await captureWorkflowCommand(fixture.archonHome, async host => {
+      expect(await workflowApproveCommand(host, seeded.id, undefined, false, fixture.repo)).toBe(0);
+    });
     expect(approved.status).toBe(0);
     expect(readRun(fixture, 'approve-origin-free').status).toBe('completed');
     expectNoConversation(fixture);

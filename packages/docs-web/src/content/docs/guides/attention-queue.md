@@ -162,10 +162,19 @@ nodes:
     bash: |
       answers=$decide.output.answers
       printf '%s' "$answers" | jq -c '.[]' | while read -r item; do
-        archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
-          --occurrence "$(jq -r .occurrence <<<"$item")" --json
+        if ! result=$(archon workflow respond "$(jq -r .runId <<<"$item")" "$(jq -r .option <<<"$item")" \
+          --occurrence "$(jq -r .occurrence <<<"$item")" --json); then
+          printf '%s\n' "$result" >&2
+          exit 1
+        fi
+        printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null || exit 1
       done
 ```
+
+Answer commands exit non-zero when an answer is refused, including with `--json`
+(`ok: false`). An accepted answer at full capacity exits 0: the run keeps its place
+and a continuation host continues it when a slot frees. `--json` records the answer
+without continuing inline; run `archon workflow wake` or use `archon serve`.
 
 Two handlers can watch the same class. The occurrence check refuses the second answer,
 and the run stays answered once.
