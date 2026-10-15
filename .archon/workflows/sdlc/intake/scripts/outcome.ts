@@ -1,7 +1,8 @@
 /**
  * Apply the facts node's decision: write the work item first, then the labels that
  * mirror it, then close an item triage found resolved, then release the claim. A
- * closed issue gets the document write only. In eval mode nothing is read or
+ * close is checked before the first write; one the forge refuses leaves the item
+ * BLOCKED for a maintainer instead. A closed issue gets the document write only. In eval mode nothing is read or
  * written: the decision is applied to a fresh item in memory and reported, with the
  * label delta live would write, as `evaluation`.
  *
@@ -10,7 +11,7 @@
  * INPUTS_MODE and INPUTS_TRUST.
  */
 
-import { type Closure, closeResolved } from '../../.shared/close.ts';
+import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
@@ -20,6 +21,7 @@ import {
   isOwnedLabel,
   type OwnedLabel,
   type Route,
+  wantedLabels,
   writeLabels,
 } from '../../.shared/labels.ts';
 import {
@@ -70,6 +72,21 @@ function triageResult(): TriageResult | null {
     labels: nullableJson(process.env.INPUTS_LABELS) as string[],
     summary: text(process.env.INPUTS_SUMMARY),
     report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
+  };
+}
+
+/** Triage's closable verdict as a BLOCKED one, when the close it declared was refused. */
+function leftToMaintainer(triage: TriageResult, refused: string): TriageResult {
+  const verdict: LabelVerdict = { contract: 'BLOCKED' };
+  return {
+    ...triage,
+    verdict,
+    closure: null,
+    labels: [
+      ...wantedLabels(verdict, triage.type.value, triage.size.value),
+      ...triage.labels.filter(name => !isOwnedLabel(name)),
+    ],
+    summary: `${triage.summary} The close was refused: ${refused}; a maintainer decides.`,
   };
 }
 
@@ -171,14 +188,20 @@ function main(): void {
     decision.path === 'triage' &&
     decision.trust === 'outside' &&
     bodyDigest(viewIssue(item).body) !== decision.body_digest;
+  // A demoted item's verdict judged text no maintainer promoted, so it closes nothing.
+  let close: ClosePlan | null = null;
+  let judged = triage;
+  if (!bodyMoved && triage?.closure) {
+    close = planClose(item, triage.closure);
+    if (close.refused !== null) judged = leftToMaintainer(triage, close.refused);
+  }
   const next = updateClaimed(item, runId, doc =>
-    applyDecision(doc, decision, triage, bodyMoved, at, runId)
+    applyDecision(doc, decision, judged, bodyMoved, at, runId)
   );
 
-  const delta = labelDelta(next, decision, triage, bodyMoved);
+  const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
-  // A demoted item's verdict judged text no maintainer promoted, so it closes nothing.
-  if (!bodyMoved && triage?.closure) closeResolved(item, triage.closure);
+  if (close !== null && close.refused === null) close.close();
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));

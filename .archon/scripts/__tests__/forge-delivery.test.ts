@@ -22,7 +22,7 @@ import {
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
-import { closeResolved } from '../../workflows/sdlc/.shared/close';
+import { type Closure, planClose } from '../../workflows/sdlc/.shared/close';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -284,12 +284,14 @@ it('closes a resolved item through the plugin, linking it to what resolved it an
     ARCHON_SDLC_FORGE: 'forge',
     ARCHON_CLI_COMMAND: JSON.stringify(host.argv),
   });
+  const close = (number: number, closure: Closure): void => {
+    const plan = planClose({ repo: PR.repo, number }, closure);
+    if (plan.refused !== null) throw new Error(plan.refused);
+    plan.close();
+  };
   try {
-    closeResolved(
-      { repo: PR.repo, number: 7 },
-      { kind: 'duplicate', url: originalUrl, original }
-    );
-    closeResolved({ repo: PR.repo, number: 8 }, { kind: 'delivered', url: change });
+    close(7, { kind: 'duplicate', url: originalUrl, original });
+    close(8, { kind: 'delivered', url: change });
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);

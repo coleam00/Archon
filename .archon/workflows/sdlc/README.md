@@ -266,15 +266,17 @@ request, never the state.
   and there is no age timeout.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
   another open issue or a merged change already delivered it, and the triage policy
-  lets it close without a person. The outcome writes the work item and labels, then
-  comments on the issue with a link to the original or the change and closes it as
-  `duplicate` or `completed`. A duplicate's original gets a comment linking back.
-  Each comment is one marked comment, so a repeated run edits it rather than adding
-  another. An item already closed for the verdict's reason (an earlier run that
-  stopped after its close) finishes without writing. The outcome refuses, before any
-  comment, an item closed for another reason and a declared original that is not an
-  open issue at the declared URL. A demoted
-  item, an eval run and every other verdict close nothing.
+  lets it close without a person. Before writing anything, the outcome checks a
+  duplicate's declared original: it must be another item, an issue rather than a pull
+  request, open, and at the declared URL. When a check fails, the item is stored and
+  labelled `BLOCKED` with the reason, for a maintainer to decide. Otherwise the
+  outcome writes the work item and labels, then comments on the issue with a link to
+  the original or the change and closes it as `duplicate` or `completed`. A
+  duplicate's original gets a comment linking back. Each comment is one marked
+  comment, so a repeated run edits it rather than adding another. An item already
+  closed for the verdict's reason (an earlier run that stopped after its close)
+  finishes without writing; one closed for another reason fails the run before any
+  comment. A demoted item, an eval run and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer

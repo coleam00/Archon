@@ -554,6 +554,25 @@ const DUPLICATE_VERDICT = closeVerdict({
   original: { repo: PR.repo, number: 3 },
 });
 
+/** A refused close writes nothing on the forge but the BLOCKED labels, and stores why. */
+function expectLeftToMaintainer(at: Install, applied: ScriptRun, refused: string): void {
+  expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+  expect([...applied.closes, ...applied.comments]).toEqual([]);
+  expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-blocked --add-label archon-size-s --add-label archon-type-feature',
+  ]);
+  const doc = stored(at).value;
+  expect(doc).toMatchObject({
+    stage: 'blocked',
+    claim: null,
+    facts: { triage: { verdict: { contract: 'BLOCKED' } } },
+  });
+  expect(doc.history.at(-1)).toMatchObject({
+    verdict: 'BLOCKED',
+    summary: expect.stringContaining(refused),
+  });
+}
+
 function outcome(
   at: Install,
   event: Event,
@@ -1049,9 +1068,14 @@ describe('the intake scripts', () => {
     const at = install();
     const event = { runId: 'run-1', others: [{ ...ORIGINAL, state: 'CLOSED' as const }] };
     const applied = outcome(at, event, facts(at, event).output, DUPLICATE_VERDICT);
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain(`${ORIGINAL_URL} is closed`);
-    expect([...applied.closes, ...applied.comments]).toEqual([]);
+    expectLeftToMaintainer(at, applied, `${ORIGINAL_URL} is closed`);
+  }, 60_000);
+
+  test('an item declared a duplicate of itself closes nothing', () => {
+    const at = install();
+    const self = closeVerdict({ kind: 'duplicate', url: ISSUE_URL, original: SUBJECT });
+    const applied = outcome(at, { runId: 'run-1' }, facts(at, { runId: 'run-1' }).output, self);
+    expectLeftToMaintainer(at, applied, 'cannot be closed as a duplicate of itself');
   }, 60_000);
 
   test('a duplicate of a pull request closes nothing; an open pull request is continued', () => {
@@ -1064,9 +1088,7 @@ describe('the intake scripts', () => {
       facts(at, event).output,
       closeVerdict({ kind: 'duplicate', url: MERGED_URL, original: { repo: PR.repo, number: 5 } })
     );
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('does not answer as that issue');
-    expect([...applied.closes, ...applied.comments]).toEqual([]);
+    expectLeftToMaintainer(at, applied, 'issues/5 is a pull request, not an issue');
   }, 60_000);
 
   test('a NO_ACTION verdict that arrives without its closure is refused', () => {
@@ -1108,9 +1130,7 @@ describe('the intake scripts', () => {
         original: { repo: PR.repo, number: 3 },
       })
     );
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('not https://ghe.example.com/example/repo/issues/4');
-    expect([...applied.closes, ...applied.comments]).toEqual([]);
+    expectLeftToMaintainer(at, applied, 'not https://ghe.example.com/example/repo/issues/4');
   }, 60_000);
 
   test('a blocked item closes nothing', () => {

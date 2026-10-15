@@ -31,6 +31,14 @@ export interface IssueView {
   readonly url: string;
 }
 
+/** The number names a pull request, which shares the issue numbering. */
+export class NotAnIssueError extends Error {
+  constructor(where: string) {
+    super(`${where} is a pull request, not an issue`);
+    this.name = 'NotAnIssueError';
+  }
+}
+
 export function viewIssue(item: QualifiedPr): IssueView {
   return forgeSource() === 'forge' ? forgeView(item) : ghView(item);
 }
@@ -68,11 +76,11 @@ function ghIssue(
   }
   const issue = record(JSON.parse(result.stdout.toString()));
   const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
+  if (issue?.number === item.number && 'pull_request' in issue) throw new NotAnIssueError(url);
   if (
     issue?.number !== item.number ||
     typeof issue.html_url !== 'string' ||
-    issue.html_url.toLowerCase() !== url.toLowerCase() ||
-    'pull_request' in issue
+    issue.html_url.toLowerCase() !== url.toLowerCase()
   ) {
     throw new Error(`tracker identity mismatch: ${url} does not answer as that issue`);
   }
@@ -97,6 +105,9 @@ function ghView(item: QualifiedPr): IssueView {
 function forgeView(item: QualifiedPr): IssueView {
   const value = invokeForge('workitem.view', { ref: item });
   const observed = parseQualifiedPr(JSON.stringify(value?.ref));
+  if (samePr(item, observed) && value?.kind === 'pr') {
+    throw new NotAnIssueError(`${item.repo.host}/${item.repo.path}#${String(item.number)}`);
+  }
   if (
     !samePr(item, observed) ||
     value?.kind !== 'issue' ||
