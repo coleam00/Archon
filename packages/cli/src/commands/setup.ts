@@ -2406,8 +2406,8 @@ async function runSetup(options: SetupOptions): Promise<void> {
   if (!isCancel(runDoctor) && runDoctor) {
     const { doctorCommand } = await import('./doctor');
     const { loadCliEnv } = await import('../load-cli-env');
-    const trustedEnv = await loadCliEnv(process.cwd());
-    await doctorCommand(undefined, trustedEnv);
+    await loadCliEnv(process.cwd());
+    await doctorCommand();
   }
 
   outro('Setup complete!');

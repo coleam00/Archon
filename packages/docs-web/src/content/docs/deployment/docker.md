@@ -582,7 +582,7 @@ instead.
 `GH_TOKEN` from `.env` is picked up automatically. Alternatively, log in inside the container for `gh` and `git`. The forge opt-in also reads this login after trying `GH_TOKEN` and `GITHUB_TOKEN`:
 
 ```bash
-docker compose exec app gh auth login
+docker compose exec -u appuser app gh auth login
 ```
 
 With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` with no `GITHUB_TOKEN` set rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.

@@ -11,8 +11,12 @@ import {
   mutationTarget,
   mutationAttempt,
   type ForgeRequest,
-  type ForgeResponse,
 } from '@archon/forge/operations';
+import {
+  cliForgeMetadataRequestSchema,
+  cliForgeResponseSchema,
+  type CliForgeResponse,
+} from '@archon/forge';
 import { writeJsonLine } from '../utils/stdout';
 
 async function readForgeConfig(configPath: string): Promise<unknown> {
@@ -60,11 +64,12 @@ export async function forgeCommand(
     env?: NodeJS.ProcessEnv;
   } = {}
 ): Promise<number> {
-  const write = dependencies.write ?? writeJsonLine;
+  const write = (value: CliForgeResponse): Promise<void> =>
+    (dependencies.write ?? writeJsonLine)(cliForgeResponseSchema.parse(value));
   const env = dependencies.env ?? process.env;
   const trustedEnv = options.trustedEnv ?? env;
   const operationId = randomUUID();
-  let response: ForgeResponse;
+  let response: CliForgeResponse;
   let request: ForgeRequest | undefined;
   let dispatched = false;
   let credentialSource: string | undefined;
@@ -92,14 +97,13 @@ export async function forgeCommand(
     // Host introspection reads the same trusted discovery metadata as dispatch;
     // it is not a plugin operation and never resolves a credential.
     if (op === 'metadata') {
-      if (!('host' in supplied) || typeof supplied.host !== 'string' || !supplied.host.trim())
-        throw new Error('metadata requires a host');
+      const { host } = cliForgeMetadataRequestSchema.parse({ ...supplied, op, operationId });
       const discovery = await discoverPlugins({
         config,
         env: trustedEnv,
         pluginsDir: getPluginsPath(archonHome),
       });
-      const plugin = discovery.byHost.get(supplied.host.trim().toLowerCase());
+      const plugin = discovery.byHost.get(host.toLowerCase());
       if (plugin) {
         await write({ operationId, ok: true, result: { op: 'metadata', value: plugin.metadata } });
         return 0;
@@ -111,7 +115,7 @@ export async function forgeCommand(
           kind: discovery.unavailable.length ? 'process_failed' : 'no_plugin_for_host',
           message: discovery.unavailable.length
             ? discovery.unavailable.map(error => error.message).join('; ')
-            : `no forge plugin claims ${supplied.host}`,
+            : `no forge plugin claims ${host}`,
         },
       });
       return 1;

@@ -302,3 +302,47 @@ test('preflight capabilities cover concrete pack calls and agent command instruc
   expect(used).toContain('checks.state');
   expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
 });
+
+test('standalone host response projection preserves credential attribution and metadata', async () => {
+  const { cliForgeResponseSchema, cliForgeMetadataRequestSchema } =
+    await import('../../../packages/forge/src/cli-response');
+  const { forgeResult } = await import('../../workflows/sdlc/.shared/forge');
+  const metadata = {
+    protocol: 1,
+    name: 'github',
+    version: 'test',
+    forge: 'github',
+    hosts: ['github.com'],
+    capabilities: ['pr.view'],
+    token_env: ['GH_TOKEN'],
+  };
+  const request = cliForgeMetadataRequestSchema.parse({
+    operationId: 'meta',
+    op: 'metadata',
+    host: 'github.com',
+  });
+  const response = cliForgeResponseSchema.parse({
+    operationId: request.operationId,
+    ok: true,
+    result: { op: request.op, value: metadata },
+  });
+  expect(forgeResult(request.op, response, 0)).toEqual(metadata);
+  for (const ok of [true, false]) {
+    const response = cliForgeResponseSchema.parse({
+      operationId: 'read',
+      ok,
+      credentialSource: 'GH_TOKEN',
+      ...(ok
+        ? { result: { op: 'pr.view', value: null } }
+        : { error: { kind: 'authorization', message: 'Rejected' } }),
+    });
+    let source: string | undefined;
+    const read = () =>
+      forgeResult('pr.view', response, ok ? 0 : 1, value => {
+        source = value;
+      });
+    if (ok) expect(read()).toBeNull();
+    else expect(read).toThrow('source: GH_TOKEN');
+    expect(source).toBe('GH_TOKEN');
+  }
+});

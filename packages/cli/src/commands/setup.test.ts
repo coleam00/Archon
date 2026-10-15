@@ -1142,10 +1142,8 @@ describe('setup provider selection', () => {
         expect(readFileSync(join(root, 'archon', '.env'), 'utf8')).toContain(
           'GH_TOKEN=setup-private-github-token'
         );
-        expect(doctor).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ GH_TOKEN: 'setup-private-github-token' })
-        );
+        expect(doctor).toHaveBeenCalledWith();
+        expect(process.env.GH_TOKEN).toBe('setup-private-github-token');
         expect(password).toHaveBeenCalledTimes(1);
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);
         expect(diagnose.mock.calls).toEqual([['claude'], ['codex']]);

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
@@ -30,7 +31,35 @@ afterAll(async () => {
   if (!skip) await removeTempTree(root);
 });
 
+const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs1', format: 'pem' })
+  .toString();
 const setups = [
+  {
+    name: 'workflow login directory',
+    source: 'forge',
+    login: true,
+    workflowLogin: false,
+    ok: false,
+    detail: 'repair the gh login',
+  },
+  ...(['gh', 'forge'] as const).map(source => ({
+    name: `App only ${source}`,
+    source,
+    login: false,
+    app: true,
+    ok: true,
+    detail: 'source: GH_TOKEN',
+  })),
+  ...(['gh', 'forge'] as const).map(source => ({
+    name: `Unregistered App ${source}`,
+    source,
+    login: false,
+    app: true,
+    unregistered: true,
+    ok: true,
+    detail: 'source: GH_TOKEN',
+  })),
   { name: 'keyring gh', source: 'gh', login: true, ok: true, detail: 'source: gh auth login' },
   { name: 'logged-out gh', source: 'gh', login: false, ok: false, detail: 'not authenticated' },
   {
@@ -75,7 +104,8 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
   mkdirSync(join(repo, '.archon'), { recursive: true });
   mkdirSync(trustedLogin);
   if (setup.login) writeFileSync(join(trustedLogin, 'logged-in'), '');
-  writeFileSync(join(home, '.env'), `GH_CONFIG_DIR=${trustedLogin}\n`);
+  if (!('workflowLogin' in setup))
+    writeFileSync(join(home, '.env'), `GH_CONFIG_DIR=${trustedLogin}\n`);
   const env: NodeJS.ProcessEnv = {
     PATH: root + delimiter + process.env.PATH,
     HOME: home,
@@ -91,7 +121,12 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
   };
   for (const args of [
     ['init'],
-    ['remote', 'add', 'origin', 'https://ghe.example.com/example/repo.git'],
+    [
+      'remote',
+      'add',
+      'origin',
+      `https://${'app' in setup ? 'github.com' : 'ghe.example.com'}/example/repo.git`,
+    ],
   ])
     expect(Bun.spawnSync(['git', ...args], { cwd: repo, env }).exitCode).toBe(0);
   writeFileSync(
@@ -105,19 +140,20 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
           {
             plugin: 'github',
             command: process.execPath,
-            args: setup.released
-              ? [
-                  '--no-env-file',
-                  resolve(
-                    import.meta.dir,
-                    '../../../../.archon/scripts/__tests__/fixtures/released-github-plugin.ts'
-                  ),
-                ]
-              : [
-                  '--no-env-file',
-                  '-e',
-                  `if (process.argv.includes('metadata')) console.log(JSON.stringify({protocol:1,name:'github',version:'test',forge:'github',hosts:['ghe.example.com'],capabilities:${JSON.stringify(REQUIRED_FORGE_OPERATIONS)},token_env:['GH_TOKEN','GITHUB_TOKEN']})); else { const request = await Bun.stdin.json(); if (process.env.ARCHON_FORGE_TOKEN !== 'fixture-keyring-token') throw new Error('wrong login'); console.log(JSON.stringify({operationId:request.operationId,ok:true,result:{op:request.op,value:null}})); }`,
-                ],
+            args:
+              'released' in setup && setup.released
+                ? [
+                    '--no-env-file',
+                    resolve(
+                      import.meta.dir,
+                      '../../../../.archon/scripts/__tests__/fixtures/released-github-plugin.ts'
+                    ),
+                  ]
+                : [
+                    '--no-env-file',
+                    '-e',
+                    `if (process.argv.includes('metadata')) console.log(JSON.stringify({protocol:1,name:'github',version:'test',forge:'github',hosts:['ghe.example.com','github.com'],capabilities:${JSON.stringify(REQUIRED_FORGE_OPERATIONS)},token_env:['GH_TOKEN','GITHUB_TOKEN']})); else { const request = await Bun.stdin.json(); if (process.env.ARCHON_FORGE_TOKEN !== '${'app' in setup ? 'fixture-app-token' : 'fixture-keyring-token'}') throw new Error('wrong login'); console.log(JSON.stringify({operationId:request.operationId,ok:true,result:{op:request.op,value:null}})); }`,
+                  ],
           },
         ],
       },
@@ -126,12 +162,43 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
   writeFileSync(
     join(repo, '.archon/config.yaml'),
     JSON.stringify({
-      env: 'repoSource' in setup ? { ARCHON_SDLC_FORGE: setup.repoSource } : {},
+      env: {
+        ...('repoSource' in setup ? { ARCHON_SDLC_FORGE: setup.repoSource } : {}),
+        ...('workflowLogin' in setup ? { GH_CONFIG_DIR: join(home, 'logged-out') } : {}),
+      },
     })
   );
   if ('repoLogin' in setup)
     writeFileSync(join(repo, '.archon/.env'), `GH_CONFIG_DIR=${join(home, 'logged-out')}\n`);
-  const doctor = Bun.spawn([process.execPath, '--no-env-file', cli, 'doctor'], {
+  const preload = join(home, 'app-preload.ts');
+  if ('app' in setup) {
+    Object.assign(env, {
+      GITHUB_APP_ID: '123',
+      GITHUB_APP_PRIVATE_KEY: privateKey,
+      WEBHOOK_SECRET: 'fixture-secret',
+    });
+    writeFileSync(
+      preload,
+      `
+      import { mock } from 'bun:test';
+      globalThis.fetch = async () => { throw new Error('Network forbidden'); };
+      mock.module(${JSON.stringify(Bun.resolveSync('@octokit/rest', resolve(import.meta.dir, '../../../core')))}, () => ({ Octokit: class {
+        async request(route, args) {
+          if (route === 'GET /repos/{owner}/{repo}/installation' && args.owner === 'example' && args.repo === 'repo') return {data: {id: 42}};
+          if (route === 'POST /app/installations/{installation_id}/access_tokens' && args.installation_id === 42) return {data: {token: 'fixture-app-token', expires_at: new Date(Date.now()+3600000).toISOString()}};
+          throw new Error('Unexpected App request');
+        }
+      }}));
+      const { createCliWorkflowHost } = await import(${JSON.stringify(resolve(import.meta.dir, '../utils/workflow-host.ts'))});
+      const host = await createCliWorkflowHost();
+      const { canonicalizeProjectPath } = await import(${JSON.stringify(resolve(import.meta.dir, '../../../paths/src/index.ts'))});
+      const cwd = await canonicalizeProjectPath(process.cwd());
+      if (${'unregistered' in setup ? 'false' : 'true'} && !await host.records.codebases.findCodebaseByDefaultCwd(cwd)) await host.records.codebases.createCodebase({name:'fixture',kind:'repo',default_cwd:cwd,repository_url:'https://github.com/example/repo.git'});
+    `
+    );
+  }
+  const preloadArgs = 'app' in setup ? ['--preload', preload] : [];
+  const doctor = Bun.spawn([process.execPath, '--no-env-file', ...preloadArgs, cli, 'doctor'], {
     cwd: repo,
     env,
     stdout: 'pipe',
@@ -144,6 +211,7 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
     [
       process.execPath,
       '--no-env-file',
+      ...preloadArgs,
       '-e',
       `
     const { loadCliEnv } = await import(${JSON.stringify(resolve(import.meta.dir, '../load-cli-env.ts'))});
@@ -154,8 +222,18 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
     registerBuiltinProviders(); registerCommunityProviders();
     const { loadConfig } = await import(${JSON.stringify(configLoader)});
     const config = await loadConfig(process.cwd());
+    const { createCliWorkflowHost } = await import(${JSON.stringify(resolve(import.meta.dir, '../utils/workflow-host.ts'))});
+    const host = await createCliWorkflowHost(true);
+    const { resolveWorkflowGithubEnvironment } = await import(${JSON.stringify(resolve(import.meta.dir, '../../../workflows/src/executor.ts'))});
+    const { resolveCodebaseForPath } = await import(${JSON.stringify(resolve(import.meta.dir, '../../../core/src/services/codebase-checkout-resolver.ts'))});
+    if (${'unregistered' in setup}) {
+      const { canonicalizeProjectPath } = await import(${JSON.stringify(resolve(import.meta.dir, '../../../paths/src/index.ts'))});
+      await host.records.codebases.createCodebase({name:'fixture',kind:'repo',default_cwd:await canonicalizeProjectPath(process.cwd()),repository_url:'https://github.com/example/repo.git'});
+    }
+    const { codebase } = await resolveCodebaseForPath(process.cwd(), host.records.codebases);
+    const github = await resolveWorkflowGithubEnvironment(host.deps, codebase?.id, undefined, config);
     const child = Bun.spawn([${JSON.stringify(process.execPath)}, '--no-env-file', ${JSON.stringify(preflight)}], {
-      env: {...process.env, ...config.envVars, ARCHON_CLI_COMMAND: ${JSON.stringify(JSON.stringify([process.execPath, '--no-env-file', cli]))}},
+      env: {...process.env, ...github.envVars, ARCHON_CLI_COMMAND: ${JSON.stringify(JSON.stringify([process.execPath, '--no-env-file', cli]))}},
       stdout: 'inherit', stderr: 'inherit',
     });
     process.exitCode = await child.exited;
@@ -189,4 +267,22 @@ test('CLI reference requires a checkout with a forge remote for doctor', async (
     reference.includes('`serve`, and `doctor` commands and `workflow attention` work anywhere')
   ).toBe(false);
   expect(reference).toContain('Run `archon doctor` from a checkout with a forge remote');
+});
+
+test('installation verification enters a forge checkout before doctor', async () => {
+  const doc = await Bun.file(
+    resolve(import.meta.dir, '../../../docs-web/src/content/docs/getting-started/installation.md')
+  ).text();
+  const recipe = doc.slice(doc.indexOf('## Verify Installation'), doc.indexOf('## Next Steps'));
+  expect(recipe).toContain('cd /path/to/your/repo');
+  expect(recipe.indexOf('archon version')).toBeLessThan(recipe.indexOf('cd /path/to/your/repo'));
+  expect(recipe.indexOf('cd /path/to/your/repo')).toBeLessThan(recipe.indexOf('archon doctor'));
+  expect(recipe).toContain('forge remote');
+});
+test('Docker gh login uses the server user', async () => {
+  const doc = await Bun.file(
+    resolve(import.meta.dir, '../../../docs-web/src/content/docs/deployment/docker.md')
+  ).text();
+  expect(doc).toContain('docker compose exec -u appuser app gh auth login');
+  expect(doc).not.toContain('docker compose exec app gh auth login');
 });

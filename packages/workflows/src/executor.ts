@@ -249,13 +249,20 @@ type WorkflowGithubDeps = Pick<
 
 type GithubApp = NonNullable<WorkflowDeps['githubApp']>;
 
+type WorkflowGithubCodebase =
+  | string
+  | Pick<
+      NonNullable<Awaited<ReturnType<WorkflowGithubDeps['store']['getCodebase']>>>,
+      'repository_url'
+    >;
+
 export async function resolveWorkflowGithubEnvironment(
   deps: WorkflowGithubDeps,
-  codebaseId: string | undefined,
+  codebase: WorkflowGithubCodebase | undefined,
   userId: string | undefined,
   environment: WorkflowEnvironment
 ): Promise<WorkflowEnvironment> {
-  const installation = await resolveAppInstallationForWorkflow(deps, codebaseId);
+  const installation = await resolveAppInstallationForWorkflow(deps, codebase);
   const bot: Record<string, string> = installation
     ? { GH_TOKEN: installation.token, GITHUB_TOKEN: installation.token }
     : {};
@@ -280,13 +287,13 @@ export async function resolveWorkflowGithubEnvironment(
 
 async function resolveAppInstallationForWorkflow(
   deps: WorkflowGithubDeps,
-  codebaseId: string | undefined
+  codebase: WorkflowGithubCodebase | undefined
 ): Promise<{ token: string; repo: string; app: GithubApp } | undefined> {
   const app = deps.githubApp;
-  if (!codebaseId || !app) return undefined;
-  const codebase = await deps.store.getCodebase(codebaseId);
-  if (!codebase?.repository_url) return undefined;
-  const parsed = parseGithubRepoUrl(codebase.repository_url);
+  if (!codebase || !app) return undefined;
+  const record = typeof codebase === 'string' ? await deps.store.getCodebase(codebase) : codebase;
+  if (!record?.repository_url) return undefined;
+  const parsed = parseGithubRepoUrl(record.repository_url);
   if (!parsed) return undefined;
   const token = await app.resolveInstallationToken(parsed.owner, parsed.repo);
   if (!token) throw new Error('GitHub App token resolution returned no installation token');

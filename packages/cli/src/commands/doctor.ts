@@ -36,6 +36,8 @@ import {
   type StoredCredentialKind,
 } from '@archon/provider-contract';
 import { forgeCommand } from './forge';
+import { loadCliEnv } from '../load-cli-env';
+import { resolveCliUserId } from '../utils/cli-user';
 import {
   checkForgeAccess,
   type ForgeProbe,
@@ -900,11 +902,52 @@ function renderResult(r: CheckResult): string {
   return `${icon} ${r.label}: ${r.message}`;
 }
 
+async function checkWorkflowSdlcForge(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  try {
+    const cwd = process.cwd();
+    const config = await defaultLoadMergedConfig(cwd);
+    const { createCliWorkflowHost } = await import('../utils/workflow-host');
+    const { resolveCodebaseForPath } =
+      await import('@archon/core/services/codebase-checkout-resolver');
+    const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
+    const host = await createCliWorkflowHost(true);
+    const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
+    let repositoryUrl: string | null = null;
+    if (!codebase && repoRoot) {
+      const { getDefaultRemote, getRemoteUrl, toRepoPath } = await import('@archon/git');
+      const { loadRepoConfig } = await import('@archon/core/config/config-loader');
+      const repoConfig = await loadRepoConfig(repoRoot);
+      const path = toRepoPath(repoRoot);
+      const remote = repoConfig.worktree?.remote?.trim() || (await getDefaultRemote(path));
+      if (remote) repositoryUrl = await getRemoteUrl(path, remote);
+    }
+    const cliId = resolveCliUserId(env);
+    const user = cliId
+      ? await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId)
+      : undefined;
+    const github = await resolveWorkflowGithubEnvironment(
+      host.deps,
+      codebase ?? { repository_url: repositoryUrl },
+      user?.id,
+      config
+    );
+    const workflowEnv = { ...env, ...github.envVars };
+    const cliEnv = { ...workflowEnv };
+    const trustedEnv = await loadCliEnv(cwd, { env: cliEnv, preserveGithubCredentials: true });
+    return checkSdlcForge(workflowEnv, (op, data) => runForgeCommand(op, data, cliEnv, trustedEnv));
+  } catch (error) {
+    return {
+      label: 'SDLC forge',
+      status: 'fail',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
-  checks?: (() => Promise<CheckResult | CheckResult[]>)[],
-  trustedEnv: NodeJS.ProcessEnv = process.env
+  checks?: (() => Promise<CheckResult | CheckResult[]>)[]
 ): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
   getLog().info('doctor.run_started');
@@ -917,10 +960,7 @@ export async function doctorCommand(
         checkInstalledProviders(),
         ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
         checkGitHubApp(env),
-        (async () => {
-          const config = await defaultLoadMergedConfig(process.cwd());
-          return checkSdlcForge({ ...env, ...config.envVars }, undefined, trustedEnv);
-        })(),
+        checkWorkflowSdlcForge(env),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
         checkDatabase(),
