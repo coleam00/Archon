@@ -275,6 +275,30 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('a process exit preserves the tool catalog so a fresh provider can resume', async () => {
+      const failed = resultOf(
+        await streamOf({ exitCode: 1 }, { nativeTools: [tool(async () => 'unused')] })
+      );
+      expect(failed.isError).toBe(true);
+      expect(failed.failure?.class).toBe('transient');
+      expect(failed.sessionId).toBeDefined();
+
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const resumed = resultOf(
+        await run(provider, { nativeTools: [tool(handler)] }, failed.sessionId)
+      );
+      expect(resumed.isError).not.toBe(true);
+      expect(resumed.sessionId).toBe(failed.sessionId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('thread/start');
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(server.processes[0].toolResponses[0].result).toEqual({
+        success: true,
+        contentItems: [{ type: 'inputText', text: 'resumed' }],
+      });
+    });
+
     test('writes the persisted session format and resumes a fixed saved identifier', async () => {
       const savedId =
         'thread-1:archon-codex-tools:031e8dcbfe5ce9aaef61a80ebcf2a12939ba1ff54a02c68117bb2bb130eeabb8';
