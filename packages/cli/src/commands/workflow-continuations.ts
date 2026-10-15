@@ -38,7 +38,7 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
   const [executable, ...prefix] = cliProgramArguments();
   return {
     id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
-    programArguments: [executable, ...prefix, 'workflow', 'wake', '--json'],
+    programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
     workingDirectory: archonHome,
     archonHome,
     schedule: { intervalSeconds, runAtLoad: true },
@@ -70,15 +70,16 @@ async function admit(
           reason: `CLI cannot deliver results to '${conversation.platform_type}'; use its server host`,
         };
       }
+      let workingPathError: string | undefined;
       try {
         if (!freshRun.working_path || !(await stat(freshRun.working_path)).isDirectory()) {
-          return { kind: 'unavailable', reason: 'recorded working path is not a directory' };
+          workingPathError = 'recorded working path is not a directory';
         }
       } catch (error) {
-        return {
-          kind: 'unavailable',
-          reason: `recorded working path is unavailable: ${errorMessage(error)}`,
-        };
+        workingPathError = `recorded working path is unavailable: ${errorMessage(error)}`;
+      }
+      if (workingPathError) {
+        return { kind: 'unavailable', reason: workingPathError };
       }
       return {
         kind: 'ready',

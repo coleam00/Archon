@@ -1011,9 +1011,11 @@ archon workflow wake --watch --json
 
 A pass scans up to 25 due continuations across the configured install database, regardless of the current directory. It awaits each admitted execution segment. A segment can complete, fail, or pause at another wait or gate; later occurrences belong to another pass. Concurrent CLI and server hosts use the engine's existing occurrence claim, so only one executes a continuation.
 
+In a long-lived `workflow wake --watch` or server process, if a run's frozen source is missing, unreadable, or fails verification (invalid manifest or source record, digest or resolution settings mismatch, or missing captured workflow), automatic continuation stops attempting that occurrence on this host after three failures and logs one warning per run per process naming the run, the path when available, and the operator actions. Resume it on the owning host with `archon workflow resume <run-id>`, or abandon it with `archon workflow abandon <run-id>`. The run's status stays unchanged, and another host can still resume it. The bound lives in process memory and resets on restart. Temporary I/O failures, such as exhausted file descriptors, and other retryable admission failures keep the 60-second retry. A successful manual resume can reach a new wait, gate, or quota occurrence; that occurrence can wake in the same process. One-shot `workflow wake` invocations start a fresh process each time and cannot accumulate this bound. Installed wake schedules run `workflow wake --watch` so repeated passes share the bound.
+
 `--watch` repeats serial passes, sleeping five seconds between completed passes. Its JSON output is JSONL: one document per pass with `ok`, `action`, `accepted`, and per-run `outcomes`. Outcomes distinguish admission from settlement (`completed`, `paused`, or `failed`). Without `--json`, the command prints a summary and run-specific outcomes.
 
-Exit status is 0 for an empty batch, a concurrent claim loser, a completed segment, or a legitimate pause. Refusals, execution failures, and deferral failures return 1. Watch continues after failures and returns 1 on shutdown if any pass failed. Prerequisite failures defer the exact occurrence for 60 seconds.
+Exit status is 0 for an empty batch, a concurrent claim loser, a completed segment, or a legitimate pause. Refusals, execution failures, and deferral failures return 1. Watch continues after failures and returns 1 on shutdown if any pass failed. Retryable prerequisite failures defer the exact occurrence for 60 seconds.
 
 The CLI preserves the run's recorded source, inputs, configuration, user, conversation, and working path. It accepts local CLI/API conversations. Container execution, missing paths or captured source, and external platform origins are refused with the run ID and reason. Use manual `workflow resume` for a container, or the server hosting the external conversation. A run stays parked if no waker runs; age never marks it failed.
 
@@ -1028,17 +1030,11 @@ archon workflow wake schedule install --interval 5 --json
 archon workflow wake schedule remove --json
 ```
 
-The interval is a positive integer in seconds, defaulting to 5. The job invokes `workflow wake --json`, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval or executable. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
+The launch interval is a positive integer in seconds, defaulting to 5. It starts the job again if it has exited; the watch process polls every five seconds. The job invokes `workflow wake --watch --json` as one long-lived process, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval or executable, or to upgrade an existing one-shot wake schedule to watch mode. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
 
-On Linux, run a one-pass command from cron (this example checks each minute):
+On Linux, use a long-lived systemd user service with `ExecStart=/absolute/path/to/archon workflow wake --watch --json`, `Environment=ARCHON_HOME=/absolute/path/to/.archon`, and `Restart=on-failure`. Enable it with `systemctl --user enable --now <name>.service`.
 
-```text
-* * * * * ARCHON_HOME=/home/alice/.archon /home/alice/.local/bin/archon workflow wake --json >> /home/alice/.archon/logs/workflow-wake.log 2>&1
-```
-
-Create the log directory first. For a systemd timer, use `ExecStart=/absolute/path/to/archon workflow wake --json` in a oneshot service, set `Environment=ARCHON_HOME=/absolute/path/to/.archon`, and schedule the service with `OnBootSec=5s` and `OnUnitInactiveSec=5s` in its timer. Enable it with `systemctl --user enable --now <name>.timer`.
-
-On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --json`, and configure a repeating trigger. Set `ARCHON_HOME` in the task's environment or invoke a wrapper that sets it, and use that home as the working directory. The OS timer owns cadence and overlap; one pass may outlast its interval.
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --watch --json`, and start the task at login. Disable the task's execution time limit and select “Do not start a new instance” if it is already running. Set `ARCHON_HOME` in the task's environment or invoke a wrapper that sets it, and use that home as the working directory.
 
 ### `workflow signal`
 

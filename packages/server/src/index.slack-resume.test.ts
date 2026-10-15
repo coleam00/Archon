@@ -78,7 +78,7 @@ const mockBridgeDetach = mock(() => {});
 mock.module('./chat-host/runtime', () => ({
   createChatHost: (installed: { descriptor: { id: string } }[]) => {
     hostedPlugins.push(installed.map(plugin => plugin.descriptor.id));
-    return { start: mockChatHostStart, stop: mockChatHostStop };
+    return { start: mockChatHostStart, stop: mockChatHostStop, attentionDestinations: [] };
   },
 }));
 

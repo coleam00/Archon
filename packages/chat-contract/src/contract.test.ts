@@ -17,6 +17,8 @@ import {
   type ChatContext,
   type ChatRunActionResponse,
   type ChatRunEvent,
+  type ChatAttentionNoticeRequest,
+  type ChatRunAction,
 } from './index';
 import { runChatConformance, type ChatConformanceFixture } from './conformance';
 
@@ -25,7 +27,12 @@ const descriptor = {
   id: 'test-chat',
   displayName: 'Test chat',
   version: '1',
-  capabilities: { defaultWorkflowDispatch: 'background', resultFooter: true, runEvents: true },
+  capabilities: {
+    attentionNotices: true,
+    defaultWorkflowDispatch: 'background',
+    resultFooter: true,
+    runEvents: true,
+  },
   workflowCommand: { prefix: '/archon-workflow ' },
   policy: {
     workspaceRetention: 'age-based',
@@ -39,6 +46,7 @@ async function fixture(startError?: Error): Promise<
     sent: string[];
     events: ChatRunEvent[];
     footers: number[];
+    notices: ChatAttentionNoticeRequest[];
   }
 > {
   let ctx: ChatContext | undefined;
@@ -48,6 +56,7 @@ async function fixture(startError?: Error): Promise<
   const sent: string[] = [];
   const events: ChatRunEvent[] = [];
   const footers: number[] = [];
+  const notices: ChatAttentionNoticeRequest[] = [];
   const pair = streamPair();
   const writer = pair.provider.writable.getWriter();
   const stopped = serveChat(
@@ -62,6 +71,10 @@ async function fixture(startError?: Error): Promise<
       },
       async resultFooter(params) {
         footers.push(params.cost ?? 0);
+      },
+      async attentionNotice(params) {
+        notices.push(params);
+        return { conversationId: `notice-${String(notices.length)}` };
       },
       onRunEvent(event) {
         events.push(event);
@@ -101,6 +114,7 @@ async function fixture(startError?: Error): Promise<
     sent,
     events,
     footers,
+    notices,
     inbound: message => context().inbound(message),
     runAction: action => context().runAction(action),
     malformedInbound() {
@@ -162,6 +176,8 @@ test('bidirectional requests preserve messages, every action result, send, foote
           resumed: false,
         },
       },
+      { status: 'done', result: { kind: 'answered', resumed: true } },
+      { status: 'done', result: { kind: 'resumed', resumed: false } },
       { status: 'done', result: { kind: 'cooperative', cancelled: false } },
       {
         status: 'done',
@@ -183,6 +199,63 @@ test('bidirectional requests preserve messages, every action result, send, foote
         result
       );
     }
+    const actions: ChatRunAction[] = [
+      {
+        action: 'answer',
+        runId: 'run',
+        sender: message.sender,
+        response: { nodeId: 'hold', pauseId: 'pause', choose: ['a', 'b'], text: 'why' },
+      },
+      { action: 'resume', runId: 'run', sender: message.sender },
+    ];
+    for (const action of actions) {
+      await f.runAction(action);
+      expect(received.at(-1)).toEqual(action);
+    }
+    const notices: ChatAttentionNoticeRequest[] = [
+      {
+        destination: 'ops',
+        notice: {
+          type: 'gate',
+          runId: 'run',
+          workflowName: 'nightly',
+          nodeId: 'review',
+          pauseId: 'pause',
+          gateType: 'interactive_loop',
+          message: 'Review',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+        },
+      },
+      {
+        destination: 'ops',
+        notice: {
+          type: 'attention',
+          runId: 'run',
+          workflowName: 'nightly',
+          nodeId: 'hold',
+          message: 'Pick',
+          form: 'multi_select',
+          options: [{ id: 'a', label: 'A' }, { id: 'b' }],
+        },
+      },
+      {
+        destination: 'ops',
+        conversationId: 'notice-1',
+        notice: {
+          type: 'terminal',
+          runId: 'run',
+          workflowName: 'nightly',
+          status: 'failed',
+          authoredOutcome: 'failed',
+          totalCostUsd: 0.5,
+        },
+      },
+    ];
+    for (const [index, notice] of notices.entries())
+      expect(await f.chat.attentionNotice(notice)).toEqual({
+        conversationId: `notice-${String(index + 1)}`,
+      });
+    expect(f.notices).toEqual(notices);
     const text = '🦊'.repeat(20000);
     await f.chat.send({
       conversationId: 'thread',
@@ -329,6 +402,12 @@ test('optional capabilities are absent and cannot be invoked when undeclared', a
     await expect(
       chat.runEvent({ type: 'terminal', runId: 'run', status: 'completed' })
     ).rejects.toThrow('not declared');
+    await expect(
+      chat.attentionNotice({
+        destination: 'ops',
+        notice: { type: 'terminal', runId: 'run', workflowName: 'nightly', status: 'completed' },
+      })
+    ).rejects.toThrow('not declared');
   } finally {
     await chat.close();
     await stopped;
@@ -336,6 +415,19 @@ test('optional capabilities are absent and cannot be invoked when undeclared', a
   await expect(
     serveChat({ descriptor, async start() {}, async send() {} }, pair.provider)
   ).rejects.toThrow('capability must match');
+  await expect(
+    serveChat(
+      {
+        descriptor: basic,
+        async start() {},
+        async send() {},
+        async attentionNotice() {
+          return {};
+        },
+      },
+      pair.provider
+    )
+  ).rejects.toThrow('attentionNotices capability must match its handler');
 });
 
 test('schemas constrain actor, identity, protocol, events and structured gate responses', () => {
@@ -367,6 +459,14 @@ test('schemas constrain actor, identity, protocol, events and structured gate re
     expect(chatRunEventSchema.parse(event)).toEqual(event);
   const target = { runId: 'run', sender: { platformUserId: 'user' } };
   expect(chatRunActionSchema.safeParse({ ...target, action: 'respond' }).success).toBe(false);
+  // A typed answer always names the occurrence it answers, so a stale one is refused.
+  expect(
+    chatRunActionSchema.safeParse({
+      ...target,
+      action: 'answer',
+      response: { nodeId: 'node', choose: ['a'] },
+    }).success
+  ).toBe(false);
   const action = chatRunActionSchema.parse({
     ...target,
     action: 'respond',
@@ -440,6 +540,9 @@ test('install inspection initializes and closes without starting a credential-de
       async send() {},
       async resultFooter() {},
       onRunEvent() {},
+      async attentionNotice() {
+        return {};
+      },
     },
     pair.provider
   );

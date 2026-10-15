@@ -19,6 +19,17 @@ export const chatRunActionSchema = z.discriminatedUnion('action', [
     action: z.literal('respond'),
     response: response.extend({ decision: id }),
   }),
+  z.object({
+    ...target,
+    action: z.literal('answer'),
+    response: z.object({
+      nodeId: id,
+      pauseId: id,
+      choose: z.array(id),
+      text: z.string().optional(),
+    }),
+  }),
+  z.object({ ...target, action: z.literal('resume') }),
   z.object({ ...target, action: z.literal('cancel') }),
 ]);
 export type ChatRunAction = z.infer<typeof chatRunActionSchema>;
@@ -38,6 +49,8 @@ export const runActionResultSchema = z.discriminatedUnion('kind', [
     newMode: z.boolean(),
     resumed: z.boolean(),
   }),
+  z.object({ kind: z.literal('answered'), resumed: z.boolean() }),
+  z.object({ kind: z.literal('resumed'), resumed: z.boolean() }),
   z.object({ kind: z.literal('cooperative'), cancelled: z.boolean() }),
   z.object({
     kind: z.literal('stopped'),
