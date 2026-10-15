@@ -79,7 +79,12 @@ test('review target schema conforms to the pack parser', () => {
       }
     }
   }
+  for (const target of [valid, { pr: null, base: null, head: sha, merge_base: null }]) {
+    cases.push({ ...target, extra: 'lost' });
+  }
   cases.push(
+    { ...valid, pr: { ...pr, extra: 'lost' } },
+    { ...valid, pr: { ...pr, repo: { ...pr.repo, extra: 'lost' } } },
     { ...valid, head: '   ' },
     { ...valid, base: '   ' },
     { ...valid, merge_base: 'invalid' },
@@ -96,11 +101,13 @@ test('review target schema conforms to the pack parser', () => {
   expect(parseReviewTarget(JSON.stringify(valid))).toEqual(valid);
   for (const target of cases) {
     let accepted = true;
+    let result: unknown;
     try {
-      parseReviewTarget(JSON.stringify(target));
+      result = parseReviewTarget(JSON.stringify(target));
     } catch {
       accepted = false;
     }
+    if (accepted) expect(result).toEqual(target);
     expect({
       target,
       valid: validateStructuredOutput({ target }, node.output_format).valid,

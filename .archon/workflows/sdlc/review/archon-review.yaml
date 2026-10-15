@@ -156,6 +156,7 @@ nodes:
         target: &review_target
           anyOf:
             - type: object
+              additionalProperties: false
               properties:
                 pr: { type: 'null' }
                 base: { type: 'null' }
@@ -163,12 +164,15 @@ nodes:
                 merge_base: { type: 'null' }
               required: [pr, base, head, merge_base]
             - type: object
+              additionalProperties: false
               properties:
                 pr:
                   type: object
+                  additionalProperties: false
                   properties:
                     repo:
                       type: object
+                      additionalProperties: false
                       properties:
                         host: { type: string, pattern: '\S' }
                         path: { type: string, pattern: '\S' }

@@ -170,25 +170,31 @@ export function listOpenPrsByHead(
     });
     return value === null ? [] : [forgePrView(value)];
   }
-  const listed = gh(
-    'pr',
-    'list',
-    '--repo',
-    ghRepo(repo),
-    '--head',
-    head,
-    '--state',
-    'open',
-    '--json',
-    PR_FIELDS
-  );
-  const rows: unknown = JSON.parse(required(listed, 'gh pr list'));
-  if (!Array.isArray(rows)) throw new Error('gh pr list returned an unexpected payload');
-  // gh matches a head branch by name alone, so the qualified head repository is
-  // compared here; the forge selector already carries it.
-  return rows
-    .map(row => ghPrView(repo, row))
-    .filter(view => view.pr.head_repo !== null && sameRepo(view.pr.head_repo, headRepo));
+  // gh paginates up to --limit. A full result is not proof of absence after
+  // filtering by head repository, so grow the limit until the list is exhausted.
+  for (let limit = 100; ; limit *= 2) {
+    const listed = gh(
+      'pr',
+      'list',
+      '--repo',
+      ghRepo(repo),
+      '--head',
+      head,
+      '--state',
+      'open',
+      '--limit',
+      String(limit),
+      '--json',
+      PR_FIELDS
+    );
+    const rows: unknown = JSON.parse(required(listed, 'gh pr list'));
+    if (!Array.isArray(rows)) throw new Error('gh pr list returned an unexpected payload');
+    if (rows.length < limit) {
+      return rows
+        .map(row => ghPrView(repo, row))
+        .filter(view => view.pr.head_repo !== null && sameRepo(view.pr.head_repo, headRepo));
+    }
+  }
 }
 
 export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {

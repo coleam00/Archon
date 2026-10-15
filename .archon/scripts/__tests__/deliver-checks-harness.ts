@@ -250,7 +250,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (fake.listFail !== undefined) return result(1, '', fake.listFail);
     if (fake.listedPrs !== undefined) {
       const rows = (fake.listedPrs[selector] ?? []).filter(row => row.state === 'OPEN' && row.headRefName === argv[argv.indexOf('--head') + 1]);
-      return result(0, JSON.stringify(rows.map(project)));
+      return result(0, JSON.stringify(rows.slice(0, (argv.includes('--limit') ? Number(argv[argv.indexOf('--limit') + 1]) : 30)).map(project)));
     }
     // gh applies the head and state filters server side.
     const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];

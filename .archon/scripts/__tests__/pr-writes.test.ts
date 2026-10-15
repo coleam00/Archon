@@ -212,6 +212,28 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('already has this head');
   });
 
+  it('reuses an open PR beyond a full GitHub listing instead of creating another', () => {
+    const result = publishPr({
+      gh: {
+        listedPrs: {
+          [`${PR.repo.host}/${PR.repo.path}`]: [
+            ...Array.from({ length: 100 }, (_, index) => ({
+              number: index + 100,
+              state: 'OPEN' as const,
+              headRefName: 'feature',
+              headRepositoryOwner: { login: `fork${index}` },
+            })),
+            { number: 42, state: 'OPEN', headRefName: 'feature' },
+          ],
+        },
+      },
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).number).toBe(42);
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(result.stderr).toContain('already has this head');
+  });
+
   it('keeps the created pull request when the host could not audit the write', () => {
     const result = publishPr({
       source: 'forge',

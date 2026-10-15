@@ -188,11 +188,18 @@ export type ReviewTarget =
   | { pr: QualifiedPr; base: string; head: string; merge_base: string }
   | { pr: null; base: null; head: string; merge_base: null };
 
+function rejectExtraFields(value: Record<string, unknown>, fields: readonly string[]): void {
+  if (Object.keys(value).some(key => !fields.includes(key))) {
+    throw new Error('unexpected reviewed target field');
+  }
+}
+
 export function parseReviewTarget(value: string): ReviewTarget {
   const target = record(JSON.parse(value));
   if (!target || typeof target.head !== 'string' || !target.head.trim()) {
     throw new Error('missing reviewed target head');
   }
+  rejectExtraFields(target, ['pr', 'base', 'head', 'merge_base']);
   if (target.pr === null && target.base === null && target.merge_base === null) {
     return { pr: null, base: null, head: target.head, merge_base: null };
   }
@@ -203,6 +210,12 @@ export function parseReviewTarget(value: string): ReviewTarget {
     !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(target.merge_base)
   ) {
     throw new Error('missing reviewed PR base or merge-base');
+  }
+  const pr = record(target.pr);
+  if (pr) {
+    rejectExtraFields(pr, ['repo', 'number']);
+    const repo = record(pr.repo);
+    if (repo) rejectExtraFields(repo, ['host', 'path']);
   }
   return {
     pr: parseQualifiedPr(JSON.stringify(target.pr)),

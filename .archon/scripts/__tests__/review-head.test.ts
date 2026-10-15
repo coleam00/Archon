@@ -275,6 +275,42 @@ describe('review head boundary', () => {
     expect(JSON.parse(run.stdout).target).toEqual(reviewFixture(cwd).target);
   });
 
+  for (const scope of ['', 'feature']) {
+    it(`checks a PR beyond the first GitHub results page for scope ${JSON.stringify(scope)}`, () => {
+      const unrelated = Array.from({ length: 200 }, (_, index) => ({
+        number: index + 100,
+        state: 'OPEN' as const,
+        headRefName: 'feature',
+        headRepositoryOwner: { login: `fork${index}` },
+      }));
+      const run = check({
+        gh: {
+          pr: { headRefOid: 'anotherhead' },
+          listedPrs: {
+            [`${PR.repo.host}/${PR.repo.path}`]: [
+              ...unrelated,
+              {
+                number: 42,
+                state: 'OPEN',
+                headRefName: 'feature',
+                headRefOid: 'anotherhead',
+              },
+            ],
+          },
+        },
+        inputs: {
+          INPUTS_SCOPE: scope,
+          INPUTS_SELECTOR: scope,
+          INPUTS_TARGET: JSON.stringify({ pr: null, base: null, head: HEAD, merge_base: null }),
+        },
+      });
+      expect(run.code).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain('is at anotherhead');
+      expect(run.stderr).toContain('No review lenses ran');
+    });
+  }
+
   it('requires an explicit selector when empty-scope discovery finds several PRs', () => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/contributor/repo.git');
