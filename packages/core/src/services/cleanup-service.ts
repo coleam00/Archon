@@ -371,6 +371,7 @@ export interface RemoveEnvironmentResult {
   skippedReason?:
     | 'environment not found'
     | 'already destroyed'
+    | 'not a worktree environment; use archon isolation cleanup 0'
     | 'has uncommitted changes'
     | 'filesystem removal incomplete; environment remains active'
     | UnknownPlatformReason;
@@ -400,6 +401,13 @@ export async function removeEnvironment(
   if (env.status === 'destroyed') {
     getLog().debug({ envId }, 'env_already_destroyed');
     return { ...noopResult, skippedReason: 'already destroyed' };
+  }
+
+  if (env.provider !== 'worktree') {
+    return {
+      ...noopResult,
+      skippedReason: 'not a worktree environment; use archon isolation cleanup 0',
+    };
   }
 
   const reason = unknownPlatformReason(env.created_by_platform);
@@ -636,7 +644,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     for (const env of environments) {
       try {
         // Skip if already processing or destroyed
-        if (env.status !== 'active') continue;
+        if (env.status !== 'active' || env.provider !== 'worktree') continue;
         const reason = unknownPlatformReason(env.created_by_platform);
         if (reason) {
           report.skipped.push({ id: env.id, reason });
@@ -843,7 +851,9 @@ export async function getWorktreeStatusBreakdown(
   mainRepoPath: string
 ): Promise<WorktreeStatusBreakdown> {
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
 
   const repoPath = toRepoPath(mainRepoPath);
   const breakdown: WorktreeStatusBreakdown = {
@@ -920,7 +930,9 @@ export async function cleanupStaleWorktrees(
 ): Promise<CleanupOperationResult> {
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
@@ -967,7 +979,9 @@ export async function cleanupMergedWorktrees(
   options: { includeClosed?: boolean } = {}
 ): Promise<MergedCleanupResult> {
   getRegisteredPlatformPolicies();
-  const environments = await isolationEnvDb.listByCodebase(codebaseId);
+  const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
+    env => env.provider === 'worktree'
+  );
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const result: MergedCleanupResult = { removed: [], skipped: [], baseRef: remoteMainRef };

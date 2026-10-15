@@ -437,6 +437,14 @@ describe('cleanup-service', () => {
   });
 
   describe('removeEnvironment', () => {
+    test('refuses container removal even with force', async () => {
+      mockGetById.mockResolvedValueOnce(makeEnvironment({ provider: 'container' }));
+      const result = await removeEnvironment('env-1', { force: true });
+      expect(result.skippedReason).toContain('not a worktree');
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
     test('calls destroy with canonicalRepoPath even when directory is missing', async () => {
       const envId = 'env-missing-dir';
 
@@ -911,6 +919,23 @@ describe('runScheduledCleanup', () => {
     mockIsRevCoveredBy.mockResolvedValue(true);
     mockGetLastCommitDate.mockResolvedValue(null);
     mockLoadRepoConfig.mockResolvedValue({});
+  });
+
+  test.each([false, true])('skips container branch checks (path exists: %s)', async pathExists => {
+    mockWorktreeExists.mockResolvedValue(pathExists);
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        ...makeEnvironment({ provider: 'container', branch_name: '' }),
+        codebase_name: 'test',
+        codebase_repository_url: null,
+        codebase_default_cwd: '/workspace/repo',
+      },
+    ]);
+    await runScheduledCleanup();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
 
   test('returns empty report when no environments exist', async () => {
@@ -3289,4 +3314,23 @@ describe('cleanup after a chat plugin is removed', () => {
       expect(mockUpdateStatus).toHaveBeenCalledWith(env.id, 'destroyed');
     }
   );
+});
+
+describe('worktree cleanup provider ownership', () => {
+  test('merged, stale, and status checks exclude containers before checking branches', async () => {
+    const env = makeEnvironment({ provider: 'container', branch_name: '' });
+    mockListByCodebase.mockResolvedValue([env]);
+    mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
+    mockGetPrState.mockClear();
+    mockWorktreeExists.mockClear();
+    mockUpdateStatus.mockClear();
+    mockDestroy.mockClear();
+    expect((await cleanupMergedWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await cleanupStaleWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await getWorktreeStatusBreakdown('cb', '/repo')).total).toBe(0);
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+  });
 });

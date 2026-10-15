@@ -214,6 +214,7 @@ const MOCK_CODEBASE_WITH_STRING_COMMANDS = {
 };
 
 const MOCK_ENV = {
+  provider: 'worktree',
   id: 'env-uuid-1',
   codebase_id: 'codebase-uuid-1',
   working_path: '/tmp/worktrees/feature-branch',
@@ -781,6 +782,26 @@ describe('DELETE /api/codebases/:id', () => {
     const body = (await response.json()) as { success: boolean };
     expect(body.success).toBe(true);
     expect(mockDeleteCodebase).toHaveBeenCalledWith('codebase-uuid-1');
+  });
+
+  test('refuses deletion before any cleanup when active containers remain', async () => {
+    mockGetCodebase.mockResolvedValueOnce(MOCK_CODEBASE);
+    mockListByCodebase.mockResolvedValueOnce([
+      MOCK_ENV,
+      { ...MOCK_ENV, id: 'container-one', provider: 'container' },
+      { ...MOCK_ENV, id: 'container-two', provider: 'container' },
+    ]);
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('container-one');
+    expect(body.error).toContain('container-two');
+    expect(body.error).toContain('archon isolation cleanup 0');
+    expect(mockRemoveWorktree).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockDeleteCodebase).not.toHaveBeenCalled();
   });
 
   test('removes worktrees before deleting codebase', async () => {

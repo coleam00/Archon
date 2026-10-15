@@ -1352,7 +1352,17 @@ Abandon deletes uncommitted work in that worktree, keeps its branch, and never r
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
-Remove stale environments. Age cleanup uses the originating platform's registered policy.
+Remove stale environments. Worktree cleanup only handles worktree records. Container
+cleanup removes eligible containers and their volumes through the container backend,
+including when no stale worktrees exist. A missing host folder does not make a container
+destroyed. To clean eligible containers without waiting for the default age threshold,
+run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
+
+Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active container
+environments remain. The error lists their environment IDs and the cleanup command.
+Clean them up explicitly, then retry deletion.
+
+Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
 the plugins. A receipt supersedes a bundled chat policy with the same platform id.
 

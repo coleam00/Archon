@@ -44,7 +44,7 @@ mock.module('../db/connection', () => ({
 }));
 const isolationDb = await import('../db/isolation-environments');
 const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { onConversationClosed, reclaimRunWorktree, removeEnvironment } =
+const { onConversationClosed, reclaimRunWorktree, removeEnvironment, runScheduledCleanup } =
   await import('./cleanup-service');
 
 async function git(path: string, ...args: string[]): Promise<string> {
@@ -563,3 +563,43 @@ test('ordinary cleanup removes a proven checkout under a symlinked base', async 
   expect(existsSync(env.working_path)).toBe(false);
   expect(await status()).toBe('destroyed');
 });
+
+test('worktree sweep keeps a missing-path container discoverable for container cleanup', async () => {
+  const container = await seedMissingPathContainer();
+  await runScheduledCleanup();
+  expect((await isolationDb.getById(container.id))?.status).toBe('active');
+  expect((await isolationDb.listActiveContainerEnvironments()).map(row => row.id)).toContain(
+    container.id
+  );
+});
+
+test('conversation close retains a container and its conversation reference', async () => {
+  const container = await seedMissingPathContainer();
+  const conversationId = randomUUID();
+  await db.query(
+    `INSERT INTO remote_agent_conversations
+      (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+     VALUES ($1, 'github', $1, $2, $3, $4)`,
+    [conversationId, codebaseId, container.id, container.working_path]
+  );
+  await expect(onConversationClosed('github', conversationId)).rejects.toThrow('not a worktree');
+  expect((await isolationDb.getById(container.id))?.status).toBe('active');
+  const { rows } = await db.query<{ isolation_env_id: string; cwd: string }>(
+    'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+    [conversationId]
+  );
+  expect(rows[0]).toEqual({ isolation_env_id: container.id, cwd: container.working_path });
+});
+
+async function seedMissingPathContainer(): Promise<IsolationEnvironmentRow> {
+  const id = randomUUID();
+  await db.query(
+    `INSERT INTO remote_agent_isolation_environments
+      (id, codebase_id, provider, workflow_type, workflow_id, working_path, branch_name)
+     VALUES ($1, $2, 'container', 'task', $1, $3, '')`,
+    [id, codebaseId, join(root, 'missing-host-folder')]
+  );
+  const row = await isolationDb.getById(id);
+  if (!row) throw new Error('Container fixture missing');
+  return row;
+}

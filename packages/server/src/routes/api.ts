@@ -917,6 +917,7 @@ const deleteCodebaseRoute = createRoute({
       description: 'Deleted',
     },
     404: jsonError('Not found'),
+    409: jsonError('Active container environments require explicit cleanup'),
     500: jsonError('Server error'),
   },
 });
@@ -3523,7 +3524,17 @@ export function registerApiRoutes(
 
       // Clean up isolation environments (worktrees)
       const environments = await isolationEnvDb.listByCodebase(id);
-      for (const env of environments) {
+      const containers = environments.filter(env => env.provider === 'container');
+      if (containers.length > 0) {
+        return apiError(
+          c,
+          409,
+          `Active container environments remain: ${containers.map(env => env.id).join(', ')}. ` +
+            'Run `archon isolation cleanup 0` to clean eligible containers, then retry deletion. ' +
+            'Containers owned by resumable runs must be released before cleanup.'
+        );
+      }
+      for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
           await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
           getLog().info({ path: env.working_path }, 'worktree_removed');

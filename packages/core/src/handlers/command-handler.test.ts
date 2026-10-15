@@ -1698,6 +1698,20 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('not using a worktree');
         });
 
+        test('refuses forced container removal without clearing tracking', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValueOnce({ ...featXEnv, provider: 'container' });
+          const result = await handleCommand(conv, '/worktree remove --force', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('archon isolation cleanup 0');
+          expect(mockIsolationDestroy).not.toHaveBeenCalled();
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+        });
+
         test('should remove worktree and switch to main', async () => {
           const convWithWorktree = makeConversation({
             ...conversationWithCodebase,
