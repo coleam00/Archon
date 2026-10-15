@@ -1382,17 +1382,24 @@ return await codebaseDb.createCodebase({...});
 
 ### Session Safety
 
-```typescript
-// Always check for active session
-const session = await sessionDb.getActiveSession(conversationId);
+Reset deactivates the active session without creating a replacement:
 
-// Use transitionSession() for immutable session pattern
-// Automatically deactivates old session and creates new one with audit trail
-const newSession = await sessionDb.transitionSession(
-  conversationId,
-  'reset-requested', // TransitionTrigger
-  { codebase_id, ai_assistant_type }
-);
+```typescript
+const session = await sessionDb.getActiveSession(conversationId);
+if (session) {
+  await sessionDb.deactivateSession(session.id, 'reset-requested');
+}
+```
+
+On the next AI message, the orchestrator creates a session with `first-message`:
+
+```typescript
+let session = await sessionDb.getActiveSession(conversationId);
+if (!session) {
+  session = await sessionDb.transitionSession(conversationId, 'first-message', {
+    ai_assistant_type: conversation.ai_assistant_type,
+  });
+}
 ```
 
 ### Streaming Error Handling
