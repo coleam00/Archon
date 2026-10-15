@@ -1,3 +1,4 @@
+import { removeTempTree } from '@archon/paths/test-utils';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
@@ -817,6 +818,57 @@ describe('POST /api/workflows/:name/run', () => {
       undefined,
       undefined
     );
+  });
+
+  test('refuses launch when the chat request cannot be persisted', async () => {
+    mockFindConversationByPlatformId.mockResolvedValueOnce(MOCK_CONV);
+    mockAddMessage.mockRejectedValueOnce(new Error('history database unavailable'));
+    const { app, mockWebAdapter } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy' }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to save workflow request to history' });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    expect(mockWebAdapter.setConversationDbId).not.toHaveBeenCalled();
+  });
+
+  test('rolls back only this request uploads when history persistence fails', async () => {
+    const originalHome = mockArchonHome;
+    const home = await mkdtemp(join(tmpdir(), 'archon-history-failure-'));
+    mockArchonHome = home;
+    try {
+      const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
+      await mkdir(uploadDir, { recursive: true });
+      await writeFile(join(uploadDir, 'existing.txt'), 'another request');
+      mockFindConversationByPlatformId.mockResolvedValueOnce(MOCK_CONV);
+      mockAddMessage.mockRejectedValueOnce(new Error('history database unavailable'));
+      const form = new FormData();
+      form.set('conversationId', 'web-test-abc');
+      form.set('message', 'Deploy with attachment');
+      form.set('files', new File(['details'], 'request.txt', { type: 'text/plain' }));
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        body: form,
+      });
+      expect(response.status).toBe(500);
+      expect(mockAddMessage).toHaveBeenCalledWith(
+        MOCK_CONV.id,
+        'user',
+        'Deploy with attachment',
+        { files: [{ name: 'request.txt', mimeType: 'text/plain', size: 7 }] },
+        undefined
+      );
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(await fsPromises.readdir(uploadDir)).toEqual(['existing.txt']);
+    } finally {
+      mockArchonHome = originalHome;
+      await removeTempTree(home);
+    }
   });
 
   test('fires title generation for conversations without title', async () => {

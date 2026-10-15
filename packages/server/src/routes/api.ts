@@ -4003,6 +4003,17 @@ export function registerApiRoutes(
           await messageDb.addMessage(conv.id, 'user', message, meta, userId);
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+          for (const file of savedFiles) {
+            await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+              if (err.code !== 'ENOENT') {
+                getLog().warn(
+                  { err, filePath: file.path, conversationId },
+                  'upload.rollback_failed'
+                );
+              }
+            });
+          }
+          return apiError(c, 500, 'Failed to save workflow request to history');
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
         if (!conv.title) {
