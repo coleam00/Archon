@@ -6,6 +6,7 @@ import {
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
   formatPausedGateSection,
+  type LaunchChannel,
 } from './prompt-builder';
 import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
@@ -14,21 +15,21 @@ import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
-    const rules = buildRoutingRulesWithProject();
+    const rules = buildRoutingRulesWithProject('commands');
 
     expect(rules).toContain('--prompt');
     expect(rules).toContain('self-contained task description');
   });
 
   test('routing rules include --prompt with project-scoped prompt', () => {
-    const rules = buildRoutingRulesWithProject('my-project');
+    const rules = buildRoutingRulesWithProject('commands', 'my-project');
 
     expect(rules).toContain('--prompt');
     expect(rules).toContain('my-project');
   });
 
   test('invocation format line includes exact --prompt flag syntax', () => {
-    const rules = buildRoutingRulesWithProject();
+    const rules = buildRoutingRulesWithProject('commands');
 
     // The format template must include --prompt as part of the command, not just in prose
     expect(rules).toContain(
@@ -36,34 +37,58 @@ describe('buildRoutingRulesWithProject', () => {
     );
   });
 
+  test('the tools channel teaches the typed tools and no command line the scan would read', () => {
+    for (const rules of [
+      buildRoutingRulesWithProject('tools'),
+      buildRoutingRulesWithProject('tools', 'p'),
+    ]) {
+      expect(rules).toContain('invoke_workflow');
+      expect(rules).toContain('register_project');
+      expect(rules).not.toContain('/invoke-workflow');
+      expect(rules).not.toContain('/register-project');
+    }
+  });
+
   test('routing rules never steer work into archon-assist (#3525)', () => {
-    for (const rules of [buildRoutingRulesWithProject(), buildRoutingRulesWithProject('p')]) {
-      expect(rules).not.toContain('archon-assist');
+    for (const channel of ['tools', 'commands'] as const) {
+      for (const rules of [
+        buildRoutingRulesWithProject(channel),
+        buildRoutingRulesWithProject(channel, 'p'),
+      ]) {
+        expect(rules).not.toContain('archon-assist');
+      }
     }
   });
 
-  test('every workflow the routing examples name is bundled and not deprecated (#3525)', () => {
-    const rules = buildRoutingRulesWithProject();
-    // Our own prompt text, not user prose: the examples name workflows as
-    // `/invoke-workflow <name>` and `**<name>** workflow`.
-    const named = [
-      ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
-      ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
-    ];
-    expect(named.length).toBeGreaterThan(0);
-    for (const name of named) {
-      const yaml = BUNDLED_WORKFLOWS[name];
-      expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
-      const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
-      expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
+  test.each(['tools', 'commands'] as const)(
+    'every workflow the %s routing examples name is bundled and not deprecated (#3525)',
+    channel => {
+      const rules = buildRoutingRulesWithProject(channel);
+      // Our own prompt text, not user prose: the examples name workflows as
+      // `/invoke-workflow <name>`, `workflow: "<name>"` and `**<name>** workflow`.
+      const named = [
+        ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
+        ...[...rules.matchAll(/workflow: "([a-z0-9-]+)"/g)].map(m => m[1]),
+        ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
+      ];
+      expect(named.length).toBeGreaterThan(1);
+      for (const name of named) {
+        const yaml = BUNDLED_WORKFLOWS[name];
+        expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
+        const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
+        expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
+      }
     }
-  });
+  );
 
-  test('rules state prompt must be self-contained with no conversation knowledge', () => {
-    const rules = buildRoutingRulesWithProject();
-
-    expect(rules).toContain('NO knowledge of the conversation history');
-  });
+  test.each(['tools', 'commands'] as const)(
+    '%s rules state prompt must be self-contained with no conversation knowledge',
+    channel => {
+      expect(buildRoutingRulesWithProject(channel)).toContain(
+        'NO knowledge of the conversation history'
+      );
+    }
+  );
 });
 
 describe('formatWorkflowContextSection', () => {
@@ -157,7 +182,8 @@ describe('buildOrchestratorSystemAppend', () => {
     const result = await buildOrchestratorSystemAppend(
       makeConversation(null),
       codebases,
-      workflows
+      workflows,
+      'commands'
     );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Registered Projects');
@@ -168,7 +194,8 @@ describe('buildOrchestratorSystemAppend', () => {
     const result = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,
-      workflows
+      workflows,
+      'commands'
     );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Active Project');
@@ -179,7 +206,8 @@ describe('buildOrchestratorSystemAppend', () => {
     const result = await buildOrchestratorSystemAppend(
       makeConversation('nonexistent'),
       codebases,
-      workflows
+      workflows,
+      'commands'
     );
     expect(result).toContain('## Registered Projects');
   });
@@ -191,12 +219,14 @@ describe('buildOrchestratorSystemAppend', () => {
     const scoped = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,
-      workflows
+      workflows,
+      'commands'
     );
     const unscoped = await buildOrchestratorSystemAppend(
       makeConversation(null),
       codebases,
-      workflows
+      workflows,
+      'commands'
     );
     expect(scoped).not.toContain('## Managing Workflow Runs');
     expect(unscoped).not.toContain('## Managing Workflow Runs');
@@ -244,10 +274,9 @@ describe('workspaces root in the prompt', () => {
     updated_at: new Date(),
   });
 
-  const promptsFor = async (): Promise<string[]> => [
-    await buildOrchestratorSystemAppend(conversation(null), [codebase], []),
-    await buildOrchestratorSystemAppend(conversation('cb-1'), [codebase], []),
-    buildRunManagementSection(),
+  const promptsFor = async (channel: LaunchChannel): Promise<string[]> => [
+    await buildOrchestratorSystemAppend(conversation(null), [codebase], [], channel),
+    await buildOrchestratorSystemAppend(conversation('cb-1'), [codebase], [], channel),
   ];
 
   test.each([
@@ -268,19 +297,27 @@ describe('workspaces root in the prompt', () => {
     for (const key of envKeys) delete process.env[key];
     Object.assign(process.env, env);
 
-    const [unscoped, scoped, runManagement] = await promptsFor();
-    for (const prompt of [unscoped, scoped, runManagement]) {
+    const commandPrompts = await promptsFor('commands');
+    const toolPrompts = await promptsFor('tools');
+    for (const prompt of [...commandPrompts, ...toolPrompts, buildRunManagementSection()]) {
       expect(prompt).toContain(`${root}/`);
       expect(prompt).not.toContain('~/.archon/workspaces');
       expect(prompt).not.toContain('/home/user/.archon');
     }
-    for (const prompt of [unscoped, scoped]) {
+    for (const prompt of [...commandPrompts, ...toolPrompts]) {
       expect(prompt).toContain(`Your working directory is ${root}/`);
       expect(prompt).toContain(
         `git clone https://github.com/{owner}/{repo} "${root}/{owner}/{repo}/source"`
       );
+    }
+    for (const prompt of commandPrompts) {
       expect(prompt).toContain(`/register-project my-new-app ${root}/user/my-new-app/source`);
       expect(prompt).toContain('/register-project {project-name} {path-to-source}');
+    }
+    for (const prompt of toolPrompts) {
+      expect(prompt).toContain(
+        `register_project(name: "my-new-app", path: "${root}/user/my-new-app/source")`
+      );
     }
   });
 });
