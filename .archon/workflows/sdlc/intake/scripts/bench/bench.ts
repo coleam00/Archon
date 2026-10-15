@@ -140,7 +140,7 @@ async function main(): Promise<void> {
     const base = gitOrThrow('rev-parse', '--verify', `${values.base ?? 'HEAD'}^{commit}`);
     const versions: { label: string; file: string; cwd: string }[] = [];
     for (const file of versionFiles.map(entry => resolve(entry))) {
-      const label = (Bun.YAML.parse(await Bun.file(file).text()) as { label?: unknown }).label;
+      const label = (Bun.YAML.parse(await Bun.file(file).text()) as { label?: unknown } | null)?.label;
       // The label names this version's checkout directory, so it is checked before any path is built from it.
       if (!isId(label)) throw new Error(`${file}: \`label\` must be letters, digits, \`.\`, \`_\` or \`-\``);
       const scratch = live?.get(label);
