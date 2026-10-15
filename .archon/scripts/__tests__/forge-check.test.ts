@@ -63,11 +63,12 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     for (const step of SETUP) expect(run.stderr).toContain(step);
   });
 
-  it('names the gh switch when the host published no CLI command', () => {
+  it('names the repository-config gh switch when the host published no CLI command', () => {
     const run = check({ forge: { kind: 'no-host' } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
-    expect(run.stderr).toContain('ARCHON_SDLC_FORGE=gh');
+    // A container execution, the host that publishes no command, never reads ~/.archon/.env.
+    expect(run.stderr).toContain("`env: { ARCHON_SDLC_FORGE: gh }` in the repository's `.archon/config.yaml`");
   });
 
   it('names the update when the installed plugin lacks the read', () => {

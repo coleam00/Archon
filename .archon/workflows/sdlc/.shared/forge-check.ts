@@ -7,7 +7,7 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, forgeSource, readRepositoryLabels, USE_GH, type ForgeSource } from './forge.ts';
+import { archonCommand, forgeSource, readRepositoryLabels, type ForgeSource } from './forge.ts';
 import { note } from './io.ts';
 import { remoteRepos } from './remote.ts';
 
@@ -67,11 +67,16 @@ function checkGh(): void {
  */
 function checkForge(): void {
   // A host that published no command (a container execution) refuses once here, not
-  // once per repository.
+  // once per repository. A container receives only the project's configured env, never
+  // `~/.archon/.env`, so the gh switch has to go through the repository config.
   try {
     archonCommand();
   } catch (error) {
-    throw new Error(`${error instanceof Error ? error.message : String(error)}. ${USE_GH}`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}. ` +
+        'To use the GitHub CLI in a container execution, set `env: { ARCHON_SDLC_FORGE: gh }` ' +
+        "in the repository's `.archon/config.yaml`; `~/.archon/.env` does not reach the container"
+    );
   }
   const repos = remoteRepos();
   if (repos.length === 0) {

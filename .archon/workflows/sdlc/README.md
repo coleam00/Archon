@@ -86,7 +86,9 @@ The source is never picked from what happens to be installed. When the selected
 source cannot answer (no host command, no plugin for the host, no credential, a
 failed operation), the node refuses; neither source falls back to the other. Any
 other value of `ARCHON_SDLC_FORGE` refuses too. A container execution receives no
-`ARCHON_CLI_COMMAND`, so the forge source refuses there.
+`ARCHON_CLI_COMMAND`, so the forge source refuses there. A container also receives
+only the project's configured env, never `~/.archon/.env`, so select `gh` for it in
+the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
 
 `archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source

@@ -15,7 +15,7 @@ archon provider add claude codex pi   # only the ones you use
 
 or `archon setup`, which asks. Until you do, a workflow or chat message that needs a provider fails before it starts and prints this command, and `archon doctor` fails with the same command. Your config, credentials, database and native provider logins are unchanged. Docker images and source checkouts run all three from source and need no step. (#3645)
 
-**Upgrading, if you run the SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`, `archon-pr`): set up the forge plugin, or keep `gh`.** They now reach GitHub through the forge plugin by default. Run `archon plugin add coleam00/Archon/plugins/forge-github` and set `GH_TOKEN` in `~/.archon/.env` (or use GitHub App mode); the forge path does not read your `gh` login. To keep the GitHub CLI, set `ARCHON_SDLC_FORGE=gh` instead. A run that has neither refuses at its first node, naming both steps, and `archon doctor` reports which step is missing. (#3433)
+**Upgrading, if you run the SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`, `archon-pr`): set up the forge plugin, or keep `gh`.** They now reach GitHub through the forge plugin by default. Run `archon plugin add coleam00/Archon/plugins/forge-github` and set `GH_TOKEN` in `~/.archon/.env` (or use GitHub App mode); the forge path does not read your `gh` login. To keep the GitHub CLI, set `ARCHON_SDLC_FORGE=gh` instead; a container execution does not read `~/.archon/.env`, so for it set `env: { ARCHON_SDLC_FORGE: gh }` in the repository's `.archon/config.yaml`. A run that has neither refuses at its first node, naming both steps, and `archon doctor` reports which step is missing. (#3433)
 
 ### Added
 
