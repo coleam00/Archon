@@ -277,6 +277,7 @@ describe('cold CLI continuation host', () => {
       // A refused `--json` answer reports `ok: false`, like every answering command.
       const bad = await answer(refused);
       expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false });
+      expect(bad.exitCode).toBe(1);
       const stale = await runProcess(
         f,
         [cli, 'workflow', 'answer', id, '--occurrence', 'stale', ...choose, '--json'],
@@ -286,6 +287,7 @@ describe('cold CLI continuation host', () => {
         ok: false,
         error: expect.stringContaining(`It is now awaiting occurrence '${occurrence}'`),
       });
+      expect(stale.exitCode).toBe(1);
       expect(row(f).status).toBe('paused');
       expect(events(f, 'wait_answered')).toBe(0);
 

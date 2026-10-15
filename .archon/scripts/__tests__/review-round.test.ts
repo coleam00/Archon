@@ -63,13 +63,14 @@ function round(
   cwd: string,
   head: string,
   cursor?: string,
-  extra: { light?: boolean; lenses?: object } = {}
+  extra: { light?: boolean; lenses?: object; part?: string } = {}
 ): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
       INPUTS_LIGHT: extra.light ? 'true' : 'false',
+      INPUTS_PART: extra.part ?? '',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
@@ -95,13 +96,15 @@ describe('review-round', () => {
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
       seams: false, code: false, tests: false, errors: false, docs: false,
+      part: null,
     });
   });
 
   it("continues from the previous round's reviewed commit with the lenses it ran", () => {
     const { cwd, older, newer } = history();
     const recorded = { seams: true, code: true, tests: false, errors: true, docs: false };
-    const run = round(cwd, newer, older, { lenses: recorded });
+    const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
+    const run = round(cwd, newer, older, { lenses: recorded, part: JSON.stringify(part) });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
@@ -110,7 +113,17 @@ describe('review-round', () => {
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
       ...recorded,
+      part,
     });
+  });
+
+  it('refuses a part assignment that is not JSON without echoing it', () => {
+    const { cwd, newer } = history();
+    const run = round(cwd, newer, undefined, { part: 'deliver chunk 1 of #42' });
+    expect(run.code).not.toBe(0);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('the part input is not JSON');
+    for (const fragment of ['deliver', 'chunk', '#42']) expect(run.stderr).not.toContain(fragment);
   });
 
   it('runs the code lens alone on a light continuation', () => {

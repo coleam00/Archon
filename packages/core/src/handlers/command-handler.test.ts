@@ -18,6 +18,7 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
+import type { CleanupOperationResult } from '../services/cleanup-service';
 import {
   MissingProjectDirectoryError,
   worktreeRegistrationMetadata,
@@ -35,6 +36,7 @@ import type * as CodebaseDb from '../db/codebases';
 import type * as ConversationDb from '../db/conversations';
 import type * as IsolationEnvironmentDb from '../db/isolation-environments';
 import type * as SessionDb from '../db/sessions';
+import type * as CleanupService from '../services/cleanup-service';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -350,9 +352,6 @@ const mockIsolationEnvDbGet = mock<typeof IsolationEnvironmentDb.getById>(() =>
 const mockIsolationEnvDbUpdate = mock<typeof IsolationEnvironmentDb.updateStatus>(() =>
   Promise.resolve()
 );
-const mockGetLiveRunOwningEnv = mock<typeof IsolationEnvironmentDb.getLiveRunOwningEnv>(() =>
-  Promise.resolve(null)
-);
 
 const mockCountActiveByCodebase = mock<typeof IsolationEnvironmentDb.countActiveByCodebase>(() =>
   Promise.resolve(0)
@@ -361,7 +360,6 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationEnvDbCreate,
   getById: mockIsolationEnvDbGet,
   getByWorkingPath: mock(() => Promise.resolve(null)),
-  getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   updateStatus: mockIsolationEnvDbUpdate,
   markDestroyed: mock(() => Promise.resolve()),
   getActiveByCodebase: mock(() => Promise.resolve([])),
@@ -430,18 +428,13 @@ mock.module('@archon/isolation', () => ({
 }));
 
 // Mock cleanup service
-const mockCleanupMergedWorktrees = mock(() =>
-  Promise.resolve({
-    removed: [] as string[],
-    skipped: [] as { branchName: string; reason: string }[],
-  })
-);
-const mockCleanupStaleWorktrees = mock(() =>
-  Promise.resolve({
-    removed: [] as string[],
-    skipped: [] as { branchName: string; reason: string }[],
-  })
-);
+const emptyCleanup = (): CleanupOperationResult => ({
+  removed: [],
+  skipped: [],
+  releasedFailedRuns: [],
+});
+const mockCleanupMergedWorktrees = mock(() => Promise.resolve(emptyCleanup()));
+const mockCleanupStaleWorktrees = mock(() => Promise.resolve(emptyCleanup()));
 // Capture the real class before mock.module replaces the module, so the mock
 // re-exports it rather than a hand-declared copy that could drift.
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
@@ -456,7 +449,11 @@ mock.module('../services/run-owner-stop', () => ({
 }));
 
 const mockReclaimContainerEnv = mock(async () => {});
+const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+  Promise.resolve(null)
+);
 mock.module('../services/cleanup-service', () => ({
+  getLiveRunBlocker: mockGetLiveRunBlocker,
   reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
@@ -492,7 +489,7 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
-import { parseCommand, handleCommand } from './command-handler';
+import { parseCommand, handleCommand, startWorkflow } from './command-handler';
 import { startRunLiveOwner } from '../services/run-live-owner';
 import { quoteCommandArg } from '../utils/command-args';
 
@@ -528,7 +525,8 @@ function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockIsolationEnvDbUpdate.mockClear();
-  mockGetLiveRunOwningEnv.mockClear();
+  mockGetLiveRunBlocker.mockReset();
+  mockGetLiveRunBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();
@@ -1775,14 +1773,18 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
+          mockGetLiveRunBlocker.mockResolvedValue({
+            reason: 'live_run',
+            display: 'run run-live is paused',
+            runId: 'run-live-1234',
+            runStatus: 'paused',
+          });
 
           const result = await handleCommand(convWithWorktree, '/worktree remove', operator);
 
           expect(result.success).toBe(false);
-          expect(result.message).toContain('run-live');
-          expect(result.message).toContain('paused');
-          expect(mockGetLiveRunOwningEnv).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(result.message).toContain('Worktree kept: run run-live is paused.');
+          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
@@ -1794,7 +1796,12 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
+          mockGetLiveRunBlocker.mockResolvedValue({
+            reason: 'live_run',
+            display: 'run run-live is paused',
+            runId: 'run-live-1234',
+            runStatus: 'paused',
+          });
 
           const result = await handleCommand(
             convWithWorktree,
@@ -1803,9 +1810,8 @@ describe('CommandHandler', () => {
           );
 
           expect(result.success).toBe(false);
-          expect(result.message).toContain('run-live');
-          expect(result.message).toContain('paused');
-          expect(mockGetLiveRunOwningEnv).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(result.message).toContain('Worktree kept: run run-live is paused.');
+          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
@@ -1847,6 +1853,9 @@ describe('CommandHandler', () => {
           mockCleanupMergedWorktrees.mockResolvedValueOnce({
             removed: ['feat-old', 'feat-done'],
             skipped: [{ branchName: 'feat-protected', reason: 'has uncommitted changes' }],
+            releasedFailedRuns: [
+              { branchName: 'feat-done', runId: 'run-failed-1', reason: 'merged' },
+            ],
           });
           mockCountActiveByCodebase.mockResolvedValueOnce(3);
 
@@ -1860,16 +1869,14 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Cleaned up 2 merged worktree(s)');
           expect(result.message).toContain('feat-old');
           expect(result.message).toContain('feat-done');
+          expect(result.message).toContain('Released failed run run-fail (merged): feat-done');
           expect(result.message).toContain('Skipped 1 (protected)');
           expect(result.message).toContain('feat-protected');
           expect(result.message).toContain('Active worktrees: 3');
         });
 
         test('should report when no stale worktrees to clean up', async () => {
-          mockCleanupStaleWorktrees.mockResolvedValueOnce({
-            removed: [],
-            skipped: [],
-          });
+          mockCleanupStaleWorktrees.mockResolvedValueOnce(emptyCleanup());
           mockCountActiveByCodebase.mockResolvedValueOnce(1);
 
           const result = await handleCommand(
@@ -2979,6 +2986,32 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).force).toBeUndefined();
         expect(startRequest(result.workflow).args).toBe('do it');
+      });
+
+      // The run route's entry: the message is the run's $ARGUMENTS byte for byte, and
+      // only the caller's `force` argument sets force (#4159).
+      test.each([
+        'Explain what git push --force does',
+        'Fix the "login bug"\n\nsteps:\n  1. a',
+        "'tis the season",
+      ])('startWorkflow keeps the message verbatim: %j', async message => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
+          ],
+          errors: [],
+        });
+
+        const result = await startWorkflow(
+          conversationWithCodebase,
+          'test-workflow',
+          message,
+          false,
+          {}
+        );
+
+        expect(startRequest(result.workflow).args).toBe(message);
+        expect(startRequest(result.workflow).force).toBeUndefined();
       });
 
       test('should return not-found when no codebase is configured', async () => {

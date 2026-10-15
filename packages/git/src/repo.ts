@@ -32,21 +32,41 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
     const { stdout } = await execFileAsync(
       'git',
       ['-C', startPath, 'rev-parse', '--show-toplevel'],
-      { timeout: 10000 }
+      {
+        timeout: 10000,
+        env: {
+          ...process.env,
+          // Trace output shares stderr with the discovery diagnostic; Trace2
+          // targets can also come from global config without environment keys.
+          ...Object.fromEntries(
+            Object.keys(process.env)
+              .filter(key => key.startsWith('GIT_TRACE'))
+              .map(key => [key, '0'])
+          ),
+          GIT_TRACE2: '0',
+          GIT_TRACE2_EVENT: '0',
+          GIT_TRACE2_PERF: '0',
+          LC_ALL: 'C',
+        },
+      }
     );
     return toRepoPath(stdout.trim());
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Expected: not a git repository
-    if (errorText.includes('not a git repository') || errorText.includes('Not a git repository')) {
+    // Git uses the same exit code for failed discovery and broken metadata.
+    // Only its discovery diagnostic proves absence; the command echo and
+    // "not a git repository: <gitdir>" from a broken pointer do not.
+    const diagnostic = err.stderr?.trim();
+    if (
+      diagnostic === 'fatal: not a git repository (or any of the parent directories): .git' ||
+      diagnostic?.startsWith('fatal: not a git repository (or any parent up to mount point ')
+    ) {
       return null;
     }
 
     // Unexpected error - surface it
     getLog().error({ startPath, err, stderr: err.stderr }, 'find_repo_root_failed');
-    throw new Error(`Failed to find repo root for ${startPath}: ${err.message}`);
+    throw new Error(`Failed to find repo root for ${startPath}: ${err.message}`, { cause: error });
   }
 }
 

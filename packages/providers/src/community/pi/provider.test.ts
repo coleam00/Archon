@@ -2,7 +2,7 @@ import { overStreams } from '../../test/plugin';
 import { createProvider, descriptor } from './index';
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
@@ -2026,6 +2026,27 @@ describe('PiProvider', () => {
     }) as { env: Record<string, string> };
     expect(merged.env.STRIPE_KEY).toBe('sk_test_abc');
     expect(merged.env.PATH).toBe('/usr/bin');
+  });
+
+  test('a caller PATH goes first and keeps Pi bin dir entries after it', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { PATH: ['/archon/gh-shim', '/usr/bin'].join(delimiter) },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { PATH: ['/pi/agent/bin', '/usr/bin'].join(delimiter) },
+    }) as { env: Record<string, string> };
+    expect(merged.env.PATH).toBe(['/archon/gh-shim', '/usr/bin', '/pi/agent/bin'].join(delimiter));
   });
 
   test('empty requestOptions.env does NOT construct a spawnHook', async () => {

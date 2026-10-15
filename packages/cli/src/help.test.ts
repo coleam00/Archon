@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
+import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
@@ -27,6 +28,22 @@ function scopedHelpOptions(argv: string[]): string {
   const end = body.indexOf('\n\n');
   return end === -1 ? body : body.slice(0, end);
 }
+
+it('keeps run source and isolation flags consistent with the parser', () => {
+  const options = scopedHelpOptions(['workflow', 'run']).split('\n');
+  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+    const parserOption = cliArgOptions[name];
+    expect(parserOption).toBeDefined();
+    const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
+    expect(lines).toHaveLength(1);
+    const spec = lines[0]?.trimStart().split(/ {2,}/)[0];
+    if (parserOption?.type === 'string') {
+      expect(spec).toMatch(new RegExp(`^--${name} <[^>]+>$`));
+    } else {
+      expect(spec).toBe(`--${name}`);
+    }
+  }
+});
 
 describe('CLI help output', () => {
   const help = renderHelp();
@@ -119,6 +136,11 @@ describe('CLI help output', () => {
   it('documents --workflow-source as a run-only flag in workflow run --help', () => {
     const scoped = renderHelp('workflow', 'run');
     expect(scoped).toContain('--workflow-source');
+  });
+
+  it('documents --container in workflow run options', () => {
+    expect(scopedHelpOptions(['workflow', 'run'])).toContain('--container');
+    expect(scopedHelpOptions(['workflow', 'answer'])).not.toContain('--container');
   });
 
   it('scopes workflow logs --help to its own flags and excludes run-only flags', () => {
@@ -272,6 +294,7 @@ Options:
                              instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run

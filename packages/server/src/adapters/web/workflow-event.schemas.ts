@@ -5,8 +5,8 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 
-export const skipCauseSchema = engineSkipCauseSchema.openapi('SkipCause');
-export const nodeSkipReasonSchema = engineNodeSkipReasonSchema.openapi('NodeSkipReason');
+export const skipCauseSchema = engineSkipCauseSchema.meta({ id: 'SkipCause' });
+export const nodeSkipReasonSchema = engineNodeSkipReasonSchema.meta({ id: 'NodeSkipReason' });
 
 export const dagNodeSseEventSchema = z
   .object({
