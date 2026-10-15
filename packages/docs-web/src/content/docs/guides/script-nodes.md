@@ -133,7 +133,7 @@ work, and so does `output_format` — see
 `mcp`, `skills`, `agents`, `effort`, `maxBudgetUsd`, `systemPrompt`,
 `fallbackModel`, `betas`, `sandbox`) are accepted by the parser but emit a
 loader warning and are ignored at runtime — no AI is invoked. `idle_timeout` is also accepted but ignored: script nodes
-run as one-shot subprocesses, so use `timeout` (hard kill after N ms) instead.
+run as one-shot subprocesses, so use `timeout` (request termination after N ms) instead. See [timeout cleanup](/guides/authoring-workflows#node-fields) for the grace period and cleanup-failure behavior.
 
 ## Inline vs Named Scripts
 
