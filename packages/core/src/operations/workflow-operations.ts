@@ -927,6 +927,14 @@ export class CancelRefusedError extends Error {
   }
 }
 
+/** Resume refused; the run is unchanged. The message states why. */
+export class ResumeRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResumeRefusedError';
+  }
+}
+
 /**
  * `cooperative`: the run's executor stops at its next status check. Either this
  * process executes the run, or the run is a `workflow:` sub-run with no live owner of
@@ -1289,7 +1297,7 @@ export function createWorkflowOperations({
     const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
     await assertMayAct(run, actor, 'resume');
     if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
-      throw new Error(
+      throw new ResumeRefusedError(
         `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`
       );
     }
@@ -1297,7 +1305,7 @@ export function createWorkflowOperations({
     // before answers continuable. Any other form has no answer to continue with.
     const wait = pausedAttentionWait(run);
     if (wait !== undefined && wait.answer === undefined && attentionForm(wait) !== 'message') {
-      throw new Error(
+      throw new ResumeRefusedError(
         `Run ${run.id} is waiting for an answer to its '${attentionForm(wait)}' attention wait. ` +
           'Answer it with answer instead of resuming it.'
       );

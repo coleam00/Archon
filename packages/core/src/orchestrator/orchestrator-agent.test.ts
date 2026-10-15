@@ -1490,6 +1490,7 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+    attentionNotices: [],
     paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
     workflows: {
