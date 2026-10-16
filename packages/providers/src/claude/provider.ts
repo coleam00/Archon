@@ -28,7 +28,6 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
-import type { SETTING_SOURCES } from '@archon/paths/skills';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -93,9 +92,11 @@ import {
 } from './plugins';
 import { clampEffort, declaredSkillRoots, type AssertNever } from '@archon/provider-contract';
 import {
+  DEFAULT_SETTING_SOURCES,
   findInstalledSkillNames,
   resolveSkillDirectoriesFromRoots,
   skillSearchRoots,
+  type SETTING_SOURCES,
 } from '@archon/paths/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -197,6 +198,12 @@ function selectResolvedModelId(
   return selected[0];
 }
 
+function deliveredClaudeCredential(options: SendQueryOptions | undefined): string | undefined {
+  return ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'].find(
+    key => options?.userCredentialEnvKeys?.includes(key) && options.env?.[key]
+  );
+}
+
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
@@ -209,15 +216,33 @@ export function buildRequestSubprocessEnv(
     );
   }
   const env = buildProviderSubprocessEnv(requestOptions);
-  // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
-  // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
-  // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
-  // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
-  // subscription delivered via requestOptions.env) must stay authoritative — the
-  // CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the install
-  // key alongside it would silently rebill the run. Truthiness is intentional:
-  // empty string = missing credential. Never clobbers an explicit ANTHROPIC_API_KEY.
-  if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  const delivered = deliveredClaudeCredential(requestOptions);
+  if (delivered) {
+    for (const key of [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_CUSTOM_HEADERS',
+      'CLAUDE_CODE_API_KEY_HELPER_FD',
+      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+    ])
+      delete env[key];
+    env[delivered === 'CLAUDE_API_KEY' ? 'ANTHROPIC_API_KEY' : delivered] =
+      requestOptions?.env?.[delivered];
+    for (const key of [
+      'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_USE_VERTEX',
+      'CLAUDE_CODE_USE_FOUNDRY',
+      'CLAUDE_CODE_USE_MANTLE',
+      'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+      'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+    ]) {
+      env[key] = '0';
+    }
+    // Native settings env otherwise overwrites the delivered identity.
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  } else if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
     getLog().debug('claude.api_key_mirrored');
   }
@@ -949,7 +974,7 @@ function buildBaseClaudeOptions(
         : {}),
     },
     // Per-node override wins over the assistant-level default; the final
-    // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
+    // fallback is DEFAULT_SETTING_SOURCES (the SDK-loading default Archon ships).
     settingSources,
     // Opt into the SDK's hook lifecycle frames so that tool-scoped hooks
     // (PreToolUse / PostToolUse / Stop / etc.) reach the workflow audit
@@ -1675,7 +1700,7 @@ export class ClaudeProvider implements IAgentProvider {
       const settingSources =
         requestOptions?.nodeConfig?.settingSources ??
         assistantDefaults.settingSources ??
-        (['project', 'user'] as const);
+        DEFAULT_SETTING_SOURCES;
 
       const toolResultQueue: ToolResultEntry[] = [];
       const options = buildBaseClaudeOptions(
@@ -1717,6 +1742,12 @@ export class ClaudeProvider implements IAgentProvider {
         }
       }
 
+      if (deliveredClaudeCredential(requestOptions)) {
+        options.settings = {
+          ...(typeof options.settings === 'object' ? options.settings : {}),
+          apiKeyHelper: '',
+        };
+      }
       options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
       // Register in-process native tools (e.g. manage_run) as an archon MCP server,

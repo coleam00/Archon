@@ -180,7 +180,7 @@ for merged PRs they do not cover, and removes duplicates.
 - Follow [`AGENTS.md`](./AGENTS.md) and
   [`.archon/engineering.md`](./.archon/engineering.md).
 - TypeScript strict mode is enforced.
-- All functions require explicit return types.
+- Use inferred types where they are clear; annotate boundaries when needed to express a meaningful contract.
 - Do not use `any` without justification.
 - Follow existing patterns in the codebase.
 
@@ -190,7 +190,7 @@ with the documented product direction will be closed.
 
 ## Architecture
 
-See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
+See [`.archon/architecture.md`](./.archon/architecture.md) for the package map, main flows, extension points and enforced boundaries.
 
 ## Sharing workflows
 

@@ -11,7 +11,10 @@ import {
   checkTriggerRule,
   loopBodyScope,
   inputEnvVars,
+  certifyExecOutput,
   nodeTemplateReferences,
+  substituteNodeOutputRefs,
+  substituteWaitMessage,
   resolveNodeBindings,
   resolveAttentionOptions,
   substituteLoopBodyText,
@@ -755,7 +758,7 @@ async function executeCodeNode(
   /** The executor's own `INPUTS_<UPPER_SNAKE>` bag: run, composed and node-local inputs. */
   inputEnv: NodeJS.ProcessEnv,
   execution?: NodeExecutionMetadata
-): Promise<{ output: string } | { error: string }> {
+): Promise<ReturnType<typeof certifyExecOutput> | { error: string }> {
   try {
     let command: string;
     let args: string[];
@@ -813,7 +816,9 @@ async function executeCodeNode(
         }),
       },
     });
-    return { output: result.stdout.replace(/\n$/, '') };
+    // The real run's gate, so a fixture cannot pass a node whose stdout the engine would reject.
+    // The simulator has no credential set to redact from the quoted stdout.
+    return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), []);
   } catch (error) {
     const err = error as Error & { stderr?: string };
     return { error: err.stderr?.trim() || err.message };
@@ -1222,7 +1227,13 @@ async function simulateNode(
     if (isWaitNode(node)) {
       const condition = waitCondition(node.wait);
       const resolvedText =
-        condition.kind === 'attention' ? resolveText(condition.message, ctx, outputs) : undefined;
+        condition.kind === 'attention'
+          ? substituteWaitMessage(
+              condition.message,
+              { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
+              ctx.inputs
+            ).trim()
+          : undefined;
       // An authored stub answers an attention wait, as an answer completes it in a real
       // run. Without one the simulation stops where the run would pause.
       const answer =
@@ -1258,7 +1269,7 @@ async function simulateNode(
       return;
     }
     if (isGateNode(node)) {
-      const resolvedText = resolveText(node.message, ctx, outputs);
+      const resolvedText = substituteNodeOutputRefs(node.message, outputs, ctx.loopBodyScopes);
       if (ctx.pauseAtGates) {
         outputs.set(node.id, { state: 'pending', output: '' });
         ctx.trace.push({
@@ -1285,7 +1296,7 @@ async function simulateNode(
       return;
     }
     if (isHaltNode(node)) {
-      const resolvedText = resolveText(node.reason, ctx, outputs);
+      const resolvedText = substituteNodeOutputRefs(node.reason, outputs, ctx.loopBodyScopes);
       outputs.set(node.id, { state: 'completed', output: resolvedText });
       ctx.trace.push({
         nodeId: node.id,
@@ -1389,7 +1400,7 @@ async function simulateNode(
       if ('error' in executed) {
         recordFailed(node, outputs, ctx, executed.error, resolvedText, iteration);
       } else {
-        outputs.set(node.id, { state: 'completed', output: executed.output });
+        outputs.set(node.id, { state: 'completed', ...executed });
         ctx.trace.push({
           nodeId: node.id,
           nodeType: nodeType(node),

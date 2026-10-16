@@ -17350,6 +17350,34 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     });
   });
 
+  it('propagates a rejected quota pause write while the run is still running', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
+    const store = createMockStore();
+    const failure = new Error('quota pause write failed');
+    store.pauseWorkflowRunForWait.mockRejectedValue(failure);
+
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-credit',
+          cwd: testDir,
+          workflow: investigateWorkflow,
+          workflowRun: makeWorkflowRun('credit-write-failure-run'),
+          config: quotaConfig(),
+        })
+      )
+    ).rejects.toBe(failure);
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-write-failure-run',
+      expect.objectContaining({ kind: 'quota', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'investigate' }
+    );
+    expect(store.getWorkflowRunStatus).toHaveBeenCalledWith('credit-write-failure-run');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('waits when the quota failure comes from a loop-group body node', async () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
     useQuery(quotaExhaustedQuery(resetAt));
@@ -17803,7 +17831,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
       workflow_run_id: 'attention-delivery-failed',
       event_type: 'pause_notice_undelivered',
       step_name: 'rerun-ci',
-      data: { nodeId: 'rerun-ci', platform: 'test' },
+      data: { nodeId: 'rerun-ci', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'node_failed' })
@@ -18319,7 +18347,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'review',
-      data: { nodeId: 'review', platform: 'test' },
+      data: { nodeId: 'review', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'approval_requested', step_name: 'review' })
@@ -18386,7 +18414,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'refine',
-      data: { nodeId: 'refine', platform: 'test' },
+      data: { nodeId: 'refine', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.getState().status).toBe('paused');
     expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
@@ -19246,6 +19274,7 @@ describe('executeDagWorkflow -- env var injection', () => {
             GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
           },
           protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
+          userCredentialEnvKeys: ['ANTHROPIC_API_KEY'],
         },
       })
     );
@@ -19258,6 +19287,7 @@ describe('executeDagWorkflow -- env var injection', () => {
       GIT_AUTHOR_NAME: 'connected-author',
       GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
+    expect(optionsArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
     expect(optionsArg?.protectedEnvKeys).toEqual([
       'ANTHROPIC_API_KEY',
       'GIT_AUTHOR_NAME',
@@ -34113,6 +34143,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     runMetadata?: Record<string, unknown>;
     status?: 'running' | 'paused';
     claimed?: boolean;
+    platform?: ReturnType<typeof createMockPlatform>;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
     store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
@@ -34124,6 +34155,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await executeDagWorkflow(
       dagOptions({
         deps,
+        ...(opts.platform ? { platform: opts.platform } : {}),
         conversationId: 'conv-wb',
         cwd: wbTestDir,
         workflow: {
@@ -34228,6 +34260,35 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(writes.filter(([event]) => event.event_type === 'writeback_requested')).toHaveLength(1);
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('records an undelivered pause notice when the write-back gate message cannot be sent', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+    });
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (): Promise<void> => {
+      throw new Error('401 unauthorized');
+    });
+    const store = await runGate({ backend, platform });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'wb-run',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'container',
+      data: { nodeId: '__writeback__', occurrence: expect.any(String), platform: 'test' },
+    });
   });
 
   it('a lost pause CAS during write-back stays fail-closed: throws, never suspends (#2489)', async () => {

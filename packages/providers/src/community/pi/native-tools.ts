@@ -1,3 +1,4 @@
+import { nativeToolInputParser } from '@archon/provider-contract';
 import { Type, StringEnum, type TSchema } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { NativeTool, NativeToolInputSchema, NativeToolProperty } from '../../types';
@@ -26,6 +27,7 @@ function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
  * boolean, and `required` decides whether it is optional.
  */
 export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TObject {
+  nativeToolInputParser(input);
   const shape: Record<string, TSchema> = {};
   for (const [key, prop] of Object.entries(input.properties)) {
     let field = typeBoxFieldForProperty(prop);
@@ -34,7 +36,7 @@ export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TObject 
     }
     shape[key] = input.required.includes(key) ? field : Type.Optional(field);
   }
-  return Type.Object(shape);
+  return Type.Object(shape, { additionalProperties: false });
 }
 
 /**
@@ -54,7 +56,12 @@ export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDef
         _toolCallId,
         params
       ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => ({
-        content: [{ type: 'text', text: await spec.handler(params as Record<string, unknown>) }],
+        content: [
+          {
+            type: 'text',
+            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params)),
+          },
+        ],
         details: undefined,
       }),
     })

@@ -51,3 +51,15 @@ test('every stop reason uses ACP v1 vocabulary; missing reasons only affect ackn
   }
   expect(acpStopReason('end_turn', true)).toBe('cancelled');
 });
+
+test('session requests reject required tool keys absent from properties', () => {
+  expect(
+    providerSessionRequestSchema.safeParse({
+      prompt: '',
+      cwd: '/',
+      nativeTools: [
+        { name: 'broken', description: '', inputSchema: { properties: {}, required: ['missing'] } },
+      ],
+    }).success
+  ).toBe(false);
+});

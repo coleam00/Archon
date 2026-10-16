@@ -61,7 +61,7 @@ mock.module('@archon/core', () => ({
     }
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
-  generateAndSetTitle: mock(async () => {}),
+  generateTitleForUser: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   createLogger: () => ({
     fatal: mock(() => undefined),
@@ -111,6 +111,8 @@ mock.module('@archon/git', () => ({
 
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
+  getConversationByPlatformId: (_platform: string, id: string) =>
+    mockFindConversationByPlatformId(id),
   listConversations: mock(async () => []),
   getOrCreateConversation: mock(async () => ({
     id: 'internal-uuid-123',
@@ -283,7 +285,7 @@ describe('POST /api/conversations/:id/message', () => {
     );
   });
 
-  test('still dispatches when conversation lookup fails (no message persistence)', async () => {
+  test('still dispatches when no conversation exists (no message persistence)', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
     mockHandleMessage.mockImplementationOnce(async () => {});
 

@@ -5,7 +5,7 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
+import { RUN_GITHUB_IDENTITY_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -80,10 +80,11 @@ describe('forge user trust boundary', () => {
     }
   });
 
-  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
-  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
-  // process: a CLI subprocess per scenario is too slow on Windows runners.
-  for (const key of GITHUB_TOKEN_KEYS) {
+  // The engine expresses a run's GitHub identity by setting the key (a token, '' to
+  // scrub, or a stored-login redirect). An absent key is no opinion, so Archon's env
+  // files supply it. Exercised in process: a CLI subprocess per scenario is too slow on
+  // Windows runners.
+  for (const key of RUN_GITHUB_IDENTITY_KEYS) {
     it(`${key}: a run's credential state wins over Archon env files`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
       const home = join(root, 'home');
@@ -262,6 +263,8 @@ if (process.argv[3] === 'metadata') {
             ARCHON_HOME: trustedHome,
             ARCHON_TELEMETRY_DISABLED: '1',
             FORGE_SECRET: '',
+            // Inside an Archon run this would make the forge audit a run id the scratch DB lacks.
+            WORKFLOW_ID: '',
           },
         }
       );
@@ -786,6 +789,23 @@ describe('workflow status arguments', () => {
     );
     expect(result.stderr).toContain('archon workflow get <run-id>');
     expect(result.stdout).toBe('');
+  });
+});
+
+describe('workflow get arguments', () => {
+  it('accepts a run id, the form recovery hints name', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-cli-get-'));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, 'cli.ts'), 'workflow', 'get', 'definitely-not-a-run'],
+        { encoding: 'utf8', env: { ...process.env, ARCHON_HOME: archonHome } }
+      );
+
+      expect(result.stderr).not.toContain('Usage: archon workflow get');
+    } finally {
+      await removeTempTree(archonHome);
+    }
   });
 });
 

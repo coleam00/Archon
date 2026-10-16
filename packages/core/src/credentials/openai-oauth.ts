@@ -325,9 +325,12 @@ export async function refreshOpenAiOAuthCredentials(
   return credentialsFromTokenResponse(json, 'refresh', creds);
 }
 
+/** A minted token must stay valid at least this long; Pi uses the same window. */
+const OPENAI_MIN_TOKEN_VALIDITY_MS = 5 * 60 * 1000;
+
 /**
  * Mint a usable bearer from a stored OpenAI credential blob, refreshing first
- * when expired. Same contract as Pi's `getOAuthApiKey` (`{ newCredentials,
+ * when expired or about to expire. Same contract as Pi's `getOAuthApiKey` (`{ newCredentials,
  * apiKey } | null`) so the store's shared rotation/resave logic applies
  * unchanged. Throws when a needed refresh fails.
  *
@@ -340,7 +343,12 @@ export async function mintOpenAiOAuthApiKey(
   creds: OpenAiOAuthCredentials
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   let current: OAuthCredentials = creds;
-  if (typeof creds.expires === 'number' && Date.now() >= creds.expires) {
+  // Refresh a token that is about to expire too: Codex gets only the access token, and
+  // Archon cannot refresh it once the turn has started.
+  if (
+    typeof creds.expires === 'number' &&
+    Date.now() + OPENAI_MIN_TOKEN_VALIDITY_MS >= creds.expires
+  ) {
     current = await refreshOpenAiOAuthCredentials(creds);
   }
   const access = typeof current.access === 'string' ? current.access : '';

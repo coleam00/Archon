@@ -73,7 +73,6 @@ import * as git from '@archon/git';
 
 **Functions:**
 ```typescript
-// All functions need explicit return types
 async function createSession(id: string): Promise<Session> { ... }
 // No implicit any
 ```
