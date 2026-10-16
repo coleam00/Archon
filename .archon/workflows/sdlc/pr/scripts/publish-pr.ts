@@ -40,6 +40,27 @@ import { pushHead } from '../../.shared/push.ts';
 
 type Repo = QualifiedPr['repo'];
 
+/**
+ * Read an existing pull request back until it reports the commit just pushed.
+ * GitHub's pull request API can keep reporting the previous head for a while after
+ * the remote branch has moved (pushHead already proved the branch with ls-remote).
+ * Review compares that recorded head with its checkout, so recording a stale one
+ * fails the round with a false head mismatch.
+ */
+function awaitHead(read: () => PrRecord, pushed: string): PrRecord {
+  let pr = read();
+  for (let attempt = 0; pr.head_revision !== pushed && attempt < 12; attempt++) {
+    Bun.sleepSync(5_000);
+    pr = read();
+  }
+  if (pr.head_revision !== pushed) {
+    throw new Error(
+      `pushed ${pushed}, but pull request ${String(pr.number)} still reports head ${pr.head_revision ?? 'none'} after 60s`
+    );
+  }
+  return pr;
+}
+
 function publish(): PrRecord {
   const source = forgeSource();
   const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
@@ -69,9 +90,9 @@ function publish(): PrRecord {
     if (prHeadRepo === null) {
       throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
     }
-    pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
+    const pushed = pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
     // The run continues a named pull request: its draft state belongs to its author.
-    return viewPr({ repo, number: existing }, source).pr;
+    return awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
   }
 
   const head = branch || text(process.env.INPUTS_HEAD);
@@ -80,7 +101,7 @@ function publish(): PrRecord {
   const open = findOpenPrByHead(repo, headRepo, head, source);
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
-    return open.pr;
+    return awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision);
   }
 
   const bodyPath = text(process.env.INPUTS_BODY);
