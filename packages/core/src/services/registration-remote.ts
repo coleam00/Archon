@@ -52,10 +52,20 @@ export async function effectiveRegistrationUrl(
  * Registration stores the URL of the remote worktree.remote selects at that
  * time. A project registered earlier, or under another selection, still owns a
  * checkout whose config now selects a different remote, so any remote with the
- * routed identity proves ownership.
+ * routed identity proves ownership. A registered path may be a subdirectory
+ * of its checkout; `requireRoot` refuses one for paths that must be a clone root.
  */
-export async function assertCheckoutRemote(path: string, remoteUrl: string): Promise<void> {
+export async function assertCheckoutRemote(
+  path: string,
+  remoteUrl: string,
+  requireRoot = false
+): Promise<void> {
   try {
+    if (requireRoot) {
+      // Git would otherwise read the remotes of a checkout that encloses path.
+      const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--show-prefix']);
+      if (stdout.trim()) throw new Error(`${path} is not the root of a Git checkout.`);
+    }
     const expected = await remoteIdentity(remoteUrl);
     const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
     for (const name of stdout.split(/\r?\n/).map(name => name.trim())) {
@@ -79,7 +89,8 @@ export async function assertCheckoutRemote(path: string, remoteUrl: string): Pro
 /**
  * Verify a project's saved checkout with {@link assertCheckoutRemote}. A missing
  * path has nothing to verify, nor has the empty managed source/ that project
- * setup creates before the first clone (or a failed clone leaves behind).
+ * setup creates before the first clone (or a failed clone leaves behind). A
+ * non-empty managed source must be its own clone.
  */
 export async function assertSavedCheckoutRemote(
   path: string,
@@ -88,7 +99,7 @@ export async function assertSavedCheckoutRemote(
 ): Promise<void> {
   if (!existsSync(path)) return;
   if (path === managedSource && (await readdir(path)).length === 0) return;
-  await assertCheckoutRemote(path, remoteUrl);
+  await assertCheckoutRemote(path, remoteUrl, path === managedSource);
 }
 
 async function readableRemoteIdentity(project: ProjectIdentity): Promise<string | null> {

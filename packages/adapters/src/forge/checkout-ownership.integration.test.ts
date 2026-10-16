@@ -136,6 +136,17 @@ for (const forge of forges) {
     `${forge.name} verifies canonical repair targets: %s`,
     async state => {
       const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-repair-owner-')));
+      // ARCHON_HOME inside a checkout of the routed remote: Git discovery from a
+      // source/ without its own .git must not borrow that checkout's remotes.
+      execFileSync('git', ['-C', root, 'init', '-q']);
+      execFileSync('git', [
+        '-C',
+        root,
+        'remote',
+        'add',
+        'origin',
+        `https://${forge.host}/acme/api`,
+      ]);
       const previousHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = root;
       try {
