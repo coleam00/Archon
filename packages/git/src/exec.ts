@@ -67,6 +67,16 @@ export function resolveBashPath(): string {
   return 'bash';
 }
 
+async function isMissingPath(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return false;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
 async function hasRepositoryMarker(path: string): Promise<boolean> {
   let current = await realpath(path);
   while (true) {
@@ -138,11 +148,14 @@ export async function execFileAsync(
         path &&
         cause instanceof Error &&
         'code' in cause &&
-        cause.code === 128 &&
+        (cause.code === 128 || cause.code === 'ENOENT') &&
         !(options?.env?.GIT_DIR ?? process.env.GIT_DIR)
       ) {
         try {
-          if (!(await hasRepositoryMarker(path))) {
+          // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
+          // ENOENT; either way no repository is there.
+          if (await isMissingPath(path)) kind = 'not_repository';
+          else if (cause.code === 128 && !(await hasRepositoryMarker(path))) {
             // Repository discovery also exits 128 for invalid configuration. Verify
             // Git can load its configuration before treating absence as the cause.
             await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {

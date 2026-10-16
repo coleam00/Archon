@@ -808,6 +808,25 @@ describe('git utilities', () => {
       expect(failure.stderr).toContain('not a git repository');
     });
 
+    test('a path that no longer exists reads as absent to repository consumers', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-vanished-')));
+      const missing = join(root, 'vanished-worktree');
+      for (const args of [['-C', missing, 'status'], ['status']]) {
+        const failure = await git
+          .execFileAsync('git', args, args[0] === '-C' ? {} : { cwd: missing })
+          .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(git.GitFailure);
+        if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+        expect(failure.kind).toBe('not_repository');
+      }
+      expect(await git.getLastCommitDate(worktree(missing))).toBeNull();
+      expect(await git.isBranchMerged(repo(missing), branch('topic'), branch('main'))).toBe(false);
+      expect(await git.isAncestorOf(worktree(missing), 'main')).toBe(false);
+      expect(await git.isPatchEquivalent(worktree(missing), branch('topic'), 'main')).toBe(false);
+      expect(await git.listWorktrees(repo(missing))).toEqual([]);
+      expect(await git.hasUncommittedChanges(worktree(missing))).toBe(false);
+    });
+
     test('invalid global config stays unclassified across repository absence consumers', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-config-')));
       const config = join(root, 'global-config');
