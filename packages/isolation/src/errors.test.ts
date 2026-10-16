@@ -70,7 +70,7 @@ describe('typed isolation failures', () => {
     const wrapped = new Error(`Failed to create PR worktree: ${failure.message}`, {
       cause: failure,
     });
-    expect(isKnownIsolationError(wrapped)).toBe(false);
+    expect(isKnownIsolationError(wrapped)).toBe(true);
     expect(classifyIsolationError(wrapped)).toContain('git worktree add');
     expect(classifyIsolationError(wrapped)).toContain(cause.stderr);
     expect(classifyIsolationError(wrapped)).toContain('exit code 128');

@@ -180,9 +180,11 @@ export function classifyIsolationError(err: Error): string {
 export function isKnownIsolationError(err: Error): boolean {
   const kind = failureKind(err);
   return (
+    err instanceof GitFailure ||
     err instanceof WorktreePostCreateError ||
     err instanceof MissingProjectDirectoryError ||
     err instanceof ExistingBranchDivergedError ||
-    (kind !== undefined && kind !== 'unclassified')
+    (kind !== undefined && kind !== 'unclassified') ||
+    (kind === 'unclassified' && err.cause instanceof Error && isKnownIsolationError(err.cause))
   );
 }
