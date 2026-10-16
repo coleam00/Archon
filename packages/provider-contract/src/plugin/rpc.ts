@@ -19,6 +19,24 @@ export class PluginProtocolError extends Error {
   }
 }
 
+// Built only from the plugin id and validated protocol values, so it is safe to surface,
+// unlike remote error prose.
+export class PluginProtocolMismatchError extends PluginProtocolError {
+  constructor(
+    plugin: string,
+    line: number,
+    public readonly hostProtocol: number | string,
+    public readonly pluginProtocol: number | string
+  ) {
+    super(
+      plugin,
+      line,
+      `plugin speaks protocol ${String(pluginProtocol)}; this Archon speaks protocol ${String(hostProtocol)}`
+    );
+    this.name = 'PluginProtocolMismatchError';
+  }
+}
+
 export class PluginRemoteError extends Error {
   constructor(
     public readonly code: number,
@@ -87,6 +105,12 @@ export class PluginRpc {
   }
   error(detail: string, cause?: unknown): PluginProtocolError {
     return new PluginProtocolError(this.plugin, this.line, detail, { cause });
+  }
+  mismatch(
+    hostProtocol: number | string,
+    pluginProtocol: number | string
+  ): PluginProtocolMismatchError {
+    return new PluginProtocolMismatchError(this.plugin, this.line, hostProtocol, pluginProtocol);
   }
   parse<T>(schema: z.ZodType<T>, value: unknown): T {
     const parsed = schema.safeParse(value);
