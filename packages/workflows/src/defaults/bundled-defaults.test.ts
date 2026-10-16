@@ -443,7 +443,8 @@ describe('bundled-defaults', () => {
     // One round loop owns delivery: implement, pr, review, then simplify and one CI
     // agent once the review passes. The pr step runs every round and owns the push;
     // a red the change caused drives another round, whose fix is reviewed before CI
-    // runs again. The graph has no engine wait and no separate ready-mark node.
+    // runs again. After CI the round answers and reads the pull request's review
+    // threads. The graph has no engine wait and no separate ready-mark node.
     it('archon-deliver runs one round loop that ends in a single CI agent', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
@@ -477,6 +478,8 @@ describe('bundled-defaults', () => {
         'reshape',
         'rereview',
         'ci',
+        'settle-threads',
+        'threads',
         'round',
       ]);
       expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
