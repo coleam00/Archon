@@ -37,7 +37,7 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
-  remoteTrackingBranchExists,
+  inspectRemoteBranches,
   isRevCoveredBy,
   countCommitsMissingFromRemotes,
   getLastCommitDate,
@@ -1378,8 +1378,13 @@ async function judgeCompletedWorktree(
       detail: `${String(commits)} commit(s) on no remote`,
     };
   }
+  // Ask the remote: a push by URL or refspec need not leave a remote-tracking ref.
   const remote = configuredRemote(await loadRepoConfig(repo));
-  if (await remoteTrackingBranchExists(repo, remote, toBranchName(env.branch_name))) {
+  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath: repo, remote });
+  if (advertised.status === 'unavailable') {
+    throw new Error(`cannot read branches on remote '${remote}': ${advertised.evidence}`);
+  }
+  if (advertised.branches.includes(toBranchName(env.branch_name))) {
     return { disposition: 'retained', reason: 'published_branch' };
   }
   return { disposition: 'release' };

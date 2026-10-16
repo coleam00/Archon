@@ -735,7 +735,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The branch was pushed; `isolation cleanup --merged` removes it after its PR merges |
+| `published_branch` | The configured remote has the branch; `isolation cleanup --merged` removes it after its PR merges |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.

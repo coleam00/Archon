@@ -626,6 +626,11 @@ describe('completed run worktree release', () => {
     await git(env.working_path, 'commit', '-qm', 'work');
   };
 
+  beforeEach(async () => {
+    await mkdir(join(repo, '.archon'));
+    await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
+  });
+
   test.each(['sql', 'file'] as const)(
     '%s: a clean checkout whose commits are all on a remote is removed, keeping its branch',
     async persistence => {
@@ -678,12 +683,27 @@ describe('completed run worktree release', () => {
   });
 
   test('a branch published to the configured remote waits for the merged sweep', async () => {
-    await mkdir(join(repo, '.archon'));
-    await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
     await commitInWorktree();
     await git(env.working_path, 'push', '-q', 'upstream', `HEAD:refs/heads/${env.branch_name}`);
     await git(repo, 'fetch', '-q', 'upstream');
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+  });
+
+  test('a published branch with no remote-tracking ref still waits for the merged sweep', async () => {
+    await git(
+      env.working_path,
+      'push',
+      '-q',
+      join(root, 'remote.git'),
+      `HEAD:refs/heads/${env.branch_name}`
+    );
+    expect(await git(repo, 'branch', '-r', '--list', `upstream/${env.branch_name}`)).toBe('');
+    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+  });
+
+  test('a remote that cannot be read keeps the checkout', async () => {
+    await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
   });
 
   test('the completing run does not hold its own checkout, another claimable run does', async () => {
