@@ -111,6 +111,8 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       getCodebase: async id => (await readPublicCodebases()).find(row => row.id === id) ?? null,
       listCodebases: async () =>
         (await readPublicCodebases()).sort((a, b) => a.name.localeCompare(b.name)),
+      // The document is validated whole on every read, so it never holds an unreadable row.
+      listCodebaseClaims: async () => readPublicCodebases(),
       findCodebaseByDefaultCwd: async cwd =>
         (await readPublicCodebases())
           .filter(row => row.default_cwd === cwd)

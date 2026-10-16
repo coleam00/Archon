@@ -37,6 +37,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
     codebases: {
       getCodebase: async id => codebases.get(id) ?? null,
       listCodebases: async () => [...codebases.values()],
+      listCodebaseClaims: async () => [...codebases.values()],
       findCodebaseByDefaultCwd: async cwd =>
         [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
       findCodebaseByPathPrefix: async cwd =>

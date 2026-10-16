@@ -17,6 +17,8 @@ export interface IWorkflowHostStore {
     findCodebaseByName(name: string): Promise<Codebase | null>;
     findCodebaseByRepoUrl(url: string): Promise<Codebase | null>;
     listCodebases(): Promise<readonly Codebase[]>;
+    /** Rows for name, storage and remote-ownership scans; an unreadable row must not fail the scan. */
+    listCodebaseClaims(): Promise<readonly Codebase[]>;
     createCodebase(data: CreateCodebaseInput): Promise<Codebase>;
     /** Hold the registration writer lock through the ownership check and removal. */
     removeUnregisteredCheckout(path: string, remove: () => Promise<void>): Promise<void>;

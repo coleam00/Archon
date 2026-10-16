@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
@@ -82,8 +83,13 @@ export async function assertCheckoutRemote(path: string, remoteUrl: string): Pro
 async function readableRemoteIdentity(project: ProjectIdentity): Promise<string | null> {
   if (project.kind === 'folder') return null;
   try {
-    // Older chat registrations omitted repository_url even for remote-backed repos.
-    const url = project.repository_url || (await effectiveRegistrationUrl(project.default_cwd));
+    // Older chat registrations omitted repository_url even for remote-backed repos. Git
+    // would resolve a relative stored path against this process's directory instead.
+    const url =
+      project.repository_url ||
+      (isAbsolute(project.default_cwd)
+        ? await effectiveRegistrationUrl(project.default_cwd)
+        : null);
     return url ? await remoteIdentity(url, project.default_cwd) : null;
   } catch (error) {
     // An unreadable checkout has unknown ownership; it must not veto other projects.

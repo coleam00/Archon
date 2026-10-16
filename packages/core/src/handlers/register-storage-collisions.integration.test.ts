@@ -590,6 +590,96 @@ describe('project storage collisions', () => {
     expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
   });
 
+  test('an unrelated project with an invalid stored path does not block lookup or registration', async () => {
+    const root = await makeHome();
+    const known = await createCodebase({
+      name: 'acme/api',
+      default_cwd: await gitCheckout(join(root, 'known'), 'git@github.com:acme/api.git'),
+      repository_url: 'git@github.com:acme/api.git',
+    });
+    // Rows written before default_cwd validation; reading one must fail only for its own project.
+    for (const [name, path] of [
+      ['Broken', 'projects/repo'],
+      ['Empty', ''],
+      ['Here', '.'],
+    ]) {
+      await db.query('INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ($1, $2)', [
+        name,
+        path,
+      ]);
+    }
+    // A relative stored path names no checkout, not even this process's directory.
+    async function inDirectory<T>(path: string, run: () => Promise<T>): Promise<T> {
+      const previous = process.cwd();
+      process.chdir(path);
+      try {
+        return await run();
+      } finally {
+        process.chdir(previous);
+      }
+    }
+
+    // Webhook routing: a spelling miss and an unknown remote.
+    expect((await findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(known.id);
+    expect(await findCodebaseByRepoUrl('https://github.com/acme/new')).toBeNull();
+
+    // Registration: a refusal, a new remote, the process's own remote, and a folder.
+    await expect(
+      registerRepository(await gitCheckout(join(root, 'second'), 'https://github.com/acme/api'))
+    ).rejects.toThrow(known.default_cwd);
+    const cwdCheckout = await gitCheckout(join(root, 'cwd'), 'https://github.com/acme/cwd');
+    const own = await inDirectory(cwdCheckout, async () =>
+      registerRepository(await gitCheckout(join(root, 'own'), 'https://github.com/acme/cwd'))
+    );
+    expect(own.alreadyExisted).toBe(false);
+    await mkdir(join(root, 'notes'));
+    expect((await registerFolder(join(root, 'notes'))).alreadyExisted).toBe(false);
+
+    // Reuse of a linked worktree whose primary keeps its Git directory elsewhere.
+    const primary = join(root, 'separate', 'primary');
+    const linked = join(root, 'separate', 'linked');
+    await mkdir(primary, { recursive: true });
+    execFileSync('git', ['-C', primary, 'init', '-q', '--separate-git-dir', join(root, 'meta')]);
+    execFileSync('git', ['-C', primary, 'commit', '-q', '--allow-empty', '-m', 'init'], {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@t',
+      },
+    });
+    execFileSync('git', ['-C', primary, 'worktree', 'add', '-q', '-b', 'linked', linked]);
+    const separate = await registerRepository(primary);
+    expect(await inDirectory(primary, () => registerRepository(linked))).toMatchObject({
+      codebaseId: separate.codebaseId,
+      alreadyExisted: true,
+    });
+
+    // /clone: reuse of a registered remote and a fresh clone.
+    expect(await cloneRepository(codebases, 'https://github.com/acme/api')).toMatchObject({
+      codebaseId: known.id,
+      alreadyExisted: true,
+    });
+    const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+      await gitCheckout(path, 'https://github.com/acme/new');
+      return { ok: true, value: undefined };
+    });
+    try {
+      expect((await cloneRepository(codebases, 'https://github.com/acme/new')).alreadyExisted).toBe(
+        false
+      );
+    } finally {
+      clone.mockRestore();
+    }
+
+    // Cleanup of an unowned checkout inside the process's directory.
+    const stray = await gitCheckout(join(cwdCheckout, 'stray'));
+    const remove = mock(async () => {});
+    await inDirectory(cwdCheckout, () => codebases.removeUnregisteredCheckout(stray, remove));
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
   test.each(['sql', 'file'] as const)(
     '%s insert-time storage conflicts are registration refusals',
     async backend => {

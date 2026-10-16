@@ -22,7 +22,7 @@ const createCodebase = mock<typeof CodebaseDb.createCodebase>(async input => ({
 }));
 mock.module('../db/codebases', () => ({
   createCodebase,
-  listCodebases: async () => [],
+  listCodebaseClaims: async () => [],
   findCodebaseByName: async () => null,
   findCodebaseByRepoUrl: async () => null,
   getCodebaseCommands: async () => ({}),

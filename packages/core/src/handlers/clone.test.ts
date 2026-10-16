@@ -71,7 +71,9 @@ const mockFindCodebaseByRepoUrl = mock<typeof CodebaseDb.findCodebaseByRepoUrl>(
 const mockFindCodebaseByDefaultCwd = mock<typeof CodebaseDb.findCodebaseByDefaultCwd>(() =>
   Promise.resolve(null)
 );
-const mockListCodebases = mock<typeof CodebaseDb.listCodebases>(() => Promise.resolve([]));
+const mockListCodebaseClaims = mock<typeof CodebaseDb.listCodebaseClaims>(() =>
+  Promise.resolve([])
+);
 const mockFindCodebaseByName = mock<typeof CodebaseDb.findCodebaseByName>(() =>
   Promise.resolve(null)
 );
@@ -86,7 +88,7 @@ mock.module('../db/codebases', () => ({
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
   findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
-  listCodebases: mockListCodebases,
+  listCodebaseClaims: mockListCodebaseClaims,
   findCodebaseByName: mockFindCodebaseByName,
   updateCodebase: mockUpdateCodebase,
 }));
@@ -210,7 +212,7 @@ function restoreSpies(): void {
 function clearMocks(): void {
   // mockReset() clears both call history AND any queued mockResolvedValueOnce values,
   // preventing cross-test bleed when tests queue different return values.
-  mockListCodebases.mockReset().mockResolvedValue([]);
+  mockListCodebaseClaims.mockReset().mockResolvedValue([]);
   mockCreateCodebase.mockReset();
   mockGetCodebaseCommands.mockReset();
   mockUpdateCodebaseCommands.mockReset();
@@ -528,7 +530,7 @@ describe('cloneRepository', () => {
           default_cwd: '/existing/checkout',
           repository_url: storedUrl,
         });
-        mockListCodebases.mockResolvedValue([existing]);
+        mockListCodebaseClaims.mockResolvedValue([existing]);
         expect((await cloneRepository('github.com/owner/repo', options)).alreadyExisted).toBe(true);
         expect(helper).toHaveBeenCalledWith('/existing/checkout');
         helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
@@ -1189,7 +1191,7 @@ describe('cloneRepository', () => {
         repository_url: 'https://github.com/owner/repo',
         default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
       });
-      mockListCodebases.mockResolvedValueOnce([existingCodebase]);
+      mockListCodebaseClaims.mockResolvedValueOnce([existingCodebase]);
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
@@ -1199,7 +1201,7 @@ describe('cloneRepository', () => {
     });
 
     test('finds an existing codebase stored with a .git suffix', async () => {
-      mockListCodebases.mockResolvedValueOnce([
+      mockListCodebaseClaims.mockResolvedValueOnce([
         makeCodebase({
           id: 'found-via-git-suffix',
           repository_url: 'https://github.com/owner/repo.git',
@@ -1325,7 +1327,7 @@ describe('cloneRepository', () => {
       'reports command-directory access failure %s and keeps the saved checkout',
       async code => {
         const existing = makeCodebase();
-        mockListCodebases.mockResolvedValueOnce([existing]);
+        mockListCodebaseClaims.mockResolvedValueOnce([existing]);
         const error = Object.assign(new Error('commands unavailable'), { code });
         spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
           if (!String(path).endsWith('.git')) throw error;
@@ -1427,7 +1429,7 @@ describe('registerRepository', () => {
         await fsPromises.writeFile(join(commandRoot, 'group', 'sub', 'hidden.md'), 'hidden');
         await fsPromises.writeFile(join(commandRoot, 'build.md'), 'build');
         const codebase = makeCodebase({ default_cwd: cwd });
-        mockListCodebases.mockResolvedValue(alreadyExists ? [codebase] : []);
+        mockListCodebaseClaims.mockResolvedValue(alreadyExists ? [codebase] : []);
         mockCreateCodebase.mockResolvedValue(codebase);
         mockFindCommandFiles.mockImplementation(discoverCommandFiles);
         // Reusing a registered remote reloads its commands without creating another checkout.
@@ -1928,7 +1930,7 @@ describe('remote registration identity', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
+    mockListCodebaseClaims.mockResolvedValueOnce([existingCodebase]);
 
     const error = await registerRepository('/home/user/repo').then(
       () => undefined,
@@ -1959,7 +1961,7 @@ describe('remote registration identity', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
+    mockListCodebaseClaims.mockResolvedValueOnce([existingCodebase]);
     const lookalike = '/mnt/backup/.archon/workspaces/owner/repo/source';
 
     const error = await registerRepository(lookalike).then(
@@ -1987,7 +1989,7 @@ describe('remote registration identity', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
+    mockListCodebaseClaims.mockResolvedValueOnce([existingCodebase]);
 
     const error = await registerRepository('/home/user/we"ird').then(
       () => undefined,
@@ -2009,7 +2011,7 @@ describe('remote registration identity', () => {
     });
     spyFsAccess.mockResolvedValue(undefined);
     // A matching remote reuses the registered checkout before cloning.
-    mockListCodebases.mockResolvedValueOnce([existingCodebase]);
+    mockListCodebaseClaims.mockResolvedValueOnce([existingCodebase]);
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
     const result = await cloneRepository('https://github.com/owner/repo');
@@ -2025,7 +2027,7 @@ describe('remote registration identity', () => {
 
   test('a matching name without a matching remote creates a separate project', async () => {
     const existingCodebase = makeCodebase({ repository_url: null, default_cwd: '/home/user/repo' });
-    mockListCodebases.mockResolvedValue([existingCodebase]);
+    mockListCodebaseClaims.mockResolvedValue([existingCodebase]);
     mockCreateCodebase.mockImplementation(async input =>
       makeCodebase({ ...input, repository_url: input.repository_url ?? null })
     );
@@ -2075,7 +2077,7 @@ describe('RegisterResult shape', () => {
 
   test('pre-existing codebase result has alreadyExisted: true and commandCount: 0', async () => {
     spyFsAccess.mockResolvedValue(undefined); // .git exists
-    mockListCodebases.mockResolvedValueOnce([makeCodebase({ id: 'existing-999' })]);
+    mockListCodebaseClaims.mockResolvedValueOnce([makeCodebase({ id: 'existing-999' })]);
 
     const result = await cloneRepository('https://github.com/owner/repo');
 

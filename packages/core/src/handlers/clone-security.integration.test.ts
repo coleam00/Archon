@@ -71,7 +71,7 @@ mock.module('../db/codebases', () => ({
   updateCodebaseCommands: mock(async () => undefined),
   findCodebaseByRepoUrl: mock(async () => null),
   findCodebaseByDefaultCwd: mock(async () => null),
-  listCodebases: mock(async () => []),
+  listCodebaseClaims: mock(async () => []),
   findCodebaseByName: mock(async () => null),
   updateCodebase: mock(async () => undefined),
 }));

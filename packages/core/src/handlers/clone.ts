@@ -37,6 +37,7 @@ import {
 export { ProjectRegistrationError } from '../services/registration-remote';
 
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import { assertAbsoluteDefaultCwd } from '../utils/codebase-path';
 import {
   allocateProjectName,
   resolveRegistrationUrl,
@@ -270,17 +271,19 @@ function refuseOccupiedSource(error: unknown): never {
 }
 
 async function claimProjectName(
-  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
+  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims'>,
   project: ProjectIdentity
 ): Promise<string> {
-  return allocateProjectName(project, await codebases.listCodebases());
+  return allocateProjectName(project, await codebases.listCodebaseClaims());
 }
 
 async function findRegisteredRemote(
-  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
+  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims'>,
   remoteUrl: string
 ): Promise<Codebase | null> {
-  return findRemoteOwner(await codebases.listCodebases(), remoteUrl);
+  const owner = await findRemoteOwner(await codebases.listCodebaseClaims(), remoteUrl);
+  if (owner) assertAbsoluteDefaultCwd(owner.default_cwd, owner.name);
+  return owner;
 }
 
 async function validateRegistrationChoice(
@@ -480,7 +483,7 @@ export async function cloneRepository(
   const appSource = appRepository(repoUrl, options);
   const derived = deriveRepoCloneTarget(repoUrl);
   const { workingUrl } = derived;
-  const existing = await findRemoteOwner(await codebases.listCodebases(), workingUrl);
+  const existing = await findRegisteredRemote(codebases, workingUrl);
   if (existing) {
     rejectExistingChoice(options);
     let missing = false;
@@ -606,7 +609,10 @@ export async function registerRepository(
 
   // Git's physical common directory proves linked-checkout ownership without
   // conflating separate clones, remotes, names, or branches (#1192).
-  const existing = await findCodebaseForCheckoutPath(localPath, codebases);
+  const existing = await findCodebaseForCheckoutPath(localPath, {
+    findCodebaseByDefaultCwd: codebases.findCodebaseByDefaultCwd,
+    listCodebases: codebases.listCodebaseClaims,
+  });
   if (existing) {
     rejectExistingChoice(options);
     if (existing.repository_url)

@@ -33,6 +33,8 @@ export async function isCheckoutRegistered(
 ): Promise<boolean> {
   const checkout = (await existingPhysicalPath(path)) ?? resolve(path);
   for (const project of registered) {
+    // An invalid relative stored path names no checkout; resolving it would claim this process's directory.
+    if (!isAbsolute(project.default_cwd)) continue;
     const physicalCwd = await readablePhysicalPath(project);
     const cwd = physicalCwd ?? resolve(project.default_cwd);
     if (

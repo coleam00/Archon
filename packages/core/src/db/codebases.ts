@@ -190,7 +190,9 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
     [repoUrl]
   );
   const row = result.rows[0];
-  return row ? validateCodebase(row) : findRemoteOwner(await listCodebases(), repoUrl);
+  if (row) return validateCodebase(row);
+  const owner = await findRemoteOwner(await listCodebaseClaims(), repoUrl);
+  return owner && validateCodebase(owner);
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {
@@ -379,6 +381,18 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
   if ((result.rowCount ?? 0) === 0) throw new CodebaseNameTakenError(name);
   getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
   return renamed;
+}
+
+/**
+ * Every row as stored, including one whose stored path no longer validates.
+ * Name, storage and remote-ownership scans read these, so an unreadable project
+ * fails only lookups that resolve to it.
+ */
+export async function listCodebaseClaims(): Promise<readonly Codebase[]> {
+  const result = await pool.query<Codebase>(
+    'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
+  );
+  return result.rows;
 }
 
 export async function listCodebases(): Promise<readonly Codebase[]> {
