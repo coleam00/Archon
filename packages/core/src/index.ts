@@ -269,7 +269,6 @@ export {
   cancelOAuth,
   type ResolvedCredential,
   type DeliveryResult,
-  type DeliveryOptions,
   type OAuthCredentials,
   type VendorCatalogEntry,
   type AgentCredentialStatus,
@@ -285,7 +284,6 @@ export {
   listUserProviderKeys,
   deleteUserProviderKey,
   getDecryptedProviderCredential,
-  listDecryptedUserProviderCredentials,
   getStoredCredentialStatus,
   type SaveUserProviderKeyParams,
   type StoredCredential,
@@ -316,3 +314,5 @@ export { processProviderRegistration } from './providers/process-registration';
 export { loadProviderPlugins } from './providers/load-provider-plugins';
 
 export { registerHostProviders } from './providers/register-host-providers';
+
+export { generateTitleForUser } from './services/user-title-generator';

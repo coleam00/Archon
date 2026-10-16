@@ -48,6 +48,7 @@ export function runStatusLabel(run: Run): string {
   }
   if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
   if (run.wait.kind === 'attention') return 'Waiting for action';
+  if (run.wait.kind === 'quota') return 'Waiting for usage limit reset';
   return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
 }
 

@@ -130,13 +130,10 @@ concurrency:
   # providers:
   #   pi: 1
 
-# Live tool attention is enabled by default; quota continuation is opt-in.
+# Live tool attention and the usage-limit wait are both on by default.
 workflows:
   toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
-  autoResumeOnQuotaReset: false
-  # quotaFallbackDelayMs: 3600000
-  quotaMaxAttempts: 1
-  quotaDeadlineMs: 86400000
+  autoResumeOnQuotaReset: true  # false fails a run on a provider usage limit instead
 
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
@@ -185,7 +182,7 @@ assistant: pi
 tiers:
   large: { provider: pi, model: minimax/MiniMax-M3 }
 workflows:
-  quotaMaxAttempts: 3
+  toolCallAttentionMs: 600000
 env:
   BENCH_MODE: "1"
 ```
@@ -302,10 +299,11 @@ absent from disk entirely, such as Claude's built-in skills and plugin-qualified
 `plugin:skill` entries, are left to the SDK to resolve. A plugin's skill loads only
 when the node also names that plugin under `plugins:`.
 
-Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
-resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo
-therefore narrows and reports itself, instead of falling back to the permissive
-`['project', 'user']` default.
+Archon refuses a config file with an unrecognized entry such as
+`settingSources: ['projct']`. Config that reaches the provider without that check
+has only the unrecognized entry dropped, and logs `provider.config_invalid_fields_dropped`.
+A typo therefore narrows the sources and reports itself, instead of falling back to
+the permissive `['project', 'user']` default.
 
 | Value | Description |
 |-------|-------------|
@@ -385,7 +383,7 @@ Copy only gitignored files this way. Copying a **tracked** file overwrites the v
 
 You do **not** need this for workflows, commands, or scripts. Those are captured by the run itself, including uncommitted ones. `.archon/config.yaml` is not part of that capture, but a new run's AI configuration is read from the checkout it was launched from, not from the worktree, so uncommitted and gitignored config applies without copying. See [Where a run reads `.archon/config.yaml`](#where-a-run-reads-archonconfigyaml).
 
-**Workflow source no longer travels through the worktree.** When a run starts, Archon freezes the workflow's own `.archon/workflows`, `.archon/commands`, and `.archon/scripts` — plus your home-scoped `~/.archon/` source, so a statically included global workflow is frozen too — into that run's artifacts directory, and resolves them from there for the run's whole life. Three consequences:
+**Workflow source no longer travels through the worktree.** When a run starts, Archon freezes the workflow's own `.archon/workflows`, `.archon/commands`, and `.archon/scripts` — plus your home-scoped `~/.archon/` source, so a statically included global workflow is frozen too — into a separate source capture beside that run's artifacts, at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`. It resolves frozen source from there throughout the run; `$ARTIFACTS_DIR` remains the output channel. See [workflow source capture](/reference/cli/#running-a-workflow-from-another-checkout). Three consequences:
 
 - The worktree stays clean. Authoring files never appear in its `git status`, and repo validators no longer see packages that came from somewhere else.
 - Editing or deleting the authoring checkout mid-run does not change a run already in flight. A resumed run executes the source it started with; the next fresh run picks up your edits.
@@ -518,7 +516,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
@@ -603,7 +601,7 @@ An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that le
 | `GITHUB_APP_CLIENT_ID` | The App's **Client ID** (starts with `Iv1.`/`Iv23…`, distinct from the numeric `GITHUB_APP_ID`). Required for the device flow that connects per-user identities. | -- |
 | `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). **Per-user GitHub identity** requires this + `GITHUB_APP_ID`. **AI credential vault** auto-provisions its own key at `~/.archon/credential-key` — this env var overrides that file on managed/multi-user deploys. **Rotating it invalidates all stored user credentials** — everyone must reconnect. | -- |
 | `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
-| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
+| `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through a trusted proxy that strips client-supplied values and sets the header from the authenticated identity. Use a loopback bind for a same-host proxy or a private container interface for a container proxy; clients must not be able to reach the upstream directly. See the [reverse-proxy contract](/deployment/reverse-proxy/#authentication-and-headers). Absent header → unattributed (never elevated). | `X-Archon-User` |
 
 To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.
 
@@ -611,7 +609,7 @@ To connect once the vars are set: `archon auth github` (CLI), `/archon connect g
 
 Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
 
-A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved and visibility stays open. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it, while the local operator always remains allowed. See [Who can act on a run](/reference/security/#who-can-act-on-a-run). `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it, while the local operator always remains allowed. See [Who can act on a run](/reference/security/#who-can-act-on-a-run). Web and CLI conversations are private to their owner; see [Adapter authorization](/reference/security/#adapter-authorization). Run reads stay open: `GET /api/workflows/runs?mine=true` is a non-enforcing "my" filter, not a security boundary.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -861,10 +859,8 @@ DISCORD_STREAMING_MODE=batch
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
-| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
-| `quotaFallbackDelayMs` | unset | Explicit delay to use when the provider's quota failure reports no reset time, or a reset time that has already passed, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
-| `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
-| `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
+| `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets. `false` fails the run, as before |
+| `quotaFallbackDelayMs`, `quotaMaxAttempts`, `quotaDeadlineMs` | — | Deprecated and have no effect. They still parse, so an older config or a persisted run config stays readable, and loading one logs a deprecation warning |
 
 Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
 
@@ -872,9 +868,13 @@ The threshold follows the same global, repository, and run-scoped `workflows` la
 
 Attention stores only ids, timestamps, and bounded display fields. It never copies raw tool inputs, outputs, assistant messages, or reasoning from provider transcripts. Commands are redacted against known credentials from the effective environment and protected credential values, including file-delivered credentials. Arbitrary secrets unknown to Archon cannot be discovered by that redaction.
 
-This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
+This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. No other provider reports a structured quota signal, so their quota errors never schedule a continuation. A quota failure without a reset time, or with one that has already passed, resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead; it waits for the latest of those resets. Any other failure, a limit without a reset time, or a reset that has already passed fails the run as before. Archon never guesses a reset time. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+
+Only a provider's typed failure starts the wait; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. Pi does not: its SDK passes Archon only the error text, with no limit signal or reset time, so a Pi run that hits a usage limit fails, and you resume it once the limit reopens. No other provider reports a structured quota signal.
+
+A run that an older Archon version scheduled under the earlier `quotaMaxAttempts` settings is still `failed` with a scheduled resume, and still wakes at its scheduled time.
 
 ## Concurrency Settings
 

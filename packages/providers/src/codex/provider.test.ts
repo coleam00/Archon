@@ -6,7 +6,7 @@ import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'b
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { MessageChunk, SendQueryOptions } from '../types';
+import type { NativeTool, MessageChunk, SendQueryOptions } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -192,8 +192,333 @@ describe('CodexProvider', () => {
       fallbackModel: false,
       sandbox: false,
       settingSources: false,
-      nativeTools: false,
+      nativeTools: true,
       containerExec: false,
+    });
+  });
+
+  test('a tool received after cancellation must not begin a new side effect', async () => {
+    const controller = new AbortController();
+    const handler = mock(async () => 'registered');
+    const { provider, server } = providerWith({
+      notifications: [itemStarted(command('ready', 'true'))],
+      completion: null,
+      ignoreInterrupt: true,
+    });
+    const consume = async () => {
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        abortSignal: controller.signal,
+        nativeTools: [
+          {
+            name: 'register_project',
+            description: 'Register',
+            inputSchema: { properties: {}, required: [] },
+            handler,
+          },
+        ],
+      })) {
+        if (chunk.type === 'tool_call') {
+          controller.abort();
+          server.processes[0].callTool({
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'after-cancel',
+            namespace: null,
+            tool: 'register_project',
+            arguments: {},
+          });
+        }
+      }
+    };
+    await expect(consume()).rejects.toThrow('Query aborted');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe('native tools', () => {
+    const input = { prompt: 'Fix the "login" bug in C:\\Users\\me' };
+    const call = {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      callId: 'call-1',
+      namespace: null,
+      tool: 'invoke_workflow',
+      arguments: input,
+    };
+    const tool = (handler: NativeTool['handler']): NativeTool => ({
+      name: 'invoke_workflow',
+      description: 'Launch a workflow',
+      inputSchema: { properties: { prompt: { kind: 'string' } }, required: ['prompt'] },
+      handler,
+    });
+
+    test('registers tools, returns asynchronous results on the server request id and preserves user config', async () => {
+      const handler = mock<NativeTool['handler']>(async () => {
+        await Promise.resolve();
+        return 'Queued';
+      });
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      expect(
+        resultOf(
+          await run(provider, {
+            nativeTools: [tool(handler)],
+            assistantConfig: {
+              model: 'gpt-user',
+              webSearchMode: 'cached',
+              additionalDirectories: ['/extra'],
+            },
+          })
+        ).isError
+      ).not.toBe(true);
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(paramsOf(server, 'initialize')?.capabilities).toMatchObject({ experimentalApi: true });
+      expect(paramsOf(server, 'thread/start')).toMatchObject({
+        model: 'gpt-user',
+        config: {
+          web_search: 'cached',
+          sandbox_workspace_write: { network_access: true, writable_roots: ['/extra'] },
+        },
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'invoke_workflow',
+            inputSchema: { type: 'object', required: ['prompt'] },
+          },
+        ],
+      });
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('skills');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('mcp_servers');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('developer_instructions');
+      expect(server.processes[0].env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+      expect(server.processes[0].toolResponses).toEqual([
+        {
+          id: 'host-tool-0',
+          result: { contentItems: [{ type: 'inputText', text: 'Queued' }], success: true },
+        },
+      ]);
+    });
+
+    test('turn completion waits for an accepted tool effect and its response', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      let committed = false;
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      const chunks: MessageChunk[] = [];
+      const collecting = (async () => {
+        for await (const chunk of provider.sendQuery('go', '/repo', undefined, {
+          nativeTools: [
+            tool(async () => {
+              started.resolve();
+              await complete.promise;
+              committed = true;
+              return 'Queued';
+            }),
+          ],
+        }))
+          chunks.push(chunk);
+      })();
+      await started.promise;
+      server.processes[0].send(turnCompleted('completed'));
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(committed).toBe(false);
+        expect(chunks.some(chunk => chunk.type === 'result')).toBe(false);
+        expect(server.processes[0].toolResponses).toEqual([]);
+      } finally {
+        complete.resolve();
+        await collecting;
+      }
+      expect(committed).toBe(true);
+      expect(chunks.some(chunk => chunk.type === 'result')).toBe(true);
+      expect(server.processes[0].toolResponses[0].result.success).toBe(true);
+    });
+
+    test('connection failure discloses that an accepted action may have committed', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      let committed = false;
+      const collecting = run(provider, {
+        nativeTools: [
+          tool(async () => {
+            started.resolve();
+            await complete.promise;
+            committed = true;
+            return 'Queued';
+          }),
+        ],
+      });
+      await started.promise;
+      server.processes[0].exit(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      complete.resolve();
+      const result = resultOf(await collecting);
+      expect(committed).toBe(true);
+      expect(server.processes[0].toolResponses).toEqual([]);
+      expect(result.isError).toBe(true);
+      expect(result.errors?.join(' ')).toContain('An accepted Archon action may have completed');
+      expect(result.errors?.join(' ')).toContain('Inspect run and project state before retrying');
+    });
+
+    test('resumed tool-enabled threads use this turn’s handlers without registering a new catalog', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const oldHandler = mock(() => Promise.resolve('first'));
+      const currentHandler = mock(() => Promise.resolve('resumed'));
+      const first = resultOf(await run(provider, { nativeTools: [tool(oldHandler)] }));
+      await run(createProvider(server), { nativeTools: [tool(currentHandler)] }, first.sessionId);
+      expect(oldHandler).toHaveBeenCalledTimes(1);
+      expect(currentHandler).toHaveBeenCalledTimes(1);
+      expect(paramsOf(server, 'thread/resume')).not.toHaveProperty('dynamicTools');
+      expect(server.processes[1].toolResponses[0].result).toMatchObject({
+        success: true,
+        contentItems: [{ text: 'resumed' }],
+      });
+    });
+
+    test('a process exit preserves the tool catalog so a fresh provider can resume', async () => {
+      const failed = resultOf(
+        await streamOf({ exitCode: 1 }, { nativeTools: [tool(async () => 'unused')] })
+      );
+      expect(failed.isError).toBe(true);
+      expect(failed.failure?.class).toBe('transient');
+      expect(failed.sessionId).toBeDefined();
+
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const resumed = resultOf(
+        await run(provider, { nativeTools: [tool(handler)] }, failed.sessionId)
+      );
+      expect(resumed.isError).not.toBe(true);
+      expect(resumed.sessionId).toBe(failed.sessionId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('thread/start');
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(server.processes[0].toolResponses[0].result).toEqual({
+        success: true,
+        contentItems: [{ type: 'inputText', text: 'resumed' }],
+      });
+    });
+
+    test('writes the persisted session format and resumes a fixed saved identifier', async () => {
+      const savedId =
+        'thread-1:archon-codex-tools:52e650d28c71262d384b8b25df7f242c4b99389e782c24f6db7711a2d4375b77';
+      const options = { nativeTools: [tool(async () => 'Queued')] };
+      expect(resultOf(await run(providerWith().provider, options)).sessionId).toBe(savedId);
+
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const result = resultOf(await run(provider, { nativeTools: [tool(handler)] }, savedId));
+      expect(result.isError).not.toBe(true);
+      expect(result.sessionId).toBe(savedId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe('thread-1');
+      expect(handler.mock.calls).toEqual([[input]]);
+    });
+
+    test('legacy threads fail visibly before a model turn instead of silently lacking tools', async () => {
+      const { provider, server } = providerWith();
+      const result = resultOf(
+        await run(provider, { nativeTools: [tool(async () => 'unused')] }, THREAD_ID)
+      );
+      expect(result.isError).toBe(true);
+      expect(result.failure?.evidence).toContain('Start a new chat');
+      expect(server.processes).toHaveLength(0);
+    });
+
+    test.each(['name', 'schema', 'description', 'added', 'removed'] as const)(
+      'catalog changes require a new chat: %s',
+      async change => {
+        const { provider, server } = providerWith();
+        const original = tool(async () => 'unused');
+        const first = resultOf(await run(provider, { nativeTools: [original] }));
+        const changed = { ...original };
+        if (change === 'name') changed.name = 'manage_run';
+        if (change === 'description') changed.description = 'Changed meaning';
+        if (change === 'schema')
+          changed.inputSchema = { properties: { confirm: { kind: 'boolean' } }, required: [] };
+        const result = resultOf(
+          await run(
+            createProvider(server),
+            {
+              nativeTools:
+                change === 'removed'
+                  ? []
+                  : change === 'added'
+                    ? [original, { ...original, name: 'manage_run' }]
+                    : [changed],
+            },
+            first.sessionId
+          )
+        );
+        expect(result.isError).toBe(true);
+        expect(result.failure?.evidence).toContain('Start a new chat');
+        expect(server.processes).toHaveLength(1);
+      }
+    );
+
+    test.each([
+      { status: 'completed' as const, success: false },
+      { status: 'failed' as const, success: null },
+    ])('failed dynamic tool items reach the stream: %j', async failure => {
+      const chunks = await run(
+        providerWith({
+          notifications: [
+            itemCompleted({
+              type: 'dynamicToolCall',
+              id: 'failed-call',
+              tool: 'invoke_workflow',
+              namespace: null,
+              arguments: input,
+              ...failure,
+              contentItems: [{ type: 'inputText', text: 'dispatch unavailable' }],
+              durationMs: 1,
+            }),
+          ],
+        }).provider
+      );
+      expect(chunks).toContainEqual({
+        type: 'tool_call_update',
+        toolCallId: 'failed-call',
+        status: 'failed',
+        output: 'dispatch unavailable',
+      });
+    });
+
+    test.each([
+      { ...call, tool: 'unknown' },
+      { ...call, arguments: {} },
+      { ...call, arguments: { prompt: false } },
+      { ...call, threadId: 'another-thread' },
+      { ...call, turnId: 'another-turn' },
+      { ...call, namespace: 'another-server' },
+    ])('rejects undeclared tools, invalid arguments and foreign calls: %j', async rejected => {
+      const handler = mock(() => Promise.resolve('should not run'));
+      const { provider, server } = providerWith({ toolCalls: [rejected] });
+      await run(provider, { nativeTools: [tool(handler)] });
+      expect(handler).not.toHaveBeenCalled();
+      expect(server.processes[0].toolResponses[0].result.success).toBe(false);
+    });
+
+    test('handler exceptions return a failed result with the original error', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      await run(provider, {
+        nativeTools: [tool(() => Promise.reject(new Error('dispatch unavailable')))],
+      });
+      expect(server.processes[0].toolResponses[0].result).toMatchObject({
+        success: false,
+        contentItems: [{ text: 'invoke_workflow failed: dispatch unavailable' }],
+      });
+    });
+
+    test('tools are absent and experimental API stays off for workflow nodes and titles without tools', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { nodeConfig: { nodeId: 'node' } });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+      await run(provider, {
+        purpose: 'title-generation',
+        nativeTools: [tool(() => Promise.resolve('no'))],
+      });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
     });
   });
 
@@ -672,7 +997,10 @@ describe('CodexProvider', () => {
     });
   });
 
-  describe('API key opt-in', () => {
+  describe('Archon-supplied credentials', () => {
+    const TOKEN_ENV = 'ARCHON_CODEX_CHATGPT_ACCESS_TOKEN';
+    const ACCOUNT_ENV = 'ARCHON_CODEX_CHATGPT_ACCOUNT_ID';
+
     test('CODEX_API_KEY logs in with the key, held only by the process', async () => {
       const { provider, server } = providerWith();
       const chunks = await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } });
@@ -680,10 +1008,73 @@ describe('CodexProvider', () => {
       const process0 = server.processes[0];
       expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
       expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
       expect(paramsOf(server, 'account/login/start')).toEqual({
         type: 'apiKey',
         apiKey: 'sk-test-key',
       });
+    });
+
+    test('managed ChatGPT tokens log in in memory, held only by the process', async () => {
+      const { provider, server } = providerWith();
+      const chunks = await run(provider, {
+        env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' },
+      });
+      expect(resultOf(chunks).failure).toBeUndefined();
+      const process0 = server.processes[0];
+      expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
+      expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toEqual({
+        experimentalApi: true,
+        requestAttestation: false,
+      });
+      expect(paramsOf(server, 'account/login/start')).toEqual({
+        type: 'chatgptAuthTokens',
+        accessToken: 'chatgpt-access',
+        chatgptAccountId: 'acct-1',
+      });
+    });
+
+    test('a rejected managed ChatGPT token fails as auth and says Archon cannot refresh it', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' } })
+      );
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).toContain('cannot refresh it during a turn');
+      expect(failure?.evidence).toContain('401 Unauthorized');
+      expect(failure?.evidence).not.toContain('chatgpt-access');
+    });
+
+    test('an auth failure on the user’s own login carries no managed-token advice', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } }));
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).not.toContain('cannot refresh');
+    });
+
+    test('managed ChatGPT tokens win over CODEX_API_KEY', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, {
+        env: { CODEX_API_KEY: 'sk-test-key', [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'a' },
+      });
+      expect(paramsOf(server, 'account/login/start')?.type).toBe('chatgptAuthTokens');
+    });
+
+    test('half a managed ChatGPT token pair is misconfigured before any process starts', async () => {
+      const { provider, server } = providerWith();
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access-secret' } })
+      );
+      expect(failure?.class).toBe('misconfigured');
+      expect(failure?.evidence).toContain(TOKEN_ENV);
+      expect(failure?.evidence).toContain(ACCOUNT_ENV);
+      expect(failure?.evidence).not.toContain('chatgpt-access-secret');
+      expect(server.processes).toHaveLength(0);
     });
 
     test('without CODEX_API_KEY Codex uses the user’s own login', async () => {
@@ -965,16 +1356,11 @@ describe('CodexProvider', () => {
       expect(await promptSent(options as SendQueryOptions)).toBe(expected);
     });
 
-    test('a Claude preset object is dropped with a warning', async () => {
+    test('appended instructions are folded in when no system prompt replaces them', async () => {
+      expect(await promptSent({ appendSystemPrompt: 'extra' })).toBe('extra\n\n---\n\ntest prompt');
       expect(
-        await promptSent({
-          systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
-        } as SendQueryOptions)
-      ).toBe('test prompt');
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ systemPromptType: 'object' }),
-        'codex.system_prompt_dropped_preset'
-      );
+        await promptSent({ appendSystemPrompt: 'extra', nodeConfig: { systemPrompt: 'node' } })
+      ).toBe('node\n\n---\n\ntest prompt');
     });
 
     test('a resumed thread gets the prepend too', async () => {

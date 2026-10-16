@@ -47,22 +47,10 @@ export type MessageChunk = ProviderChunk;
 export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
 
 /**
- * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
- * preset-with-append shape so callers can opt into cacheable prefix behavior.
- * Kept SDK-free so external providers need no Claude SDK dependency.
+ * A system prompt that replaces the provider's own. Kept SDK-free so external
+ * providers need no vendor SDK dependency.
  */
-export const systemPromptPresetSchema = z.object({
-  type: z.literal('preset'),
-  preset: z.literal('claude_code'),
-  append: z.string().optional(),
-  excludeDynamicSections: z.boolean().optional(),
-});
-export type SystemPromptPreset = z.infer<typeof systemPromptPresetSchema>;
-export const systemPromptInputSchema = z.union([
-  z.string(),
-  z.array(z.string()),
-  systemPromptPresetSchema,
-]);
+export const systemPromptInputSchema = z.union([z.string(), z.array(z.string())]);
 export type SystemPromptInput = z.infer<typeof systemPromptInputSchema>;
 
 /**
@@ -111,14 +99,22 @@ export interface AgentRequestOptions {
   model?: string;
   abortSignal?: AbortSignal;
   systemPrompt?: SystemPromptInput;
+  /**
+   * Instructions added to the provider's own system prompt. A provider that
+   * cannot extend its prompt uses them as its system prompt. A `systemPrompt`
+   * (request or node) takes precedence, using the provider's native behavior.
+   * Copilot appends explicit prompts to preserve its foundation instructions.
+   */
+  appendSystemPrompt?: string;
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   env?: Record<string, string>;
   /**
-   * Names in `env` whose values Archon injected as credentials rather than
-   * loading from project configuration. Custom provider configuration must not
-   * be allowed to select them.
+   * Names in `env` protected from node overrides and custom-provider credential
+   * selection. Protection alone does not identify a per-user credential delivery.
    */
   protectedEnvKeys?: readonly string[];
+  /** Names in `env` delivered from the requesting user's stored provider credentials. */
+  userCredentialEnvKeys?: readonly string[];
   maxBudgetUsd?: number;
   fallbackModel?: string;
   /**
@@ -131,8 +127,9 @@ export interface AgentRequestOptions {
   /**
    * In-process tools the model may call this turn. Defined once by the caller
    * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
-   * `createSdkMcpServer`/`tool()`, Pi via `customTools`. Providers without an
-   * in-process tool path (Codex/OpenCode) ignore them. Gated on the
+   * `createSdkMcpServer`/`tool()`, Codex via dynamic tools, Pi via `customTools`.
+   * Providers without an
+   * in-process tool path (OpenCode/Copilot) ignore them. Gated on the
    * `nativeTools` capability.
    */
   nativeTools?: NativeTool[];
@@ -161,10 +158,15 @@ export type NativeToolProperty = z.infer<typeof nativeToolPropertySchema>;
  * provider maps this to its SDK's schema form, so the supported subset lives
  * here once instead of being re-derived by each converter.
  */
-export const nativeToolInputSchema = z.object({
-  properties: z.record(z.string(), nativeToolPropertySchema),
-  required: z.array(z.string()).readonly(),
-});
+export const nativeToolInputSchema = z
+  .object({
+    properties: z.record(z.string(), nativeToolPropertySchema),
+    required: z.array(z.string()).readonly(),
+  })
+  .refine(input => input.required.every(key => Object.hasOwn(input.properties, key)), {
+    message: 'Required tool keys must be declared in properties',
+    path: ['required'],
+  });
 export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 
 /**
@@ -187,9 +189,8 @@ export function defineNativeToolInputSchema<P extends Record<string, NativeToolP
  * boundary as data + a function on the request options.
  *
  * `inputSchema` is the closed typed shape each provider maps to its SDK's
- * schema form. The handler is expected to return a text result rather than
- * throw — provider adapters add no safety net, so an uncaught throw would
- * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
+ * schema form. Handlers should return a text result rather than throw; an
+ * uncaught throw may surface into the agent loop. (core's `buildManageRunTool` guarantees this with
  * an outer try/catch around its dispatch.)
  */
 export interface NativeTool {

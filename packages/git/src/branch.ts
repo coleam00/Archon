@@ -106,6 +106,29 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
 }
 
 /**
+ * Removal must see untracked and submodule changes regardless of user status settings.
+ * Unlike the legacy helper, command failures propagate instead of becoming dirty evidence.
+ */
+export async function hasUncommittedChangesStrict(
+  workingPath: RepoPath | WorktreePath
+): Promise<boolean> {
+  const { stdout } = await execFileAsync(
+    'git',
+    [
+      '-C',
+      workingPath,
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ],
+    { timeout: 5 * 60 * 1000 }
+  );
+  return stdout.length > 0;
+}
+
+/**
  * Check if a git working directory has uncommitted changes
  *
  * FAIL-SAFE: Returns true (assume changes exist) on unexpected errors

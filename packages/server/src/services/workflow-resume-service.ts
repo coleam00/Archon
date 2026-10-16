@@ -1,12 +1,12 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import * as conversationDb from '@archon/core/db/conversations';
+import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import {
-  resumeWorkflowContinuation,
   unverifiableSourceGuidance,
   wakeDueWorkflowContinuations,
   type ContinuationAdmission,
-} from '@archon/core/workflows/continuation-host';
+} from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
@@ -243,7 +243,7 @@ async function admitFromServer(
                   destination.resultConversationId,
                   `⚠️ Run \`${resumableRun.id.slice(0, 8)}\` of **${resumableRun.workflow_name}** finished, but its ` +
                     'final status could not be saved. The run may still show as running — check it ' +
-                    `with \`${spellWorkflowCommand(platform, `status ${resumableRun.id}`)}\` before starting another.`
+                    `with \`${spellWorkflowCommand(platform, `get ${resumableRun.id}`)}\` before starting another.`
                 )
                 .catch((sendError: unknown) => {
                   log.warn(

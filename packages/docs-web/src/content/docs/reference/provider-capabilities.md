@@ -45,7 +45,7 @@ Background work: `reported` waits for runtime-reported task endings; `none` mean
 backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
 Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
 through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
-not evidence that this work has ended. See [Streaming event mapping](/reference/architecture/#streaming-event-mapping)
+not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
 for the background-start admission and observation cutoff rules.
 
 ## Providers
@@ -70,7 +70,7 @@ for the background-start admission and observation cutoff rules.
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Env injection (`env:`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Token reporting | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -81,7 +81,7 @@ for the background-start admission and observation cutoff rules.
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
+| In-process native tools | ✅ | ✅ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Strict-mode `required` coverage (every key in `properties` MUST appear in `required`) | ❌ | ✅ | ❌ | ❌ | ❌ |
 

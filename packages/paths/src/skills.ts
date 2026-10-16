@@ -9,38 +9,11 @@ export interface ResolvedSkills {
   missing: string[];
 }
 
-export interface ClaudeSkillSearchOptions {
-  /** Effective Claude config directory. Defaults to CLAUDE_CONFIG_DIR or ~/.claude. */
-  userConfigDir?: string;
-  /** Whether Claude is configured to load project settings. */
-  includeProject?: boolean;
-  /** Container runs cannot see host user skills unless explicitly mounted. */
-  includeUser?: boolean;
-}
-
-/** Claude Code's provider-native skill roots, in discovery precedence order. */
-export function claudeSkillSearchRoots(
-  cwd: string,
-  options: ClaudeSkillSearchOptions = {}
-): string[] {
-  const home = process.env.HOME ?? homedir();
-  const roots: string[] = [];
-  if (options.includeProject !== false) {
-    roots.push(join(cwd, '.claude', 'skills'));
-  }
-  if (options.includeUser !== false) {
-    const userConfigDir =
-      options.userConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude');
-    roots.push(join(userConfigDir, 'skills'));
-  }
-  return roots;
-}
-
 /**
  * Cross-provider skill-discovery search order for a named skill. Pi and
- * Copilot use this compatibility resolver. Claude uses the narrower
- * `claudeSkillSearchRoots` contract because its CLI does not discover
- * `.agents/skills`.
+ * Copilot use this compatibility resolver. A provider that declares its own
+ * skill roots (Claude, whose CLI does not discover `.agents/skills`) resolves
+ * against those instead.
  *
  * Order (first match wins per name):
  *   1. `<cwd>/.agents/skills/<name>/`     — project-local, agentskills.io standard
@@ -58,11 +31,15 @@ export function skillSearchRoots(cwd: string): string[] {
   // makes tests using staged temp homes impossible.
   const home = process.env.HOME ?? homedir();
   return [
-    join(cwd, '.agents', 'skills'),
-    join(cwd, '.claude', 'skills'),
+    ...projectSkillSearchRoots(cwd),
     join(home, '.agents', 'skills'),
     join(home, '.claude', 'skills'),
   ];
+}
+
+/** The project-local half of {@link skillSearchRoots}. */
+export function projectSkillSearchRoots(cwd: string): string[] {
+  return [join(cwd, '.agents', 'skills'), join(cwd, '.claude', 'skills')];
 }
 
 /**
@@ -80,7 +57,8 @@ export function resolveSkillDirectories(
   return resolveSkillDirectoriesFromRoots(skillSearchRoots(cwd), skillNames);
 }
 
-function resolveSkillDirectoriesFromRoots(
+/** Resolve skill names against `roots`, first match wins per name. */
+export function resolveSkillDirectoriesFromRoots(
   roots: string[],
   skillNames: string[] | undefined
 ): ResolvedSkills {
@@ -146,49 +124,34 @@ export function findInstalledSkillNames(roots: string[], skillNames: string[]): 
   return installed;
 }
 
+export const SETTING_SOURCES = ['project', 'user'] as const;
+
 /**
- * Resolve skills only from locations Claude Code natively discovers.
- *
- * Claude does not discover the cross-provider `.agents/skills` convention.
- * Keep this separate from `resolveSkillDirectories`, which Pi and Copilot use
- * for their broader compatibility contract.
+ * Claude's effective setting sources when neither the node nor the install config
+ * names any. Workflow validation and the Claude provider both read this, so the
+ * skill roots validation checks are the ones a run actually loads.
  */
-export function resolveClaudeSkillDirectories(
-  cwd: string,
-  skillNames: string[] | undefined,
-  options?: ClaudeSkillSearchOptions
-): ResolvedSkills {
-  return resolveSkillDirectoriesFromRoots(claudeSkillSearchRoots(cwd, options), skillNames);
-}
-
-export interface ParsedSettingSources {
-  /** Recognized entries, in the order given. Undefined when raw was not an array. */
-  value?: ('project' | 'user')[];
-  /** Entries dropped because they name no known setting source. */
-  invalid: string[];
-}
+export const DEFAULT_SETTING_SOURCES: readonly (typeof SETTING_SOURCES)[number][] = [
+  'project',
+  'user',
+];
 
 /**
- * Normalize a raw `settingSources` value to the entries Claude actually honours.
+ * Normalize a raw `settingSources` value to the recognized entries, in order.
+ * Undefined when raw is not an array.
  *
- * Shared by the provider and by workflow resource validation so the two can
- * never disagree about a node's effective sources — a divergence here means
- * `archon workflow validate` fails a workflow that runs, or passes one that
- * cannot (see the PR #2535 review).
+ * Workflow validation reads a provider's install-level default with this. It
+ * keeps the per-entry semantics of the provider's own lenient config parse, so
+ * validation and execution agree about a node's effective sources.
  *
  * Unrecognized entries are dropped rather than widening the result. Dropping
- * narrows, which is the safe direction; keeping the old "leave it unset"
- * behaviour let a single typo fall back to the permissive `['project','user']`
- * default, silently granting the ambient access the author was excluding.
+ * narrows, which is the safe direction; leaving the value unset would let a
+ * single typo fall back to the permissive `['project','user']` default,
+ * silently granting the ambient access the author was excluding.
  */
-export function parseClaudeSettingSources(raw: unknown): ParsedSettingSources {
-  if (!Array.isArray(raw)) return { invalid: [] };
-
-  const value: ('project' | 'user')[] = [];
-  const invalid: string[] = [];
-  for (const entry of raw) {
-    if (entry === 'project' || entry === 'user') value.push(entry);
-    else invalid.push(typeof entry === 'string' ? entry : JSON.stringify(entry));
-  }
-  return { value, invalid };
+export function parseSettingSources(raw: unknown): (typeof SETTING_SOURCES)[number][] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter((entry): entry is (typeof SETTING_SOURCES)[number] =>
+    SETTING_SOURCES.some(source => source === entry)
+  );
 }

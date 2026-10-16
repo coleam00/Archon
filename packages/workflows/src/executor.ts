@@ -94,6 +94,7 @@ import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import {
   continuablePauseCursor,
+  deadlineWaitCursor,
   type PersistedNodeOutput,
   type WorkflowResumeCursor,
 } from './store';
@@ -132,7 +133,7 @@ export type {
   ChildIsolationResult,
 } from './child-isolation';
 import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
-import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { GITHUB_TOKEN_KEYS, resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
   hasRunModelOverrides,
   RUN_MODEL_BINDINGS_METADATA_KEY,
@@ -258,7 +259,10 @@ export async function resolveWorkflowGithubEnvironment(
   const bot: Record<string, string> = installation
     ? { GH_TOKEN: installation.token, GITHUB_TOKEN: installation.token }
     : {};
-  const user = await resolveUserGithubEnvForWorkflow(deps, userId);
+  const { env: user, protectedKeys: userProtectedKeys } = await resolveUserGithubEnvForWorkflow(
+    deps,
+    userId
+  );
   // Only the App token is refreshed; a per-user token or scrub replaces it.
   const ghShim =
     installation && user.GH_TOKEN === undefined
@@ -271,7 +275,7 @@ export async function resolveWorkflowGithubEnvironment(
       ...new Set([
         ...(environment.protectedEnvKeys ?? []),
         ...Object.keys(bot),
-        ...Object.keys(user),
+        ...userProtectedKeys,
       ]),
     ],
   };
@@ -337,9 +341,9 @@ function resolveGithubCliShimEnv(
 async function resolveUserGithubEnvForWorkflow(
   deps: WorkflowGithubDeps,
   userId: string | undefined
-): Promise<Record<string, string>> {
+): Promise<{ env: Record<string, string>; protectedKeys: string[] }> {
   const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
-  if (!perUserEnabled) return {};
+  if (!perUserEnabled) return { env: {}, protectedKeys: [] };
   let userToken: string | undefined;
   if (userId && deps.getUserGithubToken) {
     try {
@@ -349,14 +353,18 @@ async function resolveUserGithubEnvForWorkflow(
     }
   }
   const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config; they are not
+  // secrets. Protecting them would redact their values from every node's output.
+  const protectedKeys = Object.keys(env).filter(key => GITHUB_TOKEN_KEYS.includes(key));
   if (userId && deps.getUserGithubAuthor) {
     const author = await deps.getUserGithubAuthor(userId);
     if (author) {
       env.GIT_AUTHOR_NAME = author.name;
       env.GIT_AUTHOR_EMAIL = author.email;
+      protectedKeys.push('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL');
     }
   }
-  return env;
+  return { env, protectedKeys };
 }
 
 /**
@@ -372,8 +380,8 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
 
 /**
  * Resolve per-user AI-provider credential env (Phase 2) for a run, and write
- * any file-based deliveries (e.g. Codex `CODEX_HOME/auth.json`) under the
- * run's artifacts directory. Returns the env bag to merge LAST into
+ * any file-based deliveries (Pi's `auth.json`) under the run's artifacts
+ * directory. Returns the env bag to merge LAST into
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
  * bags when per-user provider keys are disabled, no userId is present, the
@@ -2575,7 +2583,11 @@ export async function executeWorkflow(
               .join('')}`;
           } else if (wait) {
             const waitingFor =
-              wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';
+              wait.kind === 'event'
+                ? `for event \`${wait.event}\` until`
+                : wait.kind === 'quota'
+                  ? 'for a provider usage limit to reset at'
+                  : 'until';
             stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
             actionLines =
               (wait.kind === 'event'
@@ -3133,9 +3145,10 @@ export async function executeWorkflow(
     const protectedEnvKeys = new Set(config.protectedEnvKeys);
 
     // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
-    // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
-    // under it. Clear files from an earlier invocation first: a disconnected
-    // credential or failed refresh must not leave stale secrets readable on resume.
+    // created because file-based deliveries (Pi's `auth.json`) live under it.
+    // Clear files from an earlier invocation first, including the Codex
+    // `auth.json` older builds wrote: a disconnected credential or failed refresh
+    // must not leave stale secrets readable on resume.
     // Merged LAST into config.envVars so the originating user's keys
     // win over file/db/bot-github env — preserves the GitHub merge order and
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
@@ -3150,6 +3163,7 @@ export async function executeWorkflow(
       prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
+    config.userCredentialEnvKeys = Object.keys(userProviderEnv);
     for (const key of Object.keys(userProviderEnv)) {
       protectedEnvKeys.add(key);
     }
@@ -3524,8 +3538,15 @@ export async function executeWorkflow(
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
     } else if (finalStatus?.status === 'paused') {
+      const wait = pendingWorkflowWaitDeadline(finalStatus);
+      const waitCursor = wait ? deadlineWaitCursor(wait) : undefined;
       await releaseContinuablePauseSlot(deps, finalStatus);
-      return { success: true, paused: true, workflowRunId: workflowRun.id };
+      return {
+        success: true,
+        paused: true,
+        workflowRunId: workflowRun.id,
+        ...(waitCursor ? { waitCursor } : {}),
+      };
     } else {
       return {
         success: false,

@@ -9,7 +9,7 @@
  * @archon/paths process-wide.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { SessionEvent } from '@github/copilot-sdk';
+import type { SessionConfig, SessionEvent } from '@github/copilot-sdk';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -278,14 +278,49 @@ describe('CopilotProvider.sendQuery', () => {
     expect(opts.reasoningEffort).toBe('low');
   });
 
-  test('systemPrompt wraps to systemMessage with append mode', async () => {
+  test.each([
+    {
+      source: 'request systemPrompt',
+      expected: 'Be concise.',
+      options: {
+        systemPrompt: 'Be concise.',
+        nodeConfig: { systemPrompt: 'Lower-priority node prompt.' },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+    {
+      source: 'nodeConfig.systemPrompt',
+      expected: 'Be concise.',
+      options: {
+        nodeConfig: { systemPrompt: 'Be concise.' },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+    {
+      source: 'request array systemPrompt',
+      expected: 'Be\nconcise.',
+      options: {
+        systemPrompt: ['Be', 'concise.'] satisfies string[],
+        nodeConfig: { systemPrompt: 'Lower-priority node prompt.' },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+    {
+      source: 'node array systemPrompt',
+      expected: 'Be\nconcise.',
+      options: {
+        nodeConfig: { systemPrompt: ['Be', 'concise.'] satisfies string[] },
+        appendSystemPrompt: 'Lower-priority appended instructions.',
+      },
+    },
+  ])('$source appends to the default system message', async ({ expected, options }) => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      systemPrompt: 'Be concise.',
+      ...options,
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -293,9 +328,26 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    const opts = createSessionSpy.mock.calls[0]![0] as {
-      systemMessage?: { content: string; mode: string };
-    };
+    const opts = createSessionSpy.mock.calls[0]![0] as SessionConfig;
+    expect(opts.systemMessage).toEqual({ content: expected, mode: 'append' });
+  });
+
+  test('appendSystemPrompt appends to the default system message', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      appendSystemPrompt: 'Be concise.',
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    const opts = createSessionSpy.mock.calls[0]![0] as SessionConfig;
     expect(opts.systemMessage).toEqual({ content: 'Be concise.', mode: 'append' });
   });
 
@@ -617,7 +669,13 @@ describe('CopilotProvider.sendQuery', () => {
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      env: { COPILOT_GITHUB_TOKEN: 'ghp_copilot' },
+      env: {
+        COPILOT_GITHUB_TOKEN: 'ghp_copilot',
+        GH_TOKEN: 'host-gh',
+        GITHUB_TOKEN: 'host-github',
+      },
+      protectedEnvKeys: ['COPILOT_GITHUB_TOKEN'],
+      assistantConfig: { useLoggedInUser: true },
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));

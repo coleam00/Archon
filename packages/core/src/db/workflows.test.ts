@@ -810,7 +810,7 @@ describe('workflows database', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'paused'");
       expect(query).toContain("status = 'failed'");
-      expect(query).toContain("IN ('time', 'event')");
+      expect(query).toContain("IN ('time', 'event', 'quota')");
       expect(query).toContain("metadata->>'continuation_retry_at' IS NULL");
       expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
       expect(query).toContain("NOT IN ('child_workflow', 'fan_out', 'writeback')");
@@ -887,6 +887,7 @@ describe('workflows database', () => {
 
       await deferWorkflowContinuation('workflow-run-123', '2026-08-25T10:01:00.000Z', {
         kind: 'wait',
+        pauseId: 'wait-occurrence',
         nodeId: wait.nodeId,
         resumeAt: wait.resumeAt,
       });
@@ -895,11 +896,12 @@ describe('workflows database', () => {
       expect(query).toContain("status = 'paused'");
       expect(query).toContain("status = 'failed'");
       expect(query).not.toContain('SET status =');
+      expect(query).toContain("metadata->'wait'->>'pauseId' = $7");
       expect(query).toContain("metadata->'wait'->>'nodeId' = $4");
       expect(JSON.parse(params[1] as string)).toEqual({
         continuation_retry_at: '2026-08-25T10:01:00.000Z',
       });
-      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null]);
+      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null, 'wait-occurrence']);
     });
 
     test('keys quota backoff to the exact attempt cursor', async () => {
@@ -913,7 +915,7 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null]);
+      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null, null]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {
@@ -1128,43 +1130,6 @@ describe('workflows database', () => {
       expect(params).toContain(JSON.stringify({ error: 'Timeout exceeded' }));
     });
 
-    test('stores a quota continuation in the same transition to failed', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockTerminalSnapshot('failed');
-      const scheduled = {
-        reason: 'quota' as const,
-        resumeAt: '2026-08-25T10:00:00.000Z',
-        deadlineAt: '2026-08-26T10:00:00.000Z',
-        attempt: 1,
-        maxAttempts: 2,
-      };
-
-      await failWorkflowRun('workflow-run-123', 'Quota exhausted', { scheduledResume: scheduled });
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("SET status = 'failed'");
-      expect(JSON.parse(params[1] as string)).toEqual({
-        error: 'Quota exhausted',
-        scheduled_resume: scheduled,
-      });
-      const [eventQuery, eventParams] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
-      expect(eventParams[2]).toBe('quota_resume_scheduled');
-      expect(JSON.parse(eventParams[5] as string)).toEqual({
-        resume_at: scheduled.resumeAt,
-        deadline_at: scheduled.deadlineAt,
-        attempt: 1,
-        max_attempts: 2,
-      });
-      const [, terminalEventParams] = mockQuery.mock.calls[4] as [string, unknown[]];
-      expect(terminalEventParams[2]).toBe('workflow_failed');
-      expect(JSON.parse(terminalEventParams[5] as string)).toMatchObject({
-        error: 'Quota exhausted',
-        terminal_record: expect.any(Object),
-      });
-    });
-
     test('records the stop reason and its signal on the run row', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');
@@ -1200,38 +1165,6 @@ describe('workflows database', () => {
 
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(JSON.parse(params[1] as string)).toEqual({ error: 'Bash node failed' });
-    });
-
-    test('does not complete the quota transition when its audit insert fails', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockRejectedValueOnce(new Error('audit unavailable'));
-
-      await expect(
-        failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          scheduledResume: {
-            reason: 'quota',
-            resumeAt: '2026-08-25T10:00:00.000Z',
-            deadlineAt: '2026-08-26T10:00:00.000Z',
-            attempt: 1,
-            maxAttempts: 2,
-          },
-        })
-      ).rejects.toThrow('audit unavailable');
-    });
-
-    test('rejects an invalid quota continuation before writing the failed row', async () => {
-      await expect(
-        failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          scheduledResume: {
-            reason: 'quota',
-            resumeAt: '2026-08-27T10:00:00.000Z',
-            deadlineAt: '2026-08-26T10:00:00.000Z',
-            attempt: 3,
-            maxAttempts: 2,
-          },
-        })
-      ).rejects.toThrow();
-      expect(mockQuery).not.toHaveBeenCalled();
     });
 
     test('throws when rowCount is 0', async () => {

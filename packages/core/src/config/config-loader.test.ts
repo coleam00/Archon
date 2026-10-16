@@ -299,7 +299,7 @@ workflows:
       expect(mockLogger.error).toHaveBeenCalled();
     });
 
-    test('accepts quota continuation delays at the persisted timestamp bound', async () => {
+    test('parses deprecated quota settings at the persisted timestamp bound, with a warning', async () => {
       mockFsReadFile.mockResolvedValue(`
 workflows:
   quotaFallbackDelayMs: 31536000000000
@@ -312,6 +312,14 @@ workflows:
         quotaFallbackDelayMs: 31_536_000_000_000,
         quotaDeadlineMs: 31_536_000_000_000,
       });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          warning: expect.stringContaining(
+            'workflows.quotaFallbackDelayMs, workflows.quotaDeadlineMs are deprecated and have no effect'
+          ),
+        }),
+        'config.workflows_quota_keys_deprecated'
+      );
     });
 
     test('keeps ordinary config forward-compatible with unknown workflow settings', async () => {
@@ -591,13 +599,11 @@ defaults:
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 1800000,
-        autoResumeOnQuotaReset: false,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 86_400_000,
+        autoResumeOnQuotaReset: true,
       });
     });
 
-    test('merges global and repo quota continuation policy per field', async () => {
+    test('merges global and repo workflow policy per field, without deprecated quota keys', async () => {
       mockFsReadFile.mockResolvedValueOnce(`
 workflows:
   toolCallAttentionMs: 60000
@@ -616,9 +622,6 @@ workflows:
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 0,
         autoResumeOnQuotaReset: true,
-        quotaFallbackDelayMs: 3_600_000,
-        quotaMaxAttempts: 3,
-        quotaDeadlineMs: 43_200_000,
       });
     });
 
@@ -1182,10 +1185,8 @@ assistants:
       });
     });
 
-    // OpencodeProvider.sendQuery refuses any baseUrl, so accepting one here
-    // would reopen the defect this validation exists to close: a config that
-    // loads, then crashes every OpenCode run.
-    test('rejects an OpenCode server URL the provider would refuse to use', async () => {
+    // Archon owns the embedded OpenCode runtime, so a server URL has no consumer.
+    test('rejects an OpenCode server URL as an unknown setting', async () => {
       mockFsReadFile.mockResolvedValue(`
 assistants:
   opencode:
@@ -1194,7 +1195,7 @@ assistants:
 `);
 
       await expect(loadGlobalConfig()).rejects.toThrow(
-        /assistants\.opencode\.baseUrl.*external OpenCode runtimes are not supported/
+        /assistants\.opencode\.baseUrl.*unknown provider setting/
       );
     });
 
@@ -1224,9 +1225,10 @@ assistants:
     test('refuses to persist assistant defaults the loaders would then reject', async () => {
       mockFsReadFile.mockResolvedValue('');
 
-      await expect(
-        updateGlobalConfig({ assistants: { codex: { modelReasoningEfort: 'high' } } })
-      ).rejects.toThrow(/assistants\.codex\.modelReasoningEfort.*unknown provider setting/);
+      const misspelled: Record<string, unknown> = { modelReasoningEfort: 'high' };
+      await expect(updateGlobalConfig({ assistants: { codex: misspelled } })).rejects.toThrow(
+        /assistants\.codex\.modelReasoningEfort.*unknown provider setting/
+      );
       expect(mockFsWriteFile).not.toHaveBeenCalled();
     });
 

@@ -127,6 +127,9 @@
       "src/routes/api.auth.test.ts"
     ],
     [
+      "src/routes/api.conversation-ownership.test.ts"
+    ],
+    [
       "src/routes/api.provider-keys.test.ts"
     ],
     [
@@ -179,6 +182,9 @@
     ],
     [
       "src/chat-host/attention-route.integration.test.ts"
+    ],
+    [
+      "src/routes/api.title-credentials.test.ts"
     ]
   ]
 }

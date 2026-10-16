@@ -43,6 +43,7 @@ import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 import { Semaphore } from './semaphore';
+import { PI_AUTH_PATH_ENV } from './auth-path-env';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -423,12 +424,14 @@ interface PiAuthEnv {
   credentialEnv: Readonly<Record<string, string>>;
   credentialValues: readonly string[];
   protectedEnvKeys: readonly string[] | undefined;
+  deliveredEnvKeys: readonly string[];
 }
 
 function piAuthEnv(
   configEnv: Readonly<Record<string, string>> | undefined,
   requestEnv: Readonly<Record<string, string>> | undefined,
-  protectedEnvKeys?: readonly string[]
+  protectedEnvKeys?: readonly string[],
+  userCredentialEnvKeys?: readonly string[]
 ): PiAuthEnv {
   const credentialEnv: Record<string, string> = { ...configEnv };
   for (const [key, value] of Object.entries(process.env)) {
@@ -444,14 +447,18 @@ function piAuthEnv(
     credentialEnv,
     credentialValues: collectCredentialValues(credentialEnv, protectedEnvKeys),
     protectedEnvKeys,
+    deliveredEnvKeys: (userCredentialEnvKeys ?? []).filter(key => Boolean(requestEnv?.[key])),
   };
 }
 
 async function applyPiEnvOverride(
   runtime: Pick<ModelRuntime, 'setRuntimeApiKey'>,
   providerId: string,
-  env: Readonly<Record<string, string | undefined>>
+  authEnv: PiAuthEnv,
+  authPath: string | undefined
 ): Promise<void> {
+  if (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) return;
+  const env = authEnv.credentialEnv;
   const keyVar = PI_PROVIDER_ENV_VARS[providerId];
   const key = keyVar ? env[keyVar] : undefined;
   if (key) await runtime.setRuntimeApiKey(providerId, key);
@@ -478,6 +485,26 @@ function piNotConnectedMessage(providerId: string): string {
 }
 
 /**
+ * The auth store a Pi call for `provider` reads: Archon's per-run file when it holds a
+ * delivered credential for that provider, otherwise none (Pi's own auth.json).
+ *
+ * Pi reads exactly one store, and the per-run file holds only Archon's deliveries, so
+ * using it for every provider would hide the user's `pi /login` for the others. Core
+ * keys the file by Pi provider id (vendor ids are Pi provider ids), the same key Pi
+ * reads, so an exact lookup is the whole test.
+ */
+function deliveredAuthPathFor(
+  provider: string,
+  deliveredAuthPath: string | undefined,
+  readStoredCredential: (providerId: string, authPath: string) => unknown
+): string | undefined {
+  return deliveredAuthPath !== undefined &&
+    readStoredCredential(provider, deliveredAuthPath) !== undefined
+    ? deliveredAuthPath
+    : undefined;
+}
+
+/**
  * The ModelRuntime a Pi turn authenticates with. The login check builds the same one, so
  * both read the same auth file and models config and see the same model catalog.
  *
@@ -490,7 +517,9 @@ function piNotConnectedMessage(providerId: string): string {
  *
  * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
- * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
+ * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The file is
+ * used only for a provider it holds an entry for; any other provider reads the user's own
+ * auth.json, so the login check and the turn pick the same store. The path rides
  * the per-call env (the executor's per-user injection never writes to process.env), which
  * `piAuthEnv` layers over process.env for a shell-level override.
  *
@@ -506,14 +535,34 @@ async function createPiModelRuntime(
   provider: string,
   authEnv: PiAuthEnv,
   signal?: AbortSignal
-): Promise<RequestModelRuntime> {
-  return createRequestModelRuntime(
-    options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
-    authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined,
-    PI_PROVIDER_ENV_VARS[provider]
-      ? undefined
-      : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }
+): Promise<RequestModelRuntime & { authPath?: string }> {
+  // Pi reads exactly one auth store. The per-run file holds only Archon's delivered
+  // credentials, so it is used only when it holds one for this provider; otherwise Pi
+  // reads the user's own auth.json, with its own locking and refresh write-back, so a
+  // `pi /login` for this backend keeps working beside a credential delivered for another.
+  const authPath = deliveredAuthPathFor(
+    provider,
+    authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
+    piCodingAgent.readStoredCredential
   );
+  const authoritativeCredential = Boolean(
+    (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) ||
+    (authEnv.deliveredEnvKeys.includes(PI_PROVIDER_ENV_VARS[provider] ?? '') &&
+      authEnv.credentialEnv[PI_PROVIDER_ENV_VARS[provider] ?? ''])
+  );
+  const requestRuntime = await createRequestModelRuntime(
+    options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
+    authPath,
+    authoritativeCredential || !PI_PROVIDER_ENV_VARS[provider]
+      ? {
+          provider,
+          env: authEnv.credentialEnv,
+          protectedEnvKeys: authEnv.protectedEnvKeys,
+          authoritativeCredential,
+        }
+      : undefined
+  );
+  return { ...requestRuntime, authPath };
 }
 
 /**
@@ -623,7 +672,7 @@ export class PiProvider implements IAgentProvider {
       );
       const { runtime } = requestModelRuntime;
       try {
-        await applyPiEnvOverride(runtime, parsed.provider, authEnv.credentialEnv);
+        await applyPiEnvOverride(runtime, parsed.provider, authEnv, requestModelRuntime.authPath);
         const { status } = await resolvePiTurnAuth(
           runtime,
           parsed.provider,
@@ -761,8 +810,13 @@ export class PiProvider implements IAgentProvider {
     }
 
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
-    const authEnv = piAuthEnv(piConfig.env, requestOptions?.env, requestOptions?.protectedEnvKeys);
-    let requestModelRuntime: RequestModelRuntime;
+    const authEnv = piAuthEnv(
+      piConfig.env,
+      requestOptions?.env,
+      requestOptions?.protectedEnvKeys,
+      requestOptions?.userCredentialEnvKeys
+    );
+    let requestModelRuntime: RequestModelRuntime & { authPath?: string };
     try {
       requestModelRuntime = await createPiModelRuntime(piCodingAgent, parsed.provider, authEnv);
     } catch (err) {
@@ -806,7 +860,12 @@ export class PiProvider implements IAgentProvider {
       //    setRuntimeApiKey — codebase-scoped env vars win over the user's global Pi
       //    login. setRuntimeApiKey stays runtime-only (no auth.json disk write, unlike
       //    AuthStorage.set).
-      await applyPiEnvOverride(modelRuntime, parsed.provider, authEnv.credentialEnv);
+      await applyPiEnvOverride(
+        modelRuntime,
+        parsed.provider,
+        authEnv,
+        requestModelRuntime.authPath
+      );
       const { status: authStatus, apiKey } = await resolvePiTurnAuth(
         modelRuntime,
         parsed.provider,
@@ -888,12 +947,11 @@ export class PiProvider implements IAgentProvider {
       }
 
       //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
-      //        node-level; either overrides Pi's default.
-      //        Pi only supports string system prompts; structured preset objects
-      //        and string[] are dropped. Validate each level INDEPENDENTLY before
-      //        applying precedence — a non-string request-level value (e.g. a
-      //        preset object) must not win via `??` and mask a valid node-level
-      //        string.
+      //        node-level, which wins over `appendSystemPrompt`; any of them
+      //        overrides Pi's default. Pi only supports string system prompts, so
+      //        string[] is dropped. Validate each level INDEPENDENTLY before
+      //        applying precedence — a dropped request-level value must not win
+      //        via `??` and mask a valid node-level string.
       const coerceStringPrompt = (
         value: SystemPromptInput | undefined,
         source: 'request' | 'node'
@@ -908,7 +966,8 @@ export class PiProvider implements IAgentProvider {
       };
       const systemPrompt =
         coerceStringPrompt(requestOptions?.systemPrompt, 'request') ??
-        coerceStringPrompt(nodeConfig?.systemPrompt, 'node');
+        coerceStringPrompt(nodeConfig?.systemPrompt, 'node') ??
+        requestOptions?.appendSystemPrompt;
 
       //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
       //        Resolve each name against .agents/skills and .claude/skills (project

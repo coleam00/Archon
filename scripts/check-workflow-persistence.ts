@@ -14,6 +14,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/services/run-attention-watch.ts',
   'packages/core/src/services/codebase-checkout-resolver.ts',
   'packages/core/src/workflows/continuation-host.ts',
+  'packages/core/src/workflows/continuation-resume.ts',
   'packages/core/src/workflows/resource-start-host.ts',
   'packages/core/src/workflows/child-isolation-resolver.ts',
   'packages/core/src/workflows/headless-platform.ts',

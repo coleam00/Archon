@@ -500,6 +500,7 @@ describe('GitHubAdapter', () => {
       sessionProvider: null,
       kind: 'event' as const,
       event: 'checks.complete',
+      pauseId: 'check-occurrence',
       waitingSince: '2026-08-24T10:00:00.000Z',
       resumeAt: '2099-08-24T11:00:00.000Z',
     };

@@ -33,6 +33,7 @@
     "./pi/model-ref": "./src/community/pi/model-ref.ts",
     "./pi/config": "./src/community/pi/config.ts",
     "./pi/descriptor": "./src/community/pi/descriptor.ts",
+    "./pi/auth-path-env": "./src/community/pi/auth-path-env.ts",
     "./pi": "./src/community/pi/index.ts",
     "./in-process": "./src/in-process.ts"
   },
@@ -168,6 +169,12 @@
       "src/community/copilot/config.test.ts"
     ],
     [
+      "src/community/opencode/config.test.ts"
+    ],
+    [
+      "src/shared/run-config.test.ts"
+    ],
+    [
       "src/community/copilot/event-bridge.test.ts"
     ],
     [
@@ -193,6 +200,9 @@
     ],
     [
       "src/community/opencode/runtime.test.ts"
+    ],
+    [
+      "src/community/opencode/session.test.ts"
     ],
     [
       "src/shared/structured-output.test.ts"
@@ -227,6 +237,15 @@
     ],
     [
       "src/shared/plugin-logging.test.ts"
+    ],
+    [
+      "src/claude/credential-authority.boundary.test.ts"
+    ],
+    [
+      "src/codex/credential-authority.boundary.test.ts"
+    ],
+    [
+      "src/community/pi/credential-authority.integration.test.ts"
     ]
   ]
 }

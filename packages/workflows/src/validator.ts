@@ -10,7 +10,9 @@
  */
 import type { ProviderRegistry } from '@archon/provider-contract';
 
-import { join, resolve, isAbsolute } from 'path';
+import { join } from 'path';
+import { readHomeMcpDirectory } from './compiled-command';
+import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
 import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
@@ -24,12 +26,15 @@ import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
-  claudeSkillSearchRoots,
   findInstalledSkillNames,
+  parseSettingSources,
+  DEFAULT_SETTING_SOURCES,
+  projectSkillSearchRoots,
   skillSearchRoots,
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
 import {
+  declaredSkillRoots,
   findStrictSchemaIssues,
   isObjectSchemaNode,
   mcpServerMap,
@@ -117,8 +122,10 @@ export interface ValidationConfig {
   assistant?: string;
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
-  claudeSettingSources?: ('project' | 'user')[];
-  claudeConfigDir?: string;
+  /** Install-level provider defaults, keyed by provider id. */
+  assistants?: Record<string, Record<string, unknown>>;
+  /** The run environment, for provider skill roots named by an environment variable. */
+  env?: Record<string, string>;
 }
 
 // Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
@@ -486,7 +493,8 @@ export async function validateWorkflowResources(
       });
     }
 
-    const providerCaps = provider ? providers.get(provider)?.capabilities : undefined;
+    const providerDescriptor = provider ? providers.get(provider) : undefined;
+    const providerCaps = providerDescriptor?.capabilities;
 
     // --- Strict-schema compatibility (#2945, #3557) ---
     // A schema with a bare object or incomplete 'required' coverage is rejected
@@ -657,22 +665,28 @@ export async function validateWorkflowResources(
     // the absence instead.
     const mcp = 'mcp' in node ? mcpDeclaration(node.mcp) : undefined;
     if (mcp !== undefined) {
-      const mcpPath = isAbsolute(mcp.path) ? mcp.path : resolve(cwd, mcp.path);
+      const selected = await resolveMcpPath(mcp.path, cwd, readHomeMcpDirectory(node));
 
-      if (!(await fileExists(mcpPath))) {
+      if (selected.kind === 'missing') {
         if (!mcp.optional) {
           issues.push({
             level: 'error',
             nodeId: node.id,
             field: 'mcp',
-            message: `MCP config file not found: '${mcp.path}'`,
-            hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+            message: missingMcpConfigMessage(mcp.path, selected.attemptedPaths),
+            hint: `Create the file at ${selected.attemptedPaths[0]} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
           });
         }
+      } else if (selected.kind === 'read_error') {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'mcp',
+          message: `Failed to read MCP config file '${selected.path}': ${String(selected.error)}`,
+        });
       } else {
         try {
-          const content = await readFile(mcpPath, 'utf-8');
-          const serverMap = mcpServerMap(JSON.parse(content));
+          const serverMap = mcpServerMap(JSON.parse(selected.content));
           if (!serverMap.ok) {
             issues.push({
               level: 'error',
@@ -712,72 +726,79 @@ export async function validateWorkflowResources(
       // match Archon's shared four-root resolver, so accepting a `.claude`
       // match here would falsely imply that Codex can invoke it.
       if (providerCaps?.skills !== false) {
-        const settingSources =
-          'settingSources' in node && node.settingSources !== undefined
-            ? node.settingSources
-            : (config?.claudeSettingSources ?? ['project', 'user']);
-        const searchRoots =
-          provider === 'claude'
-            ? claudeSkillSearchRoots(cwd, {
-                ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
-                includeProject: settingSources.includes('project'),
-                includeUser: settingSources.includes('user'),
-              })
-            : skillSearchRoots(cwd);
+        const discovery = providerDescriptor?.skillDiscovery;
+        const env = config?.env;
+        const nodeSources = 'settingSources' in node ? node.settingSources : undefined;
+        const sources =
+          provider !== undefined && providerCaps?.settingSources
+            ? (nodeSources ??
+              parseSettingSources(config?.assistants?.[provider]?.settingSources) ??
+              DEFAULT_SETTING_SOURCES)
+            : undefined;
+        const searchRoots = discovery
+          ? declaredSkillRoots(discovery, cwd, {
+              includeProject: sources?.includes('project') ?? true,
+              includeUser: sources?.includes('user') ?? true,
+              env,
+            })
+          : skillSearchRoots(cwd);
+        const projectRoots = discovery
+          ? declaredSkillRoots(discovery, cwd, { includeUser: false, env })
+          : projectSkillSearchRoots(cwd);
         for (const skillName of node.skills) {
           let found = false;
           for (const root of searchRoots) {
             const skillPath = join(root, skillName, 'SKILL.md');
             if (await fileExists(skillPath)) {
               found = true;
+              if (!projectRoots.includes(root)) {
+                issues.push({
+                  level: 'warning',
+                  nodeId: node.id,
+                  field: 'skills',
+                  message: `Skill '${skillName}' is available only in a host user directory`,
+                  hint: 'Execution scope is not known during validation. Container runs may not load host user skills; provider preflight checks availability for the run.',
+                });
+              }
               break;
             }
           }
 
           if (!found) {
-            // Mirror the provider's rule (claude/provider.ts): a Claude skill
-            // that exists under some other root is installed but unreachable, so
-            // it is an error. A name that exists nowhere on disk may be one of
-            // Claude's built-in or `plugin:skill` entries, which no filesystem
-            // root contains — warn there rather than failing a workflow that runs.
-            // Same helper the provider preflight uses, over the same roots, so
-            // validation and execution always agree on which case this is.
+            // Mirror the declaring provider's rule (e.g. claude/provider.ts): a
+            // skill that exists under some other root is installed but
+            // unreachable, so it is an error. A name that exists nowhere on disk
+            // may be a built-in or `plugin:skill` entry the provider resolves
+            // itself — warn there rather than failing a workflow that runs. Same
+            // helper checks host paths; execution preflight owns run availability.
             const installedButUnusable =
-              provider === 'claude' &&
+              discovery !== undefined &&
               findInstalledSkillNames(
                 [
                   ...searchRoots,
                   ...skillSearchRoots(cwd),
-                  ...claudeSkillSearchRoots(cwd, {
-                    ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
-                    includeProject: true,
-                    includeUser: true,
-                  }),
+                  ...declaredSkillRoots(discovery, cwd, { env }),
                 ],
                 [skillName]
               ).length > 0;
 
             if (installedButUnusable) {
+              const displayName = providerDescriptor?.displayName ?? provider;
+              const everyDeclaredRoot = declaredSkillRoots(discovery, cwd, { env });
               issues.push({
                 level: 'error',
                 nodeId: node.id,
                 field: 'skills',
-                message: `Claude skill '${skillName}' not found in an enabled .claude/skills/ directory, though it is installed elsewhere`,
-                hint: `Claude reads .claude/skills/ only (never .agents/skills/), and only from scopes settingSources enables. Ensure .claude/skills/${skillName}/SKILL.md exists in an enabled scope`,
+                message: `${displayName} skill '${skillName}' not found in an enabled skill directory, though it is installed elsewhere`,
+                hint: `${displayName} loads skills only from ${everyDeclaredRoot.join(', ')}${providerCaps?.settingSources ? ', in the scopes settingSources enables' : ''}. A skill is a directory containing SKILL.md`,
               });
             } else {
               issues.push({
                 level: 'warning',
                 nodeId: node.id,
                 field: 'skills',
-                message:
-                  provider === 'claude'
-                    ? `Claude skill '${skillName}' not found on disk — expected for built-in and plugin-qualified skills, which Claude resolves itself`
-                    : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-                hint:
-                  provider === 'claude'
-                    ? `A plugin:skill name also needs its plugin under plugins:. Otherwise check the spelling or create .claude/skills/${skillName}/SKILL.md`
-                    : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+                message: `Skill '${skillName}' not found in ${searchRoots.join(', ') || 'any enabled skill directory'}`,
+                hint: `Create ${join(searchRoots[0] ?? '<skill directory>', skillName, 'SKILL.md')} or check the spelling. Names the provider resolves itself, such as built-in or plugin skills, have no directory; a plugin:skill name also needs its plugin under plugins:`,
               });
             }
           }

@@ -180,6 +180,12 @@ DEFAULT_AI_ASSISTANT=claude
 
 Archon does not bundle the Codex CLI. Install it, then authenticate.
 
+### Chat tools
+
+New Codex chats receive Archon's typed `invoke_workflow` and `register_project` tools; project-scoped chats also receive `manage_run`. Calls use the same validation and authorization handlers as Claude and Pi. Workflow launches start after the chat turn completes. Text resembling a slash command in a Codex reply does not launch a workflow or register a project.
+
+These tools use the Codex app-server's experimental dynamic-tool API, supported by the pinned Codex 0.160.0. Archon opts into it for turns with tools and preserves your native Codex configuration and guidance. Tool catalogs are saved when a thread starts: resuming a tool-enabled thread uses the current handlers. Archon records the catalog fingerprint in its session identifier. If a chat predates that record or its tools have changed, Archon stops before starting a model turn and asks you to start a new chat.
+
 ### Install the Codex CLI
 
 ```bash
@@ -251,11 +257,13 @@ ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 
 By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. To run Codex on an OpenAI API key instead, set `CODEX_API_KEY` in Archon's environment, for example in `~/.archon/.env`. Archon hands the key to the Codex process in memory and never writes it into your Codex home, so your own login is untouched. Codex does not read `OPENAI_API_KEY`.
 
+A credential you connect in Archon for `openai` (`archon ai key set openai` or `archon ai login openai`) also runs Codex without touching your Codex home. A connected API key reaches Codex as `CODEX_API_KEY`, and a connected ChatGPT subscription logs the Codex process in in memory. Both work in workflows and direct chat, and both take precedence over your native Codex login. Your Codex config, global `AGENTS.md`, hooks, plugins and MCP servers load as usual. A subscription token that expires during a run fails the turn with `auth`; resuming the run picks up a refreshed token.
+
 ### How Archon runs Codex
 
-Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so the run [waits until the reset](/reference/configuration/#workflow-attention-and-continuation-settings)), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
 
-Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title on failure.
+Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title if provider generation fails. In per-user mode, a missing or unusable user credential skips generation and leaves the current title unchanged.
 
 ### Codex Configuration Options
 
@@ -314,7 +322,7 @@ OpenCode handles authentication internally — Archon does not pass API keys thr
 2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
 3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
 
-OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Codebase env vars are not passed to OpenCode: every node shares one embedded server that starts without them, so Archon warns when a node would have received any.
 
 ### Configuration Options
 
@@ -344,7 +352,7 @@ assistants:
 | MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers) |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
-| Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
+| Codebase env vars (`envInjection`) | ❌ | Not delivered: all nodes share one embedded OpenCode server, so a codebase's env would leak into another's node. Archon warns when env vars are configured |
 | Skills | ❌ | Not translated to an OpenCode request yet; a node naming `skills:` fails the run at start |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
@@ -397,7 +405,7 @@ Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard
 
 ### Authenticate
 
-Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
+Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) and from env vars. Without a delivered per-user credential, env vars take priority per request so codebase-scoped overrides work. When Archon delivers a per-user credential, it takes priority over native files, env vars and project authentication settings.
 
 For Anthropic models, use `provider: claude` with your Claude Pro/Max subscription, or give Pi an `ANTHROPIC_API_KEY`. Claude Pro/Max OAuth through Pi, including a native `pi /login` session, is not a supported Anthropic path: Pi's default system prompt can be rejected by Anthropic for subscription tokens. Archon preserves Pi's native credentials but does not deliver its stored Claude subscription to Pi.
 

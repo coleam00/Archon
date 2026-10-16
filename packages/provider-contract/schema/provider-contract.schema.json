@@ -967,7 +967,7 @@
       "properties": {
         "protocol": {
           "type": "number",
-          "const": 1
+          "const": 2
         },
         "id": {
           "type": "string",
@@ -1056,6 +1056,45 @@
         "ownsUnprefixedModelRefs": {
           "type": "boolean",
           "const": true
+        },
+        "skillDiscovery": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "user": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "userDirectory": {
+              "type": "object",
+              "properties": {
+                "env": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "home": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "env",
+                "home"
+              ]
+            }
+          },
+          "required": [
+            "project",
+            "user"
+          ]
         }
       },
       "required": [
@@ -1094,31 +1133,11 @@
               "items": {
                 "type": "string"
               }
-            },
-            {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "preset"
-                },
-                "preset": {
-                  "type": "string",
-                  "const": "claude_code"
-                },
-                "append": {
-                  "type": "string"
-                },
-                "excludeDynamicSections": {
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "type",
-                "preset"
-              ]
             }
           ]
+        },
+        "appendSystemPrompt": {
+          "type": "string"
         },
         "outputFormat": {
           "type": "object",
@@ -1143,6 +1162,13 @@
           ]
         },
         "protectedEnvKeys": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "userCredentialEnvKeys": {
           "readOnly": true,
           "type": "array",
           "items": {
@@ -1375,7 +1401,7 @@
                   "properties": {
                     "protocol": {
                       "type": "number",
-                      "const": 1
+                      "const": 2
                     }
                   },
                   "required": [

@@ -47,6 +47,7 @@ const mockLogger = {
  * this file leaves it on the unreachable default, where no pointer can validate.
  */
 let mockArtifactHome = '/nonexistent/home';
+let mockWorkflowHome = '/nonexistent/home/workflows';
 // Captured before the module mock below replaces the re-export.
 const { isPathInside } = await import('@archon/paths/archon-paths');
 mock.module('@archon/paths', () => ({
@@ -58,7 +59,7 @@ mock.module('@archon/paths', () => ({
   },
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
-  getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
+  getHomeWorkflowsPath: () => mockWorkflowHome,
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
@@ -124,6 +125,7 @@ import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import { providerEventEnvelopeSchema, providerEventLineSchema } from './schemas/provider-event';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
+import { missingMcpConfigMessage } from './mcp-path';
 import type {
   DagNode,
   AgentNode,
@@ -150,6 +152,7 @@ import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import {
   COMPILED_LOOP_COMMAND,
+  readHomeMcpDirectory,
   type CompiledLoopCommand,
   type LoopWithCompiledCommand,
 } from './compiled-command';
@@ -15397,8 +15400,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       ...minimalConfig,
       workflows: {
         autoResumeOnQuotaReset: false,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 1000,
         toolCallAttentionMs: thresholdMs,
       },
     };
@@ -15559,8 +15560,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
             ...minimalConfig,
             workflows: {
               autoResumeOnQuotaReset: false,
-              quotaMaxAttempts: 1,
-              quotaDeadlineMs: 1000,
               toolCallAttentionMs: 20,
             },
           },
@@ -17264,6 +17263,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
             ],
           },
           workflowRun: makeWorkflowRun('typed-credit-failure-run'),
+          config: quotaConfig(false),
         })
       );
 
@@ -17274,7 +17274,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       expect(events).not.toContain('node_completed');
       const failedEvent = eventCalls.find(c => c[0].event_type === 'node_failed');
       expect(failedEvent?.[0].data?.error).toBe(
-        `Node 'investigate' failed: the provider's usage or credit limit is used up${resetAt !== undefined ? ` (resets ${resetAt})` : ''}. Resume the run once it reopens: You've hit your session limit`
+        resetAt !== undefined
+          ? `Node 'investigate' failed: the provider's usage or credit limit is used up until ${resetAt}: You've hit your session limit`
+          : "Node 'investigate' failed: the provider's usage or credit limit is used up. Resume the run once it reopens: You've hit your session limit"
       );
       expect(failedEvent?.[0].data?.provider_failure).toEqual({
         class: 'quota_exhausted',
@@ -17286,28 +17288,33 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     }
   );
 
-  function quotaConfig(
-    workflows: Partial<NonNullable<WorkflowConfig['workflows']>>
-  ): WorkflowConfig {
-    return {
-      ...minimalConfig,
-      workflows: {
-        autoResumeOnQuotaReset: true,
-        quotaMaxAttempts: 1,
-        quotaDeadlineMs: 3_600_000,
-        ...workflows,
-      },
-    };
+  function quotaConfig(autoResumeOnQuotaReset = true): WorkflowConfig {
+    return { ...minimalConfig, workflows: { autoResumeOnQuotaReset } };
   }
 
-  it('schedules the resume at the reset instant a typed quota failure reports', async () => {
-    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const investigateWorkflow = {
+    name: 'credit-wait-test',
+    nodes: [
+      {
+        id: 'investigate',
+        kind: 'agent' as const,
+        source: { kind: 'inline' as const, prompt: 'Investigate the issue' },
+      },
+    ],
+  };
+
+  function useQuery(sendQuery: ReturnType<typeof quotaExhaustedQuery>): void {
     mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: quotaExhaustedQuery(resetAt),
+      sendQuery,
       checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
+  }
+
+  it('waits until the reset instant a typed quota failure reports, instead of failing', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17315,26 +17322,25 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: quotaConfig({}),
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-wait-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-run',
+      {
+        owner: 'node',
+        nodeId: 'investigate',
+        kind: 'quota',
+        pauseId: expect.any(String),
+        waitingSince: expect.any(String),
+        resumeAt: resetAt,
+      },
+      { kind: 'started', stepName: 'investigate' }
+    );
     // The typed failure is recorded on the node, unchanged.
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.provider_failure).toEqual({
@@ -17344,14 +17350,37 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     });
   });
 
-  it('schedules the resume when the quota failure comes from a loop-group body node', async () => {
+  it('propagates a rejected quota pause write while the run is still running', async () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: quotaExhaustedQuery(resetAt),
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+    useQuery(quotaExhaustedQuery(resetAt));
+    const store = createMockStore();
+    const failure = new Error('quota pause write failed');
+    store.pauseWorkflowRunForWait.mockRejectedValue(failure);
+
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-credit',
+          cwd: testDir,
+          workflow: investigateWorkflow,
+          workflowRun: makeWorkflowRun('credit-write-failure-run'),
+          config: quotaConfig(),
+        })
+      )
+    ).rejects.toBe(failure);
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-write-failure-run',
+      expect.objectContaining({ kind: 'quota', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'investigate' }
+    );
+    expect(store.getWorkflowRunStatus).toHaveBeenCalledWith('credit-write-failure-run');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('waits when the quota failure comes from a loop-group body node', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17360,7 +17389,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         conversationId: 'conv-credit',
         cwd: testDir,
         workflow: {
-          name: 'credit-resume-group',
+          name: 'credit-wait-group',
           nodes: [
             {
               id: 'refine',
@@ -17373,25 +17402,71 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
             },
           ] as DagNode[],
         },
-        workflowRun: makeWorkflowRun('credit-resume-group-run'),
-        config: quotaConfig({}),
+        workflowRun: makeWorkflowRun('credit-wait-group-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-group-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'refine', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'refine' }
+    );
   });
 
-  it('never schedules a resume from error text that only reads like a quota limit', async () => {
-    // Untyped provider errors: the words say "usage limit reached" with a reset
-    // epoch inside the deadline, but no provider classified the failure, so nothing
-    // is scheduled.
+  it('waits for the latest reset when several nodes hit usage limits', async () => {
+    const sooner = new Date(Date.now() + 10 * 60_000).toISOString();
+    const later = new Date(Date.now() + 60 * 60_000).toISOString();
+    // The later reset is the first node, so a pass that kept the first or the earliest
+    // reset would wait on the wrong one.
+    useQuery(
+      mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* (prompt) {
+        yield {
+          type: 'result',
+          isError: true,
+          sessionId: 'dag-session-credit',
+          failure: {
+            class: 'quota_exhausted',
+            evidence: "You've hit your session limit",
+            resetAt: prompt.includes('later') ? later : sooner,
+          },
+        };
+      })
+    );
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-wait-latest',
+          nodes: [
+            { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'later' } },
+            { id: 'second', kind: 'agent', source: { kind: 'inline', prompt: 'sooner' } },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-wait-latest-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-latest-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'first', resumeAt: later }),
+      { kind: 'started', stepName: 'first' }
+    );
+  });
+
+  it('never waits on error text that only reads like a quota limit', async () => {
+    // Untyped provider errors: the words say "usage limit reached" with a reset epoch,
+    // but no provider classified the failure, so the run fails.
     const resetEpoch = Math.floor(Date.now() / 1000) + 600;
-    const proseOnlyQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-      async function* () {
+    useQuery(
+      mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* () {
         yield {
           type: 'result',
           isError: true,
@@ -17399,14 +17474,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
           errors: [`Claude AI usage limit reached|${String(resetEpoch)}`],
           sessionId: 'dag-session-credit',
         };
-      }
+      })
     );
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: proseOnlyQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17414,34 +17483,18 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: quotaConfig({ quotaFallbackDelayMs: 60_000 }),
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-prose-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
   });
 
-  it('uses the bounded fallback when a typed quota failure reports no reset', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+  it('fails as before when a typed quota failure reports no reset', async () => {
+    useQuery(quotaExhaustedQuery());
     const store = createMockStore();
 
     await executeDagWorkflow(
@@ -17449,99 +17502,83 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         deps: createMockDeps(store),
         conversationId: 'conv-credit',
         cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaFallbackDelayMs: 60_000,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-no-reset-run'),
+        config: quotaConfig(),
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      attempt: 1,
-      maxAttempts: 1,
-    });
-    expect(
-      store.createWorkflowEvent.mock.calls.some(
-        call => call[0].event_type === 'quota_resume_scheduled'
-      )
-    ).toBe(false);
-  });
-
-  it('records that quota continuation is unavailable when no reset is reported and no fallback is set', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
-    const store = createMockStore();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-credit',
-        cwd: testDir,
-        workflow: {
-          name: 'credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('credit-resume-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
-      })
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'credit-no-reset-run',
+      expect.stringContaining('investigate'),
+      { exitReason: 'node_error' }
     );
-
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun).toHaveBeenCalledTimes(1);
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
     expect(store.createWorkflowEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'quota_resume_skipped',
+        step_name: 'investigate',
         data: { reason: 'reset_unavailable' },
       })
     );
   });
 
-  it('does not promise automatic quota continuation for a container run', async () => {
-    const creditExhaustedQuery = quotaExhaustedQuery();
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    });
+  it.each([
+    ['the operator turned the wait off', false, 10 * 60_000, 'disabled'],
+    ['the reported reset has already passed', true, -60_000, 'reset_passed'],
+  ])('fails when %s', async (_case, autoResume, resetOffsetMs, reason) => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + resetOffsetMs).toISOString()));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: investigateWorkflow,
+        workflowRun: makeWorkflowRun('credit-fail-run'),
+        config: quotaConfig(autoResume),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'quota_resume_skipped',
+        step_name: 'investigate',
+        data: { reason },
+      })
+    );
+  });
+
+  it('fails when another node failed for a reason the reset does not clear', async () => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-mixed-test',
+          nodes: [
+            ...investigateWorkflow.nodes,
+            { id: 'broken', kind: 'exec', runtime: 'sh', script: 'exit 3' },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-mixed-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait for a container run, which the continuation host cannot continue', async () => {
+    useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
     const store = createMockStore();
     const execSpy = stubMissingContainer();
 
@@ -17551,26 +17588,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
           deps: createMockDeps(store),
           conversationId: 'conv-credit',
           cwd: testDir,
-          workflow: {
-            name: 'container-credit-resume-test',
-            nodes: [
-              {
-                id: 'investigate',
-                kind: 'agent',
-                source: { kind: 'inline', prompt: 'Investigate the issue' },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun('container-credit-resume-run'),
-          config: {
-            ...minimalConfig,
-            workflows: {
-              autoResumeOnQuotaReset: true,
-              quotaFallbackDelayMs: 60_000,
-              quotaMaxAttempts: 1,
-              quotaDeadlineMs: 3_600_000,
-            },
-          },
+          workflow: investigateWorkflow,
+          workflowRun: makeWorkflowRun('container-credit-run'),
+          config: quotaConfig(),
           execContext: { kind: 'container', containerId: 'container-1' },
         })
       );
@@ -17578,15 +17598,14 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       execSpy.mockRestore();
     }
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
-    expect(
-      store.createWorkflowEvent.mock.calls.some(
-        call =>
-          call[0].event_type === 'quota_resume_skipped' &&
-          call[0].data?.reason === 'container_unsupported'
-      )
-    ).toBe(true);
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'quota_resume_skipped',
+        data: { reason: 'container_unsupported' },
+      })
+    );
   });
 });
 
@@ -17622,6 +17641,49 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(context).toMatchObject({ nodeId: 'delay', kind: 'time' });
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
+
+  for (const wait of [
+    { duration_ms: 60_000 },
+    { until: '$INPUTS.resume_at' },
+    { event: 'ready', deadline_ms: 60_000 },
+  ]) {
+    it(`gives repeated deadline waits distinct occurrences even at the same instant (${JSON.stringify(wait)})`, async () => {
+      setSystemTime(new Date('2026-08-24T10:00:00.000Z'));
+      try {
+        const store = createMockStore();
+        const pause = mock<IWorkflowStore['pauseWorkflowRunForWait']>(async () => {});
+        store.pauseWorkflowRunForWait = pause;
+        const options = dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-wait',
+          cwd: testDir,
+          workflow: { name: 'wait-test', nodes: [{ id: 'delay', kind: 'wait', wait }] },
+          workflowRun: makeWorkflowRun('wait-occurrence', {
+            metadata: { inputs: { resume_at: '2026-08-24T10:01:00.000Z' } },
+          }),
+        });
+        await executeDagWorkflow(options);
+        await executeDagWorkflow(options);
+        const calls = pause.mock.calls;
+        const first = calls[0]?.[1];
+        const second = calls[1]?.[1];
+        expect(first?.pauseId).toEqual(expect.any(String));
+        expect(second?.pauseId).toEqual(expect.any(String));
+        expect(second?.pauseId).not.toBe(first?.pauseId);
+        expect(first).toMatchObject({ resumeAt: '2026-08-24T10:01:00.000Z' });
+        expect(second).toMatchObject({ resumeAt: '2026-08-24T10:01:00.000Z' });
+        const persisted = { ...second };
+        await executeDagWorkflow({
+          ...options,
+          workflowRun: { ...options.workflowRun, metadata: { wait: persisted } },
+        });
+        expect(calls[2]?.[1]).toEqual(persisted);
+        expect(calls[2]?.[2]).toEqual({ kind: 'continued' });
+      } finally {
+        setSystemTime();
+      }
+    });
+  }
 
   it('resolves a child workflow input used as an absolute wait timestamp', async () => {
     const store = createMockStore();
@@ -17769,7 +17831,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
       workflow_run_id: 'attention-delivery-failed',
       event_type: 'pause_notice_undelivered',
       step_name: 'rerun-ci',
-      data: { nodeId: 'rerun-ci', platform: 'test' },
+      data: { nodeId: 'rerun-ci', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'node_failed' })
@@ -18285,7 +18347,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'review',
-      data: { nodeId: 'review', platform: 'test' },
+      data: { nodeId: 'review', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.createWorkflowEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'approval_requested', step_name: 'review' })
@@ -18352,7 +18414,7 @@ describe('executeDagWorkflow -- approval node', () => {
       workflow_run_id: 'dag-test-run-id',
       event_type: 'pause_notice_undelivered',
       step_name: 'refine',
-      data: { nodeId: 'refine', platform: 'test' },
+      data: { nodeId: 'refine', occurrence: expect.any(String), platform: 'test' },
     });
     expect(store.getState().status).toBe('paused');
     expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
@@ -19212,6 +19274,7 @@ describe('executeDagWorkflow -- env var injection', () => {
             GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
           },
           protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
+          userCredentialEnvKeys: ['ANTHROPIC_API_KEY'],
         },
       })
     );
@@ -19224,6 +19287,7 @@ describe('executeDagWorkflow -- env var injection', () => {
       GIT_AUTHOR_NAME: 'connected-author',
       GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
+    expect(optionsArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
     expect(optionsArg?.protectedEnvKeys).toEqual([
       'ANTHROPIC_API_KEY',
       'GIT_AUTHOR_NAME',
@@ -22277,9 +22341,10 @@ describe('resolveNodeMcp', () => {
   it('hands a required path to the provider even when the file is missing', async () => {
     const { resolveNodeMcp } = await import('./dag-executor');
     expect(await resolveNodeMcp('missing.json', claude, testDir)).toEqual({
-      kind: 'load',
-      path: 'missing.json',
+      kind: 'missing',
+      path: join(testDir, 'missing.json'),
       servers: new Set(),
+      diagnostic: missingMcpConfigMessage('missing.json', [join(testDir, 'missing.json')]),
     });
   });
 
@@ -22295,6 +22360,34 @@ describe('resolveNodeMcp', () => {
     expect(result).toEqual({ kind: 'load', path: absolutePath, servers: new Set(['foo', 'bar']) });
   });
 
+  it('loads an optional home config beside its YAML when the checkout has none', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    const cwd = join(testDir, 'checkout');
+    const yamlDir = join(testDir, 'home', 'workflows', 'nested');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      'name: home-mcp\nnodes:\n  - id: check\n    prompt: Check\n    mcp:\n      path: servers.json\n      optional: true\n'
+    );
+    await writeFile(join(yamlDir, 'servers.json'), '{"home-server":{"command":"example"}}');
+
+    const result = await resolveNodeMcp(
+      { path: 'servers.json', optional: true },
+      claude,
+      cwd,
+      yamlDir
+    );
+
+    expect(result).toEqual({
+      kind: 'load',
+      path: join(yamlDir, 'servers.json'),
+      servers: new Set(['home-server']),
+    });
+    if (result.kind !== 'load') throw new Error('Missing optional home MCP config');
+    expect((await loadMcpConfig(result.path, cwd)).serverNames).toEqual(['home-server']);
+  });
+
   it('withholds an optional declaration whose file does not exist', async () => {
     const { resolveNodeMcp } = await import('./dag-executor');
     expect(await resolveNodeMcp({ path: 'missing.json', optional: true }, claude, testDir)).toEqual(
@@ -22302,6 +22395,7 @@ describe('resolveNodeMcp', () => {
         kind: 'unavailable',
         fullPath: join(testDir, 'missing.json'),
         record: { path: 'missing.json', reason: 'config_missing' },
+        diagnostic: missingMcpConfigMessage('missing.json', [join(testDir, 'missing.json')]),
       }
     );
   });
@@ -22321,7 +22415,7 @@ describe('resolveNodeMcp', () => {
     await writeFile(join(testDir, 'broken.json'), '{ not-json');
     expect(await resolveNodeMcp({ path: 'broken.json', optional: true }, claude, testDir)).toEqual({
       kind: 'load',
-      path: 'broken.json',
+      path: join(testDir, 'broken.json'),
       servers: new Set(),
     });
   });
@@ -22330,6 +22424,245 @@ describe('resolveNodeMcp', () => {
 // ---------------------------------------------------------------------------
 // MCP plugin-noise filtering — end-to-end through executeDagWorkflow
 // ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- home MCP paths', () => {
+  let testDir: string;
+  let yamlDir: string;
+  beforeEach(async () => {
+    testDir = await mkdtemp(join(tmpdir(), 'dag-home-mcp-'));
+    yamlDir = join(testDir, 'home', 'workflows', 'nested');
+    mockWorkflowHome = join(testDir, 'home', 'workflows');
+    await mkdir(yamlDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+  afterEach(async () => {
+    mockWorkflowHome = '/nonexistent/home/workflows';
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  async function discoverHome(
+    provider: string,
+    sourceRoots?: ExecuteDagWorkflowOptions['workflowSourceRoots']
+  ) {
+    await writeFile(
+      join(yamlDir, 'home.yaml'),
+      `name: home-mcp
+description: Home MCP
+provider: ${provider}
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+    );
+    const catalog = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+      sourceRoots,
+    });
+    expect(catalog.errors).toEqual([]);
+    const entry = catalog.workflows.find(e => e.workflow.name === 'home-mcp');
+    if (!entry) throw new Error('Missing home workflow');
+    return entry.workflow;
+  }
+
+  it.each([
+    ['claude', ''],
+    ['claude', 'nested'],
+    ['claude', 'pack/flow'],
+    ['codex', 'nested'],
+  ])('hands the selected home config to the real loader for %s in %s', async (provider, subdir) => {
+    yamlDir = join(mockWorkflowHome, subdir);
+    await mkdir(yamlDir, { recursive: true });
+    await writeFile(join(yamlDir, 'servers.json'), '{"home-server":{"command":"example"}}');
+    const workflow = await discoverHome(provider);
+    const loaded: string[][] = [];
+    mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+      const path = options?.nodeConfig?.mcp;
+      expect(path).toBe(join(yamlDir, 'servers.json'));
+      if (!path) throw new Error('Missing provider MCP path');
+      loaded.push((await loadMcpConfig(path, cwd)).serverNames);
+      yield {
+        type: 'mcp_server_status',
+        server: 'home-server',
+        status: 'failed',
+        error: 'timeout',
+      };
+      yield { type: 'mcp_server_status', server: 'ambient', status: 'failed' };
+      yield { type: 'agent_message_chunk', text: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+    const platform = createMockPlatform();
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(loaded).toEqual([['home-server']]);
+    const sent = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls.map(
+      c => c[1]
+    );
+    expect(sent).toContain('MCP server connection failed: home-server (failed): timeout');
+    expect(sent.some(text => text.includes('ambient'))).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each(['home', 'project'] as const)(
+    'keeps required missing %s MCP classified and unretried, with all candidates',
+    async source => {
+      const homeWorkflow = await discoverHome('claude');
+      const workflow =
+        source === 'home'
+          ? homeWorkflow
+          : ({
+              name: 'project',
+              description: 'Project declaration',
+              nodes: [
+                {
+                  id: 'check',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Check' },
+                  mcp: 'servers.json',
+                },
+              ],
+            } satisfies WorkflowDefinition);
+      let evidence: string | undefined;
+      mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+        try {
+          await loadMcpConfig(options!.nodeConfig!.mcp!, cwd);
+          throw new Error('Expected missing config');
+        } catch (error) {
+          if (!(error instanceof Error) || !('failureClass' in error)) throw error;
+          expect(error.failureClass).toBe('misconfigured');
+          evidence = error.message;
+          yield {
+            type: 'result',
+            isError: true,
+            errors: [error.message],
+            failure: { class: 'misconfigured', evidence: error.message },
+          };
+        }
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      const failed = store.createWorkflowEvent.mock.calls
+        .map(([e]) => e)
+        .find(e => e.event_type === 'node_failed');
+      expect(failed?.data?.provider_failure).toEqual({ class: 'misconfigured', evidence });
+      expect(failed?.data?.failure_kind).toBe('fatal');
+      const candidates = [
+        join(testDir, 'servers.json'),
+        ...(source === 'home' ? [join(yamlDir, 'servers.json')] : []),
+      ];
+      expect(failed?.data?.error).toContain(missingMcpConfigMessage('servers.json', candidates));
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    }
+  );
+
+  it('runs rediscovered captured home MCP after live removal, with checkout still first', async () => {
+    await writeFile(join(yamlDir, 'servers.json'), '{"captured":{"command":"example"}}');
+    await discoverHome('claude');
+    const capture = await captureWorkflowSource({
+      sourceRoot: testDir,
+      captureRoot: join(testDir, 'capture'),
+    });
+    const roots = capturedSourceRoots(capture.anchor);
+    await removeTempTree(join(testDir, 'home'));
+    for (const checkoutWins of [false, false, true]) {
+      if (checkoutWins)
+        await writeFile(join(testDir, 'servers.json'), '{"checkout":{"command":"example"}}');
+      const catalog = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+        sourceRoots: roots,
+      });
+      expect(catalog.errors).toEqual([]);
+      const entry = catalog.workflows.find(e => e.workflow.name === 'home-mcp');
+      if (!entry) throw new Error('Missing captured workflow');
+      const loaded: string[][] = [];
+      mockSendQueryDag.mockImplementation(async function* (_prompt, cwd, _session, options) {
+        const path = options?.nodeConfig?.mcp;
+        expect(path).toBe(
+          checkoutWins
+            ? join(testDir, 'servers.json')
+            : join(roots.globalWorkflows, 'nested', 'servers.json')
+        );
+        if (!path) throw new Error('Missing provider MCP path');
+        loaded.push((await loadMcpConfig(path, cwd)).serverNames);
+        yield { type: 'agent_message_chunk', text: 'ok' };
+        yield { type: 'result', sessionId: 'sess' };
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: entry.workflow,
+          workflowRun: makeWorkflowRun(),
+          workflowSourceRoots: roots,
+        })
+      );
+      expect(loaded).toEqual([[checkoutWins ? 'checkout' : 'captured']]);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    }
+  });
+
+  it('refuses home config capture tampering before a later node reads it', async () => {
+    await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+    await discoverHome('claude');
+    const capture = await captureWorkflowSource({
+      sourceRoot: testDir,
+      captureRoot: join(testDir, 'capture'),
+    });
+    const roots = capturedSourceRoots(capture.anchor);
+    const workflow = await discoverHome('claude', roots);
+    const homeNode = workflow.nodes[0];
+    const capturedDir = readHomeMcpDirectory(homeNode);
+    if (!capturedDir) throw new Error('Missing captured YAML directory');
+    const nodes: DagNode[] = [
+      {
+        id: 'tamper',
+        kind: 'exec',
+        runtime: 'bun',
+        script: `Bun.write(${JSON.stringify(join(capturedDir, 'servers.json'))}, '{}')`,
+      },
+      { ...homeNode, depends_on: ['tamper'] },
+    ];
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: { ...workflow, nodes },
+        workflowRun: makeWorkflowRun(),
+        workflowSourceRoots: roots,
+      })
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([e]) => e)
+      .filter(e => e.event_type === 'node_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].data?.error).toContain('captured source has changed');
+  });
+});
 
 describe('executeDagWorkflow -- MCP failure filtering', () => {
   let testDir: string;
@@ -22437,7 +22770,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     const store = createMockStore();
     await runWithEvents([], mcp, store);
 
-    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe('mcp.json');
+    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe(join(testDir, 'mcp.json'));
     expect(nodeRows(store).every(row => row.data?.mcp_unavailable === undefined)).toBe(true);
   });
 
@@ -22455,7 +22788,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
       c => c[1] as string
     );
     expect(sent).toContain(
-      `Node 'review' runs without its optional MCP servers (absent.json): config file not found at ${join(testDir, 'absent.json')}.`
+      `Node 'review' runs without its optional MCP servers (absent.json): ${missingMcpConfigMessage('absent.json', [join(testDir, 'absent.json')])}.`
     );
   });
 
@@ -33810,6 +34143,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     runMetadata?: Record<string, unknown>;
     status?: 'running' | 'paused';
     claimed?: boolean;
+    platform?: ReturnType<typeof createMockPlatform>;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
     store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
@@ -33821,6 +34155,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await executeDagWorkflow(
       dagOptions({
         deps,
+        ...(opts.platform ? { platform: opts.platform } : {}),
         conversationId: 'conv-wb',
         cwd: wbTestDir,
         workflow: {
@@ -33925,6 +34260,35 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(writes.filter(([event]) => event.event_type === 'writeback_requested')).toHaveLength(1);
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('records an undelivered pause notice when the write-back gate message cannot be sent', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+    });
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (): Promise<void> => {
+      throw new Error('401 unauthorized');
+    });
+    const store = await runGate({ backend, platform });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'wb-run',
+      event_type: 'pause_notice_undelivered',
+      step_name: 'container',
+      data: { nodeId: '__writeback__', occurrence: expect.any(String), platform: 'test' },
+    });
   });
 
   it('a lost pause CAS during write-back stays fail-closed: throws, never suspends (#2489)', async () => {
@@ -39765,7 +40129,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
   });
 
-  it('schedules the quota resume when a composed instance node reports quota_exhausted', async () => {
+  it('waits on the quota reset when a composed instance node reports quota_exhausted', async () => {
     await writeBlock(
       [
         'name: compose-blk',
@@ -39806,22 +40170,16 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
           ],
         },
         workflowRun: makeWorkflowRun('compose-quota-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
-          },
-        },
+        config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
       })
     );
 
-    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
-    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
-      reason: 'quota',
-      resumeAt: resetAt,
-    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'compose-quota-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'fan' }
+    );
   });
 
   it('refuses runtime composed fan-out resolution after the capture changes', async () => {

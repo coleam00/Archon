@@ -16,7 +16,11 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  readWorktreeCreationId,
+  WorktreeUncommittedChangesError,
+} from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -434,6 +438,14 @@ async function handleWorktreeCommand(
         return { success: false, message: 'Isolation environment not found in database.' };
       }
 
+      if (isolationEnv.provider !== 'worktree') {
+        return {
+          success: false,
+          message:
+            'This environment is not a worktree. Use `archon isolation cleanup 0` for container cleanup.',
+        };
+      }
+
       const forceFlag = args[1] === '--force';
 
       try {
@@ -495,7 +507,7 @@ async function handleWorktreeCommand(
           };
         }
         // Provide friendly error for uncommitted changes
-        if (err.message.includes('untracked files') || err.message.includes('modified')) {
+        if (error instanceof WorktreeUncommittedChangesError) {
           return {
             success: false,
             message:
@@ -628,6 +640,29 @@ async function resolveChatRunId(arg: string, conversation: Conversation): Promis
     );
   }
   return matches[0]?.id ?? arg;
+}
+
+/** What a run needs from the operator, and the commands that answer it, one line each. */
+function runAttentionLines(
+  run: Parameters<typeof runAttention>[0] & { id: string },
+  surface: WorkflowCommandSurface
+): string {
+  const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  const attention = runAttention(run);
+  let msg = '';
+  if (attention?.kind === 'stalled_tool_calls') {
+    msg += '  Tool calls need attention; work remains running.\n';
+    for (const call of attention.calls)
+      msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
+  } else if (attention?.kind === 'attention') {
+    msg += `  Needs attention: ${attention.message}\n`;
+    for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
+    msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
+  } else if (attention?.kind === 'awaiting_response') {
+    msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
+    msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
+  }
+  return msg;
 }
 
 /** Workflow commands work with or without a project context. */
@@ -882,6 +917,34 @@ async function handleWorkflowCommand(
       }
     }
 
+    case 'get': {
+      const arg = args[1];
+      if (!arg) {
+        return { success: false, message: `Usage: ${cmd('get <id>')}` };
+      }
+      try {
+        const runId = await resolveChatRunId(arg, conversation);
+        const run = await workflowDb.getWorkflowRun(runId);
+        // Same scope as the lookup above: a project conversation sees its own runs.
+        if (!run || (conversation.codebase_id && run.codebase_id !== conversation.codebase_id))
+          return { success: false, message: `Workflow run not found: ${arg}` };
+        let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
+        if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
+        msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
+        if (run.completed_at !== null)
+          msg += `  Finished: ${new Date(run.completed_at).toISOString()}\n`;
+        const error = run.metadata.error;
+        if (typeof error === 'string' && error.length > 0)
+          msg += `  Error: ${error.slice(0, 300)}\n`;
+        msg += runAttentionLines(run, surface);
+        return { success: true, message: msg.trim() };
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId: arg }, 'cmd.workflow_get_failed');
+        return { success: false, message: `Failed to look up workflow run: ${err.message}` };
+      }
+    }
+
     case 'status': {
       try {
         const { runs: activeRuns } = await operations.getWorkflowStatus();
@@ -900,19 +963,7 @@ async function handleWorkflowCommand(
             msg += `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}\n`;
           }
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
-          const attention = runAttention(run);
-          if (attention?.kind === 'stalled_tool_calls') {
-            msg += '  Tool calls need attention; work remains running.\n';
-            for (const call of attention.calls)
-              msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
-          } else if (attention?.kind === 'attention') {
-            msg += `  Needs attention: ${attention.message}\n`;
-            for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
-            msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
-          } else if (attention?.kind === 'awaiting_response') {
-            msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
-            msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
-          }
+          msg += runAttentionLines(run, surface);
           msg += '\n';
         }
 
@@ -1180,6 +1231,7 @@ async function handleWorkflowCommand(
           `  ${cmd('list')} - Show available workflows`,
           `  ${cmd('reload')} - Reload workflow definitions`,
           `  ${cmd('status')} - Show all active workflows`,
+          `  ${cmd('get <id>')} - Show one run, whatever its status`,
           `  ${cmd('cancel [id]')} - Cancel a running workflow (default: the one in this conversation)`,
           `  ${cmd('resume <id>')} - Resume a failed or paused run`,
           `  ${cmd('abandon <id>')} - Abandon a running, failed, or paused run`,
@@ -1221,6 +1273,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`${cmd('list')}\` — List available workflows
 - \`${cmd('run <name> [message]')}\` — Run a workflow explicitly
 - \`${cmd('status')}\` — Show all active workflows
+- \`${cmd('get <id>')}\` — Show one run, whatever its status
 - \`${cmd('cancel [id]')}\` — Cancel a running workflow (default: the one in this conversation)
 - \`${cmd('resume <id>')}\` — Resume a failed or paused run
 - \`${cmd('abandon <id>')}\` — Abandon a running, failed, or paused run

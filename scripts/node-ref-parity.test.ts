@@ -53,7 +53,11 @@ import {
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
 import { dagNodeSchema } from '../packages/workflows/src/schemas';
-import { validateStructural } from '../packages/web/src/experiments/console/builder/validation/structural';
+import {
+  MAX_DURABLE_WAIT_MS as BUILDER_MAX_DURABLE_WAIT_MS,
+  validateStructural,
+} from '../packages/web/src/experiments/console/builder/validation/structural';
+import { MAX_DURABLE_WAIT_MS } from '../packages/workflows/src/schemas/durable-wait';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 // OUTPUT_REF_SOURCE moved from loader.ts to output-ref.ts (#2637) so the loader
@@ -408,14 +412,6 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
  * meaningfully shared. That is exactly the axis that broke in #2591.
  */
 describe('loop completion-channel parity', () => {
-  /**
-   * `until_field` names a property in the node's `output_format`, and the engine
-   * additionally checks that it is declared, required and boolean — rules the
-   * builder deliberately does not mirror (it has no schema editor). Supplying a
-   * valid schema for those cases keeps this a comparison of the CHANNEL rule, so a
-   * disagreement here means the channel rules drifted, not that the two sides
-   * validate different things.
-   */
   const OUTPUT_FORMAT = {
     type: 'object',
     properties: { done: { type: 'boolean' } },
@@ -473,7 +469,7 @@ describe('loop completion-channel parity', () => {
         {
           id: 'l',
           variant: 'loop',
-          base: {},
+          base: { output_format: channels.until_field !== undefined ? OUTPUT_FORMAT : undefined },
           data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
         },
       ],
@@ -488,4 +484,100 @@ describe('loop completion-channel parity', () => {
       expect(builderAccepts(channels)).toBe(engineAccepts(channels));
     });
   }
+});
+
+describe('loop until_field schema parity', () => {
+  const cases: Array<[string, Record<string, unknown> | undefined, boolean, string?]> = [
+    ['requires output_format', undefined, false],
+    [
+      'requires a declared property',
+      { properties: { other: { type: 'boolean' } }, required: ['done'] },
+      false,
+    ],
+    ['requires membership in required', { properties: { done: { type: 'boolean' } } }, false],
+    [
+      'requires a boolean string type',
+      { properties: { done: { type: 'string' } }, required: ['done'] },
+      false,
+    ],
+    [
+      'accepts a required boolean',
+      { properties: { done: { type: 'boolean' } }, required: ['done'] },
+      true,
+    ],
+    ['accepts an untyped property', { properties: { done: {} }, required: ['done'] }, true],
+    [
+      'accepts a type union',
+      { properties: { done: { type: ['boolean', 'null'] } }, required: ['done'] },
+      true,
+    ],
+    ['accepts a boolean schema property', { properties: { done: true }, required: ['done'] }, true],
+    [
+      'matches the trimmed field name',
+      { properties: { done: {} }, required: ['done'] },
+      true,
+      ' done ',
+    ],
+    [
+      'rejects an inherited property name',
+      { properties: {}, required: ['toString'] },
+      false,
+      'toString',
+    ],
+    ['rejects absent properties', {}, false],
+    ['rejects null properties', { properties: null }, false],
+    ['rejects array properties', { properties: ['done'] }, false],
+    ['rejects an empty required list', { properties: { done: {} }, required: [] }, false],
+    [
+      'rejects a required list naming another field',
+      { properties: { done: {} }, required: ['other'] },
+      false,
+    ],
+    ['rejects non-array required', { properties: { done: {} }, required: 'done' }, false],
+  ];
+
+  for (const [name, output_format, accepted, until_field = 'done'] of cases) {
+    test(name, () => {
+      const engine = dagNodeSchema.safeParse({
+        id: 'l',
+        output_format,
+        loop: { prompt: 'iterate', max_iterations: 5, until_field },
+      });
+      expect(engine.success).toBe(accepted);
+      const issues = validateStructural({
+        name: 'w',
+        description: 'd',
+        meta: {},
+        nodes: [
+          {
+            id: 'l',
+            variant: 'loop',
+            base: { output_format },
+            data: {
+              prompt: 'iterate',
+              max_iterations: 5,
+              fresh_context: false,
+              until_field,
+            },
+          },
+        ],
+      });
+      expect(issues.length === 0).toBe(engine.success);
+      if (!accepted) {
+        expect(issues).toContainEqual(
+          expect.objectContaining({
+            severity: 'error',
+            source: 'client-instant',
+            path: { nodeId: 'l', field: 'loop.until_field' },
+          })
+        );
+      }
+    });
+  }
+});
+
+describe('durable wait bound parity', () => {
+  test("the builder's wait bound is the engine's", () => {
+    expect(BUILDER_MAX_DURABLE_WAIT_MS).toBe(MAX_DURABLE_WAIT_MS);
+  });
 });

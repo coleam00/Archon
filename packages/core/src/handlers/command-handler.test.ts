@@ -21,6 +21,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import type { CleanupOperationResult } from '../services/cleanup-service';
 import {
   MissingProjectDirectoryError,
+  WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
   type DestroyResult,
@@ -409,6 +410,7 @@ mock.module('../isolation', () => ({
   }),
 }));
 mock.module('@archon/isolation', () => ({
+  WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
   getIsolationProvider: () => ({
@@ -1550,6 +1552,7 @@ describe('CommandHandler', () => {
           expect(mockIsolationEnvDbCreate).toHaveBeenCalledWith(
             expect.objectContaining({
               metadata: {
+                adopted: false,
                 worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
                 worktree_branch_created: true,
               },
@@ -1701,6 +1704,45 @@ describe('CommandHandler', () => {
           metadata: { worktree_creation_id: 'checkout-proof' },
         });
 
+        test('suggests force only for a typed dirty-worktree refusal and retains state', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+          mockIsolationDestroy.mockRejectedValueOnce(
+            new WorktreeUncommittedChangesError(featXEnv.working_path)
+          );
+          const result = await handleCommand(conv, '/worktree remove', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toBe(
+            'Worktree has uncommitted changes.\n\nCommit your work first, or use `/worktree remove --force` to discard.'
+          );
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+          expect(mockDeactivateSession).not.toHaveBeenCalled();
+        });
+
+        test('does not suggest force for an unrelated removal failure containing modified', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+          mockIsolationDestroy.mockRejectedValueOnce(
+            new Error('worktree metadata could not be modified')
+          );
+          const result = await handleCommand(conv, '/worktree remove', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toBe(
+            'Failed to remove worktree: worktree metadata could not be modified'
+          );
+          expect(result.message).not.toContain('--force');
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+          expect(mockDeactivateSession).not.toHaveBeenCalled();
+        });
+
         test('should require active worktree', async () => {
           const result = await handleCommand(
             conversationWithCodebase,
@@ -1709,6 +1751,20 @@ describe('CommandHandler', () => {
           );
           expect(result.success).toBe(false);
           expect(result.message).toContain('not using a worktree');
+        });
+
+        test('refuses forced container removal without clearing tracking', async () => {
+          const conv = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: featXEnv.id,
+          });
+          mockIsolationEnvDbGet.mockResolvedValueOnce({ ...featXEnv, provider: 'container' });
+          const result = await handleCommand(conv, '/worktree remove --force', operator);
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('archon isolation cleanup 0');
+          expect(mockIsolationDestroy).not.toHaveBeenCalled();
+          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
         test('should remove worktree and switch to main', async () => {
@@ -2374,6 +2430,68 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('No active workflow to cancel.');
+      });
+    });
+
+    describe('/workflow get', () => {
+      test('shows the one run named by the id, whatever its status', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-failed',
+            workflow_name: 'implement',
+            status: 'failed',
+            metadata: { error: 'node exploded' },
+          })
+        );
+
+        const result = await handleCommand(baseConversation, '/workflow get run-failed', operator);
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('implement');
+        expect(result.message).toContain('run-failed');
+        expect(result.message).toContain('failed');
+        expect(result.message).toContain('node exploded');
+      });
+
+      test('shows the gate and its answer commands for a paused run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-approval',
+            status: 'paused',
+            metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+          })
+        );
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow get run-approval',
+          operator
+        );
+
+        expect(result.message).toContain('/workflow approve run-approval');
+        expect(result.message).toContain('/workflow reject run-approval');
+      });
+
+      test('does not show a run that belongs to another project', async () => {
+        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({ id: 'run-other', codebase_id: 'other-project' })
+        );
+        const conversation = makeConversation({ ...baseConversation, codebase_id: 'codebase-123' });
+
+        const result = await handleCommand(conversation, '/workflow get run-other', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
+      });
+
+      test('reports a missing run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+        const result = await handleCommand(baseConversation, '/workflow get nope', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
       });
     });
 

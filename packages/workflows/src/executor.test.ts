@@ -3718,20 +3718,96 @@ describe('executeWorkflow', () => {
         conversationId: 'db-conv-1',
       });
 
-    it('gives back the resource slot of a pause the host continues', async () => {
-      const paused = pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' });
-      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
-        released: true,
-      }));
-      const result = await run(
-        makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
-      );
-      expect(result).toMatchObject({ success: true, paused: true });
-      expect(releasePausedRunSlot.mock.calls).toEqual([
-        [paused.id, { kind: 'pause', nodeId: 'review', pauseId: 'p1' }],
-      ]);
-    });
-
+    for (const kind of ['approval', 'deadline'] as const) {
+      it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {
+        const paused =
+          kind === 'approval'
+            ? pausedAt({ type: 'approval', nodeId: 'review', message: '', pauseId: 'p1' })
+            : makeRun({
+                status: 'paused',
+                metadata: {
+                  wait: {
+                    owner: 'node',
+                    nodeId: 'review',
+                    kind: 'time',
+                    pauseId: 'p1',
+                    waitingSince: '2026-01-01T00:00:00.000Z',
+                    resumeAt: '2026-01-02T00:00:00.000Z',
+                  },
+                },
+              });
+        const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+          released: true,
+        }));
+        const result = await run(
+          makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot })
+        );
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(releasePausedRunSlot.mock.calls).toEqual([
+          [
+            paused.id,
+            {
+              nodeId: 'review',
+              pauseId: 'p1',
+              ...(kind === 'deadline'
+                ? { kind: 'wait', resumeAt: '2026-01-02T00:00:00.000Z' }
+                : { kind: 'pause' }),
+            },
+          ],
+        ]);
+      });
+    }
+    for (const owner of ['node', 'loop_group'] as const) {
+      for (const kind of ['time', 'event'] as const) {
+        it(`returns the ${owner} ${kind} cursor captured before releasing the slot`, async () => {
+          const wait = {
+            owner,
+            kind,
+            nodeId: 'checks',
+            ...(owner === 'loop_group'
+              ? {
+                  bodyWaitId: 'body-wait',
+                  iteration: 2,
+                  sessionId: null,
+                  sessionProvider: null,
+                }
+              : {}),
+            ...(kind === 'event' ? { event: 'checks.complete' } : {}),
+            pauseId: 'occurrence-a',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-02T00:00:00.000Z',
+          };
+          const paused = makeRun({
+            status: 'paused',
+            metadata: {
+              wait,
+            },
+          });
+          const result = await run(
+            makeStore({
+              getWorkflowRun: mock(async () => paused),
+              releasePausedRunSlot: mock(async () => {
+                paused.metadata = {
+                  ...paused.metadata,
+                  wait: { ...wait, pauseId: 'occurrence-b' },
+                };
+                return { released: true };
+              }),
+            })
+          );
+          expect(result).toMatchObject({
+            success: true,
+            paused: true,
+            waitCursor: {
+              kind: 'wait',
+              nodeId: 'checks',
+              pauseId: 'occurrence-a',
+              resumeAt: '2026-01-02T00:00:00.000Z',
+            },
+          });
+        });
+      }
+    }
     it('keeps the slot of a parent blocked on its child', async () => {
       const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
         released: true,
@@ -4015,6 +4091,7 @@ describe('executeWorkflow', () => {
         USER_KEY: 'u_val',
       });
       expect(configArg?.protectedEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual([
         'db_val',
         'reserved-db-secret',
@@ -4097,6 +4174,8 @@ describe('executeWorkflow', () => {
       expect(configArg?.envVars).toMatchObject({
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
+        GH_ENTERPRISE_TOKEN: '',
+        GITHUB_ENTERPRISE_TOKEN: '',
         COPILOT_GITHUB_TOKEN: '',
         GIT_AUTHOR_NAME: 'connected-author',
         GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
@@ -4105,11 +4184,14 @@ describe('executeWorkflow', () => {
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
+        'GH_ENTERPRISE_TOKEN',
+        'GITHUB_ENTERPRISE_TOKEN',
         'COPILOT_GITHUB_TOKEN',
         'GIT_AUTHOR_NAME',
         'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
@@ -4271,6 +4353,26 @@ describe('executeWorkflow', () => {
           expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
         });
       }
+
+      it('hides stored logins from the per-user scrub without redacting its config values', async () => {
+        const environment = await resolveWorkflowGithubEnvironment(
+          githubDeps({ token: undefined }),
+          'codebase-1',
+          'u-1',
+          {}
+        );
+        expect(environment.envVars?.GH_CONFIG_DIR).toContain('archon-gh-scrubbed-');
+        expect(environment.envVars?.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        // Only secrets are protected: protecting the scrub's config values would redact
+        // them, and every `credential.helper` mention, from node output.
+        expect(environment.protectedEnvKeys).toEqual([
+          'GH_TOKEN',
+          'GITHUB_TOKEN',
+          'GH_ENTERPRISE_TOKEN',
+          'GITHUB_ENTERPRISE_TOKEN',
+          'COPILOT_GITHUB_TOKEN',
+        ]);
+      });
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {

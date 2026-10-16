@@ -10,6 +10,7 @@
  * z.union() is NOT used here — YAML nodes lack an explicit `type` discriminant,
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
+import { SETTING_SOURCES } from '@archon/paths/skills';
 import { z } from 'zod';
 import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
@@ -262,7 +263,7 @@ export const dagNodeBaseSchema = z.object({
   // assistant-level default (['project', 'user'] when unset). Claude-only;
   // other providers warn and ignore it. Lets a lean node (e.g. a reviewer)
   // skip project/user context loading for faster startup.
-  settingSources: z.array(z.enum(['project', 'user'])).optional(),
+  settingSources: z.array(z.enum(SETTING_SOURCES)).optional(),
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a
@@ -770,10 +771,14 @@ export const attentionOptionsSchema = z
 /**
  * A label key on an attention wait. It is one CLI token with no `=`, so `--label k=v`
  * and `--set k=v` split unambiguously at the first `=`. The engine gives keys no meaning.
+ *
+ * `__proto__` is refused: assigning it to a plain object sets the prototype instead of
+ * creating a key, so a label write would vanish and a filter on it would match everything.
  */
 export const attentionLabelKeySchema = z
   .string()
-  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace")
+  .refine(key => key !== '__proto__', "'__proto__' cannot be a label key");
 
 /** An attention wait's labels: a flat map of plain strings the engine never interprets. */
 export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());

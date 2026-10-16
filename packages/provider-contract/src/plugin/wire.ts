@@ -13,8 +13,9 @@ import type { AssertNever } from '../effort';
 import { providerChunkSchema } from '../events';
 import { credentialSpecSchema } from '../registration';
 import { providerStopReasonSchema, type ProviderStopReason } from '../result';
+import { skillDiscoverySchema } from '../skills';
 
-export const PROVIDER_PLUGIN_PROTOCOL = 1;
+export const PROVIDER_PLUGIN_PROTOCOL = 2;
 export { PLUGIN_MAX_MESSAGE_BYTES as PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './rpc';
 
 export const providerPluginDescriptorSchema = z.object({
@@ -34,6 +35,7 @@ export const providerPluginDescriptorSchema = z.object({
     })
     .optional(),
   ownsUnprefixedModelRefs: z.literal(true).optional(),
+  skillDiscovery: skillDiscoverySchema.optional(),
 });
 export type ProviderPluginDescriptor = z.infer<typeof providerPluginDescriptorSchema>;
 
@@ -53,8 +55,10 @@ export const providerSessionRequestSchema = z.strictObject({
   resumeSessionId: z.string().optional(),
   model: z.string().optional(),
   systemPrompt: systemPromptInputSchema.optional(),
+  appendSystemPrompt: z.string().optional(),
   outputFormat: z.object({ type: z.literal('json_schema'), schema: configSchema }).optional(),
   protectedEnvKeys: z.array(z.string()).readonly().optional(),
+  userCredentialEnvKeys: z.array(z.string()).readonly().optional(),
   maxBudgetUsd: z.number().optional(),
   fallbackModel: z.string().optional(),
   forkSession: z.boolean().optional(),

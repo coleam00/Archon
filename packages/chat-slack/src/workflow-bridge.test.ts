@@ -487,7 +487,7 @@ test('approval delivery recovery survives paused edits and clears after resume',
   expect(update?.ts).toBe('msg-1');
   const text = update && 'text' in update ? update.text : undefined;
   expect(text).toContain('Approval card could not be delivered');
-  expect(text).toContain('/archon-workflow status run');
+  expect(text).toContain('/archon-workflow get run');
   expect(text).toContain('Web UI');
   expect(JSON.stringify(update)).toContain('Approval card could not be delivered');
   expect(JSON.stringify(update)).not.toContain('private SDK details');
@@ -517,7 +517,7 @@ test('approval delivery recovery survives paused edits and clears after resume',
   const paused = JSON.stringify(slack.updates.at(-1));
   expect(paused).toContain('Workflow paused');
   expect(paused).toContain('Approval card could not be delivered');
-  expect(paused).toContain('/archon-workflow status run');
+  expect(paused).toContain('/archon-workflow get run');
 
   await nodeUpdate('running');
   expect(slack.updates).toHaveLength(4);

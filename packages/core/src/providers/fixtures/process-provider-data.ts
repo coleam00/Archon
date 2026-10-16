@@ -1,3 +1,4 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { z } from 'zod';
 import type { ProviderConfigScope } from '@archon/provider-contract';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
@@ -17,7 +18,7 @@ export function parseConfig(
 }
 
 export const descriptor = providerPluginDescriptorSchema.parse({
-  protocol: 1,
+  protocol: PROVIDER_PLUGIN_PROTOCOL,
   id: 'process-fixture',
   displayName: 'Process fixture',
   version: '1',

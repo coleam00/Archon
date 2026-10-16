@@ -18,7 +18,8 @@
  *                 log line can interleave with the machine-readable payload)
  *
  * Configuration:
- *   LOG_LEVEL env var or setLogLevel() at startup
+ *   LOG_LEVEL env var (including one set by an Archon .env file, applied by
+ *   applyEnvLogLevel() once the files load) or setLogLevel() at startup
  *   stdout by default; setLogDestination('stderr') moves every logger there
  *   Pretty-printed when the destination is a TTY and NODE_ENV !== 'production'
  *   Newline-delimited JSON otherwise (piped, redirected, or production)
@@ -131,6 +132,7 @@ function buildLogger(): Logger {
  * Children inherit the root's level at creation time (not dynamically updated).
  */
 export const rootLogger: Logger = buildLogger();
+let levelSetByCode = false;
 
 /**
  * Create a child logger with a module binding.
@@ -156,6 +158,22 @@ export function setLogLevel(level: string): void {
     throw new Error(`Invalid log level: '${level}'. Valid levels: ${[...VALID_LEVELS].join(', ')}`);
   }
   rootLogger.level = normalized;
+  levelSetByCode = true;
+}
+
+/** Test hook: forget that `setLogLevel` ran, so tests do not depend on file order. */
+export function resetLogLevelOverride(): void {
+  levelSetByCode = false;
+}
+
+/**
+ * The root logger reads LOG_LEVEL when this module loads, which is before the Archon
+ * env files do. The env loader calls this after loading them so a `LOG_LEVEL` in
+ * `~/.archon/.env` or `.archon/.env` takes effect. A level a caller already chose with
+ * `setLogLevel` (the server launcher passes the CLI's) is not overridden.
+ */
+export function applyEnvLogLevel(): void {
+  if (!levelSetByCode) rootLogger.level = getInitialLevel();
 }
 
 export function getLogLevel(): string {

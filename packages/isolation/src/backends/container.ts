@@ -354,9 +354,7 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
-    await this.store.updateStatus(envId, 'destroyed').catch(err => {
-      log.warn({ envId, err: err as Error }, 'isolation.container_destroy_status_update_failed');
-    });
+    await this.store.updateStatus(envId, 'destroyed');
 
     log.info({ envId, containerName, volume }, 'isolation.container_destroy_completed');
   }

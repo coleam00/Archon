@@ -7,6 +7,7 @@ import type { UpdateConversationInput } from '../schemas/conversation';
 import { lockConversationOwnership } from './conversation-ownership';
 import { listConversationDetachBlockers } from './workflows';
 import { pool, getDialect, getDatabase, getDatabaseType } from './connection';
+import { visibilityWhere, type ConversationVisibility } from './conversation-visibility';
 import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
@@ -39,7 +40,7 @@ export async function getConversationById(id: string): Promise<Conversation | nu
 
 /**
  * Find a conversation by platform_conversation_id only (no platform_type filter).
- * Safe because all platform IDs are globally unique (they include platform prefix + timestamp + random).
+ * Rejects IDs shared by multiple platforms rather than selecting an arbitrary row.
  * Used by the Web UI API to load conversations from any platform.
  */
 export async function findConversationByPlatformId(
@@ -49,6 +50,7 @@ export async function findConversationByPlatformId(
     `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND ${notOriginAnchor('id')}`,
     [platformId]
   );
+  if (result.rows.length > 1) throw new Error('Ambiguous conversation platform ID');
   return result.rows[0] ?? null;
 }
 
@@ -185,19 +187,21 @@ export async function updateConversation(
 }
 
 /**
- * List all conversations ordered by recent activity
+ * List the conversations `visibility` lets the caller reach, ordered by recent activity.
+ * `userId` is a narrowing filter on every platform, unlike `visibility`, which
+ * leaves chat and forge rows reachable by everyone.
  */
 export async function listConversations(
-  limit = 50,
-  platformType?: string,
-  codebaseId?: string,
-  excludeEmpty = false,
-  /**
-   * Non-enforcing "mine" filter: when set, restrict to conversations attributed
-   * to this user (`user_id = $N`). Absent → all (default visibility stays open).
-   */
-  userId?: string
+  visibility: ConversationVisibility,
+  filter: {
+    limit?: number;
+    platformType?: string;
+    codebaseId?: string;
+    excludeEmpty?: boolean;
+    userId?: string;
+  } = {}
 ): Promise<readonly Conversation[]> {
+  const { limit = 50, platformType, codebaseId, excludeEmpty = false, userId } = filter;
   const params: unknown[] = [];
   let sql =
     'SELECT * FROM remote_agent_conversations WHERE deleted_at IS NULL AND (hidden IS NULL OR hidden = false)';
@@ -221,6 +225,8 @@ export async function listConversations(
     params.push(userId);
     sql += ` AND user_id = $${String(params.length)}`;
   }
+
+  sql += visibilityWhere(visibility, params);
 
   sql += ' ORDER BY last_activity_at DESC NULLS LAST';
   params.push(limit);

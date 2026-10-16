@@ -65,6 +65,32 @@ const BINARY = { path: '/bin/codex', pathDirs: ['/vendor/codex-path'] };
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 describe('AppServerConnection', () => {
+  test('drains accepted tool calls on closure and accepts no later calls', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const complete = Promise.withResolvers<void>();
+    const handler = mock(async () => {
+      await complete.promise;
+      return { success: true, contentItems: [] };
+    });
+    connection.handleToolCalls(handler);
+    fake.reply({ id: 'accepted', method: 'item/tool/call', params: {} });
+    await tick();
+    fake.child.emit('close', 1, null);
+    let drained = false;
+    const draining = connection.finishToolCalls().then(() => {
+      drained = true;
+    });
+    fake.reply({ id: 'too-late', method: 'item/tool/call', params: {} });
+    await tick();
+    expect(drained).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(1);
+    complete.resolve();
+    await draining;
+    expect(drained).toBe(true);
+    expect(fake.sent()).toEqual([]);
+  });
+
   test('starts app-server with the extra args and the helper dirs first on PATH', () => {
     const fake = rawChild();
     AppServerConnection.start(BINARY, ['-c', 'x=1'], { PATH: '/usr/bin' }, fake.spawner);
@@ -84,10 +110,17 @@ describe('AppServerConnection', () => {
     expect(a).toMatchObject({ id: 1, method: 'thread/start' });
     expect(b).toMatchObject({ id: 2, method: 'account/read' });
 
-    fake.reply({ id: 2, result: { account: null, requiresOpenaiAuth: true } });
+    fake.reply({
+      id: 2,
+      result: { account: null, requiresOpenaiAuth: true, workspaceRouting: null },
+    });
     fake.reply({ id: 1, result: 'first' });
     expect(await first).toBe('first');
-    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
+    expect(await second).toEqual({
+      account: null,
+      requiresOpenaiAuth: true,
+      workspaceRouting: null,
+    });
   });
 
   test('frames split across reads, or sharing one, are each read whole', async () => {
@@ -97,9 +130,15 @@ describe('AppServerConnection', () => {
     const second = connection.request('account/read', {});
     fake.stdout.write('{"id":1,"result":"fi');
     await tick();
-    fake.stdout.write('rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}\n');
+    fake.stdout.write(
+      'rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}}\n'
+    );
     expect(await first).toBe('first');
-    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
+    expect(await second).toEqual({
+      account: null,
+      requiresOpenaiAuth: true,
+      workspaceRouting: null,
+    });
   });
 
   test('a JSON-RPC error rejects with its code and the method', async () => {
@@ -125,6 +164,26 @@ describe('AppServerConnection', () => {
         error: {
           code: -32601,
           message: 'Archon does not handle item/commandExecution/requestApproval',
+        },
+      },
+    ]);
+  });
+
+  test('a ChatGPT token refresh request is declined as a refresh, not as an unknown method', async () => {
+    const fake = rawChild();
+    AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    fake.reply({
+      id: 7,
+      method: 'account/chatgptAuthTokens/refresh',
+      params: { reason: 'unauthorized', previousAccountId: 'acct-1' },
+    });
+    await tick();
+    expect(fake.sent()).toEqual([
+      {
+        id: 7,
+        error: {
+          code: -32000,
+          message: 'Archon cannot refresh the delivered ChatGPT token during a turn',
         },
       },
     ]);
@@ -189,6 +248,59 @@ describe('AppServerConnection', () => {
     expect(stderr).toContain('[REDACTED]');
     expect(stderr).not.toContain('0123456789');
     expect(stderr.length).toBeLessThanOrEqual(1000);
+  });
+
+  test('answers asynchronous host-tool requests on their JSON-RPC id and declines other requests', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const pending =
+      Promise.withResolvers<
+        import('./protocol/v2/DynamicToolCallResponse').DynamicToolCallResponse
+      >();
+    const handler = mock(() => pending.promise);
+    connection.handleToolCalls(handler);
+    fake.reply({
+      id: 'tool-request',
+      method: 'item/tool/call',
+      params: { tool: 'invoke_workflow' },
+    });
+    fake.reply({ id: 999, method: 'item/commandExecution/requestApproval', params: {} });
+    await tick();
+    expect(handler).toHaveBeenCalledWith({ tool: 'invoke_workflow' });
+    expect(fake.sent()).toEqual([
+      {
+        id: 999,
+        error: {
+          code: -32601,
+          message: 'Archon does not handle item/commandExecution/requestApproval',
+        },
+      },
+    ]);
+    pending.resolve({ success: true, contentItems: [{ type: 'inputText', text: 'Queued' }] });
+    await tick();
+    expect(fake.sent().at(-1)).toEqual({
+      id: 'tool-request',
+      result: { success: true, contentItems: [{ type: 'inputText', text: 'Queued' }] },
+    });
+  });
+
+  test('malformed host calls fail without invoking a tool handler', async () => {
+    const { buildCodexNativeTools } = await import('./native-tools');
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const handler = mock(() => Promise.resolve('no'));
+    const tools = buildCodexNativeTools([
+      { name: 'test', description: '', inputSchema: { properties: {}, required: [] }, handler },
+    ]);
+    connection.handleToolCalls(params => tools.call(params, 't', 'u'));
+    for (const params of [null, {}, { threadId: 't', turnId: 'u', tool: 'test', arguments: {} }]) {
+      fake.reply({ id: 'bad', method: 'item/tool/call', params });
+    }
+    await tick();
+    expect(fake.sent()).toHaveLength(3);
+    for (const frame of fake.sent())
+      expect(frame).toMatchObject({ id: 'bad', result: { success: false } });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   test('shutdown closes stdin and sends SIGTERM only when the process does not exit', async () => {
@@ -380,11 +492,13 @@ describe('Codex native credential check', () => {
       expect(spawner).not.toHaveBeenCalled();
     });
   });
-  test('CODEX_API_KEY is usable without starting a process', async () => {
+  test('an Archon-supplied login is usable without starting a process; half a token pair is not', async () => {
     const { CodexProvider } = await import('./provider');
     const spawner = mock(() => {
       throw new Error('must not spawn');
     });
+    const check = (env: Record<string, string>) => () =>
+      new CodexProvider(spawner).checkCredential({ env, signal: new AbortController().signal });
     const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
     expect(
       await checkCredentialStatuses([
@@ -392,11 +506,22 @@ describe('Codex native credential check', () => {
           name: 'Codex API key',
           expected: 'usable',
           secret: 'planted-key',
-          check: () =>
-            new CodexProvider(spawner).checkCredential({
-              env: { CODEX_API_KEY: 'planted-key' },
-              signal: new AbortController().signal,
-            }),
+          check: check({ CODEX_API_KEY: 'planted-key' }),
+        },
+        {
+          name: 'managed ChatGPT tokens',
+          expected: 'usable',
+          secret: 'planted-token',
+          check: check({
+            ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token',
+            ARCHON_CODEX_CHATGPT_ACCOUNT_ID: 'acct-1',
+          }),
+        },
+        {
+          name: 'half a managed ChatGPT token pair',
+          expected: 'check_failed',
+          secret: 'planted-token',
+          check: check({ ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token' }),
         },
       ])
     ).toEqual([]);

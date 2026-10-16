@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { nativeToolInputParser } from '../native-tools';
 import {
   providerDiagnosticsSchema,
   providerModelListSchema,
@@ -11,6 +11,7 @@ import type { ProviderChunk } from '../events';
 import type { ProviderSettled } from '../settled';
 import { PluginProtocolError, PluginRpc, type PluginIO } from './rpc';
 import {
+  PROVIDER_PLUGIN_PROTOCOL,
   diagnoseRequestSchema,
   listModelsRequestSchema,
   chunkNotificationSchema,
@@ -81,17 +82,7 @@ export async function connectProvider(
       throw rpc.error('tool call names an inactive session');
     const tool = turn.tools.find(tool => tool.name === name);
     if (!tool) throw rpc.error('tool call names an unknown tool');
-    const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
-    for (const [key, property] of Object.entries(tool.inputSchema.properties)) {
-      const field =
-        property.kind === 'string'
-          ? z.string()
-          : property.kind === 'boolean'
-            ? z.boolean()
-            : z.enum(property.values);
-      shape[key] = tool.inputSchema.required.includes(key) ? field : field.optional();
-    }
-    const parsed = z.strictObject(shape).safeParse(input);
+    const parsed = nativeToolInputParser(tool.inputSchema).safeParse(input);
     if (!parsed.success) throw rpc.error('invalid tool input');
     return { text: await tool.handler(parsed.data) };
   });
@@ -122,7 +113,7 @@ export async function connectProvider(
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
-          _meta: { archon: { protocol: 1 } },
+          _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } },
         },
       })
     );

@@ -18,7 +18,7 @@ test('descriptors support native tools and refuse unsupported contracts', () => 
   expect(() =>
     providerPluginDescriptorSchema.parse({ ...descriptor, credentials: { kind: 'dynamic' } })
   ).toThrow('kind');
-  expect(() => providerPluginDescriptorSchema.parse({ ...descriptor, protocol: 2 })).toThrow(
+  expect(() => providerPluginDescriptorSchema.parse({ ...descriptor, protocol: 1 })).toThrow(
     'protocol'
   );
   expect(() =>
@@ -50,4 +50,16 @@ test('every stop reason uses ACP v1 vocabulary; missing reasons only affect ackn
     checkAcp('PromptResponse', { stopReason: acpStopReason(reason, false) });
   }
   expect(acpStopReason('end_turn', true)).toBe('cancelled');
+});
+
+test('session requests reject required tool keys absent from properties', () => {
+  expect(
+    providerSessionRequestSchema.safeParse({
+      prompt: '',
+      cwd: '/',
+      nativeTools: [
+        { name: 'broken', description: '', inputSchema: { properties: {}, required: ['missing'] } },
+      ],
+    }).success
+  ).toBe(false);
 });

@@ -7,6 +7,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
+import { WORKTREE_REGISTRATION_ID } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -16,6 +17,8 @@ import type {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { WorktreeRegistrationChangedError } from './codebase-delete-error';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -153,6 +156,9 @@ export async function findLatestByCodebaseAndWorkingPath(
  */
 export async function create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow> {
   const dialect = getDialect();
+  const provider = env.provider ?? 'worktree';
+  const metadata = { ...env.metadata };
+  if (provider === 'worktree') metadata[WORKTREE_REGISTRATION_ID] = crypto.randomUUID();
   // Note: created_by_user_id is intentionally NOT in the DO UPDATE SET — on
   // re-creation (upsert) we preserve the original creator's attribution.
   // The first user to spin up an environment owns it; subsequent reactivations
@@ -175,12 +181,12 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
       env.codebase_id,
       env.workflow_type,
       env.workflow_id,
-      env.provider ?? 'worktree',
+      provider,
       env.working_path,
       env.branch_name,
       env.created_by_platform ?? null,
       env.created_by_user_id ?? null,
-      JSON.stringify(env.metadata ?? {}),
+      JSON.stringify(metadata),
     ]
   );
 
@@ -212,19 +218,90 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');
 }
 
+/** Mark only the observed worktree resource destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(
+  env: Pick<IsolationEnvironmentRow, 'id' | 'working_path' | 'branch_name' | 'metadata'>
+): Promise<void> {
+  const registrationId = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
+  const result = await pool.query(
+    `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
+     WHERE id = $1 AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${registrationId}, '') = $2`,
+    [env.id, env.metadata[WORKTREE_REGISTRATION_ID] ?? '']
+  );
+  if (result.rowCount !== 1) {
+    throw new WorktreeRegistrationChangedError(env.id);
+  }
+}
+
 /**
  * Update environment metadata (merge with existing)
  */
-export async function updateMetadata(id: string, metadata: Record<string, unknown>): Promise<void> {
+export async function updateMetadata(
+  id: string,
+  metadata: Record<string, unknown>,
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
   const dialect = getDialect();
+  // Older writers do not rotate a token; fence those rows with the observed snapshot.
+  const legacy = observed && typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
      SET metadata = ${dialect.jsonMerge('metadata', 1)}
-     WHERE id = $2`,
-    [JSON.stringify(metadata), id]
+     WHERE id = $2${
+       observed
+         ? ` AND provider = 'worktree' AND status = 'active'
+       AND COALESCE(${dialect.jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = $3
+       AND working_path = $4${
+         legacy
+           ? `
+       AND branch_name = $5
+       AND ${getDatabaseType() === 'sqlite' ? 'julianday(created_at) = julianday($6)' : "date_trunc('milliseconds', created_at) = $6::timestamptz"}
+       AND ${
+         getDatabaseType() === 'sqlite'
+           ? `NOT EXISTS (
+         WITH current_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(metadata)
+         ), observed_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree($7)
+         )
+         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
+         UNION ALL
+         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
+       )`
+           : 'metadata = $7::jsonb'
+       }
+       AND codebase_id = $8 AND workflow_type = $9 AND workflow_id = $10
+       AND created_by_platform IS NOT DISTINCT FROM $11 AND created_by_user_id IS NOT DISTINCT FROM $12`
+           : ''
+       }`
+         : ''
+     }`,
+    [
+      JSON.stringify(metadata),
+      id,
+      ...(observed
+        ? [observed.metadata[WORKTREE_REGISTRATION_ID] ?? '', observed.working_path]
+        : []),
+      ...(legacy
+        ? [
+            observed.branch_name,
+            observed.created_at.toISOString(),
+            JSON.stringify(observed.metadata),
+            observed.codebase_id,
+            observed.workflow_type,
+            observed.workflow_id,
+            observed.created_by_platform,
+            observed.created_by_user_id,
+          ]
+        : []),
+    ]
   );
 
   if (result.rowCount === 0) {
+    if (observed) throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
     throw new Error(
       `Failed to update isolation environment metadata: no environment found with id '${id}'`
     );
@@ -454,7 +531,7 @@ export async function listActiveContainerEnvironments(): Promise<
     `SELECT e.*, c.name as codebase_name, ${dialect.daysSince('e.created_at')} as days_since_created
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
-     WHERE e.status = 'active' AND e.provider = 'container'
+     WHERE ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
      ORDER BY e.created_at DESC`
   );
   return result.rows.map(normalizeEnvironmentRow);
@@ -470,6 +547,7 @@ export function createIsolationStore(): IIsolationStore {
     findActiveByWorkflow,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
+    updateMetadata,
     countActiveByCodebase,
   };
 }

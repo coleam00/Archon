@@ -5,20 +5,14 @@
  * secret-bearing: model names aren't credentials.
  */
 import { z } from '@hono/zod-openapi';
-import { tierEntrySchema } from './config.schemas';
+import { tierEntrySchema, tierFields } from './config.schemas';
 
 /**
  * An alias entry — same shape as a tier entry ({ provider, model, effort? }).
  */
 export const aliasEntrySchema = tierEntrySchema;
 
-const userTiersSchema = z
-  .object({
-    small: tierEntrySchema.optional(),
-    medium: tierEntrySchema.optional(),
-    large: tierEntrySchema.optional(),
-  })
-  .openapi('UserTiersConfig');
+const userTiersSchema = z.object(tierFields(tierEntrySchema.optional())).openapi('UserTiersConfig');
 
 /** GET /api/auth/me/ai-prefs response — the user's stored prefs (raw layer, not merged). */
 export const userAiPrefsResponseSchema = z
@@ -33,11 +27,7 @@ export const userAiPrefsResponseSchema = z
 /** PATCH /api/auth/me/ai-prefs/tiers body — per-key merge; `null` unsets that tier. */
 export const updateUserTiersBodySchema = z
   .object({
-    tiers: z.object({
-      small: tierEntrySchema.nullable().optional(),
-      medium: tierEntrySchema.nullable().optional(),
-      large: tierEntrySchema.nullable().optional(),
-    }),
+    tiers: z.object(tierFields(tierEntrySchema.nullable().optional())),
   })
   .openapi('UpdateUserTiersBody');
 

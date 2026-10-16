@@ -84,8 +84,11 @@ curl http://localhost:3090/api/conversations
 ```
 
 Query parameters:
-- `codebase_id` (optional) -- Filter by codebase
-- `include_deleted` (optional) -- Include soft-deleted conversations
+- `codebaseId` (optional) -- Filter by codebase
+- `platform` (optional) -- Filter by platform type
+- `mine` (optional) -- `true` narrows to the caller's own conversations on every platform when an identity resolves. Where conversations are private the list already holds only the caller's own web and CLI conversations, and `mine=true` also drops chat and forge conversations attributed to anyone else.
+
+Where web auth is enabled or `ARCHON_WEB_AUTH_HEADER` is set, web and CLI conversations are private to their owner; see [Security](/reference/security/#adapter-authorization) for the rules and status codes.
 
 ### Create a Conversation
 
@@ -100,10 +103,10 @@ Optionally specify a codebase:
 ```bash
 curl -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{"codebase_id": "your-codebase-id"}'
+  -d '{"codebaseId": "your-codebase-id"}'
 ```
 
-Returns the created conversation with its `platform_conversation_id`.
+Returns the created conversation with its `conversationId`.
 
 ### Send a Message
 
@@ -151,7 +154,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
-| DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
+| DELETE | `/api/codebases/{id}` | Delete a codebase after container cleanup |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
 | POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
@@ -198,7 +201,11 @@ Returns the updated codebase. The name is trimmed and must be 1 to 255 character
 curl -X DELETE http://localhost:3090/api/codebases/{id}
 ```
 
-Removes the codebase registration and cleans up associated worktrees and isolation environments.
+Removes the codebase registration and cleans up associated worktrees. If active container environments remain, returns `409` with their environment IDs and leaves the registration intact. Deletion does not remove containers or volumes. A worktree cleanup failure returns `500` and keeps the registration and unfinished cleanup records for retry. If a worktree is registered during cleanup, deletion returns `409`; retry the request to clean it up.
+
+If managed-workspace removal fails after the registration is deleted, the response is `500` and names the retained path. Resolve the filesystem error and remove that directory manually.
+
+Run `archon isolation cleanup 0` to remove eligible containers, then retry the DELETE request. Cleanup preserves containers owned by resumable runs; release those runs before cleanup.
 
 ### List Environments
 
@@ -206,7 +213,7 @@ Removes the codebase registration and cleans up associated worktrees and isolati
 curl http://localhost:3090/api/codebases/{id}/environments
 ```
 
-Returns the isolation environments (worktrees) associated with a codebase.
+Returns the active isolation environments (worktrees and containers) associated with a codebase.
 
 ---
 
@@ -221,7 +228,7 @@ Returns the isolation environments (worktrees) associated with a codebase.
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes` |
+| DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
 
@@ -304,8 +311,10 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
 | POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
-| POST | `/api/workflows/runs/{runId}/signal` | Signal the exact external event occurrence awaited by a paused run |
+| POST | `/api/workflows/runs/{runId}/signal` | Signal an external event wait; use `occurrence` for an exact match |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
+
+For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and
@@ -383,7 +392,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -F "conversationId=conv-123" \
   -F "message=fix #2482" \
-  -F 'config={"docs":{"path":"handbook"},"workflows":{"quotaMaxAttempts":3}}'
+  -F 'config={"docs":{"path":"handbook"},"workflows":{"toolCallAttentionMs":600000}}'
 ```
 
 Supported inline keys are `assistant` or `defaultAssistant`, `assistants`, `tiers`, `aliases`, `workflows`, `docs.path`, and `env`. Unknown or ineffective keys fail with `400` and name the key. `configPath` is always rejected: HTTP callers cannot ask the server to read a filesystem path. Run metadata stores sealed replay content plus redacted source/key attribution, and resume uses the original layer without accepting replacement content.
@@ -440,10 +449,13 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
-| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when the run needs no attention |
+| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
-Outside answerers can read the queue, then submit an answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
+Queue items include answerable pauses, `usage_limit` waits that continue automatically
+after reset, and `unreadable` pauses needing inspection. Branch on `kind` before acting:
+only `attention` and `awaiting_response` accept answers. Outside answerers can submit an
+answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
 
 ---
 
@@ -572,7 +584,7 @@ curl http://localhost:3090/api/auth/providers \
 
 Returns `{ enabled, connections: [{ provider, kind, label }], available, subscriptionAvailable, agents }`:
 - `available` -- every **vendor** id you can connect an API key for (`anthropic`, `openai`, `github-copilot`, plus the Pi backends). Legacy `claude`/`codex`/`copilot` ids are accepted on writes and normalized.
-- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`**, **`openai`**, and **`github-copilot`**. (The ChatGPT/Codex subscription runs an Archon-owned PKCE flow that captures the `id_token` the Codex CLI requires -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
+- `subscriptionAvailable` -- the subset that supports subscription (OAuth) login: **`anthropic`**, **`openai`**, and **`github-copilot`**. (The ChatGPT/Codex subscription runs an Archon-owned PKCE flow -- see [#1924](https://github.com/coleam00/Archon/issues/1924).)
 - `agents` -- the agent -> credential matrix: per registered agent `{ id, displayName, catalog: 'static'|'dynamic', ready, credentials: [{ vendor, displayName, kinds, connected, connectionConsumed, subscriptionAvailable, installEnv, ambientConfigured?, usable }] }`. `connectionConsumed` says whether the agent uses the `connected` credential's kind (a connected `anthropic` subscription is consumed by Claude Code, not Pi). `usable` is true for a consumed connection, install env, or detected ambient chain, and `ready` is true when any credential is `usable`. `installEnv` counts only the env vars that agent reads; `installEnv`/`ambientConfigured` report server-side detection so readiness renders on solo installs too; OpenCode is `catalog:'dynamic'` (introspect via `GET /api/providers/opencode/credentials`).
 
 ### Connect an API Key
@@ -669,7 +681,7 @@ Events are JSON-encoded with a `type` field. See the [Web UI documentation](/ada
 # 1. Create a conversation
 CONV_ID=$(curl -s -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{}' | jq -r '.platform_conversation_id')
+  -d '{}' | jq -r '.conversationId')
 
 # 2. Send a message
 curl -X POST http://localhost:3090/api/conversations/$CONV_ID/message \
@@ -686,7 +698,7 @@ curl http://localhost:3090/api/conversations/$CONV_ID/messages
 # 1. Create a conversation scoped to a codebase
 CONV_ID=$(curl -s -X POST http://localhost:3090/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{"codebase_id": "your-codebase-id"}' | jq -r '.platform_conversation_id')
+  -d '{"codebaseId": "your-codebase-id"}' | jq -r '.conversationId')
 
 # 2. Start the workflow
 curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \

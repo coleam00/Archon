@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getDatabase } from '@archon/core/db/connection';
 import { setLogSink } from '@archon/paths';
@@ -28,4 +28,6 @@ setLogSink(line => {
 });
 await startServer({ skipPlatformAdapters: true, port: 0 });
 if (port === undefined) throw new Error('Server did not report its bound port');
-await writeFile(join(root, 'server.port'), String(port));
+// The test treats the file's existence as readiness, so it must appear already complete.
+await writeFile(join(root, 'server.port.tmp'), String(port));
+await rename(join(root, 'server.port.tmp'), join(root, 'server.port'));

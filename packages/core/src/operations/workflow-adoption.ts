@@ -11,9 +11,14 @@
  * Naming note: "adopt" already exists in the executor for capture staging
  * (`withCapturedSource`); these run-level names are deliberately distinct.
  */
+import { sameWorktreeRegistration, type IsolationEnvironmentRow } from '@archon/isolation/types';
 import { existsSync } from 'fs';
 import { getCurrentBranchStrict, localBranchExists, toBranchName, toRepoPath } from '@archon/git';
-import type { TaskBranchSelection } from '@archon/isolation';
+import {
+  recordWorktreeAdoption,
+  type IIsolationStore,
+  type TaskBranchSelection,
+} from '@archon/isolation';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   type ContinuationMode,
@@ -41,11 +46,46 @@ export type ExistingTaskBranchSelection = Extract<TaskBranchSelection, { kind: '
 export type AdoptionLane =
   | {
       kind: 'reuse-worktree';
-      workingPath: string;
-      envId?: string;
+      environment: IsolationEnvironmentRow;
     }
   | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };
+
+export async function resolveRegisteredWorktree(
+  store: Pick<IIsolationStore, 'getById'>,
+  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>
+) {
+  const env = await store.getById(lane.environment.id);
+  if (!env) throw new Error(`Isolation environment ${lane.environment.id} not found`);
+  if (env.working_path !== lane.environment.working_path) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt: worktree path '${lane.environment.working_path}' does not match isolation environment ${env.id} at '${env.working_path}'.`
+    );
+  }
+  if (!sameWorktreeRegistration(env, lane.environment)) {
+    throw new WorkflowAdoptionError(
+      `Worktree ${env.id} changed during adoption; inspect it and retry`
+    );
+  }
+  const actualBranch = await getCurrentBranchStrict(toRepoPath(env.working_path));
+  if (!lane.environment.branch_name || actualBranch !== lane.environment.branch_name) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt worktree at '${env.working_path}': expected branch ` +
+        `'${lane.environment.branch_name}' but is now on '${actualBranch ?? 'detached HEAD'}'. ` +
+        'Restore the recorded branch or start a fresh run.'
+    );
+  }
+  return env;
+}
+
+export async function adoptRegisteredWorktree(
+  store: Pick<IIsolationStore, 'getById' | 'updateMetadata'>,
+  lane: Extract<AdoptionLane, { kind: 'reuse-worktree' }>,
+  repoPath: string
+) {
+  const env = await resolveRegisteredWorktree(store, lane);
+  return recordWorktreeAdoption(store, env, repoPath);
+}
 
 export interface ResolvedWorkflowAdoption {
   adoptedRun: WorkflowRun;
@@ -174,8 +214,7 @@ export async function resolveWorkflowAdoption(
       adoptedRun,
       lane: {
         kind: 'reuse-worktree',
-        workingPath: adoptedRun.working_path,
-        envId: environment.id,
+        environment,
       },
     };
   }

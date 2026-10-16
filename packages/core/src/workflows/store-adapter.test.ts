@@ -97,7 +97,9 @@ mock.module('../db/codebases', () => ({
 }));
 
 const credentialCatalog = await import('../../../providers/src/credential-catalog');
+const codexCredentialEnv = await import('../../../providers/src/codex/credential-env');
 mock.module('@archon/providers', () => ({
+  CODEX_CREDENTIAL_ENV: codexCredentialEnv.CODEX_CREDENTIAL_ENV,
   providerRegistry: { get: () => undefined, list: () => [] } satisfies ProviderRegistry,
   LEGACY_VENDOR_ALIASES: credentialCatalog.LEGACY_VENDOR_ALIASES,
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
@@ -137,15 +139,14 @@ mock.module('../credentials/config', () => ({
   isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
 }));
 
-const mockListDecryptedUserProviderCredentials = mock<
+const mockStoredProviderCredentials = mock<
   (_userId: string) => Promise<{ provider: string; cred: ResolvedCredential }[]>
 >(async () => []);
 mock.module('../db/user-provider-key-store', () => ({
-  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
   saveUserProviderKey: mock(() => Promise.resolve()),
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
   listUserProviderKeys: mock(async (userId: string) =>
-    (await mockListDecryptedUserProviderCredentials(userId)).map(r => ({
+    (await mockStoredProviderCredentials(userId)).map(r => ({
       provider: r.provider,
       kind: r.cred.kind,
       label: null,
@@ -154,9 +155,7 @@ mock.module('../db/user-provider-key-store', () => ({
   deleteUserProviderKey: mock(() => Promise.resolve()),
   getDecryptedProviderCredential: mock(
     async (userId: string, provider: string): Promise<StoredCredential> => {
-      const row = (await mockListDecryptedUserProviderCredentials(userId)).find(
-        r => r.provider === provider
-      );
+      const row = (await mockStoredProviderCredentials(userId)).find(r => r.provider === provider);
       return row
         ? { state: 'usable', source: 'archon', credential: row.cred }
         : { state: 'not_connected', source: 'archon' };
@@ -436,8 +435,8 @@ describe('createWorkflowDeps', () => {
 
   describe('provider credential fields', () => {
     beforeEach(() => {
-      mockListDecryptedUserProviderCredentials.mockReset();
-      mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+      mockStoredProviderCredentials.mockReset();
+      mockStoredProviderCredentials.mockImplementation(async () => []);
       mockIsPerUserProviderKeysEnabled.mockReset();
       mockIsPerUserProviderKeysEnabled.mockImplementation(() => false);
     });
@@ -449,7 +448,7 @@ describe('createWorkflowDeps', () => {
     });
 
     test('getUserProviderEnv refuses delivery when list query throws', async () => {
-      mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+      mockStoredProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
       const deps = createWorkflowDeps();
       await expect(deps.getUserProviderEnv?.('u-1', '/tmp/art', ['openai'], [])).rejects.toThrow(
         'db gone'
@@ -462,14 +461,14 @@ describe('createWorkflowDeps', () => {
     // there is no scrub on the AI-provider path (unlike the GitHub org-token path).
     // A future change that scrubbed ambient provider keys would fail this.
     test('getUserProviderEnv is additive: unconnected user gets empty env (no ambient scrub)', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
+      mockStoredProviderCredentials.mockResolvedValue([]);
       const deps = createWorkflowDeps();
       const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art', ['openai'], []);
       expect(result).toEqual({ env: {}, files: [], protectedValues: [] });
     });
 
     test('getUserProviderEnv aggregates env from multiple providers', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      mockStoredProviderCredentials.mockResolvedValue([
         { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-k' } },
         { provider: 'google', cred: { kind: 'api_key', apiKey: 'g-k' } },
       ]);
@@ -485,7 +484,7 @@ describe('createWorkflowDeps', () => {
     });
 
     test('getUserProviderEnv protects OAuth secrets without hiding public metadata', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      mockStoredProviderCredentials.mockResolvedValue([
         {
           provider: 'openai',
           cred: {
@@ -531,7 +530,7 @@ describe('required workflow credential delivery', () => {
     const db = await import('../db/user-provider-key-store');
     const decrypt = db.getDecryptedProviderCredential as ReturnType<typeof mock>;
     decrypt.mockClear();
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'claude', cred: { kind: 'api_key', apiKey: 'legacy' } },
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'canonical' } },
       { provider: 'openai', cred: { kind: 'api_key', apiKey: 'unused-dead' } },
@@ -551,7 +550,7 @@ describe('required workflow credential delivery', () => {
     const db = await import('../db/user-provider-key-store');
     const status = db.getStoredCredentialStatus as ReturnType<typeof mock>;
     status.mockClear();
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'codex', cred: { kind: 'oauth', oauthApiKey: 'legacy', rawCreds: {} } },
     ]);
     const stored = await createWorkflowDeps().getUserProviderCredential?.('u', 'openai');
@@ -562,14 +561,14 @@ describe('required workflow credential delivery', () => {
   });
 
   test('a connection deleted between preflight and delivery refuses ambient fallback', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
     ]);
     const deps = createWorkflowDeps();
     const stored = await deps.getUserProviderCredential?.('u', 'anthropic');
     expect(stored?.kind).toBe('api_key');
     expect(await stored?.getStatus()).toMatchObject({ state: 'usable' });
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
+    mockStoredProviderCredentials.mockResolvedValue([]);
     await expect(
       deps.getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], ['anthropic'])
     ).rejects.toMatchObject({
@@ -580,7 +579,7 @@ describe('required workflow credential delivery', () => {
 
   test('a connection deleted during its delivery read also refuses ambient fallback', async () => {
     const db = await import('../db/user-provider-key-store');
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
     ]);
     (db.getDecryptedProviderCredential as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -597,7 +596,7 @@ describe('required workflow credential delivery', () => {
 
   test('a required stored failure throws a secret-free typed refusal', async () => {
     const db = await import('../db/user-provider-key-store');
-    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'planted-secret' } },
     ]);
     (db.getDecryptedProviderCredential as ReturnType<typeof mock>).mockResolvedValueOnce({

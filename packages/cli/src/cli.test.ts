@@ -5,7 +5,7 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
+import { RUN_GITHUB_IDENTITY_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -80,10 +80,11 @@ describe('forge user trust boundary', () => {
     }
   });
 
-  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
-  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
-  // process: a CLI subprocess per scenario is too slow on Windows runners.
-  for (const key of GITHUB_TOKEN_KEYS) {
+  // The engine expresses a run's GitHub identity by setting the key (a token, '' to
+  // scrub, or a stored-login redirect). An absent key is no opinion, so Archon's env
+  // files supply it. Exercised in process: a CLI subprocess per scenario is too slow on
+  // Windows runners.
+  for (const key of RUN_GITHUB_IDENTITY_KEYS) {
     it(`${key}: a run's credential state wins over Archon env files`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
       const home = join(root, 'home');
@@ -262,6 +263,8 @@ if (process.argv[3] === 'metadata') {
             ARCHON_HOME: trustedHome,
             ARCHON_TELEMETRY_DISABLED: '1',
             FORGE_SECRET: '',
+            // Inside an Archon run this would make the forge audit a run id the scratch DB lacks.
+            WORKFLOW_ID: '',
           },
         }
       );
@@ -786,6 +789,23 @@ describe('workflow status arguments', () => {
     );
     expect(result.stderr).toContain('archon workflow get <run-id>');
     expect(result.stdout).toBe('');
+  });
+});
+
+describe('workflow get arguments', () => {
+  it('accepts a run id, the form recovery hints name', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-cli-get-'));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, 'cli.ts'), 'workflow', 'get', 'definitely-not-a-run'],
+        { encoding: 'utf8', env: { ...process.env, ARCHON_HOME: archonHome } }
+      );
+
+      expect(result.stderr).not.toContain('Usage: archon workflow get');
+    } finally {
+      await removeTempTree(archonHome);
+    }
   });
 });
 
@@ -2047,7 +2067,7 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
       }
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('No stale environments found.');
+    expect(result.stdout).toContain('No stale worktree environments found.');
     expect(existsSync(worktree)).toBe(true);
     const verify = new Database(join(home, 'archon.db'), { readonly: true });
     try {
@@ -2155,6 +2175,55 @@ globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.re
 });
 
 describe('receipt policies in the CLI host', () => {
+  it('plugin list and remove remain reachable with an incompatible provider receipt', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-protocol-recovery-'));
+    const home = join(root, 'home');
+    const id = 'owner/stale-provider';
+    const file = receiptPath(join(home, 'plugins'), id);
+    const { claudeDescriptor } = await import('@archon/providers');
+    mkdirSync(join(home, 'plugins', 'installed', 'owner', 'stale-provider'), { recursive: true });
+    const contents = JSON.stringify({
+      schemaVersion: 1,
+      id,
+      manifest: {
+        schemaVersion: 1,
+        kind: 'provider',
+        name: 'stale-provider',
+        description: 'test',
+        executable: 'archon-provider-claude',
+      },
+      tag: 'v1',
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+      files: [{ path: 'archon-provider-claude', sha256: 'b'.repeat(64) }],
+      descriptor: { ...claudeDescriptor, protocol: 1 },
+    });
+    writeFileSync(file, contents);
+    const run = (args: string[]) =>
+      spawnSync(process.execPath, [CLI_ENTRY, 'plugin', ...args], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      });
+    try {
+      const listed = run(['list']);
+      expect(listed.status).toBe(0);
+      expect(listed.stdout).toContain(`${id}  unreadable`);
+      expect(readFileSync(file, 'utf8')).toBe(contents);
+      const removed = run(['remove', id]);
+      expect(removed.status).toBe(0);
+      expect(removed.stdout).toContain(`Removed the unreadable receipt of ${id}`);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
   it.each(['--version', 'version'])(
     '%s works with a malformed installed receipt',
     async command => {
@@ -2213,7 +2282,12 @@ describe('receipt policies in the CLI host', () => {
         tag: 'v1',
         commit: 'a'.repeat(40),
         installedAt: new Date(0).toISOString(),
-        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        files: [
+          {
+            path: 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : ''),
+            sha256: 'b'.repeat(64),
+          },
+        ],
         descriptor: {
           protocol: 'archon-chat/1',
           id: 'slack',
@@ -2249,7 +2323,7 @@ describe('receipt policies in the CLI host', () => {
         );
         const registered = run();
         expect(registered.status).toBe(0);
-        expect(registered.stdout).toContain('No stale environments found.');
+        expect(registered.stdout).toContain('No stale worktree environments found.');
         expect(registered.stdout).not.toContain('not registered');
         expect(registered.stdout).not.toContain('Reconciled');
         expect(existsSync(marker)).toBe(false);
@@ -2261,7 +2335,7 @@ describe('receipt policies in the CLI host', () => {
         );
         const installed = run();
         expect(installed.status).toBe(0);
-        expect(installed.stdout).toContain('No stale environments found.');
+        expect(installed.stdout).toContain('No stale worktree environments found.');
         expect(installed.stdout).not.toContain('not registered');
         await import('node:fs/promises').then(fs => fs.unlink(file));
         await removeTempTree(workspace);

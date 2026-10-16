@@ -352,6 +352,7 @@ const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRout
 mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
+  registerGitlabWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
   registerWebhookSourceRoutes: (): void => undefined,
 }));
@@ -678,6 +679,7 @@ describe('Slack workflow resume composition', () => {
   test('server reads a chat receipt before config loading and supersedes its bundled policy', async () => {
     const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
     await mkdir(dirname(file), { recursive: true });
+    const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
     await writeFile(
       file,
       JSON.stringify({
@@ -693,7 +695,7 @@ describe('Slack workflow resume composition', () => {
         tag: 'v1',
         commit: 'a'.repeat(40),
         installedAt: new Date(0).toISOString(),
-        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        files: [{ path: executable, sha256: 'b'.repeat(64) }],
         descriptor: {
           protocol: 'archon-chat/1',
           id: 'slack',

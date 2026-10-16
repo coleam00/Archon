@@ -68,7 +68,7 @@ import {
   type ProviderStopReason,
 } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
-import { CLAUDE_CAPABILITIES } from './capabilities';
+import { CLAUDE_CAPABILITIES, CLAUDE_SKILL_DISCOVERY } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import {
   resolveClaudeBinaryPath,
@@ -90,12 +90,13 @@ import {
   readClaudePluginIds,
   withPluginScopeCheck,
 } from './plugins';
-import { clampEffort, type AssertNever } from '@archon/provider-contract';
+import { clampEffort, declaredSkillRoots, type AssertNever } from '@archon/provider-contract';
 import {
-  claudeSkillSearchRoots,
+  DEFAULT_SETTING_SOURCES,
   findInstalledSkillNames,
-  resolveClaudeSkillDirectories,
+  resolveSkillDirectoriesFromRoots,
   skillSearchRoots,
+  type SETTING_SOURCES,
 } from '@archon/paths/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -197,6 +198,12 @@ function selectResolvedModelId(
   return selected[0];
 }
 
+function deliveredClaudeCredential(options: SendQueryOptions | undefined): string | undefined {
+  return ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'].find(
+    key => options?.userCredentialEnvKeys?.includes(key) && options.env?.[key]
+  );
+}
+
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
@@ -209,15 +216,33 @@ export function buildRequestSubprocessEnv(
     );
   }
   const env = buildProviderSubprocessEnv(requestOptions);
-  // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
-  // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
-  // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
-  // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
-  // subscription delivered via requestOptions.env) must stay authoritative — the
-  // CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the install
-  // key alongside it would silently rebill the run. Truthiness is intentional:
-  // empty string = missing credential. Never clobbers an explicit ANTHROPIC_API_KEY.
-  if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  const delivered = deliveredClaudeCredential(requestOptions);
+  if (delivered) {
+    for (const key of [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_CUSTOM_HEADERS',
+      'CLAUDE_CODE_API_KEY_HELPER_FD',
+      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+    ])
+      delete env[key];
+    env[delivered === 'CLAUDE_API_KEY' ? 'ANTHROPIC_API_KEY' : delivered] =
+      requestOptions?.env?.[delivered];
+    for (const key of [
+      'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_USE_VERTEX',
+      'CLAUDE_CODE_USE_FOUNDRY',
+      'CLAUDE_CODE_USE_MANTLE',
+      'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+      'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+    ]) {
+      env[key] = '0';
+    }
+    // Native settings env otherwise overwrites the delivered identity.
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  } else if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
     getLog().debug('claude.api_key_mirrored');
   }
@@ -608,7 +633,7 @@ async function applyNodeConfig(
   nodeConfig: NodeConfig,
   cwd: string,
   skillSearch: {
-    userConfigDir?: string;
+    env: Record<string, string | undefined>;
     includeProject: boolean;
     includeUser: boolean;
     isContainer: boolean;
@@ -632,7 +657,8 @@ async function applyNodeConfig(
     );
 
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
-      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
+      const roots = declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, skillSearch);
+      const { missing } = resolveSkillDirectoriesFromRoots(roots, nodeConfig.skills);
       if (missing.length > 0) {
         // Split by whether the name exists on disk at all. A skill that resolves
         // under some other root — `.agents/skills/`, or a scope this node's
@@ -644,11 +670,7 @@ async function applyNodeConfig(
         const unreachable = findInstalledSkillNames(
           [
             ...skillSearchRoots(cwd),
-            ...claudeSkillSearchRoots(cwd, {
-              ...(skillSearch.userConfigDir ? { userConfigDir: skillSearch.userConfigDir } : {}),
-              includeProject: true,
-              includeUser: true,
-            }),
+            ...declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, { env: skillSearch.env }),
           ],
           missing
         );
@@ -666,7 +688,7 @@ async function applyNodeConfig(
             ? ' Container workflows cannot use host user-global skills.'
             : '';
           getLog().error(
-            { nodeId: nodeConfig.nodeId, unreachable, skillSearch },
+            { nodeId: nodeConfig.nodeId, unreachable, roots },
             'claude.declared_skills_unreachable'
           );
           throw new ClassifiedProviderError(
@@ -676,7 +698,7 @@ async function applyNodeConfig(
         }
 
         getLog().warn(
-          { nodeId: nodeConfig.nodeId, missing, skillSearch },
+          { nodeId: nodeConfig.nodeId, missing, roots },
           'claude.declared_skills_unresolved'
         );
         warnings.push({
@@ -899,7 +921,7 @@ function buildBaseClaudeOptions(
   toolResultQueue: ToolResultEntry[],
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined,
-  settingSources: ('project' | 'user')[]
+  settingSources: (typeof SETTING_SOURCES)[number][]
 ): Options {
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
@@ -944,9 +966,15 @@ function buildBaseClaudeOptions(
       : {}),
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
-    systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
+    systemPrompt: requestOptions?.systemPrompt ?? {
+      type: 'preset',
+      preset: 'claude_code',
+      ...(requestOptions?.appendSystemPrompt !== undefined
+        ? { append: requestOptions.appendSystemPrompt }
+        : {}),
+    },
     // Per-node override wins over the assistant-level default; the final
-    // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
+    // fallback is DEFAULT_SETTING_SOURCES (the SDK-loading default Archon ships).
     settingSources,
     // Opt into the SDK's hook lifecycle frames so that tool-scoped hooks
     // (PreToolUse / PostToolUse / Stop / etc.) reach the workflow audit
@@ -1672,7 +1700,7 @@ export class ClaudeProvider implements IAgentProvider {
       const settingSources =
         requestOptions?.nodeConfig?.settingSources ??
         assistantDefaults.settingSources ??
-        (['project', 'user'] as const);
+        DEFAULT_SETTING_SOURCES;
 
       const toolResultQueue: ToolResultEntry[] = [];
       const options = buildBaseClaudeOptions(
@@ -1689,7 +1717,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       if (requestOptions?.nodeConfig) {
         const skillSearch = {
-          ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+          env,
           includeProject: settingSources.includes('project'),
           includeUser: !isContainerRun && settingSources.includes('user'),
           isContainer: isContainerRun,
@@ -1714,6 +1742,12 @@ export class ClaudeProvider implements IAgentProvider {
         }
       }
 
+      if (deliveredClaudeCredential(requestOptions)) {
+        options.settings = {
+          ...(typeof options.settings === 'object' ? options.settings : {}),
+          apiKeyHelper: '',
+        };
+      }
       options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
       // Register in-process native tools (e.g. manage_run) as an archon MCP server,

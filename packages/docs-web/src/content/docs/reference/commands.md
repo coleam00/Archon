@@ -34,6 +34,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow list` | Show available workflows |
 | `/workflow reload` | Reload workflow definitions |
 | `/workflow status` | Show active workflows |
+| `/workflow get <id>` | Show one run, whatever its status |
 | `/workflow cancel [id]` | Cancel a running workflow (default: this conversation's). Refuses when no owner answers; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
 | `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
 | `/workflow abandon <id>` | Discard a run (running, paused, or failed) and remove the worktree it created, keeping the branch. Run it again on a cancelled run to retry a failed removal |

@@ -1,3 +1,8 @@
+import {
+  ActiveContainerEnvironmentsError,
+  ActiveWorktreeEnvironmentsError,
+  WorktreeRegistrationChangedError,
+} from '@archon/core/db/codebase-delete-error';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
@@ -36,6 +41,7 @@ import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
 import type {
+  Conversation,
   ConversationLockManager,
   AttachedFile,
   HandleMessageContext,
@@ -59,7 +65,7 @@ import {
   registerRepository,
   registerFolder,
   ConversationNotFoundError,
-  generateAndSetTitle,
+  generateTitleForUser,
   resolveTitleRequest,
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
@@ -92,6 +98,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
+  isWorktreeRegistered,
   removeWorktree,
   toRepoPath,
   toWorktreePath,
@@ -314,6 +321,10 @@ function findBundledWorkflow(
   return match;
 }
 import * as conversationDb from '@archon/core/db/conversations';
+import {
+  isConversationVisible,
+  type ConversationVisibility,
+} from '@archon/core/db/conversation-visibility';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
@@ -353,7 +364,16 @@ import {
   selectAttentionQueue,
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
-import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
+import {
+  getAuth,
+  isWebAuthEnabled,
+  getSignupMode,
+  isApiGateEnabled,
+  isConversationOwnershipEnforced,
+} from '../auth';
+// Imported from the pure config module rather than the barrel: route tests mock
+// '../auth', and the header name must stay the real implementation under them.
+import { DEFAULT_WEB_AUTH_HEADER, webAuthHeaderName } from '../auth/config';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -526,6 +546,11 @@ function jsonError(description: string): {
   return { content: { 'application/json': { schema: errorSchema } }, description };
 }
 
+/** The identity routes' 401, named after the default trusted header. */
+const WEB_AUTH_REQUIRED = jsonError(
+  `Web auth required (${DEFAULT_WEB_AUTH_HEADER} header missing)`
+);
+
 /**
  * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
  * instead", so a client reads the run to act on instead of parsing it out of the message.
@@ -676,7 +701,9 @@ const getConversationsRoute = createRoute({
       content: { 'application/json': { schema: conversationListResponseSchema } },
       description: 'OK',
     },
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -692,7 +719,9 @@ const getConversationRoute = createRoute({
       description: 'Conversation',
     },
     404: jsonError('Not found'),
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -713,7 +742,9 @@ const createConversationRoute = createRoute({
       description: 'Created conversation',
     },
     400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -736,7 +767,9 @@ const updateConversationRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -752,7 +785,9 @@ const deleteConversationRoute = createRoute({
       description: 'Deleted',
     },
     404: jsonError('Not found'),
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -771,7 +806,9 @@ const listMessagesRoute = createRoute({
       description: 'Message list',
     },
     404: jsonError('Not found'),
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -796,7 +833,10 @@ const sendMessageRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -919,6 +959,7 @@ const deleteCodebaseRoute = createRoute({
       description: 'Deleted',
     },
     404: jsonError('Not found'),
+    409: jsonError('Active container environments or newly registered worktrees require cleanup'),
     500: jsonError('Server error'),
   },
 });
@@ -1007,7 +1048,10 @@ const runWorkflowRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -1188,7 +1232,8 @@ const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
   tags: ['Workflows'],
-  summary: 'Signal the exact external event awaited by a paused workflow run',
+  summary:
+    'Signal an external event awaited by a paused workflow run; use occurrence for an exact match',
   request: {
     params: z.object({ runId: z.string() }),
     body: {
@@ -1353,7 +1398,11 @@ const resetWorkflowNodeSessionsRoute = createRoute({
       description: 'Sessions deleted (deleted count may be 0)',
     },
     400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    403: jsonError('All-scopes reset is unavailable while conversations are private'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
   },
 });
 
@@ -1556,7 +1605,7 @@ const githubDeviceStartRoute = createRoute({
       content: { 'application/json': { schema: deviceStartResponseSchema } },
       description: 'Device + user codes',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     500: jsonError('Device flow not configured or failed'),
   },
 });
@@ -1574,7 +1623,7 @@ const githubDevicePollRoute = createRoute({
       content: { 'application/json': { schema: devicePollResponseSchema } },
       description: 'Poll status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     500: jsonError('Device flow not configured or failed'),
   },
 });
@@ -1589,7 +1638,7 @@ const githubConnectionStatusRoute = createRoute({
       content: { 'application/json': { schema: githubConnectionStatusSchema } },
       description: 'Connection status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1603,7 +1652,7 @@ const githubDisconnectRoute = createRoute({
       content: { 'application/json': { schema: githubDisconnectResponseSchema } },
       description: 'Disconnected',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1618,7 +1667,7 @@ const providerKeyListRoute = createRoute({
       content: { 'application/json': { schema: providerKeyListResponseSchema } },
       description: 'Connections (metadata only) + connectable provider catalog',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
   },
 });
 
@@ -1637,7 +1686,7 @@ const providerKeySetRoute = createRoute({
       description: 'Key stored (encrypted); response carries no secret value',
     },
     400: jsonError('Unknown provider or empty key'),
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1653,7 +1702,7 @@ const providerKeyDeleteRoute = createRoute({
       content: { 'application/json': { schema: providerKeyDeleteResponseSchema } },
       description: 'Disconnected (idempotent)',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1670,7 +1719,7 @@ const providerOAuthStartRoute = createRoute({
       description: 'Login session started (mode + URL/user-code)',
     },
     400: jsonError('Provider does not support subscription login'),
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1689,7 +1738,7 @@ const providerOAuthPollRoute = createRoute({
       content: { 'application/json': { schema: providerOAuthPollResponseSchema } },
       description: 'Poll status',
     },
-    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    401: WEB_AUTH_REQUIRED,
     404: jsonError('Per-user provider keys not enabled on this install'),
   },
 });
@@ -1838,6 +1887,22 @@ const deleteWebPushRoute = createRoute({
   },
 });
 
+/**
+ * Conversation concurrency as `GET /api/health` reports it: the lock manager's
+ * stats, with `active` widened to include background workflow conversations.
+ * `satisfies` ties the declared fields to `getStats()`, so a rename there fails
+ * the type-check instead of reaching the console as a missing field.
+ */
+const healthConcurrencySchema = z.object({
+  active: z.number(),
+  queuedTotal: z.number(),
+  queuedByConversation: z.array(
+    z.object({ conversationId: z.string(), queuedMessages: z.number() })
+  ),
+  maxConcurrent: z.number(),
+  activeConversationIds: z.array(z.string()),
+}) satisfies z.ZodType<ReturnType<ConversationLockManager['getStats']>>;
+
 const getHealthRoute = createRoute({
   method: 'get',
   path: '/api/health',
@@ -1851,7 +1916,7 @@ const getHealthRoute = createRoute({
             .object({
               status: z.string(),
               adapter: z.string(),
-              concurrency: z.record(z.string(), z.unknown()),
+              concurrency: healthConcurrencySchema,
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
@@ -1936,7 +2001,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
     }
   }
 
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const headerVal = c.req.header(headerName)?.trim();
   if (!headerVal) return undefined;
   try {
@@ -1955,7 +2020,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
 export async function resolveRunActor(c: Context): Promise<RunActor> {
   const identity = await resolveAuthContext(c);
   if (identity) return { kind: 'user', userId: identity.userId };
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const suppliedIdentity = Boolean(c.req.header(headerName)?.trim());
   return { kind: isWebAuthEnabled() || suppliedIdentity ? 'unidentified' : 'operator' };
 }
@@ -1997,7 +2062,7 @@ export async function requireWebUser(
     }
   }
 
-  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerName = webAuthHeaderName();
   const headerVal = c.req.header(headerName)?.trim();
   if (!headerVal) return { error: apiError(c, 401, failMessage) };
   try {
@@ -2006,6 +2071,108 @@ export async function requireWebUser(
   } catch (err) {
     getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
     return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+  }
+}
+
+/**
+ * Which conversations this request may reach. Under ownership enforcement the
+ * caller resolves on the strict path, so neither a missing identity (401) nor an
+ * identity-backend outage (503) can fall back to the whole install.
+ */
+async function requireConversationVisibility(
+  c: Context
+): Promise<ConversationVisibility | { error: Response }> {
+  if (!isConversationOwnershipEnforced()) return { kind: 'all' };
+  const web = await requireWebUser(c, 'Authentication required');
+  if ('error' in web) return web;
+  return { kind: 'owner', userId: web.userId };
+}
+
+/**
+ * Bare platform IDs must resolve uniquely across platforms. Dispatch always uses
+ * the web adapter's row. SSE prefers web chats but also carries run transcripts
+ * from other platforms, so an unambiguous non-web row can be the fallback.
+ */
+type ConversationKey =
+  | { platformId: string }
+  | { webPlatformId: string }
+  | { webFirstPlatformId: string }
+  | { id: string };
+
+async function loadConversation(key: ConversationKey): Promise<Conversation | null> {
+  if ('platformId' in key) return conversationDb.findConversationByPlatformId(key.platformId);
+  if ('webPlatformId' in key) {
+    return conversationDb.getConversationByPlatformId('web', key.webPlatformId);
+  }
+  if ('webFirstPlatformId' in key) {
+    return (
+      (await conversationDb.getConversationByPlatformId('web', key.webFirstPlatformId)) ??
+      (await conversationDb.findConversationByPlatformId(key.webFirstPlatformId))
+    );
+  }
+  return conversationDb.getConversationById(key.id);
+}
+
+/**
+ * The authorization every route naming a conversation goes through. Identity is
+ * resolved before the row is loaded, so a refused caller learns nothing about
+ * which ids exist, and a non-owner gets the same 404 as a missing row because
+ * web conversation ids are guessable. A run's own transcript stays readable to
+ * any signed-in user, as the run itself is; writing to it stays the owner's.
+ *
+ * Throws when the conversation lookup fails; callers map that to their 500.
+ */
+async function authorizeConversation(
+  c: Context,
+  key: ConversationKey,
+  access: 'read' | 'write'
+): Promise<
+  { conversation: Conversation; visibility: ConversationVisibility } | { error: Response }
+> {
+  const visibility = await requireConversationVisibility(c);
+  if ('error' in visibility) return visibility;
+  const conversation = await loadConversation(key);
+  if (!conversation) return { error: apiError(c, 404, 'Conversation not found') };
+  if (isConversationVisible(conversation, visibility)) return { conversation, visibility };
+  if (access === 'read' && (await workflowDb.isRunTranscriptConversation(conversation.id))) {
+    return { conversation, visibility };
+  }
+  getLog().warn(
+    {
+      conversationId: conversation.id,
+      platformType: conversation.platform_type,
+      access,
+      ownerPresent: conversation.user_id !== null,
+    },
+    'api.conversation_access_denied'
+  );
+  return { error: apiError(c, 404, 'Conversation not found') };
+}
+
+/**
+ * Dispatch uses the web adapter's identity and the same caller that authorized
+ * the row. Solo installs may dispatch to an absent row, but never through a
+ * failed lookup.
+ */
+async function authorizeDispatchConversation(
+  c: Context,
+  platformId: string
+): Promise<{ conversation: Conversation | null; actor: RunActor } | { error: Response }> {
+  try {
+    if (isConversationOwnershipEnforced()) {
+      const access = await authorizeConversation(c, { webPlatformId: platformId }, 'write');
+      if ('error' in access) return access;
+      const actor: RunActor =
+        access.visibility.kind === 'owner'
+          ? { kind: 'user', userId: access.visibility.userId }
+          : await resolveRunActor(c);
+      return { conversation: access.conversation, actor };
+    }
+    const conversation = await conversationDb.getConversationByPlatformId('web', platformId);
+    return { conversation, actor: await resolveRunActor(c) };
+  } catch (err: unknown) {
+    getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
+    return { error: apiError(c, 500, 'Failed to load conversation') };
   }
 }
 
@@ -2142,7 +2309,7 @@ export function registerApiRoutes(
   // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
   //
   // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
-  // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
+  // (`webAuthHeaderName()`) as an identity. That header
   // is only safe to trust when the app is reachable solely through a proxy that
   // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
   // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
@@ -2152,9 +2319,11 @@ export function registerApiRoutes(
     if (!isApiGateEnabled()) return next();
     const path = c.req.path;
     if (PUBLIC_API_GATE_PREFIXES.some(p => path === p || path.startsWith(p))) return next();
-    const ctx = await resolveAuthContext(c);
-    if (!ctx) return apiError(c, 401, 'Authentication required');
-    return next();
+    if (await resolveAuthContext(c)) return next();
+    // Soft resolution reads an identity-backend outage as "signed out"; the strict
+    // path tells the two apart so an outage is a 503, not a 401.
+    const strict = await requireWebUser(c, 'Authentication required');
+    return 'error' in strict ? strict.error : next();
   });
 
   // GET /api/auth/status - web auth availability + signup posture.
@@ -2592,23 +2761,11 @@ export function registerApiRoutes(
     return false;
   }
 
-  /**
-   * Persist multipart-uploaded files to the conversation's upload directory.
-   * Called from /api/workflows/:name/run; /api/conversations/:id/message still
-   * inlines the same validate-write-rollback logic and could migrate to this
-   * helper as a separate hygiene pass.
-   *
-   * Returns either { ok: true, savedFiles, uploadDir } or a structured error
-   * the caller forwards via apiError; on the success path the caller passes
-   * savedFiles + uploadDir to dispatchToOrchestrator so cleanup happens
-   * inside the lock handler.
-   */
   async function persistUploadedFiles(
     conversationId: string,
     fileEntries: File[]
   ): Promise<
-    | { ok: true; savedFiles: AttachedFile[]; uploadDir: string }
-    | { ok: false; status: 400 | 500; error: string }
+    { ok: true; savedFiles: AttachedFile[] } | { ok: false; status: 400 | 500; error: string }
   > {
     if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
       return {
@@ -2676,14 +2833,14 @@ export function registerApiRoutes(
       };
     }
 
-    return { ok: true, savedFiles, uploadDir };
+    return { ok: true, savedFiles };
   }
 
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
     extraContext: Omit<HandleMessageContext, 'isolationHints'>,
-    filesToCleanup?: { files: AttachedFile[]; uploadDir: string }
+    filesToCleanup?: AttachedFile[]
   ): Promise<{ accepted: boolean; status: string }> {
     const result = await lockManager.acquireLock(conversationId, async () => {
       // Emit lock:true at handler start so the UI knows processing has begun.
@@ -2714,25 +2871,15 @@ export function registerApiRoutes(
         // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
         // has had a chance to read them. Doing this in the HTTP handler's finally block
         // would delete files while the fire-and-forget lock handler is still running.
+        // The directory is shared with uploads that have not written their first file yet.
         if (filesToCleanup) {
-          for (const f of filesToCleanup.files) {
+          for (const f of filesToCleanup) {
             await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
               if (err.code !== 'ENOENT') {
                 getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
               }
             });
           }
-          // Remove the now-empty upload directory for this conversation.
-          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                  'upload.dir_cleanup_failed'
-                );
-              }
-            }
-          );
         }
       }
     });
@@ -2874,25 +3021,20 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's conversations).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
-      if (mine && !userId && getAuth()) {
-        // Narrowing was requested but no identity resolved on an install with
-        // web auth configured — the list silently degrades to ALL conversations
-        // (documented non-enforcing posture). Without web auth (solo installs,
-        // where the console always sends mine=true) this is the normal path
-        // and stays silent.
-        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
+      const visibility = await requireConversationVisibility(c);
+      if ('error' in visibility) return visibility.error;
+      // `mine=true` narrows every platform to the caller. Off enforcement it is
+      // best-effort: it applies only when an identity happens to resolve.
+      let userId: string | undefined;
+      if (c.req.query('mine') === 'true') {
+        userId = visibility.kind === 'owner' ? visibility.userId : await resolveWebUserId(c);
       }
-      const conversations = await conversationDb.listConversations(
-        50,
+      const conversations = await conversationDb.listConversations(visibility, {
         platformType,
         codebaseId,
-        true,
-        userId
-      );
+        excludeEmpty: true,
+        userId,
+      });
       return c.json(conversations.map(toApiConversation));
     } catch (error) {
       getLog().error({ err: error }, 'list_conversations_failed');
@@ -2904,11 +3046,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(getConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      return c.json(toApiConversation(conv));
+      const access = await authorizeConversation(c, { platformId }, 'read');
+      if ('error' in access) return access.error;
+      return c.json(toApiConversation(access.conversation));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -2920,7 +3060,14 @@ export function registerApiRoutes(
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
       const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
-      const actor = await resolveRunActor(c);
+      const visibility = await requireConversationVisibility(c);
+      if ('error' in visibility) return visibility.error;
+      // Under enforcement the strictly resolved caller owns the row; a second,
+      // soft resolution could fail and leave it ownerless.
+      const actor: RunActor =
+        visibility.kind === 'owner'
+          ? { kind: 'user', userId: visibility.userId }
+          : await resolveRunActor(c);
       const userId = actor.kind === 'user' ? actor.userId : undefined;
 
       // Validate codebase exists if provided
@@ -2962,14 +3109,12 @@ export function registerApiRoutes(
         // active account (e.g. ChatGPT-plan accounts, #1855). Both calls never throw.
         if (!message.startsWith('/')) {
           void resolveTitleRequest(conversation.ai_assistant_type, userId).then(titleRequest =>
-            generateAndSetTitle(
+            generateTitleForUser(
               conversation.id,
               message,
-              titleRequest.provider,
+              titleRequest,
               getArchonWorkspacesPath(),
-              undefined,
-              titleRequest.options.assistantConfig,
-              titleRequest.options
+              userId
             )
           );
         }
@@ -3000,12 +3145,10 @@ export function registerApiRoutes(
     const platformId = c.req.param('id') ?? '';
     const { title } = getValidatedBody(c, updateConversationBodySchema);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
+      const access = await authorizeConversation(c, { platformId }, 'write');
+      if ('error' in access) return access.error;
       if (title !== undefined) {
-        await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+        await conversationDb.updateConversationTitle(access.conversation.id, title.slice(0, 255));
       }
       return c.json({ success: true });
     } catch (error) {
@@ -3021,11 +3164,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(deleteConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      await conversationDb.softDeleteConversation(conv.id);
+      const access = await authorizeConversation(c, { platformId }, 'write');
+      if ('error' in access) return access.error;
+      await conversationDb.softDeleteConversation(access.conversation.id);
       return c.json({ success: true });
     } catch (error) {
       if (error instanceof ConversationNotFoundError) {
@@ -3041,11 +3182,9 @@ export function registerApiRoutes(
     const platformConversationId = c.req.param('id') ?? '';
     const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      const messages = await messageDb.listMessages(conv.id, limit);
+      const access = await authorizeConversation(c, { platformId: platformConversationId }, 'read');
+      if ('error' in access) return access.error;
+      const messages = await messageDb.listMessages(access.conversation.id, limit);
       return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
@@ -3057,8 +3196,6 @@ export function registerApiRoutes(
   // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
   registerOpenApiRoute(sendMessageRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
-    const actor = await resolveRunActor(c);
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     // Reject conversation IDs that could be used for path traversal when building
     // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
@@ -3066,9 +3203,16 @@ export function registerApiRoutes(
       return c.json({ error: 'Invalid conversation ID' }, 400);
     }
 
+    // Before the body is read, so a refused caller writes no attachment into the
+    // conversation's upload directory.
+    const access = await authorizeDispatchConversation(c, conversationId);
+    if ('error' in access) return access.error;
+    const conv = access.conversation;
+    const actor = access.actor;
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
+
     let message: string;
     let savedFiles: AttachedFile[] = [];
-    let uploadDir = '';
 
     const contentType = c.req.header('content-type') ?? '';
 
@@ -3104,7 +3248,6 @@ export function registerApiRoutes(
           return c.json({ error: result.error }, result.status);
         }
         savedFiles = result.savedFiles;
-        uploadDir = result.uploadDir;
         getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
     } else {
@@ -3122,14 +3265,6 @@ export function registerApiRoutes(
       message = body.message;
     }
 
-    // Look up conversation for message persistence
-    let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-    try {
-      conv = await conversationDb.findConversationByPlatformId(conversationId);
-    } catch (e: unknown) {
-      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
-    }
-
     // Persist user message and pass DB ID to adapter for assistant message persistence
     if (conv) {
       // Omit path from persisted metadata — the on-disk file is ephemeral and will be
@@ -3142,18 +3277,14 @@ export function registerApiRoutes(
         await messageDb.addMessage(conv.id, 'user', message, meta, userId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
-        try {
-          await webAdapter.emitSSE(
-            conversationId,
-            JSON.stringify({
-              type: 'warning',
-              message: 'Message could not be saved to history',
-              timestamp: Date.now(),
-            })
-          );
-        } catch (sseErr: unknown) {
-          getLog().error({ err: sseErr, conversationId: conv?.id }, 'sse_warning_double_failure');
+        for (const file of savedFiles) {
+          await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT') {
+              getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
+            }
+          });
         }
+        return apiError(c, 500, 'Failed to save message to history');
       }
       webAdapter.setConversationDbId(conversationId, conv.id);
     }
@@ -3165,10 +3296,7 @@ export function registerApiRoutes(
       actor,
       ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
     };
-    let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
-    if (savedFiles.length > 0) {
-      filesToCleanup = { files: savedFiles, uploadDir };
-    }
+    const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
     const result = await dispatchToOrchestrator(
       conversationId,
       message,
@@ -3218,6 +3346,23 @@ export function registerApiRoutes(
   // GET /api/stream/:conversationId - SSE streaming
   app.get('/api/stream/:conversationId', async c => {
     const conversationId = c.req.param('conversationId');
+
+    // Decided before streamSSE owns the response, so a refused caller gets a JSON
+    // error rather than an open stream. A solo install skips the lookup and keeps
+    // streaming ids whose row has not been written yet.
+    if (isConversationOwnershipEnforced()) {
+      try {
+        const access = await authorizeConversation(
+          c,
+          { webFirstPlatformId: conversationId },
+          'read'
+        );
+        if ('error' in access) return access.error;
+      } catch (err: unknown) {
+        getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');
+        return apiError(c, 500, 'Failed to load conversation');
+      }
+    }
 
     return streamSSE(c, async stream => {
       // Send initial heartbeat immediately to flush HTTP headers.
@@ -3394,21 +3539,45 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Codebase not found');
       }
 
-      // Clean up isolation environments (worktrees)
       const environments = await isolationEnvDb.listByCodebase(id);
-      for (const env of environments) {
+      const containers = environments.filter(env => env.provider === 'container');
+      if (containers.length > 0) {
+        throw new ActiveContainerEnvironmentsError(containers.map(env => env.id));
+      }
+      for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
-          await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
+          const exists = await stat(env.working_path).then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+              throw error;
+            }
+          );
+          if (exists) {
+            await removeWorktree(
+              toRepoPath(codebase.default_cwd),
+              toWorktreePath(env.working_path)
+            );
+          }
+          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
+            throw new Error('Checkout is still registered with Git');
+          }
+          await isolationEnvDb.markWorktreeDestroyed(env);
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
-          // Worktree may already be gone — log but continue
+          if (wtErr instanceof WorktreeRegistrationChangedError) {
+            return apiError(c, 409, wtErr.message);
+          }
           getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Failed to clean up worktree ${env.id}. Project kept; resolve the cleanup failure and retry deletion.`
+          );
         }
-        await isolationEnvDb.updateStatus(env.id, 'destroyed');
       }
 
-      // Delete from database (unlinks conversations and sessions)
-      await codebaseDb.deleteCodebase(id);
+      await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
 
       // Remove workspace directory from disk — only for Archon-managed repos
       const normalizedCwd = normalize(codebase.default_cwd);
@@ -3417,8 +3586,12 @@ export function registerApiRoutes(
           await rm(normalizedCwd, { recursive: true, force: true });
           getLog().info({ path: normalizedCwd }, 'workspace_removed');
         } catch (rmErr) {
-          // Directory may not exist — log but don't fail
           getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
+          return apiError(
+            c,
+            500,
+            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
+          );
         }
       } else {
         getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
@@ -3426,6 +3599,12 @@ export function registerApiRoutes(
 
       return c.json({ success: true });
     } catch (error) {
+      if (
+        error instanceof ActiveContainerEnvironmentsError ||
+        error instanceof ActiveWorktreeEnvironmentsError
+      ) {
+        return apiError(c, 409, error.message);
+      }
       getLog().error({ err: error }, 'delete_codebase_failed');
       return apiError(c, 500, 'Failed to delete codebase');
     }
@@ -3594,8 +3773,6 @@ export function registerApiRoutes(
   // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
-    const actor = await resolveRunActor(c);
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
@@ -3608,8 +3785,7 @@ export function registerApiRoutes(
     // Between-run continuation (#2747): run-id only — no name-based newest-wins.
     let adoptRunId: string | undefined;
     let supersedesRunId: string | undefined;
-    let savedFiles: AttachedFile[] = [];
-    let uploadDir = '';
+    let fileEntries: File[] = [];
 
     const contentType = c.req.header('content-type') ?? '';
 
@@ -3713,20 +3889,7 @@ export function registerApiRoutes(
         : rawFiles !== undefined
           ? [rawFiles]
           : [];
-      const fileEntries = fileList.filter((e): e is File => e instanceof File);
-
-      if (fileEntries.length > 0) {
-        const result = await persistUploadedFiles(conversationId, fileEntries);
-        if (!result.ok) {
-          return apiError(c, result.status, result.error);
-        }
-        savedFiles = result.savedFiles;
-        uploadDir = result.uploadDir;
-        getLog().info(
-          { conversationId, fileCount: savedFiles.length, workflowName },
-          'run_workflow.files_uploaded'
-        );
-      }
+      fileEntries = fileList.filter((e): e is File => e instanceof File);
     } else {
       let body: {
         conversationId?: unknown;
@@ -3789,16 +3952,31 @@ export function registerApiRoutes(
       message = body.message;
     }
 
+    // The conversation id arrives in the body, so attachments are written only
+    // once it is known that the caller may reach this conversation.
+    const access = await authorizeDispatchConversation(c, conversationId);
+    if ('error' in access) return access.error;
+    const conv = access.conversation;
+    const actor = access.actor;
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
+
+    let savedFiles: AttachedFile[] = [];
+    if (fileEntries.length > 0) {
+      const result = await persistUploadedFiles(conversationId, fileEntries);
+      if (!result.ok) {
+        return apiError(c, result.status, result.error);
+      }
+      savedFiles = result.savedFiles;
+      getLog().info(
+        { conversationId, fileCount: savedFiles.length, workflowName },
+        'run_workflow.files_uploaded'
+      );
+    }
+
     try {
       // Persist user message and register DB ID (same as message endpoint).
       // File metadata (name/mime/size — no path, since the on-disk file is
       // ephemeral) goes into message metadata when present.
-      let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-      try {
-        conv = await conversationDb.findConversationByPlatformId(conversationId);
-      } catch (e: unknown) {
-        getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
-      }
       if (conv) {
         try {
           const meta =
@@ -3814,20 +3992,30 @@ export function registerApiRoutes(
           await messageDb.addMessage(conv.id, 'user', message, meta, userId);
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+          for (const file of savedFiles) {
+            await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+              if (err.code !== 'ENOENT') {
+                getLog().warn(
+                  { err, filePath: file.path, conversationId },
+                  'upload.rollback_failed'
+                );
+              }
+            });
+          }
+          return apiError(c, 500, 'Failed to save workflow request to history');
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
         if (!conv.title) {
           // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
           // assistant default (#1855). Both calls never throw.
           void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
-            generateAndSetTitle(
+            generateTitleForUser(
               conv.id,
               message,
-              titleRequest.provider,
+              titleRequest,
               getArchonWorkspacesPath(),
-              workflowName,
-              titleRequest.options.assistantConfig,
-              titleRequest.options
+              userId,
+              workflowName
             )
           );
         }
@@ -3846,7 +4034,7 @@ export function registerApiRoutes(
         ...(adoptRunId ? { workflowAdoptRunId: adoptRunId } : {}),
         ...(supersedesRunId ? { workflowSupersedesRunId: supersedesRunId } : {}),
       };
-      const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
+      const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
         message,
@@ -4097,18 +4285,13 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const request = getValidatedBody(c, signalWorkflowWaitRequestSchema);
+    const { event } = request;
     try {
       const store = createWorkflowStore();
       const run = await store.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const { signaled } = await signalWorkflowWait(
-        runId,
-        event,
-        resumeAt,
-        payload,
-        await resolveRunActor(c)
-      );
+      const { signaled } = await signalWorkflowWait(runId, request, await resolveRunActor(c));
       if (!signaled) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }
@@ -4224,6 +4407,12 @@ export function registerApiRoutes(
       case 'awaiting_response':
         // The gate is open and this route may go on to resolve it.
         return null;
+      case 'usage_limit':
+        return {
+          error:
+            `Run is waiting for a provider usage limit to reset at ${attention.resumeAt}; it ` +
+            'has no gate to resolve and continues by itself.',
+        };
       case 'stalled_tool_calls':
       case 'terminal':
         // Unreachable: every route checks `status !== 'paused'` before calling this.
@@ -4521,6 +4710,20 @@ export function registerApiRoutes(
       );
     }
     try {
+      // A scope key is a conversation's internal id. Under enforcement it is
+      // authorized like any other conversation route, and the all-scopes reset, which reaches every user's
+      // conversations at once, is not offered.
+      if (isConversationOwnershipEnforced()) {
+        if (scope === undefined) {
+          return apiError(
+            c,
+            403,
+            'Resetting sessions across all scopes is not available while conversations are private. Pass ?scope=<conversation id> to reset one conversation.'
+          );
+        }
+        const access = await authorizeConversation(c, { id: scope }, 'write');
+        if ('error' in access) return access.error;
+      }
       const { deleted } = await resetWorkflowNodeSessions({
         workflow_name: workflowName,
         scope_key: scope,
@@ -5580,14 +5783,15 @@ export function registerApiRoutes(
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
 
+    const concurrency: z.infer<typeof healthConcurrencySchema> = {
+      ...stats,
+      active: allActiveIds.length,
+      activeConversationIds: allActiveIds,
+    };
     return c.json({
       status: 'ok',
       adapter: 'web',
-      concurrency: {
-        ...stats,
-        active: allActiveIds.length,
-        activeConversationIds: allActiveIds,
-      },
+      concurrency,
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
       is_docker: isDocker(),

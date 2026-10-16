@@ -23,17 +23,16 @@ import {
 } from '../store';
 import {
   answeredPauseContinuation,
-  isApprovalContext,
   isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  pausedUsageLimitWait,
   workflowWaitDue,
   isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
-  scheduledWorkflowResumeSchema,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
@@ -131,12 +130,18 @@ export function createTransactionView(
     expected: Parameters<IWorkflowStore['resolveApprovalGate']>[3]
   ): boolean => {
     if (!run) return false;
-    const gate = run.metadata.approval;
-    if (run.status !== 'paused' || !isApprovalContext(gate) || gate.resolved != null) return false;
+    // Same rule as the SQL `unresolvedGateClause`: a paused run is open unless its recorded
+    // gate is resolved, so a run with no readable gate can still be rejected. Only an
+    // `expected` gate needs a gate to compare against.
+    if (run.status !== 'paused') return false;
+    const gate: unknown = run.metadata.approval;
+    const record: Record<string, unknown> =
+      typeof gate === 'object' && gate !== null ? Object.fromEntries(Object.entries(gate)) : {};
+    if (record.resolved != null) return false;
     if (expected === undefined) return true;
     return (
-      gate.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
-      (gate.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
+      record.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
+      (record.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
     );
   };
   interface TerminalChange {
@@ -268,6 +273,7 @@ export function createTransactionView(
         wait.event !== expected.event ||
         wait.nodeId !== expected.nodeId ||
         wait.resumeAt !== expected.resumeAt ||
+        wait.pauseId !== expected.pauseId ||
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
@@ -348,31 +354,11 @@ export function createTransactionView(
           reason: options.exitReason,
           ...(options.signal ? { signal: options.signal } : {}),
         };
-      const precedingEvents: WorkflowEventInput[] = [];
-      if (options?.scheduledResume) {
-        run.metadata.scheduled_resume = scheduledWorkflowResumeSchema.parse(
-          options.scheduledResume
-        );
-        precedingEvents.push({
-          workflow_run_id: id,
-          event_type: 'quota_resume_scheduled',
-          data: {
-            resume_at: options.scheduledResume.resumeAt,
-            deadline_at: options.scheduledResume.deadlineAt,
-            attempt: options.scheduledResume.attempt,
-            max_attempts: options.scheduledResume.maxAttempts,
-          },
-        });
-      }
-      await terminal(
-        run,
-        {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
-        },
-        precedingEvents
-      );
+      await terminal(run, {
+        workflow_run_id: id,
+        event_type: 'workflow_failed',
+        data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
+      });
     },
     pauseWorkflowRun: async (
       id,
@@ -420,6 +406,8 @@ export function createTransactionView(
           data: { error: run.metadata.error },
         });
       if (run.status === 'paused') record(workflowUnpausedEvent(id));
+      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
+      if (pausedUsageLimitWait(run)) delete run.metadata.wait;
       if (
         run.status === 'failed' &&
         isScheduledWorkflowResume(scheduled) &&
@@ -768,6 +756,7 @@ export function createTransactionView(
         run.status !== 'running' ||
         !isWorkflowWaitContext(current) ||
         current.nodeId !== wait.nodeId ||
+        current.pauseId !== wait.pauseId ||
         (current.kind === 'attention' ? current.waitingSince : current.resumeAt) !==
           (wait.kind === 'attention' ? wait.waitingSince : wait.resumeAt)
       )
