@@ -141,7 +141,9 @@ export function qualifyPackReferences(
 ): { supportChildren: string[]; ambiguousReferences: string[] } {
   const supportChildren: string[] = [];
   const ambiguousReferences = new Set<string>();
+  const qualifiedNames = new Set([...qualifiedByName.values()].flat());
   const resolve = (name: string): string | undefined => {
+    if (qualifiedNames.has(name)) return name;
     const targets = qualifiedByName.get(name);
     if (targets !== undefined && targets.length > 1) {
       ambiguousReferences.add(name);

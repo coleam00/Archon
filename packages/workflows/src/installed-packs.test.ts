@@ -379,32 +379,78 @@ describe('installed packs in the catalog', () => {
     }
   }
 
-  for (const field of ['include', 'workflow'] as const) {
-    test(`qualified ${field} references select the requested public identity despite authored-name collisions`, async () => {
-      await install({
-        id: ID,
-        name: 'review-kit',
-        commit: COMMIT_A,
-        entrypoints: {
-          review: 'review/review.yaml',
-          first: 'first/first.yaml',
-          second: 'second/second.yaml',
-        },
-        files: {
-          'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n  - id: child\n    ${field}: acme/review-kit:first\n`,
-          'first/first.yaml':
-            'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
-          'second/second.yaml':
-            'name: shared\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
-        },
-      });
-      const catalog = await discover();
-      expect(catalog.errors).toEqual([]);
-      const caller = catalog.workflows.find(entry => entry.workflow.name === REVIEW);
-      expect(caller?.workflow.nodes[0]).toMatchObject(
-        field === 'include' ? { script: 'echo first' } : { workflow: 'acme/review-kit:first' }
-      );
-    });
+  for (const collision of ['entrypoint', 'support'] as const) {
+    for (const aliases of [1, 2]) {
+      for (const reference of [
+        'include',
+        'workflow',
+        'fan-out include',
+        'fan-out workflow',
+        'loop include',
+      ] as const) {
+        test(`qualified ${reference} selects its public target over ${aliases} colliding ${collision} aliases`, async () => {
+          const target = 'acme/review-kit:first';
+          const field = reference.includes('workflow') ? 'workflow' : 'include';
+          let nodes = `  - id: child\n    ${field}: ${target}\n`;
+          if (reference.startsWith('fan-out')) {
+            nodes += `    fan_out:\n      items: '["a"]'\n      as: item\n`;
+          }
+          if (reference === 'loop include') {
+            nodes = `  - id: group\n    loop_group:\n      until_bash: exit 0\n      max_iterations: 1\n      nodes:\n        - id: child\n          include: ${target}\n`;
+          }
+          await install({
+            id: ID,
+            name: 'review-kit',
+            commit: COMMIT_A,
+            entrypoints: {
+              review: 'review/review.yaml',
+              first: 'first/first.yaml',
+              ...(collision === 'entrypoint' ? { second: 'second/second.yaml' } : {}),
+              ...(collision === 'entrypoint' && aliases === 2 ? { third: 'third/third.yaml' } : {}),
+            },
+            files: {
+              'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n${nodes}`,
+              'first/first.yaml':
+                'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+              'second/second.yaml': `name: ${target}\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n`,
+              ...(aliases === 2
+                ? {
+                    'third/third.yaml': `name: ${target}\ndescription: Third\nnodes:\n  - id: done\n    bash: echo third\n`,
+                  }
+                : {}),
+            },
+          });
+          const catalog = await discover();
+          expect(catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW)).toEqual(
+            []
+          );
+          const caller = catalog.workflows.find(entry => entry.workflow.name === REVIEW);
+          const node = caller?.workflow.nodes[0];
+          if (reference === 'loop include') {
+            expect(node).toMatchObject({
+              loop_group: { nodes: [{ script: 'echo first' }] },
+            });
+          } else {
+            expect(node).toMatchObject(
+              field === 'workflow'
+                ? { workflow: target }
+                : reference === 'fan-out include'
+                  ? { include: target }
+                  : { script: 'echo first' }
+            );
+          }
+          if (reference.startsWith('fan-out') || field === 'workflow') {
+            await expect(
+              resolveFanOutChildDefinition(
+                { ...deps, providers: providerRegistry },
+                project,
+                target
+              )
+            ).resolves.toMatchObject({ definition: { nodes: [{ script: 'echo first' }] } });
+          }
+        });
+      }
+    }
   }
 
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
