@@ -3,9 +3,10 @@ description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On every round but a light one, a quick route agent picks the lenses
   the change earns — seams, code, tests, errors, docs — with seams on unless the
-  change clearly touches no type, contract, state or boundary. Reviews a PR when
-  given one, otherwise the working diff. Every round also holds the change to the
-  accepted contract: each stated acceptance item, invariant, and steering
+  change clearly touches no type, contract, state or boundary. Reviews the requested
+  PR; empty scope selects the current branch's open PR first, otherwise the working
+  diff. Every round also holds the change to the accepted contract: each stated
+  acceptance item, invariant, and steering
   constraint is met with cited evidence or raised as a blocking finding. Given a
   part assignment, items that only later parts own are deferred, not unmet.
   Advisory and read-only: it judges, it never edits. Given the previous round's
@@ -18,7 +19,9 @@ description: |
 
   When the checkout matches the PR head, the final synthesized report is posted
   to it as one canonical comment, edited in place on re-review. A head mismatch
-  stops before review and returns the command to rerun on the PR branch.
+  stops before review and returns the exact rerun command. For a same-repository
+  PR, use its head branch. For a fork PR, fetch its head first, then use a fresh
+  review branch with `--from <PR head SHA>`.
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
