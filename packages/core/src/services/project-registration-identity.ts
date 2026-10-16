@@ -120,7 +120,12 @@ export function resolveRegistrationUrl(url: string, cwd: string): string {
 export async function remoteIdentity(url: string, cwd = process.cwd()): Promise<string> {
   url = resolveRegistrationUrl(url, cwd);
   // Missing local targets retain their stored spelling; access errors must surface.
-  if (isAbsolute(url)) return `file:${(await existingPhysicalPath(url)) ?? url}`;
+  if (isAbsolute(url)) {
+    const physicalPath = await existingPhysicalPath(url);
+    if (!physicalPath) return `file:${url}`;
+    const { commonGitDir } = await getGitCheckoutIdentity(physicalPath);
+    return `file:${await realpath(commonGitDir)}`;
+  }
   const cleaned = url
     .trim()
     .replace(/\/+$/, '')

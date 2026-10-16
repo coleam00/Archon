@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { existsSync } from 'node:fs';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -559,7 +560,10 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     if (existing) {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      if (
+        (await isWorktreePath(existing.default_cwd)) ||
+        (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
+      ) {
         const identity = parseOwnerRepo(existing.name);
         if (!identity) {
           throw new Error(

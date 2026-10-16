@@ -2,6 +2,7 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
+import { existsSync } from 'node:fs';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -924,10 +925,11 @@ export class GitHubAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      // Either it's an actual worktree, or it looks like one (contains /worktrees/ in path)
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      if (
+        (await isWorktreePath(existing.default_cwd)) ||
+        (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
+      ) {
         const identity = parseOwnerRepo(existing.name);
         if (!identity) {
           throw new Error(

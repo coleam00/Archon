@@ -856,6 +856,30 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    test('keeps a healthy bare-name checkout under a worktrees directory', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'archon-main-checkout-'));
+      try {
+        const path = join(root, 'worktrees', 'api');
+        await mkdir(join(path, '.git'), { recursive: true });
+        const existing = {
+          id: 'main-project',
+          name: 'local-api',
+          default_cwd: path,
+          repository_url: 'https://example.com/testuser/testrepo',
+        };
+        const adapter = createSelfFilterAdapter();
+        mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+        mockUpdateCodebase.mockClear();
+        // @ts-expect-error - exercise the private registration boundary
+        const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
+        expect(result.repoPath).toBe(path);
+        expect(result.codebase).toBe(existing);
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+
     test('refuses ambiguous stale checkout repair for a bare project name', async () => {
       const adapter = createSelfFilterAdapter();
       const existing = {

@@ -67,25 +67,25 @@ export async function findRegisteredRemote(
   const failures: ProjectRegistrationError[] = [];
   for (const project of registered) {
     if (project.kind === 'folder') continue;
-    let registeredUrl = project.repository_url;
-    // Older chat registrations omitted repository_url even for remote-backed repos.
-    if (!registeredUrl) {
-      try {
-        registeredUrl = await effectiveRegistrationUrl(project.default_cwd);
-      } catch (error) {
-        failures.push(
-          new ProjectRegistrationError(
-            `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
-              'Restore access to that checkout or repair it with /update-project before registering another repository. ' +
-              `Remote error: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error }
-          )
-        );
-        continue;
+    try {
+      // Older chat registrations omitted repository_url even for remote-backed repos.
+      const registeredUrl =
+        project.repository_url || (await effectiveRegistrationUrl(project.default_cwd));
+      if (
+        registeredUrl &&
+        (await remoteIdentity(registeredUrl, project.default_cwd)) === identity
+      ) {
+        matches.push(project);
       }
-    }
-    if (registeredUrl && (await remoteIdentity(registeredUrl, project.default_cwd)) === identity) {
-      matches.push(project);
+    } catch (error) {
+      failures.push(
+        new ProjectRegistrationError(
+          `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
+            'Restore access to that checkout or repair it with /update-project before registering another repository. ' +
+            `Remote error: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        )
+      );
     }
   }
   if (matches.length > 1) {

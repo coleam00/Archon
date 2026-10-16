@@ -10,7 +10,16 @@
  */
 import { describe, test, expect, mock, afterEach, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, realpath, readFile, symlink, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  realpath,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import * as fsPromises from 'node:fs/promises';
 import { createFileWorkflowHost } from '../workflows/file-host';
 import { tmpdir } from 'node:os';
@@ -122,6 +131,9 @@ describe('project storage collisions', () => {
       execFileSync('git', ['clone', '-q', alias, secondPath]);
       const first = await registerInStore(store, firstPath);
       const owner = await store.getCodebase(first.codebaseId);
+      expect((await store.findCodebaseByRepoUrl(pathToFileURL(alias).href))?.id).toBe(
+        first.codebaseId
+      );
       await expect(registerInStore(store, secondPath)).rejects.toThrow(
         `Project "${owner?.name}" is already registered at ${firstPath}`
       );
@@ -134,6 +146,100 @@ describe('project storage collisions', () => {
         })
       ).rejects.toThrow(firstPath);
       expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    'one local Git repository owns both root and metadata remote URLs (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const remote = await gitCheckout(join(root, 'upstream'));
+      execFileSync('git', [
+        '-C',
+        remote,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'Initial',
+      ]);
+      const firstPath = join(root, 'first');
+      const secondPath = join(root, 'second');
+      execFileSync('git', ['clone', '-q', remote, firstPath]);
+      execFileSync('git', ['clone', '-q', join(remote, '.git'), secondPath]);
+      const first = await registerInStore(store, firstPath);
+      const owner = await store.getCodebase(first.codebaseId);
+      await expect(registerInStore(store, secondPath)).rejects.toThrow(
+        `Project "${owner?.name}" is already registered at ${firstPath}`
+      );
+      await expect(registerInStore(store, secondPath)).rejects.toThrow('worktrees');
+      await expect(
+        store.createCodebase({
+          name: 'bypass',
+          default_cwd: secondPath,
+          repository_url: pathToFileURL(join(remote, '.git')).href,
+        })
+      ).rejects.toThrow(firstPath);
+      expect(
+        (await store.findCodebaseByRepoUrl(pathToFileURL(join(remote, '.git')).href))?.id
+      ).toBe(first.codebaseId);
+      expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    'lookup isolates unreadable stored local remotes but registration fails closed (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const remote = join(root, 'upstream.git');
+      execFileSync('git', ['init', '--bare', '-q', remote]);
+      const broken = await store.createCodebase({
+        name: 'broken',
+        default_cwd: join(root, 'broken'),
+        repository_url: remote,
+      });
+      const known = await store.createCodebase({
+        name: 'acme/api',
+        default_cwd: join(root, 'known'),
+        repository_url: 'https://github.com/acme/api',
+      });
+      await rm(remote, { recursive: true });
+      await symlink(remote, remote);
+      const warnings: unknown[] = [];
+      setLogLevel('warn');
+      setLogSink(line => warnings.push(JSON.parse(line)));
+      expect((await store.findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(known.id);
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          err: expect.objectContaining({
+            type: 'ProjectRegistrationError',
+            message: expect.stringContaining(broken.default_cwd),
+          }),
+        }),
+      ]);
+      await expect(store.findCodebaseByRepoUrl('https://github.com/acme/unknown')).rejects.toThrow(
+        ProjectRegistrationError
+      );
+      const candidate = await gitCheckout(join(root, 'candidate'), 'https://github.com/acme/new');
+      try {
+        await registerInStore(store, candidate);
+        throw new Error('Registration unexpectedly succeeded');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProjectRegistrationError);
+        expect(error instanceof Error && error.cause).toMatchObject({ code: 'ELOOP' });
+      }
+      expect(await store.listCodebases()).toHaveLength(2);
     }
   );
 

@@ -1215,7 +1215,9 @@ describe('cloneRepository', () => {
   describe('local path delegation', () => {
     test('delegates absolute path (/) to registerRepository', async () => {
       // registerRepository calls git rev-parse, then creates codebase
-      spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
+      spyExecFileAsync.mockImplementation((_file: string, args: string[]) =>
+        Promise.resolve({ stdout: args.includes('rev-parse') ? '.git' : '', stderr: '' })
+      );
       mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ name: 'myrepo', default_cwd: '/home/user/myrepo' }) as ReturnType<
@@ -1230,7 +1232,9 @@ describe('cloneRepository', () => {
     });
 
     test('delegates tilde path (~/) to registerRepository with expansion', async () => {
-      spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
+      spyExecFileAsync.mockImplementation((_file: string, args: string[]) =>
+        Promise.resolve({ stdout: args.includes('rev-parse') ? '.git' : '', stderr: '' })
+      );
       mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ name: 'myrepo', default_cwd: '/home/test/myrepo' }) as ReturnType<
@@ -1249,7 +1253,9 @@ describe('cloneRepository', () => {
     });
 
     test('delegates relative path (./) to registerRepository', async () => {
-      spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
+      spyExecFileAsync.mockImplementation((_file: string, args: string[]) =>
+        Promise.resolve({ stdout: args.includes('rev-parse') ? '.git' : '', stderr: '' })
+      );
       mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 

@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { existsSync } from 'node:fs';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
@@ -643,9 +644,11 @@ export class GiteaAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      if (
+        (await isWorktreePath(existing.default_cwd)) ||
+        (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
+      ) {
         const identity = parseOwnerRepo(existing.name);
         if (!identity) {
           throw new Error(
