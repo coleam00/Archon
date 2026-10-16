@@ -60,10 +60,9 @@ function row(f: Fixture): RunRow | null {
   try {
     db.exec('PRAGMA busy_timeout = 5000');
     return db
-      .query<
-        RunRow,
-        []
-      >('SELECT id, status, metadata FROM remote_agent_workflow_runs ORDER BY started_at DESC LIMIT 1')
+      .query<RunRow, []>(
+        'SELECT id, status, metadata FROM remote_agent_workflow_runs ORDER BY started_at DESC LIMIT 1'
+      )
       .get();
   } finally {
     db.close();
@@ -275,8 +274,8 @@ nodes:
       ${check} || exit 41
       echo bash >> '${marker.replaceAll('\\', '/')}'
 ${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
-      options.wait
-        ? `  - id: pause
+  options.wait
+    ? `  - id: pause
     depends_on: [bash]
     wait:
 ${
@@ -287,8 +286,8 @@ ${
       : '      duration_ms: 1000'
 }
 `
-        : ''
-    }  - id: script
+    : ''
+}  - id: script
     depends_on: [${options.wait ? 'pause' : options.fail ? 'refuse' : 'bash'}]
     runtime: bun
     script: |
@@ -476,10 +475,9 @@ test('default worktree CLI execution delivers repository-scoped App credentials 
   const db = new Database(join(f.home, 'archon.db'), { readonly: true });
   try {
     const isolation = db
-      .query<
-        { working_path: string },
-        []
-      >('SELECT working_path FROM remote_agent_isolation_environments')
+      .query<{ working_path: string }, []>(
+        'SELECT working_path FROM remote_agent_isolation_environments'
+      )
       .get();
     expect(isolation).not.toBeNull();
     expect(isolation?.working_path).not.toBe(f.project);

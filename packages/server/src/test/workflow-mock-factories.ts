@@ -4,7 +4,7 @@ import type { DashboardRunsResult } from '@archon/core/db/workflows';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { ParseResult } from '@archon/workflows/loader';
 
-type ListDashboardRuns = (typeof import('@archon/core/db/workflows'))['listDashboardRuns'];
+type ListDashboardRuns = typeof import('@archon/core/db/workflows')['listDashboardRuns'];
 
 interface DashboardRunsOverrides {
   runs?: DashboardRunsResult['runs'];

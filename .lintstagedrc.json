@@ -1,7 +1,3 @@
 {
-  "*.{ts,tsx}": [
-    "biome lint --write --no-errors-on-unmatched --files-ignore-unknown=true",
-    "prettier --write"
-  ],
-  "*.{json,jsonc,md,yaml,yml}": ["prettier --write"]
+  "*": "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
 }

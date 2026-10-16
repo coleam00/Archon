@@ -161,10 +161,9 @@ function readRun(fixture: Fixture): RunRow | undefined {
   const database = openDatabase(fixture);
   try {
     return database
-      .query<
-        RunRow,
-        [string]
-      >('SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
+      .query<RunRow, [string]>(
+        'SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1'
+      )
       .get(WORKFLOW_NAME) as RunRow | undefined;
   } catch {
     // The owner creates archon.db before applying the schema, so an early read throws

@@ -39,8 +39,9 @@ mock.module('../db/connection', () => ({
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const { registerRepository, registerFolder, inspectProjectBaseBranch } =
-  await import('./sql-registration');
+const { registerRepository, registerFolder, inspectProjectBaseBranch } = await import(
+  './sql-registration'
+);
 const { getCodebase, updateCodebase, listCodebases } = await import('../db/codebases');
 // This test hosts a workflow run, so it registers providers the way CLI and server do.
 registerBuiltinProviders();
@@ -226,6 +227,9 @@ test('prefill distinguishes unavailable remote, unknown HEAD, absent or ambiguou
     "Configured base branch 'absent' not found on remote 'upstream'"
   );
   expect(await inspectProjectBaseBranch({ path: root })).toEqual({ kind: 'folder' });
+  await expect(inspectProjectBaseBranch({ path: join(root, 'missing') })).rejects.toThrow(
+    'Failed to find repo root'
+  );
 }, 30000);
 
 test('configured upstream controls the worktree commit, dispatch metadata and BASE_BRANCH', async () => {

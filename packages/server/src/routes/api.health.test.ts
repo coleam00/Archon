@@ -150,7 +150,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 }));
 
 const mockGetRunningWorkflows = mock<
-  (typeof import('@archon/core/db/workflows'))['getRunningWorkflows']
+  typeof import('@archon/core/db/workflows')['getRunningWorkflows']
 >(async () => []);
 
 mock.module('@archon/core/db/workflows', () => ({

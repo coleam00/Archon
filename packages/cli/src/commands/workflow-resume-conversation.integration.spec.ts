@@ -150,10 +150,9 @@ function readThreadState(fixture: Fixture): ThreadState {
   try {
     return database.transaction(() => {
       const run = database
-        .query<
-          { id: string; status: string; conversation_id: string },
-          [string]
-        >('SELECT id, status, conversation_id FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
+        .query<{ id: string; status: string; conversation_id: string }, [string]>(
+          'SELECT id, status, conversation_id FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1'
+        )
         .get(WORKFLOW_NAME);
       if (!run) throw new Error('no run row was recorded');
       const conversationIds = database
@@ -192,10 +191,9 @@ function readPlatformConversationId(fixture: Fixture, conversationId: string): s
   const database = openDatabase(fixture);
   try {
     const row = database
-      .query<
-        { platform_conversation_id: string },
-        [string]
-      >('SELECT platform_conversation_id FROM remote_agent_conversations WHERE id = ?')
+      .query<{ platform_conversation_id: string }, [string]>(
+        'SELECT platform_conversation_id FROM remote_agent_conversations WHERE id = ?'
+      )
       .get(conversationId);
     if (!row) throw new Error(`no conversation row for ${conversationId}`);
     return row.platform_conversation_id;
@@ -559,10 +557,9 @@ function readRun(fixture: Fixture, name: string): RunRow {
   const database = openDatabase(fixture);
   try {
     const run = database
-      .query<
-        RunRow,
-        [string]
-      >('SELECT id, status, conversation_id, completed_at FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
+      .query<RunRow, [string]>(
+        'SELECT id, status, conversation_id, completed_at FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1'
+      )
       .get(name);
     if (!run) throw new Error(`no run row was recorded for ${name}`);
     return run;
@@ -700,10 +697,9 @@ test('resume reuses a registered worktree with one warning and durable adoption'
     const database = openDatabase(fixture);
     try {
       return database
-        .query<
-          { working_path: string; metadata: string },
-          []
-        >('SELECT working_path, metadata FROM remote_agent_isolation_environments')
+        .query<{ working_path: string; metadata: string }, []>(
+          'SELECT working_path, metadata FROM remote_agent_isolation_environments'
+        )
         .all();
     } finally {
       database.close();

@@ -12,7 +12,7 @@ export interface ValidateCheck {
   skipOnWindows?: string;
 }
 
-// CI selects from this registry; local defaults omit the expensive fixture and hook formatting checks.
+// CI selects from this registry; local defaults omit the expensive fixture checks.
 export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   {
     id: 'cli-import-boundary',
@@ -48,9 +48,8 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'format',
-    label: 'Prettier formatting',
+    label: 'Biome formatting',
     commands: [['bun', 'run', 'format:check']],
-    explicitOnly: true,
   },
   {
     id: 'installer',

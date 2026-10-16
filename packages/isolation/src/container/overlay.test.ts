@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { summarizeOverlayChanges, applyOverlayChanges } from './overlay';
-import type { DockerRunner, DockerExecResult } from './docker-exec';
+import { extractDockerError, type DockerRunner, type DockerExecResult } from './docker-exec';
+import { IsolationFailure, isKnownIsolationError } from '../errors';
 
 const TARGET = { volume: 'archon-x-upper', hostRoot: '/tmp/ops', image: 'archon-runner:test' };
 
@@ -85,13 +86,24 @@ describe('summarizeOverlayChanges', () => {
     expect(summary.truncated).toBe(true);
   });
 
-  test('a docker failure is surfaced, not swallowed', async () => {
-    const docker = fakeDocker(() => {
-      throw new Error('Cannot connect to the Docker daemon');
+  test('an inspection failure preserves its typed cause and original process evidence', async () => {
+    const cause = Object.assign(new Error('docker run failed'), {
+      code: 23,
+      stderr: 'Cannot connect to the Docker daemon\noriginal stderr',
     });
-    await expect(summarizeOverlayChanges(docker, TARGET)).rejects.toThrow(
-      /inspect the overlay diff/
-    );
+    const failure = new IsolationFailure('unclassified', extractDockerError(cause), cause);
+    const docker = fakeDocker(() => {
+      throw failure;
+    });
+    const error = await summarizeOverlayChanges(docker, TARGET).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error('expected inspection failure');
+    expect(error.message).toContain('inspect the overlay diff');
+    expect(error.message).toContain(cause.stderr);
+    expect(error.message).toContain('exit code 23');
+    expect(error.cause).toBe(failure);
+    expect(failure.cause).toBe(cause);
+    expect(isKnownIsolationError(error)).toBe(false);
   });
 });
 
@@ -109,17 +121,29 @@ describe('applyOverlayChanges', () => {
     expect(joined).not.toContain('/tmp/ops:/dest:ro');
   });
 
-  test('a partial apply throws loudly, reporting how many paths landed', async () => {
-    const err = Object.assign(new Error('cp: No space left on device'), {
-      stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
-    });
-    const docker = fakeDocker(() => {
-      throw err;
-    });
-    await expect(applyOverlayChanges(docker, TARGET)).rejects.toThrow(
-      /2 path\(s\) already applied/
-    );
-  });
+  test.each([0, 2])(
+    'a partial apply failure reports %s confirmed paths without understating mutations',
+    async count => {
+      const cause = Object.assign(new Error('cp: No space left on device'), {
+        stdout: count ? records(['W', 'a.txt'], ['W', 'b.txt']) : '',
+        stderr: 'cp: No space left on device',
+        code: 23,
+      });
+      const failure = new IsolationFailure('unclassified', 'docker run failed', cause);
+      const docker = fakeDocker(() => {
+        throw failure;
+      });
+      const error = await applyOverlayChanges(docker, TARGET).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected partial apply failure');
+      expect(error.message).toContain(`${count} path(s) confirmed completed`);
+      expect(error.message).toContain('the failing path may already have changed');
+      expect(error.message).toContain('inspect and reconcile manually');
+      expect(error.cause).toBe(failure);
+      expect(failure.cause).toBe(cause);
+      expect(failure.cause).toMatchObject({ code: 23, stdout: cause.stdout, stderr: cause.stderr });
+    }
+  );
 
   test('surfaces helper stderr as warnings', async () => {
     const docker = fakeDocker({
@@ -130,3 +154,14 @@ describe('applyOverlayChanges', () => {
     expect(summary.warnings).toEqual(['skipped opaque dir foo/']);
   });
 });
+
+test.each([summarizeOverlayChanges, applyOverlayChanges])(
+  '%s propagates unexpected runner failures unchanged',
+  async operation => {
+    const failure = new ReferenceError('broken runner');
+    const docker = fakeDocker(() => {
+      throw failure;
+    });
+    await expect(operation(docker, TARGET)).rejects.toBe(failure);
+  }
+);

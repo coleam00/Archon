@@ -35,7 +35,7 @@ const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
 }));
 
 // Default: returns a valid workflow. Use mockReturnValueOnce in tests that need a parse failure.
-const mockParseWorkflow = mock<(typeof import('@archon/workflows/loader'))['parseWorkflow']>(
+const mockParseWorkflow = mock<typeof import('@archon/workflows/loader')['parseWorkflow']>(
   (content: string, _filename: string) => {
     const raw = parseYaml(content);
     const name =

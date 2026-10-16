@@ -137,8 +137,9 @@ async function registerProviders(): Promise<void> {
   // stderr, like a deprecated workflow's notice: it survives --json's log silencing.
   setDeprecationReporter((_provider, notice) => console.warn(notice));
   if (BUNDLED_IS_BINARY) {
-    const { claimPiExtensionProcessError } =
-      await import('@archon/providers/pi/extension-error-broker');
+    const { claimPiExtensionProcessError } = await import(
+      '@archon/providers/pi/extension-error-broker'
+    );
     installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   }
   await registerHostProviders();
@@ -165,8 +166,9 @@ async function loadRoute<T>(
   if (options.database) {
     const { loadStoreSelection } = await import('@archon/core/config/store-selection');
     if ((await loadStoreSelection()) === 'files') {
-      const { FileStoreUnsupportedError: fileStoreUnsupportedError } =
-        await import('@archon/workflows/file-store');
+      const { FileStoreUnsupportedError: fileStoreUnsupportedError } = await import(
+        '@archon/workflows/file-store'
+      );
       throw new fileStoreUnsupportedError('this SQL-only CLI command');
     }
     databaseRouteLoaded = true;
@@ -431,8 +433,9 @@ async function main(): Promise<number> {
       subcommand === 'run' &&
       typeof detachedRunConfigPayload === 'string'
     ) {
-      const { decodeWorkflowRunConfigHandoff } =
-        await import('@archon/core/config/run-config-handoff');
+      const { decodeWorkflowRunConfigHandoff } = await import(
+        '@archon/core/config/run-config-handoff'
+      );
       detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
       // Fail-fast for the decode step, not a second copy of the invariant: `workflow.ts`
       // still owns this rejection for every caller. A legitimately spawned detached child
@@ -545,8 +548,9 @@ async function main(): Promise<number> {
         try {
           if (databaseLookup) databaseRouteLoaded = true;
           const { createCliWorkflowHost } = await import('./utils/workflow-host');
-          const { resolveCodebaseForPath } =
-            await import('@archon/core/services/codebase-checkout-resolver');
+          const { resolveCodebaseForPath } = await import(
+            '@archon/core/services/codebase-checkout-resolver'
+          );
           const host = await createCliWorkflowHost();
           const { codebase, repoRoot } = await resolveCodebaseForPath(
             realCwd,

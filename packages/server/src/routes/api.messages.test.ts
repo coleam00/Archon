@@ -37,7 +37,7 @@ const mockAddMessage = mock(
     created_at: new Date().toISOString(),
   })
 );
-const mockListMessages = mock<(typeof import('@archon/core/db/messages'))['listMessages']>(
+const mockListMessages = mock<typeof import('@archon/core/db/messages')['listMessages']>(
   async () => []
 );
 const mockHandleMessage = mock(async () => {});

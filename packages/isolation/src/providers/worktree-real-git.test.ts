@@ -5,7 +5,16 @@
  * process, so this file gets its own `testGroups` entry. Real Git is needed to
  * prove failed-add ownership, cleanup, and preservation of hidden changes.
  */
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  spyOn,
+} from 'bun:test';
 import { existsSync } from 'node:fs';
 import {
   cp,
@@ -32,10 +41,15 @@ import {
 import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
+import * as gitModule from '@archon/git';
+
 import { WorktreeProvider } from './worktree';
+import { IsolationResolver } from '../resolver';
 import type { IsolationRequest } from '../types';
 import {
   classifyIsolationError,
+  isKnownIsolationError,
+  IsolationFailure,
   ExistingBranchDivergedError,
   MissingProjectDirectoryError,
   WorktreeUncommittedChangesError,
@@ -44,6 +58,18 @@ import {
 // The provider logs a full setup failure and its rollback. Both are expected here,
 // and a child logger takes the level set before it is created.
 setLogLevel('silent');
+
+/** The rejection must be a typed failure that the resolver reports as blocked. */
+async function typedFailure(attempt: Promise<unknown>): Promise<IsolationFailure> {
+  const failure = await attempt.then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  if (!(failure instanceof IsolationFailure))
+    throw new Error(`expected IsolationFailure: ${failure}`);
+  expect(isKnownIsolationError(failure)).toBe(true);
+  return failure;
+}
 
 const CODEBASE_NAME = 'acme/widgets';
 const TASK_BRANCH = 'feature/login';
@@ -244,6 +270,139 @@ describe('WorktreeProvider against real git', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  test.each(['workspace sync', 'repository sync', 'fork PR', 'remote refresh'] as const)(
+    'recovers %s after real Git ref contention clears',
+    async operation => {
+      const remotePath = join(root, 'remote');
+      await cp(templateRepo, remotePath, { recursive: true });
+      await git(repoPath, 'remote', 'add', 'origin', remotePath);
+      await git(remotePath, 'update-ref', 'refs/pull/42/head', 'HEAD');
+      const ref =
+        operation === 'fork PR'
+          ? 'heads/pr-42-review'
+          : `remotes/origin/${operation === 'remote refresh' ? TASK_BRANCH : 'main'}`;
+      const lock = join(repoPath, '.git', 'refs', `${ref}.lock`);
+      await mkdir(join(lock, '..'), { recursive: true });
+      await writeFile(lock, '');
+      const exec = gitModule.execFileAsync;
+      let collisions = 0;
+      const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (cmd, args, options) => {
+          try {
+            return await exec(cmd, args, options);
+          } catch (error) {
+            if (args.includes('fetch') && existsSync(lock)) {
+              collisions++;
+              await rm(lock);
+            }
+            throw error;
+          }
+        }
+      );
+      try {
+        if (operation === 'workspace sync') {
+          await gitModule.syncWorkspace(toRepoPath(repoPath), toBranchName('main'), {
+            mode: 'fetch-only',
+          });
+        } else if (operation === 'repository sync') {
+          expect(
+            await gitModule.syncRepository(toRepoPath(repoPath), toBranchName('main'))
+          ).toEqual({ ok: true, value: undefined });
+        } else {
+          await provider.create(
+            operation === 'fork PR'
+              ? {
+                  ...request,
+                  workflowType: 'pr',
+                  identifier: '42',
+                  prBranch: toBranchName(TASK_BRANCH),
+                  isForkPR: true,
+                }
+              : {
+                  ...request,
+                  workflowType: 'task',
+                  baseBranch: toBranchName('main'),
+                  taskBranch: { kind: 'new', branch: toBranchName(TASK_BRANCH) },
+                }
+          );
+        }
+        expect(collisions).toBe(1);
+        expect((await git(repoPath, 'show-ref', '--verify', `refs/${ref}`)).trim()).not.toBe('');
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
+
+  test.each(['existing task', 'same-repository PR', 'fork PR'])(
+    'wrong-branch adoption blocks %s without changing its checkout',
+    async kind => {
+      const hints =
+        kind === 'existing task'
+          ? {
+              workflowType: 'task' as const,
+              workflowId: 'login',
+              taskBranch: { kind: 'existing' as const, branch: toBranchName(TASK_BRANCH) },
+            }
+          : {
+              workflowType: 'pr' as const,
+              workflowId: '4271',
+              prBranch: toBranchName(TASK_BRANCH),
+              isForkPR: kind === 'fork PR',
+            };
+      const expectedRequest: IsolationRequest =
+        hints.workflowType === 'task'
+          ? request
+          : {
+              ...request,
+              workflowType: 'pr',
+              identifier: hints.workflowId,
+              prBranch: hints.prBranch,
+              isForkPR: hints.isForkPR,
+            };
+      const target = provider.getWorktreePath(
+        expectedRequest,
+        provider.generateBranchName(expectedRequest)
+      );
+      await mkdir(join(target, '..'), { recursive: true });
+      await git(repoPath, 'worktree', 'add', '--detach', target, 'main');
+      const head = await git(target, 'rev-parse', 'HEAD');
+      const resolver = new IsolationResolver({
+        provider,
+        store: {
+          getById: async () => null,
+          findActiveByWorkflow: async () => null,
+          countActiveByCodebase: async () => 0,
+          listActive: async () => [],
+          create: async () => {
+            throw new Error('refused adoption must not create a row');
+          },
+          updateMetadata: async () => {
+            throw new Error('refused adoption must not update a row');
+          },
+          updateStatus: async () => {
+            throw new Error('refused adoption must not change status');
+          },
+          markWorktreeDestroyed: async () => {
+            throw new Error('refused adoption must not retire a row');
+          },
+        },
+      });
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: { id: request.codebaseId, name: CODEBASE_NAME, defaultCwd: repoPath },
+        hints,
+        platformType: 'web',
+      });
+      expect(result.status).toBe('blocked');
+      if (result.status !== 'blocked') throw new Error('expected blocked adoption');
+      expect(result.reason).toBe('creation_failed');
+      expect(result.userMessage).toContain('Refused to adopt');
+      expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+      expect((await git(target, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('HEAD');
+    }
+  );
+
   test('new and reused checkouts work when Git requires explicit ownership trust', async () => {
     const config = process.env.GIT_CONFIG_GLOBAL;
     if (!config) throw new Error('Scratch global config missing');
@@ -314,7 +473,9 @@ describe('WorktreeProvider against real git', () => {
       if (writesOutput) {
         expect(await readFile(join(worktreePath, 'installer-output'), 'utf8')).toBe('valuable\n');
         expect(await lockReasonOf(worktreePath)).toContain('setup in progress');
-        await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+        const failure = await typedFailure(provider.create(request));
+        expect(failure.kind).toBe('setup_unfinished');
+        expect(failure.message).toContain('its setup did not finish');
       }
     }
   );
@@ -477,14 +638,14 @@ describe('WorktreeProvider against real git', () => {
       if (scenario === 'plain directory') await mkdir(created.workingPath, { recursive: true });
     }
     await writeFile(join(created.workingPath, 'operator-file'), 'keep me');
-    await expect(
-      provider.destroy(created.workingPath, {
-        canonicalRepoPath: request.canonicalRepoPath,
-        creationId,
-        branchName: created.branchName,
-        force: true,
-      })
-    ).rejects.toThrow('ownership');
+    const destruction = provider.destroy(created.workingPath, {
+      canonicalRepoPath: request.canonicalRepoPath,
+      creationId,
+      branchName: created.branchName,
+      force: true,
+    });
+    if (scenario === 'missing proof') await expect(destruction).rejects.toThrow('ownership');
+    else expect((await typedFailure(destruction)).kind).toBe('ownership_unverified');
     expect(await readFile(join(created.workingPath, 'operator-file'), 'utf8')).toBe('keep me');
     expect(await git(repoPath, 'branch', '--list', created.branchName)).toContain(
       created.branchName
@@ -719,7 +880,9 @@ describe('WorktreeProvider against real git', () => {
       expect(await readFile(join(worktreePath, filename), 'utf-8')).toBe('hook-work');
       expect(await registeredWorktrees()).toContain(resolve(worktreePath));
       expect(await lockReasonOf(worktreePath)).toMatch(/^archon: worktree setup in progress: .+/);
-      await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+      const failure = await typedFailure(provider.create(request));
+      expect(failure.kind).toBe('setup_unfinished');
+      expect(failure.message).toContain('its setup did not finish');
     }
   );
 
@@ -859,11 +1022,35 @@ describe('WorktreeProvider against real git', () => {
   test.each([false, true])('preserves a pre-existing directory (empty: %s)', async empty => {
     await mkdir(worktreePath, { recursive: true });
     if (!empty) await writeFile(join(worktreePath, 'user-work'), 'keep me');
-    await expect(provider.create(request)).rejects.toThrow(
+    const failure = await typedFailure(provider.create(request));
+    expect(failure.kind).toBe('path_exists');
+    expect(failure.message).toContain(
       'a pre-existing directory occupies this path. It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
     );
     expect(existsSync(worktreePath)).toBe(true);
     if (!empty) expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');
+  });
+
+  test('a missing checkout registered by Git is refused with a typed kind', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const attempt: IsolationRequest = {
+      codebaseId: request.codebaseId,
+      codebaseName: request.codebaseName,
+      canonicalRepoPath: request.canonicalRepoPath,
+      workflowType: 'issue',
+      identifier: '4271',
+      baseBranch: toBranchName('main'),
+    };
+    const target = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
+    await git(repoPath, 'worktree', 'add', '-q', '--detach', target);
+    await git(repoPath, 'worktree', 'lock', '--reason', 'operator lock', target);
+    await rm(target, { recursive: true });
+    const failure = await provider.create(attempt).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(IsolationFailure);
+    if (!(failure instanceof IsolationFailure)) throw new Error('expected registration refusal');
+    expect(failure.kind).toBe('worktree_registered');
+    expect(isKnownIsolationError(failure)).toBe(true);
+    expect(await registeredWorktrees()).toContain(resolve(target));
   });
 
   test('an add that creates nothing reports only the original failure', async () => {
@@ -1091,6 +1278,28 @@ describe('WorktreeProvider against real git', () => {
       }
     );
 
+    test('an existing branch containing timeout keeps its cause and is blocked', async () => {
+      const branch = 'fix/timeout-retry';
+      await git(repoPath, 'branch', branch);
+      const error = await provider
+        .create({
+          ...attempt,
+          workflowType: 'task',
+          taskBranch: {
+            kind: 'new',
+            branch: toBranchName(branch),
+            fromBranch: toBranchName('main'),
+          },
+        })
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected existing-branch refusal');
+      expect(classifyIsolationError(error)).toContain(`Branch "${branch}" already exists`);
+      expect(classifyIsolationError(error)).not.toContain('Timed out');
+      expect(isKnownIsolationError(error)).toBe(true);
+      expect(error).toHaveProperty('kind', 'branch_exists');
+    });
+
     test('an existing remote-only PR branch is checked out at its head', async () => {
       const tip = await commitOn(PR_BRANCH, 'one');
       await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
@@ -1106,17 +1315,43 @@ describe('WorktreeProvider against real git', () => {
       expect(env.metadata).toHaveProperty('branchCreated', true);
     });
 
-    test('a local branch behind its remote counterpart is fast-forwarded to it', async () => {
-      await commitOn(PR_BRANCH, 'one');
-      const tip = await commitOn(PR_BRANCH, 'two');
-      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
-      await git(repoPath, 'branch', '-f', PR_BRANCH, `${PR_BRANCH}~1`);
-
-      const env = await provider.create(attempt);
-
-      expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
-      expect(await localHead()).toBe(tip);
-    });
+    test.each([false, true])(
+      'fast-forwards a local branch behind its remote (transient ref lock: %s)',
+      async locked => {
+        await commitOn(PR_BRANCH, 'one');
+        const tip = await commitOn(PR_BRANCH, 'two');
+        await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+        await git(repoPath, 'branch', '-f', PR_BRANCH, `${PR_BRANCH}~1`);
+        const lock = join(repoPath, '.git', 'refs', 'heads', `${PR_BRANCH}.lock`);
+        if (locked) await writeFile(lock, '');
+        const exec = gitModule.execFileAsync;
+        let collisions = 0;
+        const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+          async (cmd, args, options) => {
+            try {
+              return await exec(cmd, args, options);
+            } catch (error) {
+              if (args.includes('fetch') && args.includes('.') && existsSync(lock)) {
+                expect(args.at(-1)).toBe(
+                  `refs/remotes/origin/${PR_BRANCH}:refs/heads/${PR_BRANCH}`
+                );
+                collisions++;
+                await rm(lock);
+              }
+              throw error;
+            }
+          }
+        );
+        try {
+          const env = await provider.create(attempt);
+          expect(collisions).toBe(locked ? 1 : 0);
+          expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
+          expect(await localHead()).toBe(tip);
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    );
 
     test('diverged local and remote fail before any checkout', async () => {
       const shared = await commitOn(PR_BRANCH, 'shared');

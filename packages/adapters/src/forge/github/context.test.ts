@@ -39,7 +39,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const mockHandleMessage = mock<(typeof import('@archon/core'))['handleMessage']>(async () => {});
+const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(async () => {});
 
 const mockGetOrCreateConversation = mock(async () => ({
   id: 'conv-1',

@@ -475,36 +475,30 @@ container:
   write_back: approve # 'approve' (default) pauses at a write-back gate; 'auto' applies without pausing
 ```
 
-**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. Neither `$ARTIFACTS_DIR` nor `$STATE_DIR` is mounted into the container — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
+**Prerequisites:** Docker, and the runner image built with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Rebuild existing and custom runner images after upgrading Archon: native fallback requires the current entrypoint's dedicated FUSE mount failure status (78). Docker startup failures, including a missing `/dev/fuse`, and older images returning a generic failure status stop preparation without native fallback. Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` is bound read-write at its host path; `$STATE_DIR` is not mounted — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
 
 ### Container runs and run output
 
-Container runs are the one place where a run's output is **not** addressable from the host
-filesystem by run id. This is a documented limitation, not an oversight — the accurate
-picture:
+Standard CLI container runs bind `$ARTIFACTS_DIR` read-write at the same absolute path
+inside the container and on the host. Write screenshots, reports, and other run output
+there: they are available in the host run's artifacts directory without project write-back
+and survive container teardown.
 
-- A container run has exactly two mounts: the project root at `/mnt/lower` (read-only) and
-  the per-run overlay volume at `/mnt/upper`. `ARCHON_HOME` is never mounted.
-- `ARTIFACTS_DIR` and `STATE_DIR` reach the container only as environment variables, so a
-  node that writes to either from *inside* the container writes into the container's own
-  ephemeral layer, not to the host.
-- The container is **not** destroyed when the run completes. It is removed by the cleanup
-  service (7-day stale window by default) or by an explicit teardown, and `destroy()`
-  removes the container *and* its volume. Until then those files remain readable with
-  `docker exec`.
+The project root is mounted read-only at `/mnt/lower`, and the per-run overlay volume at
+`/mnt/upper` holds project changes until write-back. The run's frozen workflow source is
+also bound at its host path, read-only. Archon does not mount all of `ARCHON_HOME`.
 
-Net effect: container-run output is a roughly 7-day TTL on an ephemeral container layer,
-reachable by `docker exec`, and **not** addressable by run id from the host. Retrieval is
-therefore non-uniform — "point an agent at run X's artifacts" is a filesystem path for
-every other run, and a `docker exec` into a specific container within the cleanup window
-for a container run. The blast radius is bounded: container mode is folder-projects-only
-and works only with `containerExec`-capable providers.
+`$STATE_DIR` is not mounted. Files written there inside the container stay in its ephemeral
+layer and disappear when the container is removed. Use `$ARTIFACTS_DIR` for host-visible
+run output; use the project working directory for changes that should pass through the
+overlay diff and write-back gate.
 
-**Workaround.** A node whose output must reach the host should write into the **project
-root** — the node's working directory inside the container, which is the overlay mount —
-rather than into `$ARTIFACTS_DIR` / `$STATE_DIR`. A plain relative path does this. Writes
-there ride the existing overlay diff plus the approval-gated write-back, so they do land on
-the host.
+On rootful Linux daemons, artifact files are initially owned by the container's root user.
+Archon attempts to restore host ownership when suspending or destroying the container.
+This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed`
+and do not stop suspension or destruction. Older resumed runs whose metadata predates the
+artifacts bind retain container-local artifact output;
+Archon logs `isolation.container_resume_without_artifacts_mount` when recreating them.
 
 ## Environment Variables
 

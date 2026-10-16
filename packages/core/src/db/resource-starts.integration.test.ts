@@ -493,10 +493,9 @@ describe('durable resource starts', () => {
     let stored: { intent: string; event_input_names: string | null } | null;
     try {
       stored = raw
-        .query<
-          { intent: string; event_input_names: string | null },
-          SQLQueryBindings[]
-        >('SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?')
+        .query<{ intent: string; event_input_names: string | null }, SQLQueryBindings[]>(
+          'SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+        )
         .get(receiptId);
     } finally {
       raw.close();

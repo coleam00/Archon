@@ -115,7 +115,7 @@ const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
   url: `https://auth/${provider}`,
   expiresIn: 600,
 }));
-const mockPollOAuth = mock<(typeof import('@archon/core'))['pollOAuth']>(() => ({
+const mockPollOAuth = mock<typeof import('@archon/core')['pollOAuth']>(() => ({
   status: 'pending',
 }));
 

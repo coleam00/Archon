@@ -10,6 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type {
+  OverlayMode,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
 } from '@archon/workflows/container-context';
@@ -172,9 +173,8 @@ interface IsolatedEnvironmentBase {
   warnings?: string[];
 }
 
-export interface WorktreeEnvironment<
-  Metadata extends WorktreeMetadata = WorktreeMetadata,
-> extends IsolatedEnvironmentBase {
+export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = WorktreeMetadata>
+  extends IsolatedEnvironmentBase {
   provider: 'worktree';
   branchName: BranchName;
   metadata: Metadata;
@@ -597,7 +597,7 @@ export interface PreparedEnv {
    * read-write — i.e. the agent could bypass the write-back gate. The engine warns
    * loudly at run start when this is `native` (see SECURITY.md). Absent for in-place.
    */
-  overlayMode?: 'fuse' | 'native';
+  overlayMode?: OverlayMode;
 }
 
 /**

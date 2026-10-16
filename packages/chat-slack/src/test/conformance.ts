@@ -95,8 +95,9 @@ export async function processFixture(command?: string[]): Promise<ChatConformanc
     }
     return raw;
   }
-  const { chatInboundResponseSchema, chatRunActionResponseSchema } =
-    await import('@archon/chat-contract');
+  const { chatInboundResponseSchema, chatRunActionResponseSchema } = await import(
+    '@archon/chat-contract'
+  );
   let armed: Promise<unknown> = Promise.resolve();
   return {
     chat: {

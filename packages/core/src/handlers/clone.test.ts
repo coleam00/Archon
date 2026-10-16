@@ -32,8 +32,9 @@ const realExecFileAsync = gitUtils.execFileAsync;
 const realAddSafeDirectory = gitUtils.addSafeDirectory;
 
 // Capture the real functions before the re-export is replaced by the module mock.
-const { findCommandFiles: discoverCommandFiles, isPathInside } =
-  await import('@archon/paths/archon-paths');
+const { findCommandFiles: discoverCommandFiles, isPathInside } = await import(
+  '@archon/paths/archon-paths'
+);
 
 const appRequest = mock(async () => {
   throw Object.assign(new Error('Not Found'), { status: 404 });

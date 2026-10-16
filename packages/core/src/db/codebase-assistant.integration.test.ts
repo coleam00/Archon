@@ -44,8 +44,9 @@ const { updateGlobalConfig } = await import('../config/config-loader');
 const { registerFolder, registerRepository } = await import('../handlers/sql-registration');
 const { getCodebase } = await import('./codebases');
 const { getOrCreateConversation } = await import('./conversations');
-const { formatProjectSection, buildOrchestratorSystemAppend } =
-  await import('../orchestrator/prompt-builder');
+const { formatProjectSection, buildOrchestratorSystemAppend } = await import(
+  '../orchestrator/prompt-builder'
+);
 
 afterAll(async () => {
   await db.close();

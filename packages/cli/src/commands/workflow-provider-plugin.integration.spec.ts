@@ -234,10 +234,9 @@ test('release install registers a provider, runs a workflow, and removal rejects
     expect(count()).toBe(1);
     expect(
       db
-        .query<
-          { output: string },
-          []
-        >("SELECT json_extract(data, '$.node_output') AS output FROM remote_agent_workflow_events WHERE event_type = 'node_completed' AND step_name = 'echo'")
+        .query<{ output: string }, []>(
+          "SELECT json_extract(data, '$.node_output') AS output FROM remote_agent_workflow_events WHERE event_type = 'node_completed' AND step_name = 'echo'"
+        )
         .get()?.output
     ).toContain('release-provider-echo');
     for (const field of ['skills', 'plugins', 'mcp']) {

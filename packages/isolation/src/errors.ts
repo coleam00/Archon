@@ -1,3 +1,4 @@
+import { GitFailure, ConfiguredBaseBranchNotFoundError, type GitFailureKind } from '@archon/git';
 import type { WorktreeSetupFailureKind } from '@archon/workflows/schemas/worktree-setup';
 
 export class WorktreePostCreateError extends Error {
@@ -85,166 +86,70 @@ export class IsolationBlockedError extends Error {
   }
 }
 
-/**
- * Single source of truth for isolation error classification.
- *
- * `known: true` means the error is a recognized infrastructure/config failure
- * that should produce a user-facing "blocked" message. `known: false` means
- * it's classifiable (we have a helpful message) but still a programming /
- * user-input bug that should crash rather than be absorbed as blocked state.
- */
-const ERROR_PATTERNS: {
-  pattern: string;
-  /** A function receives the original error message, for errors whose own text is the action. */
-  message: string | ((cause: string) => string);
-  known: boolean;
-}[] = [
-  {
-    // Checked FIRST: this refusal's message embeds the worktree path, and a
-    // branch slug in that path can contain any generic pattern below
-    // ('timeout', 'cannot adopt'). The refusal already names the checkout and
-    // the exact command that removes it, which a static message cannot: a
-    // branch-matched checkout may live outside the worktree base.
-    pattern: 'its setup did not finish',
-    message: cause => `**Error:** ${cause}`,
-    known: true,
-  },
-  // ─── Container backend (Docker) ──────────────────────────────────────────
-  // Checked FIRST: the docker-permission message is more specific than the
-  // generic 'permission denied' worktree message below and must win.
-  {
-    pattern: 'cannot connect to the docker daemon',
-    message:
-      '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
-      '`systemctl start docker`) and retry, or run without `--container`.',
-    known: true,
-  },
-  {
-    pattern: 'is the docker daemon running',
-    message:
-      '**Error:** The Docker daemon is not reachable. Start Docker and retry, or run ' +
-      'without `--container`.',
-    known: true,
-  },
-  {
-    // Image-agnostic on purpose: this static message can't know the configured
-    // `container.image`. The docker preflight error (docker-exec.ts) already
-    // names the exact missing tag; this classifier fallback must NOT hardcode a
-    // tag (`archon-runner`) or it would contradict a custom `container.image`.
-    pattern: 'no such image',
-    message:
-      '**Error:** The Archon runner image is missing. Build it with ' +
-      '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
-      'or build your configured `container.image` from ' +
-      '`packages/isolation/docker/runner.Dockerfile`.',
-    known: true,
-  },
-  {
-    pattern: 'permission denied while trying to connect to the docker',
-    message:
-      '**Error:** Permission denied connecting to the Docker daemon. Add your user to the ' +
-      '`docker` group (`sudo usermod -aG docker $USER`, then re-login) or run Docker rootless.',
-    known: true,
-  },
-  {
-    pattern: 'permission denied',
-    message:
-      '**Error:** Permission denied while creating workspace. Check file system permissions.',
-    known: true,
-  },
-  {
-    pattern: 'eacces',
-    message:
-      '**Error:** Permission denied while creating workspace. Check file system permissions.',
-    known: true,
-  },
-  {
-    pattern: 'timeout',
-    message: '**Error:** Timed out creating workspace. Git repository may be slow or unavailable.',
-    known: true,
-  },
-  {
-    pattern: 'no space left',
-    message: '**Error:** No disk space available for new workspace.',
-    known: true,
-  },
-  {
-    pattern: 'enospc',
-    message: '**Error:** No disk space available for new workspace.',
-    known: true,
-  },
-  {
-    pattern: 'not a git repository',
-    message: '**Error:** Target path is not a valid git repository.',
-    known: true,
-  },
-  {
-    // Deliberately not `known` — this is a user-input / registration bug,
-    // not an infrastructure failure. Surface classification, but crash.
-    pattern: 'cannot extract owner/repo',
-    message:
-      '**Error:** Repository path is too short to extract owner and repo name. ' +
-      'Re-register the codebase with a full path (e.g. `/home/user/owner/repo`).',
-    known: false,
-  },
-  {
-    pattern: 'branch not found',
-    message:
-      '**Error:** Branch not found. The requested branch may have been deleted or not yet pushed.',
-    known: true,
-  },
-  {
-    pattern: 'no base branch configured',
-    message:
-      '**Error:** No base branch configured. Set `worktree.baseBranch` in `.archon/config.yaml` ' +
-      'or use the `--from` flag to select a branch (e.g., `--from dev`).',
-    known: true,
-  },
-  {
-    pattern: 'cannot detect default branch',
-    message:
-      '**Error:** No base branch could be detected. Set `worktree.baseBranch` in ' +
-      '`.archon/config.yaml` or update the registered codebase default branch.',
-    known: true,
-  },
-  {
-    pattern: 'belongs to a different clone',
-    message:
-      '**Error:** A worktree at the target path was created by a different local clone. ' +
-      'Remove it from that clone, or register this codebase from the same local path.',
-    known: true,
-  },
-  {
-    pattern: 'cannot verify worktree ownership',
-    message:
-      '**Error:** Cannot verify ownership of an existing worktree at the target path. ' +
-      'Check file system permissions and remove any unrelated git directories at that path.',
-    known: true,
-  },
-  {
-    pattern: 'cannot adopt',
-    message:
-      '**Error:** Refused to adopt an existing directory at the worktree path. ' +
-      'Remove it or choose a different branch/codebase registration.',
-    known: true,
-  },
-  {
-    pattern: 'submodule initialization failed',
-    message:
-      '**Error:** Submodule initialization failed. Check credentials and network access to ' +
-      'submodule remotes, or set `worktree.initSubmodules: false` in `.archon/config.yaml` ' +
-      'to opt out if submodules are not needed for your workflows.',
-    known: true,
-  },
-];
+export type IsolationFailureKind =
+  | GitFailureKind
+  | 'permission_denied'
+  | 'no_space'
+  | 'configured_branch_missing'
+  | 'submodule_failed'
+  | 'branch_exists'
+  | 'path_exists'
+  | 'worktree_registered'
+  | 'setup_unfinished'
+  | 'docker_unreachable'
+  | 'runner_image_missing';
 
-/**
- * An isolation error carrying the failure of the cleanup it triggered.
- *
- * The note rides alongside the message instead of being appended to it: both
- * classifiers below match on message text, and cleanup wording such as
- * "permission denied" would otherwise outrank the real cause.
- */
+export class IsolationFailure extends Error {
+  constructor(
+    readonly kind: IsolationFailureKind,
+    message: string,
+    cause?: unknown
+  ) {
+    super(message, { cause });
+    this.name = 'IsolationFailure';
+  }
+}
+
+const FAILURE_MESSAGES = {
+  permission_denied:
+    '**Error:** Permission denied while creating workspace. Check file system permissions.',
+  timeout: '**Error:** Timed out creating workspace. Git repository may be slow or unavailable.',
+  no_space: '**Error:** No disk space available for new workspace.',
+  not_repository: '**Error:** Target path is not a valid git repository.',
+  configured_branch_missing: undefined,
+  default_branch_missing:
+    '**Error:** No base branch could be detected. Set `worktree.baseBranch` in ' +
+    '`.archon/config.yaml` or update the registered codebase default branch.',
+  different_clone:
+    '**Error:** A worktree at the target path was created by a different local clone. ' +
+    'Remove it from that clone, or register this codebase from the same local path.',
+  ownership_unverified:
+    '**Error:** Cannot verify ownership of an existing worktree at the target path. ' +
+    'Check file system permissions and remove any unrelated git directories at that path.',
+  adoption_refused:
+    '**Error:** Refused to adopt an existing directory at the worktree path. ' +
+    'Remove it or choose a different branch/codebase registration.',
+  submodule_failed:
+    '**Error:** Submodule initialization failed. Check credentials and network access to ' +
+    'submodule remotes, or set `worktree.initSubmodules: false` in `.archon/config.yaml` ' +
+    'to opt out if submodules are not needed for your workflows.',
+  docker_unreachable:
+    '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+    '`systemctl start docker`) and retry, or run without `--container`.',
+  // Image-agnostic on purpose: this static message can't know the configured
+  // `container.image`, so it must not hardcode the default tag.
+  runner_image_missing:
+    '**Error:** The Archon runner image is missing. Build it with ' +
+    '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
+    'or build your configured `container.image` from ' +
+    '`packages/isolation/docker/runner.Dockerfile`.',
+  unclassified: undefined,
+  branch_exists: undefined,
+  path_exists: undefined,
+  worktree_registered: undefined,
+  setup_unfinished: undefined,
+} satisfies Record<IsolationFailureKind, string | undefined>;
+
 type ErrorWithCleanupFailure = Error & { cleanupFailure?: string };
 
 /**
@@ -255,49 +160,41 @@ export function recordCleanupFailure(err: Error, detail: string): void {
   (err as ErrorWithCleanupFailure).cleanupFailure = detail;
 }
 
-/**
- * Classify isolation creation errors into user-friendly messages.
- */
-export function classifyIsolationError(err: Error): string {
-  if (err instanceof WorktreePostCreateError) {
-    const cleanup = (err as ErrorWithCleanupFailure).cleanupFailure;
-    return `**Error:** ${err.message}${cleanup ? ` ${cleanup}` : ''}`;
+function failureKind(err: Error): IsolationFailureKind | undefined {
+  if (err instanceof WorktreePostCreateError) return undefined;
+  if ((err instanceof IsolationFailure || err instanceof GitFailure) && err.kind !== 'unclassified')
+    return err.kind;
+  if (err instanceof ConfiguredBaseBranchNotFoundError) return 'configured_branch_missing';
+  if ('code' in err) {
+    if (err.code === 'EACCES' || err.code === 'EPERM') return 'permission_denied';
+    if (err.code === 'ENOSPC') return 'no_space';
+    if (err.code === 'ETIMEDOUT') return 'timeout';
   }
-  if (err instanceof MissingProjectDirectoryError || err instanceof ExistingBranchDivergedError)
-    return `**Error:** ${err.message}`;
+  const causeKind = err.cause instanceof Error ? failureKind(err.cause) : undefined;
+  return (
+    causeKind ??
+    (err instanceof IsolationFailure || err instanceof GitFailure ? 'unclassified' : undefined)
+  );
+}
 
-  const stderr = (err as Error & { stderr?: string }).stderr ?? '';
-  const errorLower = `${err.message} ${stderr}`.toLowerCase();
-
-  const message = ERROR_PATTERNS.find(({ pattern }) => errorLower.includes(pattern))?.message;
+export function classifyIsolationError(err: Error): string {
+  const kind = failureKind(err);
+  const message = kind === undefined ? undefined : FAILURE_MESSAGES[kind];
   const classified =
-    message === undefined
-      ? `**Error:** Could not create isolated workspace (${err.message}).`
-      : typeof message === 'string'
-        ? message
-        : message(err.message);
-
+    message ??
+    (isKnownIsolationError(err)
+      ? `**Error:** ${err.message}`
+      : `**Error:** Could not create isolated workspace (${err.message}).`);
   const cleanupFailure = (err as ErrorWithCleanupFailure).cleanupFailure;
   return cleanupFailure ? `${classified} ${cleanupFailure}` : classified;
 }
 
-/**
- * Returns true if the error is a known infrastructure failure that should
- * produce a user-facing "blocked" message rather than a crash.
- *
- * Unknown errors (programming bugs, unexpected failures) should propagate
- * so they are visible as crashes rather than silent workspace failures.
- */
 export function isKnownIsolationError(err: Error): boolean {
-  if (
+  const kind = failureKind(err);
+  return (
     err instanceof WorktreePostCreateError ||
     err instanceof MissingProjectDirectoryError ||
-    err instanceof ExistingBranchDivergedError
-  )
-    return true;
-
-  const stderr = (err as Error & { stderr?: string }).stderr ?? '';
-  const errorLower = `${err.message} ${stderr}`.toLowerCase();
-
-  return ERROR_PATTERNS.some(({ pattern, known }) => known && errorLower.includes(pattern));
+    err instanceof ExistingBranchDivergedError ||
+    (kind !== undefined && kind !== 'unclassified')
+  );
 }

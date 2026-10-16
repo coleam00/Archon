@@ -41,10 +41,9 @@ function row(f: Fixture): RunRow {
   const db = openReadOnly(join(f.home, 'archon.db'));
   try {
     const run = db
-      .query<
-        RunRow,
-        []
-      >('SELECT * FROM remote_agent_workflow_runs ORDER BY started_at DESC LIMIT 1')
+      .query<RunRow, []>(
+        'SELECT * FROM remote_agent_workflow_runs ORDER BY started_at DESC LIMIT 1'
+      )
       .get();
     if (!run) throw new Error('no run');
     return run;
@@ -160,10 +159,9 @@ function events(f: Fixture, type: string): number {
   try {
     return (
       db
-        .query<
-          { count: number },
-          [string]
-        >('SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE event_type = ?')
+        .query<{ count: number }, [string]>(
+          'SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE event_type = ?'
+        )
         .get(type)?.count ?? 0
     );
   } finally {
@@ -346,10 +344,9 @@ describe('cold CLI continuation host', () => {
     try {
       expect(
         db
-          .query<
-            { data: string },
-            []
-          >("SELECT data FROM remote_agent_workflow_events WHERE event_type = 'wait_signaled' LIMIT 1")
+          .query<{ data: string }, []>(
+            "SELECT data FROM remote_agent_workflow_events WHERE event_type = 'wait_signaled' LIMIT 1"
+          )
           .get()?.data
       ).toContain('42');
     } finally {

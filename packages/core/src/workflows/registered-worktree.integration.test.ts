@@ -26,8 +26,9 @@ mock.module('../db/connection', () => ({
 }));
 const isolation = await import('../db/isolation-environments');
 const { createRegisteredWorktree } = await import('./registered-worktree');
-const { resolveRegisteredWorktree, adoptRegisteredWorktree } =
-  await import('../operations/workflow-adoption');
+const { resolveRegisteredWorktree, adoptRegisteredWorktree } = await import(
+  '../operations/workflow-adoption'
+);
 const { createCodebaseChildResolver } = await import('./child-isolation-resolver');
 const originalEnv = {
   ARCHON_HOME: process.env.ARCHON_HOME,

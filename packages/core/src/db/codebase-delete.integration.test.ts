@@ -218,8 +218,9 @@ for (const replacement of [
 
 test('cleanup supports legacy registrations and rejects their identical re-registration', async () => {
   const { createCodebase, deleteCodebase, getCodebase } = await import('./codebases');
-  const { create, getById, markWorktreeDestroyed, updateMetadata } =
-    await import('./isolation-environments');
+  const { create, getById, markWorktreeDestroyed, updateMetadata } = await import(
+    './isolation-environments'
+  );
   for (const replace of [false, true]) {
     const project = await createCodebase({
       name: `legacy-${replace}`,
@@ -262,8 +263,9 @@ test('cleanup supports legacy registrations and rejects their identical re-regis
 for (const legacy of [false, true]) {
   test(`retiring the same registration is idempotent (legacy: ${legacy})`, async () => {
     const { createCodebase } = await import('./codebases');
-    const { create, getById, markWorktreeDestroyed, updateMetadata } =
-      await import('./isolation-environments');
+    const { create, getById, markWorktreeDestroyed, updateMetadata } = await import(
+      './isolation-environments'
+    );
     const project = await createCodebase({
       name: `idempotent-retire-${legacy}`,
       default_cwd: `/repos/retire-${legacy}`,
@@ -312,8 +314,9 @@ for (const legacy of [false, true]) {
 
 test('legacy writer replacement cannot be retired by a stale cleanup observation', async () => {
   const { createCodebase } = await import('./codebases');
-  const { getById, markWorktreeDestroyed, listByCodebase } =
-    await import('./isolation-environments');
+  const { getById, markWorktreeDestroyed, listByCodebase } = await import(
+    './isolation-environments'
+  );
   const project = await createCodebase({
     name: 'legacy-writer',
     default_cwd: '/repos/legacy-writer',

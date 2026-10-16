@@ -140,8 +140,9 @@ import {
 } from './workflow';
 
 beforeAll(async () => {
-  const { registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers/in-process');
+  const { registerBuiltinProviders, registerCommunityProviders } = await import(
+    '@archon/providers/in-process'
+  );
   registerBuiltinProviders();
   registerCommunityProviders();
 });
@@ -6798,10 +6799,12 @@ describe('workflowGetCommand', () => {
   });
 
   it('reads attribution and observed duration from a terminal row without a start-row join', async () => {
-    const { startNodeExecution, finishNodeExecution, newNodeInvocation } =
-      await import('@archon/workflows/node-execution');
-    const { serializeNodeStateRecord } =
-      await import('@archon/workflows/node-record-serialization');
+    const { startNodeExecution, finishNodeExecution, newNodeInvocation } = await import(
+      '@archon/workflows/node-execution'
+    );
+    const { serializeNodeStateRecord } = await import(
+      '@archon/workflows/node-record-serialization'
+    );
     const completed = finishNodeExecution(
       startNodeExecution({
         runId: 'terminal-only',
@@ -8807,8 +8810,9 @@ describe('workflowRunCommand — detach', () => {
   it('hands the detached child the sealed validated layer instead of a mutable path', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { unsealWorkflowRunConfig } = await import('@archon/core/config');
-    const { workflowRunConfigMetadataSchema } =
-      await import('@archon/workflows/schemas/run-config');
+    const { workflowRunConfigMetadataSchema } = await import(
+      '@archon/workflows/schemas/run-config'
+    );
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
@@ -15045,12 +15049,11 @@ describe('workflowWaitCommand', () => {
   it('says when the owner cannot be checked from this host', async () => {
     const stderrSpy = spyOnStderr();
     const recordedOwner = { host: 'build-2', pid: 4242, uid: 501 };
-    const announceUnknown: Parameters<
-      typeof mockWaitForRunAttention.mockImplementation
-    >[0] = async (_store, _runId, opts) => {
-      await opts?.onAttached?.('running', { kind: 'unknown', recordedOwner });
-      return terminal('completed');
-    };
+    const announceUnknown: Parameters<typeof mockWaitForRunAttention.mockImplementation>[0] =
+      async (_store, _runId, opts) => {
+        await opts?.onAttached?.('running', { kind: 'unknown', recordedOwner });
+        return terminal('completed');
+      };
     mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
     mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
 
