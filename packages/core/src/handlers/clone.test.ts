@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
+import * as registrationRemote from '../services/registration-remote';
 import type { Codebase } from '../types';
 import * as helperInstaller from '../github-auth/credential-helper-install';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -150,6 +151,7 @@ import {
 } from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
+let spyCheckoutRemote: ReturnType<typeof spyOn>;
 let spyFsAccess: ReturnType<typeof spyOn>;
 let spyFsRm: ReturnType<typeof spyOn>;
 let spyFsStat: ReturnType<typeof spyOn>;
@@ -160,6 +162,9 @@ let spyCloneGitRepository: ReturnType<typeof spyOn>;
 let spyGetCanonicalRepoPath: ReturnType<typeof spyOn>;
 
 function setupSpies(): void {
+  spyCheckoutRemote = spyOn(registrationRemote, 'assertCheckoutRemote').mockResolvedValue(
+    undefined
+  );
   // Default: .git does NOT exist (no pre-existing clone)
   spyFsAccess = spyOn(fsPromises, 'access').mockRejectedValue(
     Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
@@ -189,6 +194,7 @@ function setupSpies(): void {
 }
 
 function restoreSpies(): void {
+  spyCheckoutRemote?.mockRestore();
   spyFsAccess?.mockRestore();
   spyFsRm?.mockRestore();
   spyFsRealpath?.mockRestore();

@@ -81,6 +81,49 @@ async function storageRoot(codebaseId: string): Promise<string> {
 }
 
 describe('project storage collisions', () => {
+  test.each([
+    { backend: 'sql', entry: 'url' },
+    { backend: 'sql', entry: 'path' },
+    { backend: 'file', entry: 'url' },
+    { backend: 'file', entry: 'path' },
+  ] as const)(
+    'saved remote ownership is verified on $entry reuse ($backend)',
+    async ({ backend, entry }) => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const path = await gitCheckout(join(root, 'api'), 'https://github.com/acme/api.git');
+      const saved = await registerInStore(store, path);
+      execFileSync('git', [
+        '-C',
+        path,
+        'remote',
+        'set-url',
+        'origin',
+        'https://github.com/foreign/api.git',
+      ]);
+      await expect(
+        entry === 'url'
+          ? cloneRepository(store, 'https://github.com/acme/api.git')
+          : registerInStore(store, path)
+      ).rejects.toThrow('/update-project');
+      expect((await store.listCodebases()).map(row => row.id)).toEqual([saved.codebaseId]);
+    }
+  );
+
+  test('local registration refuses a foreign populated managed source before inserting', async () => {
+    const root = await makeHome();
+    const path = await gitCheckout(join(root, 'api'), 'https://github.com/acme/api.git');
+    const source = join(root, '.archon', 'workspaces', 'acme', 'api', 'source');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, 'foreign.txt'), 'foreign checkout');
+    await expect(registerRepository(path)).rejects.toThrow('already contains');
+    expect(await listCodebases()).toHaveLength(0);
+    expect(await readFile(join(source, 'foreign.txt'), 'utf8')).toBe('foreign checkout');
+  });
+
   test.each(['sql', 'file'] as const)(
     'relative local remotes retain checkout context (%s)',
     async backend => {
@@ -348,7 +391,7 @@ describe('project storage collisions', () => {
         repository_url: url,
       });
       const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, target) => {
-        await gitCheckout(target);
+        await gitCheckout(target, _url);
         return { ok: true, value: undefined };
       });
       const safe = spyOn(git, 'addSafeDirectory').mockResolvedValue(undefined);

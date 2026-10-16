@@ -1404,23 +1404,39 @@ describe('createProjectSourceSymlink', () => {
     }
   });
 
-  test.skipIf(isWindows)(
-    'is a no-op when real directory with contents exists (clone case)',
-    async () => {
-      await ensureProjectStructure('acme', 'widget');
+  test('refuses a populated source belonging to another checkout', async () => {
+    await ensureProjectStructure('acme', 'widget');
 
-      // Put a file in the source dir to simulate a clone
-      const sourcePath = getProjectSourcePath('acme', 'widget');
-      await writeFile(join(sourcePath, 'README.md'), '# Hello');
+    // Put a file in the source dir to simulate a clone
+    const sourcePath = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(sourcePath, 'README.md'), '# Hello');
 
-      // Should not overwrite the directory with a symlink
-      await createProjectSourceSymlink('acme', 'widget', tempTarget);
+    await expect(createProjectSourceSymlink('acme', 'widget', tempTarget)).rejects.toThrow(
+      'already contains'
+    );
 
-      const stats = await lstat(sourcePath);
-      expect(stats.isDirectory()).toBe(true);
-      expect(stats.isSymbolicLink()).toBe(false);
-    }
-  );
+    const stats = await lstat(sourcePath);
+    expect(stats.isDirectory()).toBe(true);
+    expect(stats.isSymbolicLink()).toBe(false);
+  });
+
+  test('refuses a source path occupied by a regular file', async () => {
+    const source = getProjectSourcePath('acme', 'widget');
+    await mkdir(getProjectRoot('acme', 'widget'), { recursive: true });
+    await writeFile(source, 'operator file');
+    await expect(createProjectSourceSymlink('acme', 'widget', tempTarget)).rejects.toThrow(
+      'already contains'
+    );
+    expect(readFileSync(source, 'utf8')).toBe('operator file');
+  });
+
+  test('keeps a populated source when registering that directory itself', async () => {
+    await ensureProjectStructure('acme', 'widget');
+    const source = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(source, 'README.md'), '# Hello');
+    await createProjectSourceSymlink('acme', 'widget', source);
+    expect((await lstat(source)).isDirectory()).toBe(true);
+  });
 
   test.skipIf(isWindows)(
     'replaces empty directory with symlink (ensureProjectStructure case)',

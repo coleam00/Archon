@@ -1102,14 +1102,15 @@ export async function createProjectSourceSymlink(
         `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
       );
     }
-    if (stats.isDirectory()) {
-      // Check if it's a real clone (has contents) vs empty dir from ensureProjectStructure
-      const entries = await readdir(linkPath);
-      if (entries.length > 0) {
-        // Real directory with contents (e.g., from /clone) - don't overwrite
-        return;
-      }
-      // Empty directory from ensureProjectStructure - will be replaced with symlink below
+    if (!stats.isDirectory()) {
+      throw new Error(`Source path at ${linkPath} already contains a file; expected ${targetPath}`);
+    }
+    const entries = await readdir(linkPath);
+    if (entries.length > 0) {
+      if ((await realpath(linkPath)) === (await realpath(targetPath))) return;
+      throw new Error(
+        `Source directory at ${linkPath} already contains another checkout; expected ${targetPath}`
+      );
     }
   } catch (error) {
     const err = error as NodeJS.ErrnoException;

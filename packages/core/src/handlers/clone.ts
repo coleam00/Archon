@@ -27,6 +27,7 @@ import {
 } from '@archon/git';
 import {
   ProjectRegistrationError,
+  assertCheckoutRemote,
   findRegisteredRemote as findRemoteOwner,
   effectiveRegistrationUrl,
   registrationRemote,
@@ -38,6 +39,7 @@ export { ProjectRegistrationError } from '../services/registration-remote';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import {
   allocateProjectName,
+  resolveRegistrationUrl,
   type ProjectIdentity,
 } from '../services/project-registration-identity';
 import { quoteCommandArg } from '../utils/command-args';
@@ -484,6 +486,11 @@ export async function cloneRepository(
       const credentials = await repositoryCredentials(workingUrl, options);
       await ensureProjectStructure(identity.owner, identity.repo);
       await cloneCheckout(workingUrl, existing.default_cwd, credentials);
+    } else if (existing.repository_url) {
+      await assertCheckoutRemote(
+        existing.default_cwd,
+        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
+      );
     }
     if (appSource) await setupAppRepository(existing.default_cwd);
     return loadRepositoryCommands(
@@ -583,6 +590,11 @@ export async function registerRepository(
   const existing = await findCodebaseForCheckoutPath(localPath, codebases);
   if (existing) {
     rejectExistingChoice(options);
+    if (existing.repository_url)
+      await assertCheckoutRemote(
+        localPath,
+        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
+      );
     return {
       codebaseId: existing.id,
       name: existing.name,
