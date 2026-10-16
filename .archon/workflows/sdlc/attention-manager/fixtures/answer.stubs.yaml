@@ -25,7 +25,7 @@ decide:
 apply:
   decision: answered
   summary: "stub: answered with stub-keep"
-  record: "attention-manager/decisions/stub-asking-run/stub-occurrence"
+  record: "attention-manager/decisions/3e92a290149d59ad55207b6b995d2b4a9baaea0c32a88f147376e95e199a3a25"
   evaluation: null
 fixture:
   inputs: { autonomy: answer }
