@@ -54,6 +54,64 @@ const OVERLOAD_MAX_DELAY_MS = 300_000;
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
+/**
+ * Center of the wait after a rate limit outlasts its retries and the provider gave no reset;
+ * jitter widens it to ±50% in {@link rateLimitResumeAt}.
+ */
+export const RATE_LIMIT_PAUSE_DELAY_MS = 10 * 60_000;
+
+/**
+ * When a run paused by a rate limit that outlasted its retries tries again, in epoch ms:
+ * the provider's reported reset while it is still ahead, otherwise a jittered backoff so
+ * runs limited together do not wake in lockstep. A seconds-scale `retryAfterMs` hint is
+ * deliberately not a deadline here: it would wake the run straight into another full retry
+ * cycle.
+ */
+export function rateLimitResumeAt(failure: ProviderFailure, now: number): number {
+  const reportedReset = failure.resetAt === undefined ? Number.NaN : Date.parse(failure.resetAt);
+  if (reportedReset > now) return reportedReset;
+  return now + Math.round(RATE_LIMIT_PAUSE_DELAY_MS * (0.5 + Math.random()));
+}
+
+/**
+ * When the provider-limit wait would try a failed limit again, in epoch ms: a rate limit's
+ * {@link rateLimitResumeAt}, a usage limit's reported reset. Undefined for a usage limit
+ * without a reported reset, which the run cannot wait on, and for any other failure.
+ */
+export function providerLimitResumeAt(failure: ProviderFailure, now: number): number | undefined {
+  if (failure.class === 'rate_limited') return rateLimitResumeAt(failure, now);
+  if (failure.class === 'quota_exhausted' && failure.resetAt !== undefined) {
+    return Date.parse(failure.resetAt);
+  }
+  return undefined;
+}
+
+/**
+ * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
+ * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
+ * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
+ * when every one is a provider limit, so the wait never pauses a run beside an unrelated
+ * failure that each continuation would repeat. Among limits, a usage limit without a reported
+ * reset wins because the run cannot wait on it; otherwise the latest
+ * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
+ */
+export function aggregateProviderFailure(
+  failures: readonly (ProviderFailure | undefined)[],
+  now: number
+): ProviderFailure | undefined {
+  if (failures.length <= 1) return failures[0];
+  const limits: { failure: ProviderFailure; resumeAt: number | undefined }[] = [];
+  for (const failure of failures) {
+    if (failure?.class !== 'rate_limited' && failure?.class !== 'quota_exhausted') return undefined;
+    limits.push({ failure, resumeAt: providerLimitResumeAt(failure, now) });
+  }
+  const unwaitable = limits.find(limit => limit.resumeAt === undefined);
+  if (unwaitable !== undefined) return unwaitable.failure;
+  return limits.reduce((latest, limit) =>
+    (limit.resumeAt ?? 0) > (latest.resumeAt ?? 0) ? limit : latest
+  ).failure;
+}
+
 export function effectiveRetryMaxRetries(
   configuredMaxRetries: number,
   retryClass: RetryClass | undefined,

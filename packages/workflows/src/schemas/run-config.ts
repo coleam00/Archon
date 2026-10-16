@@ -96,6 +96,7 @@ export function deprecatedQuotaPolicyWarning(
       ? 'is deprecated and has no effect. '
       : 'are deprecated and have no effect. ') +
     'A run that hits a provider usage limit waits until the reset time the ' +
-    "provider reports; 'workflows.autoResumeOnQuotaReset: false' turns that off."
+    'provider reports, and one whose rate limit outlasts its retries waits and tries again; ' +
+    "'workflows.autoResumeOnQuotaReset: false' turns that off."
   );
 }

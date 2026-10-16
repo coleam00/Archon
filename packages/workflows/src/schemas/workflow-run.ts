@@ -84,9 +84,10 @@ const workflowWaitEventFields = {
   payload: z.unknown().optional(),
 } as const;
 /**
- * A run whose failed nodes all hit a provider usage limit with a reported reset waits until
- * the latest of those resets (`usageLimitWait` in the DAG executor). The resume claim
- * clears it, and the nodes run again; a repeat limit pauses on a new wait.
+ * A run whose failed nodes all hit a provider usage limit with a reported reset, or a rate
+ * limit that outlasted its retries, waits until the latest of their deadlines
+ * (`usageLimitWait` in the DAG executor). The resume claim clears it, and the nodes run
+ * again; a repeat limit pauses on a new wait.
  */
 const workflowWaitQuotaFields = {
   pauseId: z.string().min(1),
@@ -1314,8 +1315,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  *
  * `runAttention` returns null for ordinary progress without an advisory, including
  * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
- * `usage_limit` is a run waiting for a provider usage limit to reset: it needs no answer and
- * continues by itself at `resumeAt`, but an operator may still cancel or abandon it.
+ * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
+ * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
@@ -1518,7 +1519,7 @@ export type QueuedRunAttention = Extract<
 
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
- * pause someone must answer, a paused run waiting for a provider usage limit to reset,
+ * pause someone must answer, a paused run waiting for a provider usage or rate limit,
  * which an operator may want to see or cancel, or a paused run nothing can read or will
  * continue, which
  * needs someone to look. The queue's list and single read both build items by this one rule.

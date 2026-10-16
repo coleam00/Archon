@@ -130,10 +130,10 @@ concurrency:
   # providers:
   #   pi: 1
 
-# Live tool attention and the usage-limit wait are both on by default.
+# Live tool attention and the provider-limit wait are both on by default.
 workflows:
   toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
-  autoResumeOnQuotaReset: true  # false fails a run on a provider usage limit instead
+  autoResumeOnQuotaReset: true  # false fails a run on a provider usage or rate limit instead
 
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
@@ -853,7 +853,7 @@ DISCORD_STREAMING_MODE=batch
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
-| `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets. `false` fails the run, as before |
+| `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets, or when a rate limit outlasts its retries. `false` fails the run in both cases |
 | `quotaFallbackDelayMs`, `quotaMaxAttempts`, `quotaDeadlineMs` | — | Deprecated and have no effect. They still parse, so an older config or a persisted run config stays readable, and loading one logs a deprecation warning |
 
 Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
@@ -864,7 +864,9 @@ Attention stores only ids, timestamps, and bounded display fields. It never copi
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead; it waits for the latest of those resets. Any other failure, a limit without a reset time, or a reset that has already passed fails the run as before. Archon never guesses a reset time. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead, or a rate limit (below); it waits for the latest of those deadlines. Any other failure, a usage limit without a reset time, or a usage limit whose reset has already passed fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+
+A rate limit (`rate_limited`, such as HTTP 429) that still refuses a node after its retries takes the same wait. Its deadline is the provider's reset when the failure reports one that is still ahead; otherwise Archon waits a computed backoff of 5 to 15 minutes, jittered so runs limited together do not retry together. Resume the run to try sooner.
 
 Only a provider's typed failure starts the wait; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. Pi does not: its SDK passes Archon only the error text, with no limit signal or reset time, so a Pi run that hits a usage limit fails, and you resume it once the limit reopens. No other provider reports a structured quota signal.
 

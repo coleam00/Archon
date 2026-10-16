@@ -453,7 +453,7 @@ These routes record the decision and return. The server's continuation scheduler
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
 Queue items include answerable pauses, `usage_limit` waits that continue automatically
-after reset, and `unreadable` pauses needing inspection. Branch on `kind` before acting:
+when a provider usage limit resets or a rate limit's wait ends (its reported reset, else a backoff), and `unreadable` pauses needing inspection. Branch on `kind` before acting:
 only `attention` and `awaiting_response` accept answers. Outside answerers can submit an
 answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
 
