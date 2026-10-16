@@ -42,13 +42,16 @@ interface Target {
  * repository (a local bare repository behind `url.insteadOf`), so the push it makes
  * first lands and reads back. The fake forge reports that pushed commit as the head.
  */
-function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string; cwd: string } {
-  const { target = {}, ...rest } = options;
+function publishPr(
+  options: ScriptOptions & { target?: Target; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
+): ScriptRun & { head: string; cwd: string } {
+  const { target = {}, forgeAt, ...rest } = options;
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     source: 'gh',
     ...rest,
+    ...(forgeAt ? { forge: forgeAt(head) } : {}),
     cwd,
     gh: { ...rest.gh, pr: { headRefOid: head, ...rest.gh?.pr } },
     inputs: {
@@ -94,7 +97,10 @@ describe('publish-pr opens the pull request at most once', () => {
         source,
         artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
         gh: { pr: { headRefName: 'feature' } },
-        forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord() }) },
+        forgeAt: head => ({
+          kind: 'fake',
+          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }),
+        }),
       });
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
@@ -276,6 +282,43 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
     expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
+  });
+
+  // GitHub's pull request API can report the previous head after the branch moved.
+  // The first `gh pr view` is the read before the push; the next `stale` reads lag.
+  const lagging = (stale: number) => `
+const fakeSpawn = Bun.spawnSync.bind(Bun);
+let views = 0;
+Bun.sleepSync = () => {};
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const result = fakeSpawn(argv, settings);
+  if (argv[0] !== 'gh' || argv[1] !== 'pr' || argv[2] !== 'view' || !argv.includes('--json')) return result;
+  views++;
+  if (views < 2 || views > 1 + ${String(stale)}) return result;
+  const pr = JSON.parse(String(result.stdout));
+  return { ...result, stdout: Buffer.from(JSON.stringify({ ...pr, headRefOid: 'stale' })) };
+} });
+`;
+
+  it('waits for a continued pull request to report the pushed head before recording it', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      gh: { pr: { headRefName: 'feature' } },
+      preload: lagging(3),
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
+  });
+
+  it('refuses when a continued pull request never reports the pushed head', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      gh: { pr: { headRefName: 'feature' } },
+      preload: lagging(100),
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(`pushed ${result.head}, but pull request 42 still reports head stale`);
   });
 
   it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
