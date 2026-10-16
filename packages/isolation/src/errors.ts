@@ -178,10 +178,11 @@ export function classifyIsolationError(err: Error): string {
 }
 
 export function isKnownIsolationError(err: Error): boolean {
+  const kind = failureKind(err);
   return (
     err instanceof WorktreePostCreateError ||
     err instanceof MissingProjectDirectoryError ||
     err instanceof ExistingBranchDivergedError ||
-    failureKind(err) !== undefined
+    (kind !== undefined && kind !== 'unclassified')
   );
 }

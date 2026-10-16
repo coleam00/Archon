@@ -164,7 +164,7 @@ describe('ContainerBackend.prepare', () => {
       expect(error).toBeInstanceOf(IsolationFailure);
       if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
       expect(error.kind).toBe('unclassified');
-      expect(isKnownIsolationError(error)).toBe(true);
+      expect(isKnownIsolationError(error)).toBe(false);
       if (phase === 'run') expect(error).toBe(failures[0]);
       else {
         expect(error.message).toContain('docker exec failed');
@@ -788,7 +788,7 @@ describe('ContainerBackend.resumeEnv', () => {
           if (cleanupFails) {
             expect(error).toBeInstanceOf(IsolationFailure);
             if (!(error instanceof IsolationFailure)) throw error;
-            expect(isKnownIsolationError(error)).toBe(true);
+            expect(isKnownIsolationError(error)).toBe(false);
             expect(error.message).toContain(persistenceError.message);
             expect(error.message).toContain(cleanupError.message);
             expect(error.cause).toBeInstanceOf(AggregateError);

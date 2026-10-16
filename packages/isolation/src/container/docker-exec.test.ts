@@ -32,8 +32,8 @@ test.skipIf(process.platform === 'win32')(
     expect(error.message).toContain('docker image inspect failed');
     expect(error.message).toContain(stderr);
     expect(error.message).toContain('exit code 23');
-    expect(isKnownIsolationError(error)).toBe(true);
-    expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
+    expect(isKnownIsolationError(error)).toBe(false);
+    expect(classifyIsolationError(error)).toContain(error.message);
   }
 );
 
@@ -142,7 +142,7 @@ describe('Docker failure classification', () => {
     expect(error.cause).toBeInstanceOf(IsolationFailure);
     if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
     expect(error.cause.cause).toBe(cause);
-    expect(isKnownIsolationError(error)).toBe(true);
+    expect(isKnownIsolationError(error)).toBe(false);
     expect(classifyIsolationError(error)).toContain(stderr);
     expect(classifyIsolationError(error)).toContain('exit code 1');
     expect(classifyIsolationError(error)).toContain('Cannot inspect image');

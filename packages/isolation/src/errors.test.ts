@@ -70,7 +70,7 @@ describe('typed isolation failures', () => {
     const wrapped = new Error(`Failed to create PR worktree: ${failure.message}`, {
       cause: failure,
     });
-    expect(isKnownIsolationError(wrapped)).toBe(true);
+    expect(isKnownIsolationError(wrapped)).toBe(false);
     expect(classifyIsolationError(wrapped)).toContain('git worktree add');
     expect(classifyIsolationError(wrapped)).toContain(cause.stderr);
     expect(classifyIsolationError(wrapped)).toContain('exit code 128');
@@ -84,7 +84,11 @@ describe('typed isolation failures', () => {
     ['ETIMEDOUT', 'Timed out'],
   ] as const)('classifies structured errno %s through context wrappers', (code, message) => {
     const failure = new Error('Cannot inspect path containing timeout', {
-      cause: Object.assign(new Error('arbitrary vendor wording'), { code }),
+      cause: new IsolationFailure(
+        'unclassified',
+        'process failure',
+        Object.assign(new Error('arbitrary vendor wording'), { code })
+      ),
     });
     expect(isKnownIsolationError(failure)).toBe(true);
     expect(classifyIsolationError(failure)).toContain(message);

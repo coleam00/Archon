@@ -3200,20 +3200,25 @@ describe('WorktreeProvider', () => {
           countActiveByCodebase: async () => 0,
         };
         const resolver = new IsolationResolver({ store, provider });
-        const result = await resolver.resolve({
+        const resolution = resolver.resolve({
           existingEnvId: null,
           codebase: { id: 'cb-123', defaultCwd: '/workspace/repo', name: 'owner/repo' },
           hints: { workflowType: 'issue', workflowId: '42' },
           platformType: 'web',
         });
-        expect(result.status).toBe('blocked');
-        if (result.status !== 'blocked') throw new Error('expected blocked result');
-        expect(result.userMessage).toContain(
-          path === 'ancestry' ? 'original git evidence' : 'Permission denied'
-        );
         if (path === 'ancestry') {
-          expect(result.userMessage).toContain('exit code 128');
-          expect(result.userMessage).toContain('merge-base failed');
+          const error = await resolution.catch((error: unknown) => error);
+          expect(error).toBeInstanceOf(Error);
+          if (!(error instanceof Error)) throw error;
+          expect(error.cause).toMatchObject({ cause });
+          expect(error.message).toContain('merge-base failed');
+          expect(error.message).toContain('original git evidence');
+          expect(error.message).toContain('exit code 128');
+        } else {
+          const result = await resolution;
+          expect(result.status).toBe('blocked');
+          if (result.status !== 'blocked') throw new Error('expected blocked result');
+          expect(result.userMessage).toContain('Permission denied');
         }
       });
     }

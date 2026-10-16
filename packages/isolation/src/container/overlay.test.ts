@@ -103,7 +103,7 @@ describe('summarizeOverlayChanges', () => {
     expect(error.message).toContain('exit code 23');
     expect(error.cause).toBe(failure);
     expect(failure.cause).toBe(cause);
-    expect(isKnownIsolationError(error)).toBe(true);
+    expect(isKnownIsolationError(error)).toBe(false);
   });
 });
 
