@@ -395,6 +395,44 @@ describe('project storage collisions', () => {
   );
 
   test.each(['sql', 'file'] as const)(
+    '%s rejected clone removes its checkout when an independent repository owns the remote',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const url = 'https://github.com/acme/api.git';
+      const target = join(root, '.archon', 'workspaces', 'acme', 'api', 'source');
+      const ownerPath = await gitCheckout(join(root, 'independent'), url);
+      await writeFile(join(ownerPath, 'operator-work.txt'), 'keep my work');
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+        await gitCheckout(path, url);
+        return { ok: true, value: undefined };
+      });
+      const racingStore = {
+        ...store,
+        createCodebase: async (input: Parameters<typeof createCodebase>[0]) => {
+          await store.createCodebase({ ...input, name: 'Remote owner', default_cwd: ownerPath });
+          return store.createCodebase(input);
+        },
+      };
+      try {
+        await expect(cloneRepository(racingStore, url)).rejects.toThrow(ownerPath);
+        await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(join(ownerPath, 'operator-work.txt'), 'utf8')).toBe('keep my work');
+        expect(
+          execFileSync('git', ['-C', ownerPath, 'status', '--porcelain'], { encoding: 'utf8' })
+        ).toContain('operator-work.txt');
+        expect(await store.listCodebases()).toMatchObject([{ default_cwd: ownerPath }]);
+        expect(await store.listCodebases()).toHaveLength(1);
+      } finally {
+        clone.mockRestore();
+      }
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
     '%s rejected clone preserves a registered linked worktree and its Git backing store',
     async backend => {
       const root = await makeHome();
