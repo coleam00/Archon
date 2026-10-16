@@ -429,7 +429,7 @@ export class ContainerBackend implements IIsolationBackend {
         throw new IsolationFailure(
           'unclassified',
           `Cannot resume container env '${envId}': invalid persisted overlay mode ` +
-            `'${String(meta.overlayMode)}'. Expected one of: ${OVERLAY_MODES.join(', ')}.`
+            `${JSON.stringify(meta.overlayMode)}. Expected one of: ${OVERLAY_MODES.join(', ')}.`
         );
       }
       const containerId = await this.getContainerId(containerName);
@@ -440,6 +440,21 @@ export class ContainerBackend implements IIsolationBackend {
             `'${containerId}' does not match recorded ID '${meta.containerId}'. ` +
             'Its overlay mode is unknown; remove the unrecorded container before retrying, ' +
             `preserving overlay volume '${volume}'.`
+        );
+      }
+      const { stdout } = await this.docker(['inspect', '-f', '{{json .Config.Env}}', containerId]);
+      const environment: unknown = JSON.parse(stdout);
+      const modeEntries = Array.isArray(environment)
+        ? environment.filter(
+            (entry: unknown): entry is string =>
+              typeof entry === 'string' && entry.startsWith('ARCHON_OVERLAY_MODE=')
+          )
+        : [];
+      if (modeEntries.length !== 1 || modeEntries[0] !== `ARCHON_OVERLAY_MODE=${priorMode}`) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': container '${containerId}' overlay mode ` +
+            `${JSON.stringify(modeEntries)} does not match recorded overlay mode '${priorMode}'.`
         );
       }
       if (presence === 'stopped') {

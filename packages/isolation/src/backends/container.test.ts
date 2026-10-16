@@ -784,28 +784,73 @@ describe('ContainerBackend.suspend', () => {
 });
 
 describe('ContainerBackend.resumeEnv', () => {
-  for (const state of ['running', 'exited']) {
-    test.each(['bogus', '', null, 1])(
-      `rejects invalid persisted overlay mode %j for a ${state} container`,
-      async overlayMode => {
+  for (const state of ['running', 'created', 'exited', 'dead', 'removing']) {
+    test.each(
+      ['bogus', '', null, 1, { toString: null, value: 'broken-mode' }, ['bogus']].map(value => [
+        value,
+      ])
+    )(`rejects invalid persisted overlay mode %j for a ${state} container`, async overlayMode => {
+      const store = fakeStore();
+      const row = seedContainerRow(store);
+      await store.updateMetadata(row.id, { overlayMode });
+      const docker = fakeDocker(args => {
+        if (args[0] === 'container')
+          return { stdout: `cid-orig\tarchon-res-1\t${state}\n`, stderr: '' };
+        if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+          return { stdout: 'cid-orig\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const error = await backend.resumeEnv(row.id).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(IsolationFailure);
+      if (!(error instanceof IsolationFailure)) throw error;
+      expect(error.kind).toBe('unclassified');
+      expect(error.message).toContain('invalid persisted overlay mode');
+      expect(error.message).toContain(row.id);
+      expect(error.message).toContain(JSON.stringify(overlayMode));
+      expect(isKnownIsolationError(error)).toBe(false);
+      expect(docker.calls.some(args => args[0] === 'start' || args[0] === 'exec')).toBe(false);
+    });
+  }
+
+  for (const state of ['running', 'created', 'exited', 'dead', 'removing']) {
+    test.each([
+      ['fuse', ['ARCHON_OVERLAY_MODE=native']],
+      ['native', ['ARCHON_OVERLAY_MODE=fuse']],
+      ['fuse', []],
+      ['fuse', ['ARCHON_OVERLAY_MODE=bogus']],
+      ['fuse', ['ARCHON_OVERLAY_MODE=fuse', 'ARCHON_OVERLAY_MODE=native']],
+    ])(
+      `rejects unverified container mode for a ${state} container (stored: %s, env: %j)`,
+      async (mode, environment) => {
         const store = fakeStore();
-        const row = seedContainerRow(store);
-        await store.updateMetadata(row.id, { overlayMode });
+        seedContainerRow(store, { overlayMode: mode });
         const docker = fakeDocker(args => {
           if (args[0] === 'container')
             return { stdout: `cid-orig\tarchon-res-1\t${state}\n`, stderr: '' };
           if (args[0] === 'inspect' && args.includes('{{.Id}}'))
             return { stdout: 'cid-orig\n', stderr: '' };
+          if (args[0] === 'inspect' && args.includes('{{json .Config.Env}}')) {
+            expect(args.at(-1)).toBe('cid-orig');
+            return { stdout: JSON.stringify(environment), stderr: '' };
+          }
           return { stdout: '', stderr: '' };
         });
         const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-        const error = await backend.resumeEnv(row.id).catch((error: unknown) => error);
+        const error = await backend.resumeEnv('env-c').catch((error: unknown) => error);
         expect(error).toBeInstanceOf(IsolationFailure);
         if (!(error instanceof IsolationFailure)) throw error;
         expect(error.kind).toBe('unclassified');
-        expect(error.message).toContain('invalid persisted overlay mode');
+        expect(error.message).toContain('env-c');
+        expect(error.message).toContain('cid-orig');
+        expect(error.message).toContain(`does not match recorded overlay mode '${String(mode)}'`);
+        expect(error.message).toContain(JSON.stringify(environment));
         expect(isKnownIsolationError(error)).toBe(false);
-        expect(docker.calls.some(args => args[0] === 'start' || args[0] === 'exec')).toBe(false);
+        expect(
+          docker.calls.some(
+            args => args[0] !== undefined && ['start', 'exec', 'run', 'rm'].includes(args[0])
+          )
+        ).toBe(false);
       }
     );
   }
@@ -825,11 +870,13 @@ describe('ContainerBackend.resumeEnv', () => {
       if (args[0] === 'exec' && runs === 1) throw new IsolationFailure('unclassified', 'not ready');
       if (args[0] === 'inspect')
         return {
-          stdout: args.includes('{{.Id}}')
-            ? 'cid-2\n'
-            : args.includes('{{.State.ExitCode}}')
-              ? '78\n'
-              : 'false\n',
+          stdout: args.includes('{{json .Config.Env}}')
+            ? JSON.stringify(['ARCHON_OVERLAY_MODE=native'])
+            : args.includes('{{.Id}}')
+              ? 'cid-2\n'
+              : args.includes('{{.State.ExitCode}}')
+                ? '78\n'
+                : 'false\n',
           stderr: '',
         };
       return { stdout: '', stderr: '' };
@@ -874,11 +921,13 @@ describe('ContainerBackend.resumeEnv', () => {
               throw new IsolationFailure('unclassified', 'not ready');
             if (args[0] === 'inspect')
               return {
-                stdout: args.includes('{{.Id}}')
-                  ? (containerId ?? '')
-                  : args.includes('{{.State.ExitCode}}')
-                    ? '78'
-                    : 'false',
+                stdout: args.includes('{{json .Config.Env}}')
+                  ? JSON.stringify([`ARCHON_OVERLAY_MODE=${activeMode}`])
+                  : args.includes('{{.Id}}')
+                    ? (containerId ?? '')
+                    : args.includes('{{.State.ExitCode}}')
+                      ? '78'
+                      : 'false',
                 stderr: '',
               };
             if (args[0] === 'rm') {
@@ -952,6 +1001,11 @@ describe('ContainerBackend.resumeEnv', () => {
         if (args[0] === 'container' && args[1] === 'ls') {
           return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
         }
+        if (args[0] === 'inspect' && args.includes('{{json .Config.Env}}'))
+          return {
+            stdout: JSON.stringify(['PATH=/usr/bin', `ARCHON_OVERLAY_MODE=${mode ?? 'native'}`]),
+            stderr: '',
+          };
         if (args[0] === 'inspect' && args.includes('{{.Id}}'))
           return { stdout: 'cid-orig\n', stderr: '' };
         return { stdout: '', stderr: '' };
@@ -974,6 +1028,11 @@ describe('ContainerBackend.resumeEnv', () => {
         if (args[0] === 'container' && args[1] === 'ls') {
           return { stdout: 'cid-orig\tarchon-res-1\texited\n', stderr: '' };
         }
+        if (args[0] === 'inspect' && args.includes('{{json .Config.Env}}'))
+          return {
+            stdout: JSON.stringify(['PATH=/usr/bin', `ARCHON_OVERLAY_MODE=${mode ?? 'native'}`]),
+            stderr: '',
+          };
         if (args[0] === 'inspect' && args.includes('{{.Id}}'))
           return { stdout: 'cid-orig\n', stderr: '' };
         if (args[0] === 'start') return { stdout: '', stderr: '' };
