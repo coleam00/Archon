@@ -515,6 +515,23 @@ export async function localBranchExists(
   }
 }
 
+/** Whether the remote-tracking ref `refs/remotes/<remote>/<branch>` exists locally. */
+export async function remoteTrackingBranchExists(
+  repoPath: RepoPath,
+  remote: string,
+  branchName: BranchName
+): Promise<boolean> {
+  try {
+    return await refExists(repoPath, `refs/remotes/${remote}/${branchName}`);
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(
+      `Failed to verify remote-tracking branch '${remote}/${branchName}' at ${repoPath}: ${err.message}`,
+      { cause: error }
+    );
+  }
+}
+
 async function refExists(repoPath: RepoPath, ref: string): Promise<boolean> {
   try {
     await execFileAsync('git', ['-C', repoPath, 'show-ref', '--verify', '--quiet', ref], {

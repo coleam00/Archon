@@ -6709,6 +6709,25 @@ export interface components {
               code?: string;
             }[];
           };
+          worktree_disposition?:
+            | {
+                /** @enum {string} */
+                disposition: 'release';
+              }
+            | {
+                /** @enum {string} */
+                disposition: 'retained';
+                /** @enum {string} */
+                reason:
+                  | 'resumable'
+                  | 'cancelled'
+                  | 'workspace_retained'
+                  | 'uncommitted_changes'
+                  | 'unpushed_commits'
+                  | 'published_branch'
+                  | 'check_failed';
+                detail?: string;
+              };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
         nodes: {

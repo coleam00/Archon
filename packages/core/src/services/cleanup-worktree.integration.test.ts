@@ -47,8 +47,16 @@ mock.module('../db/connection', () => ({
 }));
 const isolationDb = await import('../db/isolation-environments');
 const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { onConversationClosed, reclaimRunWorktree, removeEnvironment, runScheduledCleanup } =
-  await import('./cleanup-service');
+const {
+  assessCompletedRunWorktree,
+  cleanupStaleWorktrees,
+  onConversationClosed,
+  reclaimRunWorktree,
+  releaseCompletedRunWorktree,
+  removeEnvironment,
+  runScheduledCleanup,
+} = await import('./cleanup-service');
+const codebaseDb = await import('../db/codebases');
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const process = Bun.spawn(['git', '-C', path, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -602,6 +610,154 @@ describe('owned worktree release', () => {
     } finally {
       exec.mockRestore();
     }
+  });
+});
+
+describe('completed run worktree release', () => {
+  const readers = () => ({
+    getCodebase: codebaseDb.getCodebase,
+    getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+  });
+  const assess = () =>
+    assessCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
+  const commitInWorktree = async (): Promise<void> => {
+    await writeFile(join(env.working_path, 'work'), 'work');
+    await git(env.working_path, 'add', 'work');
+    await git(env.working_path, 'commit', '-qm', 'work');
+  };
+
+  test.each(['sql', 'file'] as const)(
+    '%s: a clean checkout whose commits are all on a remote is removed, keeping its branch',
+    async persistence => {
+      const target =
+        persistence === 'sql'
+          ? store
+          : (
+              await (
+                await import('../workflows/file-host')
+              ).createFileWorkflowHost(join(root, 'store'))
+            ).records.isolation;
+      if (persistence === 'file') {
+        env = await target.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'release',
+          working_path: env.working_path,
+          branch_name: toBranchName(env.branch_name),
+          metadata: env.metadata,
+        });
+        run.metadata = {
+          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+        };
+      }
+      const completed = { ...run, status: 'completed' as const };
+
+      expect(await assessCompletedRunWorktree(completed, target, readers())).toEqual({
+        disposition: 'release',
+      });
+      await releaseCompletedRunWorktree(completed, target, readers());
+
+      expect(existsSync(env.working_path)).toBe(false);
+      expect((await target.getById(env.id))?.status).toBe('destroyed');
+      expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+    }
+  );
+
+  test('a commit on no remote keeps the checkout', async () => {
+    await commitInWorktree();
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '1 commit(s) on no remote',
+    });
+  });
+
+  test('uncommitted changes keep the checkout', async () => {
+    await writeFile(join(env.working_path, 'file'), 'edited');
+    expect(await assess()).toEqual({ disposition: 'retained', reason: 'uncommitted_changes' });
+  });
+
+  test('a branch published to the configured remote waits for the merged sweep', async () => {
+    await mkdir(join(repo, '.archon'));
+    await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
+    await commitInWorktree();
+    await git(env.working_path, 'push', '-q', 'upstream', `HEAD:refs/heads/${env.branch_name}`);
+    await git(repo, 'fetch', '-q', 'upstream');
+    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+  });
+
+  test('a check that cannot run is reported, not thrown', async () => {
+    run.metadata = { owned_worktree: { envId: env.id, creationId: randomUUID() } };
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'check_failed',
+      detail: 'creation proof does not match its isolation record',
+    });
+  });
+
+  test('work that appears after the assessment refuses the release', async () => {
+    const completed = { ...run, status: 'completed' as const };
+    expect(await assessCompletedRunWorktree(completed, store, readers())).toEqual({
+      disposition: 'release',
+    });
+    await writeFile(join(env.working_path, 'late'), 'late work');
+
+    await expect(releaseCompletedRunWorktree(completed, store, readers())).rejects.toThrow(
+      'no longer releasable: uncommitted_changes'
+    );
+    expect(await readFile(join(env.working_path, 'late'), 'utf8')).toBe('late work');
+    expect(await status()).toBe('active');
+  });
+});
+
+describe('the age sweep keeps work that exists nowhere else', () => {
+  const age = (id: string): Promise<unknown> =>
+    db.query(
+      `UPDATE remote_agent_isolation_environments SET created_at = datetime('now', '-30 days') WHERE id = $1`,
+      [id]
+    );
+
+  test('a stale environment with no run keeps a commit on no remote', async () => {
+    await writeFile(join(env.working_path, 'work'), 'work');
+    await git(env.working_path, 'add', 'work');
+    await git(env.working_path, 'commit', '-qm', 'work');
+    await age(env.id);
+
+    const result = await cleanupStaleWorktrees(codebaseId, repo);
+
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([
+      {
+        branchName: env.branch_name,
+        reason: `1 unpushed commit(s); remove it explicitly with archon complete ${env.branch_name} --force`,
+      },
+    ]);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
+  test('a stale environment with no run and nothing unpushed is still removed', async () => {
+    await age(env.id);
+    const result = await cleanupStaleWorktrees(codebaseId, repo);
+    expect(result.removed).toEqual([env.branch_name]);
+    expect(await status()).toBe('destroyed');
+  });
+
+  test('a missing checkout keeps the branch it created while it holds a commit on no remote', async () => {
+    await writeFile(join(env.working_path, 'work'), 'work');
+    await git(env.working_path, 'add', 'work');
+    await git(env.working_path, 'commit', '-qm', 'work');
+    const tip = await git(env.working_path, 'rev-parse', 'HEAD');
+    await git(repo, 'worktree', 'remove', env.working_path);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: env.id,
+      reason: `path missing but 1 unpushed commit(s); remove it explicitly with archon complete ${env.branch_name} --force`,
+    });
+    expect(await status()).toBe('active');
+    expect(await git(repo, 'rev-parse', env.branch_name)).toBe(tip);
   });
 });
 

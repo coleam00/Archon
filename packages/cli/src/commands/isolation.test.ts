@@ -1013,6 +1013,7 @@ describe('isolationCleanupCommand', () => {
       kind: 'unpushed',
       runId: 'run-failed-1',
       commits: 2,
+      display: 'failed run run-fail has 2 unpushed commit(s)',
     });
 
     await isolationCleanupCommand(7);

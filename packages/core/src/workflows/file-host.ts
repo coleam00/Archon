@@ -33,6 +33,7 @@ import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { createWorkflowDeps } from './store-adapter';
+import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
@@ -321,7 +322,42 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     getCodebaseEnvVars: async id =>
       (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
   });
-  const deps = createWorkflowDeps(store, 'files');
+  const worktreeReaders: WorktreeOwnershipReaders = {
+    getCodebase: id => records.codebases.getCodebase(id),
+    getLiveRunOwningEnv: async id => {
+      const env = await records.isolation.getById(id);
+      const runs = await listRuns(root);
+      return (
+        runs
+          .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
+          .find(
+            row =>
+              (!isTerminalRunStatus(row.status) ||
+                RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
+              (row.metadata.isolation_env_id === id ||
+                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
+                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
+          ) ?? null
+      );
+    },
+  };
+  const deps: ReturnType<typeof createWorkflowDeps> = {
+    ...createWorkflowDeps(store, 'files'),
+    completedRunWorktree: {
+      assess: async run =>
+        (await import('../services/cleanup-service')).assessCompletedRunWorktree(
+          run,
+          records.isolation,
+          worktreeReaders
+        ),
+      release: async run =>
+        (await import('../services/cleanup-service')).releaseCompletedRunWorktree(
+          run,
+          records.isolation,
+          worktreeReaders
+        ),
+    },
+  };
   return {
     records,
     deps,
@@ -337,27 +373,11 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
       reclaimRunWorktree: async (run, isolation) =>
-        (await import('../services/cleanup-service')).reclaimRunWorktree(run, isolation, {
-          getCodebase: id => records.codebases.getCodebase(id),
-          getLiveRunOwningEnv: async id => {
-            const env = await records.isolation.getById(id);
-            const runs = await listRuns(root);
-            return (
-              runs
-                .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-                .find(
-                  row =>
-                    (!isTerminalRunStatus(row.status) ||
-                      RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-                    (row.metadata.isolation_env_id === id ||
-                      worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId ===
-                        id ||
-                      (row.codebase_id === env?.codebase_id &&
-                        row.working_path === env?.working_path))
-                ) ?? null
-            );
-          },
-        }),
+        (await import('../services/cleanup-service')).reclaimRunWorktree(
+          run,
+          isolation,
+          worktreeReaders
+        ),
       reclaimContainerEnv: async (id, isolation) =>
         (await import('../services/cleanup-service')).reclaimContainerEnv(id, isolation),
     }),

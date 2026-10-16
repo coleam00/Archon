@@ -8,7 +8,7 @@ import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
 import { buildRunTerminalTelemetry } from './run-terminal-telemetry';
-import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
+import { RUN_GRAPH_METADATA_KEY, type WorktreeDisposition } from './schemas/terminal-record';
 import {
   describe,
   it,
@@ -44571,5 +44571,90 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       )
     ).toHaveLength(0);
     expect(store.getDagResumeSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- completed run worktree release', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-release-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  async function complete(
+    disposition: WorktreeDisposition | null,
+    release: () => Promise<void> = async () => {}
+  ): Promise<{ order: string[]; store: MockWorkflowStore; released: boolean }> {
+    const order: string[] = [];
+    let released = false;
+    const mockDeps = createMockDeps();
+    mockDeps.store.completeWorkflowRun.mockImplementation(async () => {
+      order.push('complete');
+    });
+    const deps: MockWorkflowDeps<MockWorkflowStore> = {
+      ...mockDeps,
+      completedRunWorktree: {
+        assess: async () => {
+          order.push('assess');
+          return disposition;
+        },
+        release: async () => {
+          order.push('release');
+          released = true;
+          await release();
+        },
+      },
+    };
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-release',
+        cwd: testDir,
+        workflow: {
+          name: 'release-test',
+          nodes: [{ id: 'only', kind: 'exec', runtime: 'sh', script: 'echo done' }],
+        },
+        workflowRun: makeWorkflowRun('release-run-id'),
+      })
+    );
+    return { order, store: mockDeps.store, released };
+  }
+
+  it('records the assessment in the completion and releases only after the write', async () => {
+    const { order, store } = await complete({ disposition: 'release' });
+
+    expect(order).toEqual(['assess', 'complete', 'release']);
+    expect(store.completeWorkflowRun.mock.calls[0]?.[2]).toMatchObject({
+      worktree_disposition: { disposition: 'release' },
+    });
+  });
+
+  it('keeps a retained worktree and records why', async () => {
+    const retained: WorktreeDisposition = { disposition: 'retained', reason: 'unpushed_commits' };
+    const { order, store, released } = await complete(retained);
+
+    expect(released).toBe(false);
+    expect(order).toEqual(['assess', 'complete']);
+    expect(store.completeWorkflowRun.mock.calls[0]?.[2]).toMatchObject({
+      worktree_disposition: retained,
+    });
+  });
+
+  it('leaves the run completed when the release fails', async () => {
+    const { order, store } = await complete({ disposition: 'release' }, async () => {
+      throw new Error('worktree is no longer releasable: uncommitted_changes');
+    });
+
+    expect(order).toEqual(['assess', 'complete', 'release']);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 });
