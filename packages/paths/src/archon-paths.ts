@@ -603,7 +603,14 @@ export function getWebDistDir(version: string): string {
 // =============================================================================
 
 /** Valid characters for owner/repo segments (GitHub-compatible, no path traversal) */
-const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+const SAFE_NAME_CHARS = 'a-zA-Z0-9._-';
+const SAFE_NAME = new RegExp(`^[${SAFE_NAME_CHARS}]+$`);
+const UNSAFE_NAME_CHAR = new RegExp(`[^${SAFE_NAME_CHARS}]`, 'g');
+
+/** Replace each character {@link parseOwnerRepo} rejects in a segment with `-`. */
+export function toSafeNameSegment(value: string): string {
+  return value.replace(UNSAFE_NAME_CHAR, '-');
+}
 
 /**
  * Parse "owner/repo" from a codebase name string.

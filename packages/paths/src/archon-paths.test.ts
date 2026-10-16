@@ -33,6 +33,7 @@ import {
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  toSafeNameSegment,
   resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
@@ -508,6 +509,13 @@ describe('archon-paths', () => {
 
     test('returns null for bare name', () => {
       expect(parseOwnerRepo('widget')).toBeNull();
+    });
+
+    test('accepts any segment made safe by toSafeNameSegment', () => {
+      expect(parseOwnerRepo(`_local/${toSafeNameSegment('org/team app~ü')}-2`)).toEqual({
+        owner: '_local',
+        repo: 'org-team-app---2',
+      });
     });
 
     test('returns null for empty string', () => {

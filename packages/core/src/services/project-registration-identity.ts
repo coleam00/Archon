@@ -8,6 +8,7 @@ import {
   getProjectStoragePaths,
   resolveProjectStorageKey,
   parseOwnerRepo,
+  toSafeNameSegment,
 } from '@archon/paths';
 import type { Codebase } from '../schemas/codebase';
 
@@ -95,7 +96,7 @@ function candidateName(kind: Codebase['kind'], derived: string, n: number): stri
   if (n === 1) return derived;
   if (kind === 'folder') return `${derived}-${n}`;
   const { owner, repo } = parseOwnerRepo(derived) ?? { owner: '_local', repo: derived };
-  return `${owner}/${repo.replace(/[^a-zA-Z0-9._-]/g, '-')}-${n}`;
+  return `${owner}/${toSafeNameSegment(repo)}-${n}`;
 }
 
 export function allocateProjectName(

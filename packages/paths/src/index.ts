@@ -28,6 +28,7 @@ export {
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  toSafeNameSegment,
   resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
