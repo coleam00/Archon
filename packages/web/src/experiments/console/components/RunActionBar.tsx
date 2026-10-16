@@ -16,9 +16,10 @@ interface RunActionBarProps {
  *   running   → Cancel; Abandon too once cancel was refused (409: no live owner
  *               answered, or it could not be stopped). Abandon is then how the
  *               operator releases a run whose process is gone.
- *   paused    → Abandon for attention and usage-limit waits (Resume too for an attention
- *               wait paused before answers existed); AttentionAnswerPanel answers attention
- *               waits, gates use ApprovalPanel, a usage-limit wait continues by itself
+ *   paused    → Abandon for attention and provider-limit waits; Resume too for a
+ *               provider-limit wait (it continues by itself, Resume tries sooner) and for
+ *               an attention wait paused before answers existed; AttentionAnswerPanel
+ *               answers attention waits, gates use ApprovalPanel
  *   failed    → Resume · Abandon
  *   completed → Re-run when the run has a project
  *   cancelled → Re-run
@@ -79,6 +80,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
   // existed still continues with a bare resume.
   const canResume =
     run.status === 'failed' ||
+    run.attention?.kind === 'usage_limit' ||
     (run.attention?.kind === 'attention' && isLegacyAttention(run.attention));
 
   return (
