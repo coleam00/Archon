@@ -4091,6 +4091,7 @@ describe('executeWorkflow', () => {
         USER_KEY: 'u_val',
       });
       expect(configArg?.protectedEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual([
         'db_val',
         'reserved-db-secret',
@@ -4190,6 +4191,7 @@ describe('executeWorkflow', () => {
         'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');

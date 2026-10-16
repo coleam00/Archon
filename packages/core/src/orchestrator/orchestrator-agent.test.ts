@@ -444,7 +444,15 @@ mock.module('@archon/providers', () => ({
     if (!mockIsRegisteredProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
     return {
       parseConfig: (raw: Record<string, unknown>) => raw,
-      credentials: { vendorFor: (model?: string) => mockChatVendor(model) },
+      credentials: {
+        kind: 'static',
+        specs: ['anthropic', 'openai'].map(vendor => ({
+          vendor,
+          displayName: vendor,
+          kinds: ['api_key', 'subscription'],
+        })),
+        vendorFor: (model?: string) => mockChatVendor(model),
+      },
     };
   },
   getAgentProvider: mock(() => ({
@@ -6102,7 +6110,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as {
       env?: Record<string, string>;
       protectedEnvKeys?: readonly string[];
+      userCredentialEnvKeys?: readonly string[];
     };
+    expect(requestOptions?.userCredentialEnvKeys).toEqual(['OPENROUTER_API_KEY']);
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
     expect(requestOptions?.protectedEnvKeys).toEqual(['OPENROUTER_API_KEY']);
   });
