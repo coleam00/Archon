@@ -956,7 +956,7 @@ export class WorktreeProvider implements IIsolationProvider {
     const lock = await readWorktreeLock(toWorktreePath(worktreePath));
     if (lock?.reason === RELEASE_LOCK_REASON) {
       throw new IsolationFailure(
-        'setup_unfinished',
+        'adoption_refused',
         `Cannot adopt the worktree at ${worktreePath}: an abandoned run is removing it. Retry once the removal finishes.`
       );
     }

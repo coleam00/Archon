@@ -25,6 +25,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { getGitCheckoutIdentity, readWorktreeLock, toRepoPath, toBranchName } from '@archon/git';
 import {
   WorktreeProvider,
+  classifyIsolationError,
   configureIsolation,
   getIsolationProvider,
   worktreeRegistrationMetadata,
@@ -431,6 +432,11 @@ describe('owned worktree release', () => {
     }
     expect(claimed).toBeNull();
     expect(String(adoption)).toContain('an abandoned run is removing it');
+    if (!(adoption instanceof Error)) throw new Error('expected adoption refusal');
+    expect(classifyIsolationError(adoption)).toBe(
+      '**Error:** Refused to adopt an existing directory at the worktree path. ' +
+        'Remove it or choose a different branch/codebase registration.'
+    );
     expect(existsSync(env.working_path)).toBe(false);
 
     // Once a fresh checkout is registered at the path again, runs there start normally.

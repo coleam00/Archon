@@ -59,6 +59,18 @@ import {
 // and a child logger takes the level set before it is created.
 setLogLevel('silent');
 
+/** The rejection must be a typed failure that the resolver reports as blocked. */
+async function typedFailure(attempt: Promise<unknown>): Promise<IsolationFailure> {
+  const failure = await attempt.then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  if (!(failure instanceof IsolationFailure))
+    throw new Error(`expected IsolationFailure: ${failure}`);
+  expect(isKnownIsolationError(failure)).toBe(true);
+  return failure;
+}
+
 const CODEBASE_NAME = 'acme/widgets';
 const TASK_BRANCH = 'feature/login';
 
@@ -457,7 +469,9 @@ describe('WorktreeProvider against real git', () => {
       if (writesOutput) {
         expect(await readFile(join(worktreePath, 'installer-output'), 'utf8')).toBe('valuable\n');
         expect(await lockReasonOf(worktreePath)).toContain('setup in progress');
-        await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+        const failure = await typedFailure(provider.create(request));
+        expect(failure.kind).toBe('setup_unfinished');
+        expect(failure.message).toContain('its setup did not finish');
       }
     }
   );
@@ -620,14 +634,14 @@ describe('WorktreeProvider against real git', () => {
       if (scenario === 'plain directory') await mkdir(created.workingPath, { recursive: true });
     }
     await writeFile(join(created.workingPath, 'operator-file'), 'keep me');
-    await expect(
-      provider.destroy(created.workingPath, {
-        canonicalRepoPath: request.canonicalRepoPath,
-        creationId,
-        branchName: created.branchName,
-        force: true,
-      })
-    ).rejects.toThrow('ownership');
+    const destruction = provider.destroy(created.workingPath, {
+      canonicalRepoPath: request.canonicalRepoPath,
+      creationId,
+      branchName: created.branchName,
+      force: true,
+    });
+    if (scenario === 'missing proof') await expect(destruction).rejects.toThrow('ownership');
+    else expect((await typedFailure(destruction)).kind).toBe('ownership_unverified');
     expect(await readFile(join(created.workingPath, 'operator-file'), 'utf8')).toBe('keep me');
     expect(await git(repoPath, 'branch', '--list', created.branchName)).toContain(
       created.branchName
@@ -862,7 +876,9 @@ describe('WorktreeProvider against real git', () => {
       expect(await readFile(join(worktreePath, filename), 'utf-8')).toBe('hook-work');
       expect(await registeredWorktrees()).toContain(resolve(worktreePath));
       expect(await lockReasonOf(worktreePath)).toMatch(/^archon: worktree setup in progress: .+/);
-      await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+      const failure = await typedFailure(provider.create(request));
+      expect(failure.kind).toBe('setup_unfinished');
+      expect(failure.message).toContain('its setup did not finish');
     }
   );
 
@@ -1002,7 +1018,9 @@ describe('WorktreeProvider against real git', () => {
   test.each([false, true])('preserves a pre-existing directory (empty: %s)', async empty => {
     await mkdir(worktreePath, { recursive: true });
     if (!empty) await writeFile(join(worktreePath, 'user-work'), 'keep me');
-    await expect(provider.create(request)).rejects.toThrow(
+    const failure = await typedFailure(provider.create(request));
+    expect(failure.kind).toBe('path_exists');
+    expect(failure.message).toContain(
       'a pre-existing directory occupies this path. It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
     );
     expect(existsSync(worktreePath)).toBe(true);
@@ -1275,6 +1293,7 @@ describe('WorktreeProvider against real git', () => {
       expect(classifyIsolationError(error)).toContain(`Branch "${branch}" already exists`);
       expect(classifyIsolationError(error)).not.toContain('Timed out');
       expect(isKnownIsolationError(error)).toBe(true);
+      expect(error).toHaveProperty('kind', 'branch_exists');
     });
 
     test('an existing remote-only PR branch is checked out at its head', async () => {
