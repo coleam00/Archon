@@ -125,7 +125,7 @@ export class WindowsProcessTree {
   /** Remember ambiguous identities too: their children may outlive the known tree. */
   private trackUnprovedAncestry(listing: WindowsProcessListing): WindowsProcessRow[] {
     this.trackMembers(listing, this.unproved);
-    const ownedUntil = this.members.reduce((latest, member) => {
+    const ownedUntil = [...this.members, ...this.unproved].reduce((latest, member) => {
       const end = member.goneBy ?? listing.takenAt;
       return end > latest ? end : latest;
     }, this.root.created);

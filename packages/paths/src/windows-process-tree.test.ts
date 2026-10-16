@@ -412,6 +412,41 @@ it('retains unproved ancestry when a transient orphan leaves a later child', asy
   }
 });
 
+it.each([false, true])(
+  'rejects a survivor of an unseen intermediate process (initial orphan=%s)',
+  async initialOrphan => {
+    let listings = 0;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+      listings++;
+      return {
+        stdout: JSON.stringify({
+          takenAt: String(listings * 100),
+          rows:
+            listings === 1
+              ? [
+                  { pid: 10, parentPid: 1, created: '10' },
+                  ...(initialOrphan ? [{ pid: 12, parentPid: 11, created: '50' }] : []),
+                ]
+              : listings === 2
+                ? [{ pid: 12, parentPid: 11, created: '50' }]
+                : [{ pid: 14, parentPid: 13, created: '260' }],
+        }),
+        stderr: '',
+      };
+    });
+    try {
+      await expect(terminateWindowsProcessTree(10, () => {})).rejects.toThrow(
+        'processes 14 have unproved ancestry'
+      );
+      expect(listings).toBe(6);
+      expect(commands.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+    } finally {
+      commands.mockRestore();
+    }
+  }
+);
+
 it('does not kill an initially ambiguous tree after root ownership is lost', async () => {
   const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({
     stdout:
