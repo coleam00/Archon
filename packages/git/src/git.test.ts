@@ -3480,6 +3480,25 @@ branch refs/heads/feature/auth
     );
 
     test.each([
+      ['401', 'permission_denied'],
+      ['404', 'not_a_repo'],
+    ] as const)('maps HTTP %s clone stderr to %s guidance', async (status, code) => {
+      execSpy.mockRejectedValue(
+        Object.assign(new Error('git clone failed'), {
+          code: 128,
+          stderr: `remote: denied\nfatal: unable to access 'https://gitlab.example.test/group/project.git/': The requested URL returned error: ${status}\n`,
+        })
+      );
+
+      const result = await git.cloneRepository(
+        'https://gitlab.example.test/group/project.git',
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({ ok: false, error: { code, path: '/tmp/target' } });
+    });
+
+    test.each([
       ['fatal: Authentication failed', 'The requested URL returned error: 403'],
       ['fatal: Authentication failed: HTTP 403', 'git clone failed'],
       ['fatal: The requested URL returned error: 4030\n', 'git clone failed'],
