@@ -89,6 +89,14 @@ describe('WindowsProcessTree', () => {
     );
   });
 
+  it('does not retain ambiguity for a child of a reused orphan PID', () => {
+    const tree = treeFrom(10, listing(100, [row(10, 1, 10), row(12, 11, 50)]));
+    expect(tree.observe(listing(200, []))).toEqual([]);
+    expect(tree.observe(listing(300, [row(1, 0, 1), row(12, 1, 250), row(13, 12, 260)]))).toEqual(
+      []
+    );
+  });
+
   it('treats a reused root PID as the root being gone', () => {
     const tree = treeFrom(10, listing(100, [row(10, 1, 10)]));
     expect(tree.observe(listing(200, [row(1, 0, 1), row(10, 1, 150)]))).toEqual([]);
@@ -215,7 +223,7 @@ it.each([false, true])(
       expect(commands.mock.calls.map(([command]) => command)).toEqual([
         'powershell.exe',
         'taskkill',
-        'powershell.exe',
+        ...Array.from({ length: 5 }, () => 'powershell.exe'),
       ]);
       expect(commands.mock.calls[1]?.[1]).toEqual(['/PID', '10', '/T', '/F']);
       expect(kill).not.toHaveBeenCalled();
@@ -328,13 +336,81 @@ it.each([false, true])(
       expect(commands.mock.calls.map(([command]) => command)).toEqual([
         'powershell.exe',
         'taskkill',
-        'powershell.exe',
+        ...Array.from({ length: leavesChild ? 5 : 1 }, () => 'powershell.exe'),
       ]);
     } finally {
       commands.mockRestore();
     }
   }
 );
+
+it.each([false, true])(
+  'waits for post-kill orphan exit without accepting persistent ambiguity (survives=%s)',
+  async survives => {
+    let listings = 0;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+      listings++;
+      return {
+        stdout: JSON.stringify({
+          takenAt: String(listings * 100),
+          rows:
+            listings === 1
+              ? [{ pid: 10, parentPid: 1, created: '10' }]
+              : survives || listings < 4
+                ? [{ pid: 12, parentPid: 11, created: '50' }]
+                : [],
+        }),
+        stderr: '',
+      };
+    });
+    const kill = spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      const outcome = terminateWindowsProcessTree(10, () => {});
+      if (survives) {
+        await expect(outcome).rejects.toThrow('processes 12 have unproved ancestry');
+      } else {
+        await expect(outcome).resolves.toBeUndefined();
+      }
+      expect(listings).toBe(survives ? 6 : 4);
+      expect(commands.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      commands.mockRestore();
+      kill.mockRestore();
+    }
+  }
+);
+
+it('retains unproved ancestry when a transient orphan leaves a later child', async () => {
+  let listings = 0;
+  const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+    if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+    listings++;
+    return {
+      stdout: JSON.stringify({
+        takenAt: String(listings * 100),
+        rows:
+          listings === 1
+            ? [{ pid: 10, parentPid: 1, created: '10' }]
+            : listings === 2
+              ? [
+                  { pid: 12, parentPid: 11, created: '50' },
+                  { pid: 13, parentPid: 12, created: '150' },
+                ]
+              : [{ pid: 14, parentPid: 13, created: '250' }],
+      }),
+      stderr: '',
+    };
+  });
+  try {
+    await expect(terminateWindowsProcessTree(10, () => {})).rejects.toThrow(
+      'processes 14 have unproved ancestry'
+    );
+  } finally {
+    commands.mockRestore();
+  }
+});
 
 it('does not kill an initially ambiguous tree after root ownership is lost', async () => {
   const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({

@@ -56,6 +56,8 @@ interface TreeMember {
   goneBy: bigint | undefined;
 }
 
+class UnprovedAncestryError extends Error {}
+
 /**
  * The members of one process tree, tracked across successive listings.
  *
@@ -71,6 +73,7 @@ interface TreeMember {
  */
 export class WindowsProcessTree {
   private readonly members: TreeMember[];
+  private readonly unproved: TreeMember[] = [];
 
   private constructor(private readonly root: WindowsProcessRow) {
     this.members = [{ pid: root.pid, created: root.created, goneBy: undefined }];
@@ -81,19 +84,26 @@ export class WindowsProcessTree {
     const root = listing.rows.find(row => row.pid === rootPid);
     if (!root) return undefined;
     const tree = new WindowsProcessTree(root);
-    tree.trackMembers(listing);
+    tree.trackMembers(listing, tree.members);
+    tree.trackUnprovedAncestry(listing);
     return tree;
   }
 
   /** Return listed member PIDs; throw if missing ancestry could hide another member. */
   observe(listing: WindowsProcessListing): number[] {
-    this.trackMembers(listing);
-    this.assertAncestryProved(listing);
+    this.trackMembers(listing, this.members);
+    const ambiguous = this.trackUnprovedAncestry(listing);
+    if (ambiguous.length > 0) {
+      throw new UnprovedAncestryError(
+        `Could not confirm process tree ${String(this.root.pid)} exited: ` +
+          `processes ${ambiguous.map(row => row.pid).join(', ')} have unproved ancestry`
+      );
+    }
     return this.members.filter(member => member.goneBy === undefined).map(member => member.pid);
   }
 
-  private trackMembers(listing: WindowsProcessListing): void {
-    for (const member of this.members) {
+  private trackMembers(listing: WindowsProcessListing, members: TreeMember[]): void {
+    for (const member of members) {
       if (member.goneBy !== undefined) continue;
       const listed = listing.rows.some(row => this.isMember(row, member));
       if (!listed) member.goneBy = listing.takenAt;
@@ -103,34 +113,37 @@ export class WindowsProcessTree {
     while (grew) {
       grew = false;
       for (const row of listing.rows) {
-        if (this.members.some(member => this.isMember(row, member))) continue;
-        if (this.members.some(parent => this.isChildOf(row, parent))) {
-          this.members.push({ pid: row.pid, created: row.created, goneBy: undefined });
+        if (members.some(member => this.isMember(row, member))) continue;
+        if (members.some(parent => this.isChildOf(row, parent))) {
+          members.push({ pid: row.pid, created: row.created, goneBy: undefined });
           grew = true;
         }
       }
     }
   }
 
-  /** Missing parents can hide descendants of an intermediate process no listing saw. */
-  private assertAncestryProved(listing: WindowsProcessListing): void {
+  /** Remember ambiguous identities too: their children may outlive the known tree. */
+  private trackUnprovedAncestry(listing: WindowsProcessListing): WindowsProcessRow[] {
+    this.trackMembers(listing, this.unproved);
     const ownedUntil = this.members.reduce((latest, member) => {
       const end = member.goneBy ?? listing.takenAt;
       return end > latest ? end : latest;
     }, this.root.created);
     const ambiguous = listing.rows.filter(row => {
+      if (this.unproved.some(member => this.isMember(row, member))) return true;
       if (row.created < this.root.created || row.created > ownedUntil) return false;
       if (this.members.some(member => this.isMember(row, member))) return false;
       return !listing.rows.some(
         parent => parent.pid === row.parentPid && parent.created <= row.created
       );
     });
-    if (ambiguous.length > 0) {
-      throw new Error(
-        `Could not confirm process tree ${String(this.root.pid)} exited: ` +
-          `processes ${ambiguous.map(row => row.pid).join(', ')} have unproved ancestry`
-      );
+    for (const row of ambiguous) {
+      if (!this.unproved.some(member => this.isMember(row, member))) {
+        this.unproved.push({ pid: row.pid, created: row.created, goneBy: undefined });
+      }
     }
+    this.trackMembers(listing, this.unproved);
+    return listing.rows.filter(row => this.unproved.some(member => this.isMember(row, member)));
   }
 
   private isMember(row: WindowsProcessRow, member: TreeMember): boolean {
@@ -239,8 +252,16 @@ export async function terminateWindowsProcessTree(
     // PID-only kill could terminate a process outside the owned tree.
     let survivors: number[] = [];
     for (let round = 0; round < MAX_CONFIRM_ROUNDS; round++) {
-      survivors = tree.observe(await listWindowsProcesses());
-      if (survivors.length === 0) return;
+      const listing = await listWindowsProcesses();
+      try {
+        survivors = tree.observe(listing);
+        if (survivors.length === 0) return;
+      } catch (error) {
+        // taskkill can return before an orphan finishes exiting. Ambiguity needs
+        // the same bounded confirmation as a known survivor; it is never proof of exit.
+        if (!(error instanceof UnprovedAncestryError) || round === MAX_CONFIRM_ROUNDS - 1)
+          throw error;
+      }
     }
     throw new Error(
       `Could not confirm process tree ${String(pid)} exited: ` +
