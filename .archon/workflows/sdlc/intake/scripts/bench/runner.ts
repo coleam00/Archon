@@ -829,7 +829,9 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
       const recorded = status === 'completed' ? decided.verdict : liveVerdict((await archonJson(['state', 'get', `work/${String(live.number)}`], run.cwd)).value, runId);
       if (recorded?.contract === 'NO_ACTION') {
         const checked = closure.kind === 'duplicate' ? { ...closure, url: viewIssue(closure.original).url } : closure;
-        comments = closeComments(live, viewIssue(live).url, checked).filter(comment => sameRepo(comment.item.repo, live.repo));
+        comments = closeComments(live, viewIssue(live).url, checked)
+          .filter(comment => sameRepo(comment.item.repo, live.repo))
+          .map(comment => ({ ...comment, item: { repo: live.repo, number: comment.item.number } }));
       }
     }
   } catch (error) {

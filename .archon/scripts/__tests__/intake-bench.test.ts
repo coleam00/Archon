@@ -394,7 +394,10 @@ describe('bench run', () => {
   it('allows only the exact declared closure comments on scratch issues, including canonical backlinks', () => {
     const delivered = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
     const duplicate = { kind: 'duplicate' as const, url: 'https://github.com/me/scratch-base/issues/103', original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
-    for (const declaredClosure of [delivered, duplicate]) {
+    for (const declaredClosure of [delivered, duplicate,
+      { ...duplicate, original: { ...duplicate.original, repo: { host: 'GITHUB.COM', path: 'me/scratch-base' } } },
+      { ...duplicate, original: { ...duplicate.original, repo: { host: 'github.com', path: 'Me/Scratch-Base' } } },
+    ]) {
       const posted = declaredClosure.kind === 'delivered'
         ? [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }]
         : [
