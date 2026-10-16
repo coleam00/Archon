@@ -27,6 +27,8 @@ import { existsSync, unlinkSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
+import * as pluginProcess from '@archon/paths/plugin-process';
+import { recordNodeProcessTrees } from './subprocess';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
@@ -22291,6 +22293,69 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
     expect(events.some(event => event.event_type === 'node_skipped')).toBe(false);
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
+
+  it.each([
+    // Captured output would otherwise replace the termination error in the message.
+    ['Bash', { id: 'slow', bash: 'echo started; sleep 30', timeout: 500, on_timeout: 'skip' }],
+    [
+      'Script',
+      {
+        id: 'slow',
+        script: 'console.log("started"); await Bun.sleep(30_000)',
+        runtime: 'bun',
+        timeout: 500,
+        on_timeout: 'skip',
+      },
+    ],
+  ] as const)(
+    'fails an opted-in %s timeout whose process tree could not be ended',
+    async (label, nodeInput) => {
+      const store = createMockStore();
+      const realTerminateTree = pluginProcess.terminateTree;
+      const terminateSpy = spyOn(pluginProcess, 'terminateTree').mockImplementation(
+        async (pid, signal) => {
+          await realTerminateTree(pid, signal);
+          throw new Error('group refused the signal');
+        }
+      );
+      // POSIX ends the tree only for a recorded node; Windows ends it on every owner path.
+      const trees = recordNodeProcessTrees();
+
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(`${label}-timeout-tree-survived`),
+            workflow: {
+              name: `${label}-timeout-tree-survived`,
+              nodes: [dagNodeSchema.parse(nodeInput)],
+            },
+          })
+        );
+      } finally {
+        trees.release();
+        terminateSpy.mockRestore();
+      }
+
+      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'slow',
+          data: expect.objectContaining({
+            error: expect.stringMatching(
+              new RegExp(
+                `^${label} node 'slow' failed: .*could not terminate subprocess tree: group refused the signal`
+              )
+            ),
+          }),
+        })
+      );
+      expect(events.some(event => event.event_type === 'node_skipped')).toBe(false);
+    },
+    testTimeout(10000)
+  );
 
   it('does not misclassify a non-timeout failure whose diagnostic mentions a timeout', async () => {
     const store = createMockStore();

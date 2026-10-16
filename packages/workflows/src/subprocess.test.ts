@@ -203,14 +203,6 @@ test('an owned-group deadline remains a timeout whatever exit evidence arrives',
   expect(isSubprocessTimeout(Object.assign(new Error('exit'), { code: 7 }))).toBe(false);
 });
 
-test('a deadline whose tree survived is a failure, not a skippable timeout', () => {
-  const error = Object.assign(new Error('deadline'), {
-    timedOut: true,
-    treeSurvived: true as const,
-  });
-  expect(isSubprocessTimeout(error)).toBe(false);
-});
-
 test('owned process groups are rejected before container execution', async () => {
   await expect(
     runSubprocess({ kind: 'container', containerId: 'must-not-execute' }, 'bash', ['-c', 'true'], {
