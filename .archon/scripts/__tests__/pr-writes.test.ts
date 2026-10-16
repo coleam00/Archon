@@ -321,6 +321,19 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
+  it('continues a named pull request on its own head even when the caller also selected a branch', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      inputs: { INPUTS_PULL_REQUEST: '42', INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
+  });
+
   it('fails loudly when forge is selected but unavailable, never falling back to gh', () => {
     const result = publishPr({ source: 'forge', forge: { kind: 'no-host' } });
     expect(result.code).not.toBe(0);
