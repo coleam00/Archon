@@ -32,7 +32,7 @@ import {
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
-import { createWorkflowDeps } from './store-adapter';
+import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
 import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
@@ -344,20 +344,11 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   };
   const deps: ReturnType<typeof createWorkflowDeps> = {
     ...createWorkflowDeps(store, 'files'),
-    completedRunWorktree: {
-      assess: async run =>
-        (await import('../services/cleanup-service')).assessCompletedRunWorktree(
-          run,
-          records.isolation,
-          worktreeReaders
-        ),
-      release: async run =>
-        (await import('../services/cleanup-service')).releaseCompletedRunWorktree(
-          run,
-          records.isolation,
-          worktreeReaders
-        ),
-    },
+    completedRunWorktree: completedRunWorktreeDeps(async () => ({
+      cleanup: await import('../services/cleanup-service'),
+      store: records.isolation,
+      readers: worktreeReaders,
+    })),
   };
   return {
     records,
