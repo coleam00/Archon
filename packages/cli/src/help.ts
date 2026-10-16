@@ -752,6 +752,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--project <id|name>',
+    description:
+      'Bind the run to a registered project (owner/repo) instead of the one --cwd resolves to',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--input <name>=<value>',
     description:
       'Supply a declared workflow input; repeat per input (mutually exclusive with --resume)',

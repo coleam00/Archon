@@ -17,6 +17,28 @@ export interface CodebaseCheckoutResolverDeps {
 }
 
 /**
+ * Resolve a registered codebase named explicitly by id, then by name (`owner/repo` for
+ * a repository). A name two codebases share is refused rather than guessed. Returns null
+ * when nothing matches, so each caller can say what else the spec may name.
+ */
+export async function findRegisteredCodebase(
+  codebases: Pick<CodebaseCheckoutResolverDeps, 'listCodebases'>,
+  spec: string
+): Promise<Codebase | null> {
+  const all = await codebases.listCodebases();
+  const byId = all.find(codebase => codebase.id === spec);
+  if (byId) return byId;
+  const byName = all.filter(codebase => codebase.name === spec);
+  if (byName.length > 1)
+    throw new Error(
+      `Project name '${spec}' matches ${String(byName.length)} codebases (${byName
+        .map(codebase => codebase.id)
+        .join(', ')}). Name one by id.`
+    );
+  return byName[0] ?? null;
+}
+
+/**
  * Resolve a checkout to an existing codebase without remote or branch inference.
  *
  * Exact registration wins. Normal linked worktrees then use their Git-proven

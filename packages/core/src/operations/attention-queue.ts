@@ -11,7 +11,10 @@ import {
 } from '@archon/workflows/attention-queue';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
-import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
+import {
+  findRegisteredCodebase,
+  resolveCodebaseForPath,
+} from '../services/codebase-checkout-resolver';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 
 /**
@@ -51,18 +54,8 @@ export async function resolveAttentionProject(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   spec: string
 ): Promise<ProjectRef> {
-  const all = await codebases.listCodebases();
-  const byId = all.find(codebase => codebase.id === spec);
-  if (byId) return projectRefForCodebase(byId);
-  const byName = all.filter(codebase => codebase.name === spec);
-  if (byName.length > 1)
-    throw new Error(
-      `Project name '${spec}' matches ${String(byName.length)} codebases (${byName
-        .map(codebase => codebase.id)
-        .join(', ')}). Name one by id.`
-    );
-  const [named] = byName;
-  if (named) return projectRefForCodebase(named);
+  const codebase = await findRegisteredCodebase(codebases, spec);
+  if (codebase) return projectRefForCodebase(codebase);
   if (stateProjectKeySchema.safeParse(spec).success) return projectRef(spec, null);
   throw new Error(
     `No project matches '${spec}'. Pass a codebase id, a codebase name, or a project key.`

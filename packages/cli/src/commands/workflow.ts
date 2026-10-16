@@ -103,6 +103,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import {
   findCodebaseForCheckoutPath,
+  findRegisteredCodebase,
   resolveCodebaseForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
@@ -359,6 +360,13 @@ export interface WorkflowRunOptions {
   container?: boolean;
   resume?: boolean;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
+  /**
+   * Bind the run to a registered project (`--project <id|name>`) instead of the one
+   * `cwd` resolves to. The path lookup and auto-registration are skipped, so a run
+   * launched from another checkout of the repository does not register a duplicate
+   * codebase. `cwd` still selects discovery, repo config, and the `--no-worktree` lane.
+   */
+  project?: string;
   /**
    * Override the directory used for workflow YAML discovery — and, for a fresh run,
    * the source the run captures.
@@ -1607,7 +1615,7 @@ export async function workflowListCommand(
 async function resolveRunCodebase(
   host: WorkflowHost,
   cwd: string,
-  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
+  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'project' | 'registrationBaseBranch'>
 ): Promise<{
   codebase: Codebase | null;
   lookupError: Error | null;
@@ -1619,6 +1627,17 @@ async function resolveRunCodebase(
   let lookupError: Error | null = null;
   let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
+  // An explicit project is the whole answer: a lookup failure or a miss is fatal, never
+  // a fall-through to the path lookup or registration the flag exists to bypass.
+  if (options.project !== undefined) {
+    const named = await findRegisteredCodebase(host.records.codebases, options.project);
+    if (!named)
+      throw new Error(
+        `No registered project matches '${options.project}'. Pass a registered codebase id ` +
+          'or name (owner/repo for a repository).'
+      );
+    return { codebase: named, lookupError: null, registrationError: null };
+  }
   cwd = await canonicalizeProjectPath(cwd);
   let repoRoot: string | null = null;
   try {
@@ -2020,6 +2039,17 @@ async function runWorkflowWithOwnedSource(
       );
   }
 
+  if (options.project !== undefined) {
+    if (options.folder)
+      throw new Error(
+        '--project and --folder are mutually exclusive: --folder registers the current directory.'
+      );
+    if (options.registrationBaseBranch !== undefined)
+      throw new Error(
+        '--base-branch applies only to initial registration; --project names a registered project.'
+      );
+  }
+
   const dryRunOnlyOptions = [
     ['--stubs', options.stubsPath !== undefined],
     ['--stubs-init', options.stubsInitPath !== undefined],
@@ -2039,6 +2069,7 @@ async function runWorkflowWithOwnedSource(
       ['--base', options.baseBranch !== undefined],
       ['--no-worktree', options.noWorktree === true],
       ['--folder', options.folder === true],
+      ['--project', options.project !== undefined],
       ['--container', options.container === true],
       ['--resume', options.resume === true],
       ['--detach', options.detach === true],

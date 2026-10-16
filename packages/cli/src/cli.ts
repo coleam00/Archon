@@ -536,6 +536,15 @@ async function main(): Promise<number> {
       const realCwd = await canonicalizeProjectPath(cwd);
       if (folderFlag && command === 'workflow' && subcommand === 'run') {
         effectiveCwd = realCwd;
+      } else if (
+        typeof values.project === 'string' &&
+        command === 'workflow' &&
+        subcommand === 'run'
+      ) {
+        // `--project` names the codebase, so the cwd needs no registration and no
+        // repository of its own; it still selects discovery from its repo root.
+        const { findRepoRoot } = await import('@archon/git');
+        effectiveCwd = (await findRepoRoot(realCwd)) ?? realCwd;
       } else if (dryRunFlag && command === 'workflow' && subcommand === 'run') {
         const { resolveDiscoveryCwd } = await import('./utils/project-cwd');
         effectiveCwd = await resolveDiscoveryCwd(realCwd);
@@ -869,6 +878,7 @@ async function main(): Promise<number> {
               discoveryCwd: workflowSource,
               noWorktree,
               folder: folderFlag,
+              project: values.project as string | undefined,
               container: containerFlag,
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,

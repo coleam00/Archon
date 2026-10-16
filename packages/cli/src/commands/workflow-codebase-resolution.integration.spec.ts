@@ -468,3 +468,71 @@ test('list and fixture testing discover only a registered inner folder from its 
     expect(result.stdout).not.toContain('outer-only');
   }
 }, 30_000);
+
+test('--project binds a run from outside the checkout to the registered project', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-run-project-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  initRepo(repo, join(root, 'repo.git'), 'repo-only.txt');
+  // Not a repository: the path lookup has nothing to resolve or register here.
+  const outside = join(root, 'outside');
+  mkdirSync(join(outside, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(outside, '.archon', 'workflows', 'probe.yaml'),
+    'name: probe\ndescription: Probe checkout\nnodes:\n  - id: probe\n    bash: cat repo-only.txt\n'
+  );
+  const cli = (args: string[]): SpawnSyncReturns<string> => {
+    const launched = spawnSync(process.execPath, [join(import.meta.dir, '..', 'cli.ts'), ...args], {
+      cwd: outside,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    if (launched.error) throw launched.error;
+    return launched;
+  };
+
+  const registration = await captureWorkflowCommand(home, async host =>
+    workflowRunCommand(host, repo, 'probe', 'register', { noWorktree: true })
+  );
+  expect(registration.status, registration.output).toBe(0);
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  try {
+    const codebases = db.query<CodebaseRow & { name: string }, []>(
+      'SELECT id, default_cwd, name FROM remote_agent_codebases'
+    );
+    const [project] = codebases.all();
+    if (!project) throw new Error('Repository was not registered');
+
+    const unknown = cli(['workflow', 'run', 'probe', 'x', '--project', 'nobody/nothing']);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stdout + unknown.stderr).toContain(
+      "No registered project matches 'nobody/nothing'"
+    );
+    const folder = cli(['workflow', 'run', 'probe', 'x', '--project', project.name, '--folder']);
+    expect(folder.status).not.toBe(0);
+    expect(folder.stdout + folder.stderr).toContain(
+      '--project and --folder are mutually exclusive'
+    );
+
+    const invocation = crypto.randomUUID();
+    const launched = cli(['workflow', 'run', 'probe', invocation, '--project', project.name]);
+    expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+    const run = db
+      .query<
+        RunRow,
+        [string]
+      >('SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs WHERE user_message = ?')
+      .get(invocation);
+    if (!run) throw new Error('Missing project-bound run');
+    expect(run.codebase_id).toBe(project.id);
+    expect(run.status).toBe('completed');
+    expect(git(run.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).toBe(
+      git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+    );
+    expect(codebases.all()).toEqual([project]);
+  } finally {
+    db.close();
+  }
+}, 120_000);
