@@ -12,23 +12,17 @@ $INPUTS.scope
 
 $INPUTS.prior_report
 
-**Commit under review**, fixed before this round started: the checkout's HEAD.
+**Commit under review**: read the checkout's HEAD with `git rev-parse HEAD`. Every diff you record ends at that full SHA, never a branch name or a revision read from a pull-request record. The mode node validates continuation ancestry after this node accepts the PR head; publication refuses when the checkout or the pull request's remote head differs from the reviewed commit.
 
-$mode.output.head
-
-**Previous round's reviewed commit** (empty on a first round): the cursor this round's delta starts from.
-
-$mode.output.cursor
-
-These two commits are not yours to choose. Every diff you record ends at the commit under review, written as that SHA, never as a branch name or a revision read from a pull-request record. The report that publishes this round must name the commit under review, and publication refuses when the checkout or the pull request's remote head is anywhere else.
+**Previous round's reviewed commit** (only after the head matches): read `reviewed-head` beside the supplied prior report. This is the cursor this round's delta starts from, not a SHA inferred from the report's prose.
 
 **Accepted work order** (may be empty for a standalone review):
 
 $INPUTS.work_order
 
-**Part assignment** (null when this run delivers the whole contract), certified against its schema before this node started:
+**Part assignment** (empty when this run delivers the whole contract; mode validates its schema before lenses run):
 
-$mode.output.part
+$INPUTS.part
 
 The run's trigger message, which may narrow or override the above:
 
@@ -40,7 +34,7 @@ $ARGUMENTS
 - A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. The PR's head must be the commit under review; when it is not, stop and say so rather than reviewing either one. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
 
-For every PR target (including a recorded PR or one found from empty scope), read its current head commit and head ref from the forge and compare that commit with the commit under review. Set `head_matches` to `true` for a matching head or a working-diff target. On a mismatch, set it to `false`, write only the mismatch explanation and the exact rerun command in `$ARTIFACTS_DIR/review/scope.md` (`archon workflow run archon-review --input scope=<PR URL> --branch <PR head ref>`, with actual values, shell-quoted and preserving this run's other supplied inputs). For a fork PR, include the prerequisite `git fetch <head repository clone URL> <head ref>`, then give the rerun with `--branch <fresh review branch> --from <current PR head SHA>` instead; choose a review branch absent locally, on the configured remote and from existing worktrees, so the fetched fork commit is the start point rather than the base. These are instructions for the caller; do not fetch or check out the fork yourself. Then declare `pr`, `head_matches` and `report` below and stop; do not resolve the contract or prepare a diff.
+For every PR target (including a recorded PR or one found from empty scope), read its current head commit and head ref from the forge and compare that commit with the commit under review. Set `head_matches` to `true` for a matching head or a working-diff target. On a mismatch, set it to `false`, write only the mismatch explanation and the exact rerun command in `$ARTIFACTS_DIR/review/scope.md` (`archon workflow run archon-review --input scope=<PR URL> --branch <PR head ref>`, with actual values, shell-quoted and preserving this run's other supplied inputs). For a same-repository PR, first instruct the caller to locate any existing worktree for that head ref (`git worktree list`), check it for local changes, and, only when clean, advance it with `git -C <worktree path> pull --ff-only <base repository clone URL> <PR head ref>` using actual, shell-quoted values; verify its HEAD equals the current PR head SHA before rerunning, and stop to reconcile local changes, divergence or an ahead checkout rather than discarding commits or edits. `--branch` reuses a healthy worktree without advancing it. For a fork PR, include the prerequisite `git fetch <head repository clone URL> <head ref>`, then give the rerun with `--branch <fresh review branch> --from <current PR head SHA>` instead; choose a review branch absent locally, on the configured remote and from existing worktrees, so the fetched fork commit is the start point rather than the base. These are instructions for the caller; do not fetch or check out the fork yourself. Then declare `pr`, `head_matches` and `report` below and stop; do not resolve the contract or prepare a diff.
 
 ## Resolve the accepted contract
 

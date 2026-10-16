@@ -1,7 +1,6 @@
 # A mismatched PR head stops before route, every lens, synthesis and publish.
 # Those nodes have no stubs, so reaching any of them fails the fixture.
 policy: { defaults: "fixture-policy-defaults" }
-mode: '{"continuation":true,"light":false,"head":"checkouthead","cursor":"priorhead","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":true,"errors":true,"docs":true,"part":null}'
 scope:
   head_matches: false
   pr: { repo: { host: github.com, path: example/repo }, number: 1 }

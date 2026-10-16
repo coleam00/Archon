@@ -179,7 +179,7 @@ Reviews a change through specialist lenses and produces one evidence-based verdi
 archon workflow run archon-review --input scope=87 --branch fix/login-redirect
 ```
 
-Replace `fix/login-redirect` with the PR's head branch for a same-repository PR. For a fork PR, fetch its head into the launch repository first, then start a fresh review branch at that commit:
+Replace `fix/login-redirect` with the PR's head branch for a same-repository PR. `--branch` reuses an existing healthy worktree without advancing it. Before rerunning, locate it with `git worktree list` and check for local changes. Only when clean, run `git -C <worktree-path> pull --ff-only <base-clone-url> <PR-head-ref>` with the PR's actual values. Verify its HEAD equals the current PR head SHA before rerunning. Stop on local changes, divergence or an ahead checkout and reconcile them before retrying. For a fork PR, fetch its head into the launch repository first, then start a fresh review branch at that commit:
 
 ```bash
 git fetch <fork-clone-url> <PR-head-ref>

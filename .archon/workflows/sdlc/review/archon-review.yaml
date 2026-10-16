@@ -20,8 +20,9 @@ description: |
   When the checkout matches the PR head, the final synthesized report is posted
   to it as one canonical comment, edited in place on re-review. A head mismatch
   stops before review and returns the exact rerun command. For a same-repository
-  PR, use its head branch. For a fork PR, fetch its head first, then use a fresh
-  review branch with `--from <PR head SHA>`.
+  PR, advance any clean existing worktree to its head, then use its head branch.
+  For a fork PR, fetch its head first, then use a fresh review branch with
+  `--from <PR head SHA>`.
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
@@ -83,7 +84,7 @@ nodes:
         defaults: { type: string }
       required: [defaults]
 
-  # Fixes what this round reviews before any agent reads the target: whether it
+  # After scope accepts the checkout, fixes what this round reviews: whether it
   # continues a previous round, the commit under review (the checkout's HEAD as
   # the engine observed it), and, on a continuation, the previous round's
   # reviewed commit, which the head must descend from. A caller's pull-request
@@ -92,10 +93,12 @@ nodes:
   # commit. The node also turns the input into the routable fact the lenses gate
   # on: an include's inputs are substituted as text at load time and cannot be
   # compared in a `when:`. For the same reason it carries the part assignment, so
-  # scope and synthesis read a value certified against its schema, not raw text.
+  # synthesis reads a value certified against its schema, not raw text.
   - id: mode
     script: review-round
     runtime: bun
+    depends_on: [scope]
+    when: "$scope.output.head_matches == true"
     with:
       prior_report: "$INPUTS.prior_report"
       light: "$INPUTS.light"
@@ -144,7 +147,6 @@ nodes:
     command: review-scope
     context: fresh
     mutates_checkout: false
-    depends_on: [mode]
     output_format:
       type: object
       properties:
@@ -253,7 +255,7 @@ nodes:
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted. The deciding
   # agent can then tolerate specialist failures without also tolerating a failed
-  # mode/scope preflight: synthesize separately requires scope to have succeeded.
+  # mode/scope preflight: synthesize separately requires both to have succeeded.
   - id: review-complete
     bash: "true"
     depends_on: [scope, route, seams, code, tests, errors, docs]
@@ -282,7 +284,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     output_type: review-report
-    depends_on: [policy, scope, review-complete]
+    depends_on: [policy, mode, scope, review-complete]
     when: "$scope.output.head_matches == true"
     with:
       policy_defaults: "$policy.output.defaults"
@@ -363,10 +365,11 @@ nodes:
     runtime: bun
     script: |
       const verdict = JSON.parse(process.env.INPUTS_VERDICT);
+      const report = JSON.parse(process.env.INPUTS_SCOPE_REPORT);
       console.log(JSON.stringify(JSON.parse(process.env.INPUTS_HEAD_MATCHES) ? verdict : {
         ready: false, action: "needs_human",
-        findings_summary: require("node:fs").readFileSync(process.env.ARTIFACTS_DIR + "/review/scope.md", "utf8"),
-        report: JSON.parse(process.env.INPUTS_SCOPE_REPORT), discoveries: [], contract_left: ["PR head mismatch prevented contract review."]
+        findings_summary: require("node:fs").readFileSync(require("node:path").join(process.env.ARTIFACTS_DIR, report.path), "utf8"),
+        report, discoveries: [], contract_left: ["PR head mismatch prevented contract review."]
       }));
     output_format:
       <<: *review_verdict

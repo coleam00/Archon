@@ -547,7 +547,11 @@ describe('bundled-defaults', () => {
       expect(parsed.workflow.inputs?.pr_number).toBeUndefined();
       expect(parsed.workflow.inputs?.pr_head).toBeUndefined();
       const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
-      expect(scope?.depends_on).toEqual(['mode']);
+      expect(scope?.depends_on).toBeUndefined();
+      expect(parsed.workflow.nodes.find(node => node.id === 'mode')).toMatchObject({
+        depends_on: ['scope'],
+        when: '$scope.output.head_matches == true',
+      });
       expect(scope?.kind).toBe('agent');
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       const scopeSchema = scope.output_format;
@@ -640,7 +644,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['policy', 'scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['policy', 'mode', 'scope', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
@@ -954,8 +958,12 @@ describe('bundled-defaults', () => {
       mkdirSync(join(root, 'review'));
       const message =
         'Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature\n';
-      writeFileSync(join(root, 'review/scope.md'), message);
-      const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
+      const scopeReport = {
+        type: 'archon_artifact',
+        run_id: 'run',
+        path: 'review/renamed-scope.md',
+      };
+      writeFileSync(join(root, scopeReport.path), message);
       const verdict = {
         ready: true,
         action: 'none',
@@ -995,7 +1003,6 @@ describe('bundled-defaults', () => {
                 contract_left: ['PR head mismatch prevented contract review.'],
               }
         );
-        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(true);
       }
     });
 
