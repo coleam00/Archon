@@ -3,7 +3,9 @@
  *
  * The decision is the last agent's that ran: give-up's over answer's, answer's over
  * route's. A route that launched is answered after its round, so its own decision is
- * recorded only when it asked. In live the push comes first, then the work item, in
+ * recorded only when it asked. A push the answer declared is made whatever the run
+ * decided, since a round's work belongs on its pull request even when a person is
+ * asked about it. In live the push comes first, then the work item, in
  * one conditional write that also releases the claim unless a person is asked; a run
  * that asks keeps its claim until the ruling node records the answer. Eval writes
  * nothing and returns the decision, with the writes live would make, as `evaluation`.
@@ -13,7 +15,7 @@
  * whole output of its node, "null" when it was skipped.
  */
 
-import type { AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
+import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
 import { withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
@@ -56,12 +58,7 @@ type Decision =
   | { readonly kind: 'parked'; readonly reason: string }
   | { readonly kind: 'launch'; readonly brief: string; readonly reason: string }
   | { readonly kind: 'ready'; readonly reason: string }
-  | {
-      readonly kind: 'continue';
-      readonly brief: string;
-      readonly push: QualifiedPr | null;
-      readonly reason: string;
-    }
+  | { readonly kind: 'continue'; readonly brief: string; readonly reason: string }
   | {
       readonly kind: 'asked';
       readonly by: AskedBy;
@@ -90,7 +87,7 @@ function decide(
     if (giveUp?.decision === 'ask') {
       return asked('scope', giveUp.attention, answer.brief, giveUp.reason);
     }
-    return { kind: 'continue', brief: answer.brief, push: answer.push, reason: answer.reason };
+    return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
   if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
@@ -143,12 +140,14 @@ function main(): void {
     ending === null
       ? (nullableJson(process.env.INPUTS_RECORDED) as BuildRound | null)
       : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
+  const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const decision = decide(
     path,
     nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null,
-    nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null,
+    answer,
     nullableJson(process.env.INPUTS_GIVE_UP) as GiveUpOutput | null
   );
+  const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
   const attention =
     asking === null
@@ -159,7 +158,7 @@ function main(): void {
     ...(asking?.attention.links ?? []),
   ];
   const result = {
-    decision: decision.kind,
+    decision: decision.kind satisfies ApplyDecision,
     summary: summaryOf(item, decision),
     attention,
     options: asking === null ? [] : attentionOptions(asking.attention),
@@ -179,14 +178,14 @@ function main(): void {
         decision,
         round,
         attention,
-        push: decision.kind === 'continue' ? decision.push : null,
+        push,
       },
     });
     return;
   }
   if (decision.kind === 'launch') throw new Error('a live launch reached apply without its round');
 
-  const pushed = decision.kind === 'continue' && decision.push !== null ? pushTo(decision.push) : null;
+  const pushed = push === null ? null : pushTo(push);
   const entry: DecisionEntry = {
     at,
     run_id: runId,

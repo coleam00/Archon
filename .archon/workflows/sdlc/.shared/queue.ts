@@ -24,12 +24,14 @@ export interface Choice<Effect extends string> {
   readonly ruling: string;
 }
 
+export const CONFIDENCES = ['low', 'medium', 'high'] as const;
+
 export interface Recommendation {
   /** The id of the recommended choice. */
   readonly choice: string;
   readonly why: string;
   readonly evidence: string;
-  readonly confidence: 'low' | 'medium' | 'high';
+  readonly confidence: (typeof CONFIDENCES)[number];
   readonly would_change: string;
 }
 

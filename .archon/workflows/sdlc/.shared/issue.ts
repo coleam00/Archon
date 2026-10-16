@@ -277,6 +277,8 @@ export function issueBodyAt(item: QualifiedPr, at: string): string {
   if (forgeSource() === 'forge') {
     throw new Error('the forge source has no edit history, so the body at a past time is unknown');
   }
+  const when = Date.parse(at);
+  if (Number.isNaN(when)) throw new Error(`"${at}" is not a time`);
   const issue = graphql(item, EDITS_QUERY, `issue ${String(item.number)} history`);
   const edits = record(issue?.userContentEdits);
   if (
@@ -287,13 +289,13 @@ export function issueBodyAt(item: QualifiedPr, at: string): string {
   ) {
     throw new Error(`issue ${String(item.number)} has no edit history to read`);
   }
-  if (at < issue.createdAt) throw new Error(`issue ${String(item.number)} did not exist at ${at}`);
+  if (when < Date.parse(issue.createdAt)) throw new Error(`issue ${String(item.number)} did not exist at ${at}`);
   if (edits.totalCount === 0) return issue.body;
   if (edits.totalCount > edits.nodes.length) {
     throw new Error(`issue ${String(item.number)} has more edits than one history read returns`);
   }
   const revision = edits.nodes.map(record).find(
-    edit => typeof edit?.editedAt === 'string' && edit.editedAt <= at
+    edit => typeof edit?.editedAt === 'string' && Date.parse(edit.editedAt) <= when
   );
   if (typeof revision?.diff !== 'string') {
     throw new Error(`issue ${String(item.number)} has no readable revision at ${at}`);

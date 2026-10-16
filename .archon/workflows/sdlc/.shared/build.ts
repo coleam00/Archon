@@ -21,8 +21,12 @@ export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
 export const GIVE_UP_DECISIONS = ['continue', 'ask'] as const;
 export const BUILD_PATHS = ['idle', 'closed', 'route', 'answer'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
-/** Which decision raised an attention item: its class label. */
-export type AskedBy = 'route' | 'stop' | 'scope';
+/** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
+export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
+export type ApplyDecision = (typeof APPLY_DECISIONS)[number];
+/** Which decision raised an attention item: its class label, which the YAML also declares. */
+export const ASKED_BY = ['route', 'stop', 'scope'] as const;
+export type AskedBy = (typeof ASKED_BY)[number];
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */
 export const LAUNCH_STAGES = [

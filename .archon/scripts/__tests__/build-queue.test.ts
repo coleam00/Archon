@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   ANSWER_DECISIONS,
+  APPLY_DECISIONS,
+  ASKED_BY,
   BUILD_EFFECTS,
   BUILD_PATHS,
   type BuildAttention,
@@ -16,7 +18,7 @@ import {
   GIVE_UP_DECISIONS,
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
-import { checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
+import { CONFIDENCES, checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
 import {
   newWorkItem,
   parseWorkItem,
@@ -144,23 +146,32 @@ describe('the build record', () => {
     expect(() => chosen(ATTENTION, 'approve')).toThrow('not one of the choices');
   });
 
-  test("the paths, decisions and effects are archon-build-queue's own", () => {
+  test("the paths, decisions, classes, effects and confidences are archon-build-queue's own", () => {
     type Enum = { enum: string[] };
+    type AttentionSchema = {
+      properties: {
+        recommendation: { properties: { confidence: Enum } };
+        choices: { items: { properties: { effect: Enum } } };
+      };
+    };
     const workflow = Bun.YAML.parse(
       readFileSync(join(PACK, 'build-queue/archon-build-queue.yaml'), 'utf8')
     ) as { nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[] };
     const field = (id: string, name: string) =>
       workflow.nodes.find(node => node.id === id)?.output_format?.properties[name] as
-        | (Enum & { properties: { choices: { items: { properties: { effect: Enum } } } } })
+        | (Enum & AttentionSchema)
         | undefined;
     expect(field('facts', 'path')?.enum).toEqual([...BUILD_PATHS]);
     expect(field('route', 'decision')?.enum).toEqual([...ROUTE_DECISIONS]);
     expect(field('answer', 'decision')?.enum).toEqual([...ANSWER_DECISIONS]);
     expect(field('give-up', 'decision')?.enum).toEqual([...GIVE_UP_DECISIONS]);
+    expect(field('apply', 'decision')?.enum).toEqual([...APPLY_DECISIONS]);
+    expect(field('apply', 'class')?.enum).toEqual(['', ...ASKED_BY]);
+    expect(field('ruling', 'decision')?.enum).toEqual([...BUILD_EFFECTS]);
     for (const id of ['route', 'answer', 'give-up']) {
-      expect(field(id, 'attention')?.properties.choices.items.properties.effect.enum).toEqual([
-        ...BUILD_EFFECTS,
-      ]);
+      const attention = field(id, 'attention')?.properties;
+      expect(attention?.choices.items.properties.effect.enum).toEqual([...BUILD_EFFECTS]);
+      expect(attention?.recommendation.properties.confidence.enum).toEqual([...CONFIDENCES]);
     }
   });
 });
@@ -285,6 +296,18 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
   }, 60_000);
 
+  test('the round about to run reaches the cap when the rounds since the last scope change fill the limit', () => {
+    const at = install();
+    const rounds = [round('r1', '2026-10-16T02:00:00.000Z'), round('r2', '2026-10-16T03:00:00.000Z')];
+    seed(at, triaged({}, record({ rounds })));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: true });
+    seed(at, triaged({ claim: null }, record({ rounds: rounds.slice(0, 1) })));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: false });
+    const answered = { at: '2026-10-16T03:30:00.000Z', run_id: 'r2', decision: 'answered: continue', reason: 'Relax it', links: [], answer: { choice: 'relax', text: '', at: '2026-10-16T03:30:00.000Z' } };
+    seed(at, triaged({ claim: null }, record({ rounds, decisions: [answered] })));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: false });
+  }, 60_000);
+
   test('items intake has not routed, and items the queue finished, are never picked up', () => {
     const at = install();
     seed(at, triaged({ stage: 'needs_contract' }));
@@ -385,15 +408,41 @@ describe('the build queue scripts', () => {
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 
-  test("a continue that names its pull request pushes the checkout's commits and reads them back first", () => {
-    const at = install();
-    seed(at, triaged(CLAIMED));
-    const applied = ok(run(at, 'apply', applyInputs({ ...CONTINUE, push: { repo: PR.repo, number: PR.number } })));
+  const PUSH = { push: { repo: PR.repo, number: PR.number } };
+
+  function expectPushed(at: Install, applied: Record<string, unknown>): void {
     const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
     const remote = spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: at.checkout, encoding: 'utf8' }).stdout;
     expect(remote.split(/\s+/)[0]).toBe(head);
     expect(applied.summary).toContain(`pushed ${head} to feature`);
-    expect(stored(at).value?.facts.build?.decisions[0]?.reason).toContain(`pushed ${head}`);
+    expect(stored(at).value?.facts.build?.decisions.at(-1)?.reason).toContain(`pushed ${head}`);
+  }
+
+  test("a continue that names its pull request pushes the checkout's commits and reads them back first", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    expectPushed(at, ok(run(at, 'apply', applyInputs({ ...CONTINUE, ...PUSH }))));
+  }, 60_000);
+
+  test('a run that asks still pushes the commits the round left unpushed', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const applied = ok(run(at, 'apply', applyInputs({ ...ASK, ...PUSH })));
+    expect(applied).toMatchObject({ decision: 'asked', class: 'stop' });
+    expectPushed(at, applied);
+  }, 60_000);
+
+  test('a done marks the item ready, pushes what the round left, and releases it for good', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const done = { decision: 'done', brief: '', ...PUSH, reason: 'Ready at the head and CI green', attention: null };
+    const applied = ok(run(at, 'apply', applyInputs(done)));
+    expect(applied).toMatchObject({ decision: 'ready', attention: '', asked: null });
+    expectPushed(at, applied);
+    const doc = stored(at).value;
+    expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', decisions: [{ decision: 'ready' }] } } });
+    expect(doc?.facts.build?.rounds).toHaveLength(1);
+    expect(buildWaits(doc as WorkItem)).toBe(false);
   }, 60_000);
 
   test('a closed pull request takes no push, and nothing is recorded', () => {
@@ -494,6 +543,18 @@ describe('eval mode', () => {
     });
     expect(applied.gh.filter(call => !call.startsWith('api repos') && !call.startsWith('api graphql'))).toEqual([]);
     expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
+  test('a time written with an offset reads the revision at that instant, and text that is not a time refuses', () => {
+    const at = install();
+    const history = { issue: { body: 'The contract with the later ruling.', history: { edits: EDITS } } };
+    // 07:25:31+02:00 is 05:25:31Z: after the old revision, before the later ruling.
+    const offset = run(at, 'facts', { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_AS_OF: '2026-10-16T07:25:31+02:00' }, history);
+    ok(offset);
+    expect(readFileSync(join(offset.artifacts, 'build/issue.md'), 'utf8')).toContain(OLD);
+    const bad = run(at, 'facts', { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_AS_OF: 'yesterday' }, history);
+    expect(bad.code).not.toBe(0);
+    expect(bad.stderr).toContain('"yesterday" is not a time');
   }, 60_000);
 
   test('a time before every readable revision refuses rather than judging other text', () => {
