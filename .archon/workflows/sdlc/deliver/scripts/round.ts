@@ -42,9 +42,10 @@ const round = (Number.isNaN(previous) ? 0 : previous) + 1;
 const green = text(process.env.INPUTS_GREEN);
 const redCause = text(process.env.INPUTS_RED_CAUSE);
 const rereviewed = ['true', 'false'].includes(text(process.env.INPUTS_REREVIEW_READY));
-const review = rereviewed ? 'REREVIEW' : 'REVIEW';
-const reviewReady = text(process.env[`INPUTS_${review}_READY`]);
-const reviewAction = text(process.env[`INPUTS_${review}_ACTION`]);
+// Every binding is read by its literal name: the load-time binding check cannot see a computed key.
+const reviewReady = text(rereviewed ? process.env.INPUTS_REREVIEW_READY : process.env.INPUTS_REVIEW_READY);
+const reviewAction = text(rereviewed ? process.env.INPUTS_REREVIEW_ACTION : process.env.INPUTS_REVIEW_ACTION);
+const reviewSummary = rereviewed ? process.env.INPUTS_REREVIEW_SUMMARY : process.env.INPUTS_REVIEW_SUMMARY;
 const ci = text(process.env.INPUTS_CI);
 const ciRerun = text(process.env.INPUTS_CI_RERUN);
 const prUrl = text(process.env.INPUTS_PR_URL);
@@ -67,14 +68,15 @@ function decide(): { reason: Ended; again: boolean } {
   return { reason: 'ci_other', again: false };
 }
 
-const SUMMARY_OF: Record<Ended, string> = {
-  delivered: 'CI_SUMMARY',
-  implement_blocked: 'IMPLEMENT_SUMMARY',
-  review_open: `${review}_SUMMARY`,
-  replan: `${review}_SUMMARY`,
-  needs_human: `${review}_SUMMARY`,
-  ci_pr_caused: 'CI_SUMMARY',
-  ci_other: 'CI_SUMMARY',
+const ciSummary = process.env.INPUTS_CI_SUMMARY;
+const SUMMARY_OF: Record<Ended, string | undefined> = {
+  delivered: ciSummary,
+  implement_blocked: process.env.INPUTS_IMPLEMENT_SUMMARY,
+  review_open: reviewSummary,
+  replan: reviewSummary,
+  needs_human: reviewSummary,
+  ci_pr_caused: ciSummary,
+  ci_other: ciSummary,
 };
 
 const { reason, again } = decide();
@@ -96,5 +98,5 @@ emit({
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,
+  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(SUMMARY_OF[reason])}`,
 });
