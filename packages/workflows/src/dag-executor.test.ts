@@ -22316,7 +22316,7 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
 
   it.each([
     // Captured output would otherwise replace the termination error in the message.
-    ['Bash', { id: 'slow', bash: 'echo started; sleep 30', timeout: 500, on_timeout: 'skip' }],
+    ['Bash', { id: 'slow', bash: 'echo started; exec sleep 30', timeout: 500, on_timeout: 'skip' }],
     [
       'Script',
       {
@@ -22331,12 +22331,8 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
     'fails an opted-in %s timeout whose process tree could not be ended',
     async (label, nodeInput) => {
       const store = createMockStore();
-      const realTerminateTree = pluginProcess.terminateTree;
-      const terminateSpy = spyOn(pluginProcess, 'terminateTree').mockImplementation(
-        async (pid, signal) => {
-          await realTerminateTree(pid, signal);
-          throw new Error('group refused the signal');
-        }
+      const terminateSpy = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
+        new Error('group refused the signal')
       );
       // POSIX ends the tree only for a recorded node; Windows ends it on every owner path.
       const trees = recordNodeProcessTrees();

@@ -391,8 +391,11 @@ export async function execOwnedProcessGroup(
       child.kill('SIGTERM');
       return;
     }
-    termination = terminateTree(child.pid, node ? 'SIGTERM' : 'SIGKILL').catch((error: unknown) => {
+    const signal = node ? 'SIGTERM' : 'SIGKILL';
+    termination = terminateTree(child.pid, signal).catch((error: unknown) => {
       terminationError = error instanceof Error ? error : new Error(String(error));
+      // `close` waits for the root, so a root left running would hang the caller.
+      if (!exited) child.kill(signal);
     });
   };
   const rootPid = child.pid;
