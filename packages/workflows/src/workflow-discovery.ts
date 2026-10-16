@@ -88,7 +88,7 @@ import {
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
-/** Pre-parse pack errors retain their full path so they cannot alias a bare target. */
+/** Errors without a known workflow name keep their full path to avoid aliasing a bare target. */
 export function workflowLoadErrorName(error: WorkflowLoadError): string {
   return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
 }
@@ -1044,10 +1044,17 @@ export async function discoverWorkflows(
         label,
         configuredEnvNames
       );
-      allErrors.push(...loaded.errors);
       const entrypointByPath = new Map(
         Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
       );
+      for (const error of loaded.errors) {
+        const entry = entrypointByPath.get(error.filename.slice(label.length + 1));
+        allErrors.push(
+          entry === undefined
+            ? error
+            : { ...error, workflowName: installedWorkflowName(pack, entry) }
+        );
+      }
       // A pack workflow is referred to inside its pack by its `name:`. It is known
       // outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
       const qualifiedByName = new Map<string, string>();
@@ -1062,6 +1069,7 @@ export async function discoverWorkflows(
         if (!loaded.files.some(file => `${file.folder}/${file.filename}` === path)) {
           allErrors.push({
             filename: `${label}/${path}`,
+            workflowName: installedWorkflowName(pack, entry),
             error: `Entrypoint '${entry}' of installed plugin ${label} did not load from ${path}.`,
             errorType: 'validation_error',
           });

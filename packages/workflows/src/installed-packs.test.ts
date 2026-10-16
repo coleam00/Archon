@@ -15,7 +15,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { discoverWorkflowsWithConfig, workflowLoadErrorName } from './workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from './router';
 import { validateWorkflowResources } from './validator';
 import { loadCommandPrompt } from './executor-shared';
@@ -172,6 +172,52 @@ describe('installed packs in the catalog', () => {
       }
     }
   );
+
+  for (const fault of ['malformed', 'missing', 'unreadable'] as const) {
+    test.skipIf(
+      fault === 'unreadable' && (process.platform === 'win32' || process.getuid?.() === 0)
+    )(`a selected ${fault} entrypoint retains its public name and load diagnostic`, async () => {
+      const pack = reviewKit();
+      if (fault === 'malformed') pack.files['review/code-review.yaml'] = 'nodes: [';
+      if (fault === 'missing') delete pack.files['review/code-review.yaml'];
+      await install(pack);
+      const path = join(
+        packTreePath(join(home, 'plugins'), ID, COMMIT_A),
+        'review/code-review.yaml'
+      );
+      try {
+        if (fault === 'unreadable') await chmod(path, 0o000);
+        const catalog = await discover();
+        const errors = catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW);
+        expect(errors.length).toBeGreaterThan(0);
+        expect(
+          errors.every(error => error.filename === 'acme/review-kit/review/code-review.yaml')
+        ).toBe(true);
+        const diagnostic = errors.find(
+          error =>
+            error.errorType ===
+            (fault === 'malformed'
+              ? 'parse_error'
+              : fault === 'unreadable'
+                ? 'read_error'
+                : 'validation_error')
+        );
+        if (!diagnostic) throw new Error(`Missing ${fault} entrypoint diagnostic`);
+        const resolution = resolveFanOutChildDefinition(
+          { ...deps, providers: providerRegistry },
+          project,
+          REVIEW
+        );
+        if (fault === 'unreadable') {
+          await expect(resolution).rejects.toMatchObject({ code: 'EACCES' });
+        } else {
+          expect(await resolution).toEqual({ unresolved: diagnostic.error });
+        }
+      } finally {
+        if (fault === 'unreadable') await chmod(path, 0o644);
+      }
+    });
+  }
 
   test('installed MCP declarations stay checkout-only despite adjacent and home configs', async () => {
     registerBuiltinProviders();
