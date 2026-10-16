@@ -209,10 +209,13 @@ names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
 falling back to the pack's defaults"; triage names `triage.md`, and plan and review
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
-read before either stops for a person. Agents interpret
+read before either stops for a person. The build queue's agents name `build.md`, what
+the queue may decide on its own, and its route and answer agents `rulings.md` too.
+Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
-A node reaches the defaults through its workflow's `policy` script node. A run
+A node reaches the defaults through a script node of its workflow: its `policy` node,
+or the build queue's `facts`. A run
 captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
@@ -427,6 +430,93 @@ are the operator's and stay outside the pack and the repository.
   which an agent ran (`unreported` when no provider reported one) and wall time, and
   which versions got each disagreement right. A bar with no applicable rows reads
   `not applicable`. It does not choose a winner.
+
+## Build queue
+
+[`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
+items to a reviewed, ready pull request, and stops only for decisions that belong to a
+person. It acts on its own when a case is clear and asks when it is not; the default
+policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
+which a project replaces with its own `.archon/sdlc/policy/build.md`.
+
+- **Pickup.** A run claims one item with intake's claim and order (the `order`
+  input). An item waits for the build queue when its work item's stage is a READY
+  route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
+  recorded it, or recorded it as waiting for its next round. A re-triage after the
+  queue's last decision starts the item over. The build queue's claim takes none of
+  the item's intake requests, so an edit or label request recorded while it holds the
+  item waits for intake's next pickup. The queue writes no labels; intake's mirror
+  stays as it is.
+- **Route.** The `route` agent checks that the issue body is a contract (the six
+  elements, with its dated "Current scope" sections), proves a bug's symptom before
+  its first round, and writes the brief `archon-ship` starts from. A bug that needs a
+  browser is reproduced with the playwright-cli skill, which the prompt names rather
+  than a `skills:` entry, because a provider that cannot load named skills refuses a
+  whole run that declares one.
+- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
+  it ended and decides: `done` when the pull request's latest review says Ready at its
+  head commit, `continue` with a brief when the contract already answers what stopped
+  it (a correctable finding, CI red the change caused, a false blocker naming a later
+  step), or `ask`. It declares the pull request when the round left commits unpushed.
+- **Give up.** When a round ends wanting another and `round_limit` rounds (default 3)
+  have run since the item's scope last changed, by a re-triage or a maintainer's
+  answer, the `give-up` agent compares their reviews. Each round finding new defects
+  asks the scope question instead of running another round.
+- **Writes.** The `apply` script refuses an attention item without the choice it
+  recommends, pushes the declared commits (never forcing, and reading the remote head
+  back), then records the decision on the work item and releases the claim, in one
+  conditional write. A run that asks keeps its claim while it is paused.
+- **Attention.** An unclear decision pauses the run as one `select` attention item
+  labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
+  is, why it matters, the agent's recommendation with its evidence, confidence and
+  what would change it, the choices and what each does, what happens if nobody
+  answers, and the links to the evidence. The answer is one declared choice, so the
+  queue never reads the answer's prose for a decision. The `ruling` script writes the
+  choice's ruling and the person's words into the issue body as one dated "Current
+  scope" section, reads it back, and records the answer: a `continue` choice launches
+  the next round from it, and a `park` choice stops working the item until a
+  re-triage. A run cancelled while it waits leaves the item asking, and only a
+  re-triage starts it over.
+- **Record.** The work item's `facts.build` holds the item's status (`next`,
+  `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
+  rounds and its last twenty decisions with any maintainer's answer.
+- **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
+  issue named by `number`: with an empty `replay` it makes the route decision, and
+  otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
+  are its history), reading the issue body as it was at `as_of`. The agents keep
+  their read tools, so they can still see the pull request and comments as they are
+  now.
+
+The pack installs no binding. A schedule keeps items moving, because a run works one
+item and a continuation waits for the next run. Each run includes `archon-ship`, which
+changes its checkout, so every run needs its own worktree:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-build-queue",
+  "binding": {
+    "bindingId": "build-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:build",
+    "capacity": 2,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-build-queue",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "worktree" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
+
+To start a run as soon as intake routes an item, add a label binding on the same
+resource, with intake's label selector narrowed to the route labels intake writes
+(`archon-ready`, `archon-plan`, `archon-issue`) and the same launch.
 
 ## Discoveries
 

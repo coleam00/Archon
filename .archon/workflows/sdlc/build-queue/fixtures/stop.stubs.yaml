@@ -1,0 +1,68 @@
+# Dry-run fixture, the stop-answer decision: a round ends on a question the
+# contract does not answer, so the answer agent asks. The run pauses as one
+# attention item whose answer is a declared choice, and the ruling node records it.
+# The queue's own scripts reach the state store and the forge, so they are stubbed
+# here and proved by .archon/scripts/__tests__/build-queue.test.ts.
+facts:
+  path: route
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  record: null
+  brief: ""
+  rounds: []
+  recorded: null
+  at_cap: false
+  policy_defaults: "/stub/policy"
+route:
+  decision: launch
+  brief: "stub: continue PR 8"
+  reason: "stub: the body is a contract"
+  attention: null
+ship__triage__triage:
+  decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: title", body: "stub: body" } }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  summary: "stub: no acceptance stated"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+answer:
+  decision: ask
+  brief: "stub: continue PR 8 under the ruling"
+  push: null
+  reason: "stub: the plan asks to relax a stated constraint"
+  attention:
+    what: "stub: the item and the decision"
+    why: "stub: what either answer changes"
+    recommendation:
+      choice: narrow
+      why: "stub: why"
+      evidence: "stub: evidence"
+      confidence: medium
+      would_change: "stub: what would change it"
+    choices:
+      - { id: narrow, label: "stub: narrow it", does: "stub: continues on the narrower scope", effect: continue, ruling: "stub: acceptance drops A4" }
+      - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
+    if_unanswered: "stub: the item waits"
+    links: ["https://github.com/example/repo/pull/8"]
+apply:
+  decision: asked
+  summary: "stub: Issue 7: asked."
+  attention: "stub: the attention message"
+  options: [{ id: narrow, label: "stub: narrow it" }, { id: park, label: "stub: park it" }]
+  class: stop
+  asked: { attention: {}, brief: "stub: continue PR 8", by: stop }
+  evaluation: null
+ask: { decision: narrow, text: "stub: drop A4" }
+ruling:
+  decision: continue
+  section: "stub: Current scope (maintainer ruling)"
+  summary: "stub: the maintainer chose narrow"
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, route, ship__report, answer, apply, ask, ruling]
+exec-code: true
