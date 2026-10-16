@@ -469,6 +469,11 @@ export interface WorkflowLoadError {
   readonly cause?: unknown;
 }
 
+/** Errors after parsing retain the authored identity even when the filename differs. */
+export interface ParsedWorkflowLoadError extends WorkflowLoadError {
+  readonly workflowName: string;
+}
+
 /**
  * Result of workflow discovery - includes both successful loads and errors
  */

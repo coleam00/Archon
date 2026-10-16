@@ -51,6 +51,42 @@ test('discovery reports an inaccessible global workflow scope but tolerates a mi
   }
 });
 
+for (const fault of ['missing-packaged-script', 'unbound-input'] as const) {
+  test(`post-parse ${fault} errors retain the declared workflow name`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-script-load-identity-'));
+    const folder = join(root, '.archon/workflows/team/pack');
+    try {
+      await mkdir(join(folder, 'scripts'), { recursive: true });
+      await writeFile(
+        join(folder, 'different.yaml'),
+        JSON.stringify({
+          name: 'declared',
+          description: 'Script validation',
+          inputs: { declared: {} },
+          nodes: [{ id: 'check', script: 'check', runtime: 'bun' }],
+        })
+      );
+      if (fault === 'unbound-input')
+        await writeFile(
+          join(folder, 'scripts/check.ts'),
+          'console.log(process.env.INPUTS_MISSING)'
+        );
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
+      expect(result.workflows).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatchObject({
+        workflowName: 'declared',
+        errorType: 'validation_error',
+      });
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+}
+
 test('project directory access failures preserve their typed cause', async () => {
   const root = await mkdtemp(join(tmpdir(), 'archon-project-workflow-read-'));
   const workflowPath = join(root, '.archon', 'workflows');

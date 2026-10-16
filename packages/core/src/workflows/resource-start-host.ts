@@ -119,7 +119,9 @@ async function prepareBinding(
     );
     if (!workflow) {
       const loadError = discovered.errors.find(
-        error => error.filename.replace(/\.ya?ml$/, '') === intent.launch.workflowName
+        error =>
+          (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) ===
+          intent.launch.workflowName
       );
       throw new Error(
         loadError

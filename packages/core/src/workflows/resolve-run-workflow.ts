@@ -20,7 +20,9 @@ function findWorkflowLoadError(
   loadErrors: readonly WorkflowLoadError[],
   workflowName: string
 ): WorkflowLoadError | undefined {
-  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
+  return loadErrors.find(
+    error => (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) === workflowName
+  );
 }
 
 export async function resolveRunWorkflow(

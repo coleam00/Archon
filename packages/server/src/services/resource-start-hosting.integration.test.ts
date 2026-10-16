@@ -15,7 +15,7 @@ import { execFileAsync } from '@archon/git';
  * pending run exactly as the executor does, so the claim fence stays the real one.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -348,6 +348,34 @@ describe('server resource-start host', () => {
     expect(JSON.parse(messages[0].metadata)).toEqual({ category: 'workflow_status' });
   });
 
+  test('resource preparation reports a load error by declared workflow name', async () => {
+    const { deliver, engine } = await fixture(false, { kind: 'in-place' }, false);
+    const workflows = join(root, 'project/.archon/workflows');
+    await rename(join(workflows, 'hosted.yaml'), join(workflows, 'different.yaml'));
+    await writeFile(
+      join(workflows, 'different.yaml'),
+      'name: hosted\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
+    );
+    expect((await deliver('load-error', 'queue')).status).toBe(200);
+    try {
+      await drainResourceStartHost({
+        ...createSqlWorkflowHost(),
+        engine,
+        hostId: HOST_ID,
+        startAdmitted: async () => {
+          throw new Error('invalid workflow was admitted');
+        },
+      });
+      throw new Error('expected preparation refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) throw error;
+      expect(error.errors).toHaveLength(1);
+      expect(error.errors[0].message).toContain("Workflow 'hosted' failed to load:");
+      expect(error.errors[0].message).toContain('absent');
+    }
+    expect(engine.submitted).toHaveLength(0);
+  });
   test('a webhook receipt is prepared, admitted and started through the engine port', async () => {
     const { deliver, engine } = await fixture();
     await writeFile(join(root, 'home', 'config.yaml'), 'defaultAssistant: pi\n');

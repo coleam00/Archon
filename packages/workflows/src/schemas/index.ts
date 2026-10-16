@@ -308,6 +308,7 @@ export type {
   LoadCommandResult,
   WorkflowExecutionResult,
   WorkflowLoadError,
+  ParsedWorkflowLoadError,
   WorkflowLoadResult,
   GraphPlan,
   ResolvedWorkflow,

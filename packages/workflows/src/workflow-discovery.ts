@@ -26,6 +26,7 @@ import { basename, dirname, join, resolve } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
+  ParsedWorkflowLoadError,
   WorkflowLoadResult,
   WorkflowWithSource,
   WorkflowSource,
@@ -772,7 +773,7 @@ export async function discoverWorkflows(
 
   const validateNamedScripts = async (
     files: Map<string, ScopeFile>,
-    errors: WorkflowLoadError[]
+    errors: ParsedWorkflowLoadError[]
   ): Promise<void> => {
     const targetsByFile = new Map<
       string,
@@ -832,6 +833,7 @@ export async function discoverWorkflows(
           if (parsePackagedResourceReference(target.slot.value) === null) continue;
           errors.push({
             filename,
+            workflowName: workflow.name,
             error: `Named packaged script '${target.slot.value}' was not found in its workflow's scripts directory.`,
             errorType: 'validation_error',
           });
@@ -870,6 +872,7 @@ export async function discoverWorkflows(
       if (validation.errors.length > 0) {
         errors.push({
           filename,
+          workflowName: workflow.name,
           error: validation.errors.join(' '),
           errorType: 'validation_error',
         });
@@ -898,7 +901,7 @@ export async function discoverWorkflows(
   const expandScope = async (
     files: Map<string, ScopeFile>
   ): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> => {
-    const errors: WorkflowLoadError[] = [];
+    const errors: ParsedWorkflowLoadError[] = [];
     await validateNamedScripts(files, errors);
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
@@ -921,6 +924,7 @@ export async function discoverWorkflows(
         for (const filename of filenames) {
           errors.push({
             filename,
+            workflowName: name,
             error: `Duplicate workflow name '${name}' — also declared in ${filenames
               .filter(f => f !== filename)
               .join(

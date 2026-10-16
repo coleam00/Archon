@@ -122,6 +122,20 @@ describe('resolveRunWorkflow', () => {
     if (result.ok) expect(result.workflow.description).toBe('Legacy live graph');
   });
 
+  test('reports a post-parse load error by declared name rather than filename', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-named-load-error-')));
+    await mkdir(join(root, '.archon/workflows'), { recursive: true });
+    await writeFile(
+      join(root, '.archon/workflows/different.yaml'),
+      'name: continued\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
+    );
+    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('Workflow `continued` failed to load:');
+      expect(result.message).toContain('absent');
+    }
+  });
   test('reports a malformed legacy workflow instead of treating it as absent', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-malformed-legacy-run-')));
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
