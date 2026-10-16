@@ -43831,8 +43831,10 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
     }
   });
 
-  // A node that declares no timeout reaches the exec boundary with no deadline. The loop
-  // until_bash site is covered above and the resumed loop_group probe in the #2967 block.
+  // A node that declares no timeout reaches runSubprocess with no deadline. Spying there
+  // rather than at execFileAsync keeps the check platform-independent: on Windows bash and
+  // script nodes spawn through execOwnedProcessGroup. The loop until_bash site is covered
+  // above and the resumed loop_group probe in the '#2707 step 3' escalation block.
   it.each([
     ['bash node', { id: 'b', bash: 'echo UNDECLARED' }],
     ['script node', { id: 's', script: 'console.log("UNDECLARED")', runtime: 'bun' }],
@@ -43851,7 +43853,11 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
   ])('passes no deadline for an undeclared %s', async (_site, raw) => {
     const node = dagNodeSchema.parse(raw);
 
-    const execSpy = spyOnExec();
+    const runSpy = spyOn(subprocess, 'runSubprocess').mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      credentialValues: [],
+    });
     try {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: 'working on it' };
@@ -43868,13 +43874,11 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
         })
       );
 
-      const call = execSpy.mock.calls.find(c =>
-        (c[1] as string[]).some(arg => arg.includes('UNDECLARED'))
-      ) as [string, string[], { timeout?: number }] | undefined;
+      const call = runSpy.mock.calls.find(c => c[2].some(arg => arg.includes('UNDECLARED')));
       expect(call).toBeDefined();
-      expect(call?.[2]?.timeout).toBeUndefined();
+      expect(call?.[3].timeout).toBeUndefined();
     } finally {
-      execSpy.mockRestore();
+      runSpy.mockRestore();
     }
   });
 });
