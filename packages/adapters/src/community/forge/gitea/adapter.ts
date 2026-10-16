@@ -490,7 +490,8 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Uses @archon/git functions for safe, testable git operations.
    *
    * Without a checkout (no source/ or an empty one): clone
-   * With a checkout: sync if shouldSync=true, skip if shouldSync=false
+   * With content (a checkout, or a registered subdirectory of one): sync if
+   * shouldSync=true, skip if shouldSync=false
    *
    * @param shouldSync - Whether to sync an existing checkout (pass true to ensure latest code)
    */
@@ -504,8 +505,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     const { name: projectName, default_cwd: repoPath } = codebase;
     let repositoryExists = false;
     try {
-      await access(join(repoPath, '.git'));
-      repositoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -516,7 +516,6 @@ export class GiteaAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // Missing git metadata includes the empty source/ left by a failed clone.
     }
 
     if (repositoryExists) {

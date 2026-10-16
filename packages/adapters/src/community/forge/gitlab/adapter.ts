@@ -434,10 +434,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     shouldSync: boolean
   ): Promise<void> {
     const { name: projectName, default_cwd: repoPath } = codebase;
+    // An empty source/ is what a failed clone leaves; any other content is a
+    // checkout, or a registered subdirectory of one, and is never cloned over.
     let repositoryExists = false;
     try {
-      await access(join(repoPath, '.git'));
-      repositoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {

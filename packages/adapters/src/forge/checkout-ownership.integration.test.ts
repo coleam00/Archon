@@ -276,37 +276,37 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
 const readiness = [
   {
     name: 'GitHub',
-    prepare: (codebase: ProjectCheckout) =>
+    prepare: (codebase: ProjectCheckout, shouldSync = false) =>
       // @ts-expect-error - exercise the private readiness boundary
       new GitHubAdapter({ kind: 'pat', token: 'test' }, 'secret', lock).ensureRepoReady(
         'acme',
         'api',
         'main',
         codebase,
-        false
+        shouldSync
       ),
   },
   {
     name: 'GitLab',
-    prepare: (codebase: ProjectCheckout) =>
+    prepare: (codebase: ProjectCheckout, shouldSync = false) =>
       // @ts-expect-error - exercise the private readiness boundary
       new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com').ensureRepoReady(
         'acme/api',
         'main',
         codebase,
-        false
+        shouldSync
       ),
   },
   {
     name: 'Gitea',
-    prepare: (codebase: ProjectCheckout) =>
+    prepare: (codebase: ProjectCheckout, shouldSync = false) =>
       // @ts-expect-error - exercise the private readiness boundary
       new GiteaAdapter('https://gitea.example.com', 'test', 'secret', lock).ensureRepoReady(
         'acme',
         'api',
         'main',
         codebase,
-        false
+        shouldSync
       ),
   },
 ];
@@ -330,6 +330,35 @@ test.each(readiness)(
       }
     } finally {
       clone.mockRestore();
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  }
+);
+
+test.each(readiness.filter(forge => forge.name !== 'GitHub'))(
+  '$name syncs a project registered at a subdirectory of a checkout instead of cloning into it',
+  async ({ prepare }) => {
+    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-subdirectory-project-')));
+    const checkout = join(root, 'checkout');
+    execFileSync('git', ['init', '-q', '-b', 'main', checkout]);
+    const subdirectory = join(checkout, 'service');
+    await mkdir(subdirectory);
+    await writeFile(join(subdirectory, 'README.md'), 'service');
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = root;
+    const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
+      ok: false,
+      error: { code: 'unknown', message: 'destination already exists and is not empty' },
+    });
+    const sync = spyOn(git, 'syncRepository').mockResolvedValue({ ok: true, value: undefined });
+    try {
+      await prepare({ name: 'acme/api', default_cwd: subdirectory }, true);
+      expect(clone).not.toHaveBeenCalled();
+      expect(sync).toHaveBeenCalledWith(subdirectory, 'main');
+    } finally {
+      clone.mockRestore();
+      sync.mockRestore();
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }
