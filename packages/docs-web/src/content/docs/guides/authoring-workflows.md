@@ -267,7 +267,8 @@ On macOS and Linux a foreground `workflow run`, `workflow resume` or `trigger ex
 the node in its own process group and sends `SIGTERM` to that group. A node under
 `archon serve` or a detached run shares its owner's process group, so on macOS and Linux its
 timeout still ends only the node's own process, and work it started in the background keeps
-running. `until_bash` checks and container nodes end only their own process.
+running. `until_bash` checks end only their own process. A container node's timeout ends only
+the local `docker exec` client, so the command inside the container may keep running.
 
 Archon does not confirm that the tree is gone, so some work outlives a reported timeout:
 
