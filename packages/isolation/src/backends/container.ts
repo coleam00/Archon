@@ -425,22 +425,33 @@ export class ContainerBackend implements IIsolationBackend {
     const priorMode: OverlayMode = meta.overlayMode ?? 'native';
 
     const presence = await this.describeContainer(containerName);
-    if (presence === 'running') {
-      const containerId = await this.getContainerId(containerName);
-      log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
-      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
-    }
     if (presence === 'paused' || presence === 'restarting') {
       throw new IsolationFailure(
         'unclassified',
         `Cannot resume container env '${envId}': container '${containerName}' is ${presence}.`
       );
     }
-    if (presence === 'stopped') {
-      await this.docker(['start', containerName]);
+    if (presence === 'running' || presence === 'stopped') {
       const containerId = await this.getContainerId(containerName);
-      await this.waitForReady(containerId);
-      log.info({ envId, containerName }, 'isolation.container_resume_restarted');
+      if (containerId !== meta.containerId) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': container '${containerName}' ID ` +
+            `'${containerId}' does not match recorded ID '${meta.containerId}'. ` +
+            'Its overlay mode is unknown; remove the unrecorded container before retrying, ' +
+            `preserving overlay volume '${volume}'.`
+        );
+      }
+      if (presence === 'stopped') {
+        await this.docker(['start', containerId]);
+        await this.waitForReady(containerId);
+      }
+      log.info(
+        { envId, containerName },
+        presence === 'running'
+          ? 'isolation.container_resume_reused_running'
+          : 'isolation.container_resume_restarted'
+      );
       return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
     }
 
@@ -475,7 +486,25 @@ export class ContainerBackend implements IIsolationBackend {
       codebaseId,
       mounts
     );
-    await this.store.updateMetadata(envId, { containerId, overlayMode: mode });
+    try {
+      await this.store.updateMetadata(envId, { containerId, overlayMode: mode });
+    } catch (error) {
+      try {
+        await this.docker(['rm', '-f', containerId]);
+      } catch (cleanupError) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Failed to record recreated container '${containerId}': ${extractDockerError(error)}. ` +
+            `Could not remove it: ${extractDockerError(cleanupError)}. ` +
+            `Overlay volume '${volume}' is preserved.`,
+          new AggregateError(
+            [error, cleanupError],
+            'Container recreation persistence and cleanup failed'
+          )
+        );
+      }
+      throw error;
+    }
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
     return this.preparedEnvFor(containerId, workspacePath, envId, mode);
   }
@@ -672,15 +701,11 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Start the container with the least-privileged overlay mount that works, and
-   * wait for it to become ready. Tries `fuse` FIRST — fuse-overlayfs runs with
-   * only `--device /dev/fuse` and NO `CAP_SYS_ADMIN`, closing the
-   * `mount -o remount,rw /mnt/lower` escape (see SECURITY.md). That path only
-   * succeeds where the daemon grants unprivileged FUSE mounts (rootless /
-   * userns-remap); on a standard rootful daemon it fails fast and we fall back to
-   * `native` (kernel overlay + `CAP_SYS_ADMIN`), which works everywhere but grants
-   * that escape. The failed attempt's container is removed before the next try so
-   * the name is free.
+   * Try FUSE without CAP_SYS_ADMIN first. Only the runner's dedicated FUSE
+   * mount failure status (78) permits native overlay with CAP_SYS_ADMIN, which
+   * allows in-container root to remount the lower directory (see SECURITY.md).
+   * Docker startup failures and other readiness failures stop preparation.
+   * The failed FUSE container must be removed before trying native.
    *
    * @returns the ready container id + the mode that succeeded.
    */

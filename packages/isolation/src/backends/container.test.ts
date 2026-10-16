@@ -740,6 +740,86 @@ describe('ContainerBackend.resumeEnv', () => {
     expect(runs).toBe(2);
   });
 
+  for (const priorMode of ['fuse', 'native'] as const) {
+    for (const state of ['running', 'exited']) {
+      test.each([false, true])(
+        `failed metadata write after ${priorMode} recreation preserves safe ${state} retry (cleanup fails: %s)`,
+        async cleanupFails => {
+          const store = fakeStore();
+          const row = seedContainerRow(store, { overlayMode: priorMode });
+          const persistenceError = new Error('metadata write failed');
+          const cleanupError = new Error('container removal failed');
+          spyOn(store, 'updateMetadata').mockRejectedValueOnce(persistenceError);
+          const mode = priorMode === 'fuse' ? 'native' : 'fuse';
+          let containerId: string | undefined;
+          let activeMode = 'fuse';
+          let runs = 0;
+          const docker = fakeDocker(args => {
+            if (args[0] === 'container')
+              return {
+                stdout: containerId ? `${containerId}\tarchon-res-1\t${state}\n` : '',
+                stderr: '',
+              };
+            if (args[0] === 'volume') return { stdout: 'archon-res-1-upper\n', stderr: '' };
+            if (args[0] === 'run') {
+              activeMode = args.includes('SYS_ADMIN') ? 'native' : 'fuse';
+              containerId = `cid-${++runs}`;
+              return { stdout: containerId, stderr: '' };
+            }
+            if (args[0] === 'exec' && mode === 'native' && activeMode === 'fuse')
+              throw new IsolationFailure('unclassified', 'not ready');
+            if (args[0] === 'inspect')
+              return {
+                stdout: args.includes('{{.Id}}')
+                  ? (containerId ?? '')
+                  : args.includes('{{.State.ExitCode}}')
+                    ? '78'
+                    : 'false',
+                stderr: '',
+              };
+            if (args[0] === 'rm') {
+              if (cleanupFails && activeMode === mode) throw cleanupError;
+              containerId = undefined;
+            }
+            return { stdout: '', stderr: '' };
+          });
+          const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+          const error = await backend.resumeEnv(row.id).catch((error: unknown) => error);
+          if (cleanupFails) {
+            expect(error).toBeInstanceOf(IsolationFailure);
+            if (!(error instanceof IsolationFailure)) throw error;
+            expect(isKnownIsolationError(error)).toBe(true);
+            expect(error.message).toContain(persistenceError.message);
+            expect(error.message).toContain(cleanupError.message);
+            expect(error.cause).toBeInstanceOf(AggregateError);
+            if (!(error.cause instanceof AggregateError)) throw error;
+            expect(error.cause.errors).toEqual([persistenceError, cleanupError]);
+            expect(row.metadata).toMatchObject({ containerId: 'cid-orig', overlayMode: priorMode });
+            const callsBeforeRetry = docker.calls.length;
+            await expect(backend.resumeEnv(row.id)).rejects.toThrow('does not match');
+            expect(docker.calls.slice(callsBeforeRetry).map(args => args[0])).toEqual([
+              'container',
+              'inspect',
+            ]);
+          } else {
+            expect(error).toBe(persistenceError);
+            expect(containerId).toBeUndefined();
+            const retried = await backend.resumeEnv(row.id);
+            expect(retried.overlayMode).toBe(mode);
+            expect(row.metadata).toMatchObject({ containerId, overlayMode: mode });
+            expect(await backend.resumeEnv(row.id)).toEqual(retried);
+          }
+          expect(docker.calls.filter(args => args[0] === 'rm')).toContainEqual([
+            'rm',
+            '-f',
+            mode === 'native' ? 'cid-2' : 'cid-1',
+          ]);
+          expect(docker.calls.some(args => args[0] === 'volume' && args[1] === 'rm')).toBe(false);
+        }
+      );
+    }
+  }
+
   test.each(['paused', 'restarting'])(
     'rejects a %s container before returning an execution handle',
     async state => {
@@ -766,12 +846,12 @@ describe('ContainerBackend.resumeEnv', () => {
         return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
       }
       if (args[0] === 'inspect' && args.includes('{{.Id}}'))
-        return { stdout: 'cid-run\n', stderr: '' };
+        return { stdout: 'cid-orig\n', stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-run' });
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
     expect(docker.calls.find(c => c[0] === 'start')).toBeUndefined();
   });
 
@@ -783,15 +863,15 @@ describe('ContainerBackend.resumeEnv', () => {
         return { stdout: 'cid-orig\tarchon-res-1\texited\n', stderr: '' };
       }
       if (args[0] === 'inspect' && args.includes('{{.Id}}'))
-        return { stdout: 'cid-started\n', stderr: '' };
+        return { stdout: 'cid-orig\n', stderr: '' };
       if (args[0] === 'start') return { stdout: '', stderr: '' };
       if (args[0] === 'exec' && args.includes('test')) return { stdout: '', stderr: '' }; // ready
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-started' });
-    expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'archon-res-1']);
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
+    expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'cid-orig']);
   });
 
   test('recreates the container over the surviving volume when the container is gone', async () => {
