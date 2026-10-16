@@ -1091,7 +1091,7 @@ export async function ensureProjectStructure(owner: string, repo: string): Promi
       if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
         throw new ProjectSourceOccupiedError(
           source,
-          `Source path at ${source} already contains a file`
+          `Source path at ${source} is occupied by a file or broken link`
         );
       }
       throw error;
