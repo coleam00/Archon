@@ -97,6 +97,23 @@ export function mergeWaits(doc: WorkItem): boolean {
   return build.at > merge.at;
 }
 
+/**
+ * The decision label of an item settled `waiting` because its pull request could not be
+ * read. A second one in a row parks the item instead, so a pull request that can never
+ * be read is reported rather than claimed by every sweep.
+ */
+export const UNREADABLE = 'waiting (unreadable)';
+
+/** A claimed item the facts node settled without the sweep, which the record node writes. */
+export interface MergeSettled {
+  readonly item: QualifiedPr;
+  readonly pr: QualifiedPr | null;
+  readonly status: Extract<MergeStatus, 'merged' | 'parked' | 'waiting'>;
+  /** The decision label recorded. */
+  readonly decision: string;
+  readonly reason: string;
+}
+
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
 /** The pull request the build queue's last round delivered on the item, or null. */
@@ -380,20 +397,24 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
   return refusals;
 }
 
-/** What the gate writes beside the run's artifacts for every merge it made. */
+/**
+ * What the gate writes beside the run's artifacts for every merge it made, as soon as
+ * the forge accepts it and before it reads the merge back, so a failed read-back still
+ * leaves the record node evidence of the merge.
+ */
 export interface Receipt {
   readonly pr: string;
   readonly head: string;
-  readonly merge_commit: string;
   readonly at: string;
 }
 
-/**
- * Merge at exactly `head`, then read the pull request back: it must be merged with that
- * head. The forge refuses the merge when the head has moved since it was read.
- */
-export function mergePinned(pr: QualifiedPr, head: string, method: MergeMethod, maintainers: ReadonlySet<string>): string {
+/** Merge at exactly `head`; the forge refuses when the head has moved since it was read. */
+export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): void {
   gh('pr', 'merge', String(pr.number), '--repo', `${pr.repo.host}/${pr.repo.path}`, `--${method}`, '--match-head-commit', head);
+}
+
+/** The merge commit of a pull request that must read back merged with `head`. */
+export function mergedAt(pr: QualifiedPr, head: string, maintainers: ReadonlySet<string>): string {
   const after = readPr(pr, maintainers).facts;
   if (after.state !== 'merged' || after.head_revision !== head || after.merge_commit === null) {
     throw new Error(`${after.url} does not read back merged at ${head}; it is ${after.state} at ${after.head_revision}`);

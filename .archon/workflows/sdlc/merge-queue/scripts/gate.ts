@@ -6,12 +6,13 @@
  * It reads the pull request fresh and refuses unless the trusted review verdict says
  * Ready at `head`, CI is green at `head`, no review thread is unresolved, and the pull
  * request is open, not a draft, into the default branch and still at `head`. Without
- * `--merge` it only reports. With it, a passing gate merges pinned to `head`, reads the
- * merge back and writes a receipt the record node checks: a pull request the sweep
- * says it merged must carry one.
+ * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
+ * receipt as soon as the forge accepts the merge, and reads the merge back. The record
+ * node holds the sweep to the receipts: a pull request with one was merged by this run,
+ * and one the sweep says it merged must have one.
  *
  * Prints one JSON document: `{pr, head, refusals, merge_commit}`. A refused merge or a
- * failed one exits nonzero.
+ * failed one exits nonzero; a merge that failed only its read-back says it was made.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -20,7 +21,8 @@ import { emit, refuse } from '../../.shared/io.ts';
 import {
   gateRefusals,
   MERGE_METHODS,
-  mergePinned,
+  mergeAtHead,
+  mergedAt,
   prFromUrl,
   type Receipt,
   readPr,
@@ -52,10 +54,17 @@ function main(): void {
     if (merge) process.exitCode = 1;
     return;
   }
-  const commit = mergePinned(pr, head, method, maintainers);
-  const receipt: Receipt = { pr: url, head, merge_commit: commit, at: new Date().toISOString() };
+  mergeAtHead(pr, head, method);
+  const receipt: Receipt = { pr: url, head, at: new Date().toISOString() };
   mkdirSync(receipts, { recursive: true });
   writeFileSync(join(receipts, `${String(pr.number)}.json`), `${JSON.stringify(receipt)}\n`);
+  let commit: string;
+  try {
+    commit = mergedAt(pr, head, maintainers);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`merged ${url} at ${head}, so declare it merged, but the read-back failed: ${reason}`);
+  }
   emit({ pr: url, head, refusals, merge_commit: commit });
 }
 

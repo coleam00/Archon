@@ -245,6 +245,8 @@ interface FakePr {
   readonly threadTotal?: number;
   /** Every pull request read fails. */
   readonly unreadable?: boolean;
+  /** Every pull request read after a merge fails. */
+  readonly unreadableAfterMerge?: boolean;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
 }
@@ -268,6 +270,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (argv[argv.indexOf('--match-head-commit') + 1] !== forgePr.headRefOid) return out(1, '', 'Head branch was modified');
     forgePr.state = 'MERGED';
     forgePr.mergeCommit = '3333333333333333333333333333333333333333';
+    forgePr.unreadable = forgePr.unreadableAfterMerge === true;
     return out(0);
   }
   if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('pullRequest(number')) {
@@ -370,7 +373,7 @@ function recordInputs(decisions: readonly Record<string, unknown>[], dev: Record
   };
 }
 
-const RECEIPT = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: HEAD, merge_commit: '3', at: AT }) };
+const RECEIPT = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: HEAD, at: AT }) };
 
 describe('the merge queue scripts', () => {
   test('facts claims the items the build queue finished, reads each pull request, and leaves its review for a delta review', () => {
@@ -415,6 +418,16 @@ describe('the merge queue scripts', () => {
     expect(JSON.parse(readFileSync(join(gated.artifacts, 'merge/receipts/42.json'), 'utf8'))).toMatchObject({ head: HEAD });
   }, 60_000);
 
+  test('a merge whose read-back fails still leaves its receipt, and the gate says it merged', () => {
+    const at = install();
+    const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/merge/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const gated = run(at, 'gate', {}, { args, pr: { unreadableAfterMerge: true } });
+    expect(gated.code).not.toBe(0);
+    expect(gated.stderr).toContain(`merged ${PR_URL} at ${HEAD}, so declare it merged, but the read-back failed`);
+    expect(merges(gated)).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(gated.artifacts, 'merge/receipts/42.json'), 'utf8'))).toMatchObject({ head: HEAD });
+  }, 60_000);
+
   test('the gate refuses a verdict on an older commit, a red check or an open thread, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
@@ -454,6 +467,14 @@ describe('the merge queue scripts', () => {
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
     expect(mergeWaits(doc)).toBe(true);
+
+    const again = ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }, { pr: { unreadable: true } })) as { settled: { status: string; reason: string }[] };
+    expect(again.settled).toMatchObject([{ status: 'parked' }]);
+    expect(again.settled[0]?.reason).toContain('could not be read the sweep before either');
+    ok(run(at, 'record', { WORKFLOW_ID: 'run-2', INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(again.settled), INPUTS_SWEEP: 'null' }));
+    const parked = stored(at).value as WorkItem;
+    expect(parked).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
+    expect(mergeWaits(parked)).toBe(false);
   }, 60_000);
 
   test('a merge the forge reads back is recorded and released; one it does not is refused before any write', () => {
@@ -480,12 +501,20 @@ describe('the merge queue scripts', () => {
     const merged = { pr: { state: 'MERGED' } } as const;
     const bypassed = run(at, 'record', recordInputs([decision({})], DEV_GREEN), merged);
     expect(bypassed.stderr).toContain(`the sweep says it merged at ${HEAD}, but the gate wrote no receipt at that head`);
-    const elsewhere = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: OLD, merge_commit: '3', at: AT }) };
+    const elsewhere = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: OLD, at: AT }) };
     const moved = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...merged, artifacts: elsewhere });
     expect(moved.stderr).toContain('the gate wrote no receipt at that head');
     const sweptAt = run(at, 'record', recordInputs([decision({ head: OLD })], DEV_GREEN), { ...merged, artifacts: elsewhere });
     expect(sweptAt.stderr).toContain(`but it merged at ${HEAD}, not the head the gate passed`);
     for (const result of [bypassed, moved, sweptAt]) expect(result.code).not.toBe(0);
+    expect(stored(at).revision).toBe(before);
+
+    const undeclared = run(at, 'record', recordInputs([decision({ action: 'wait' })]), { ...merged, artifacts: RECEIPT });
+    expect(undeclared.stderr).toContain(`PR 42: the gate merged it at ${HEAD}, but the sweep declared wait`);
+    const stray = { ...RECEIPT, 'merge/receipts/99.json': JSON.stringify({ pr: `${PR_URL.replace(/42$/, '')}99`, head: HEAD, at: AT }) };
+    const unclaimed = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...merged, artifacts: stray });
+    expect(unclaimed.stderr).toContain('the gate merged PR 99, which this run did not claim');
+    for (const result of [undeclared, unclaimed]) expect(result.code).not.toBe(0);
     expect(stored(at).revision).toBe(before);
 
     ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), merged));
@@ -595,7 +624,7 @@ describe('the merge queue scripts', () => {
       { item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, prior_report: '', recorded: null },
     ]);
     const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], dev);
-    const receipt = { 'merge/receipts/43.json': JSON.stringify({ pr: otherUrl, head: HEAD, merge_commit: '3', at: AT }) };
+    const receipt = { 'merge/receipts/43.json': JSON.stringify({ pr: otherUrl, head: HEAD, at: AT }) };
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: items }, { pr: { merged: [43] }, artifacts: receipt }));
     expect(raised).toMatchObject({ merged: [43], class: 'dev', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'dev' } });
     expect(raised.attention).toContain('dev is red after merging PR 43');
@@ -666,5 +695,13 @@ describe('eval mode', () => {
     });
     for (const result of [facts, recorded]) expect([...result.gh, ...forgeCalls(result)]).toEqual([]);
     expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
+  test('replays a merge without a receipt, a work item or a dev check, and reads and writes nothing', () => {
+    const at = install();
+    const items = JSON.stringify([{ item: null, pr: PR, url: PR_URL, facts: null, record: null, prior_report: '', recorded: { at: AT, facts: 'ready' } }]);
+    const recorded = run(at, 'record', { ...recordInputs([decision({})], DEV_GREEN), INPUTS_MODE: 'eval', INPUTS_ITEMS: items });
+    expect(ok(recorded)).toMatchObject({ merged: [], evaluation: { decisions: [{ number: 42, action: 'merged' }], dev: { state: 'green' } } });
+    expect([...recorded.gh, ...forgeCalls(recorded)]).toEqual([]);
   }, 60_000);
 });
