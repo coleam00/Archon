@@ -398,10 +398,11 @@ describe('bench run', () => {
       { ...duplicate, original: { ...duplicate.original, repo: { host: 'GITHUB.COM', path: 'me/scratch-base' } } },
       { ...duplicate, original: { ...duplicate.original, repo: { host: 'github.com', path: 'Me/Scratch-Base' } } },
     ]) {
+      const closingUrl = declaredClosure.kind === 'delivered' ? declaredClosure.url : `https://github.com/${declaredClosure.original.repo.path}/issues/103`;
       const posted = declaredClosure.kind === 'delivered'
         ? [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }]
         : [
-            { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${declaredClosure.url}; follow the work there.` },
+            { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${closingUrl}; follow the work there.` },
             { number: 103, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
           ];
       const allowed = benchLive({ declaredClosure, posted });
@@ -410,7 +411,7 @@ describe('bench run', () => {
       expect(failed.checks[0].checks.posted_text.ok).toBe(true);
       const undeclared = benchLive({ posted });
       expect(undeclared.checks[0].checks.posted_text.ok).toBe(false);
-      const altered = [`${posted[0].body}\nExtra text`, posted[0].body.replace(declaredClosure.url, 'https://github.com/o/r/issues/999')];
+      const altered = [`${posted[0].body}\nExtra text`, posted[0].body.replace(closingUrl, 'https://github.com/o/r/issues/999')];
       for (const changed of [
         [...posted, { number: 101, body: 'Unrelated text' }],
         ...altered.map(body => [{ ...posted[0], body }, ...posted.slice(1)]),
