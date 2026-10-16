@@ -199,6 +199,20 @@ export function caveats(
 }
 
 /**
+ * The URL of the pull request this run last published, from the engine's
+ * typed-artifact listing; empty when it published none. A tail that failed after
+ * publishing still names its pull request, so the next run continues that one
+ * instead of opening another. An unreadable listing is named by `failed`'s summary.
+ */
+export function publishedPrUrl(
+  artifacts: string,
+  options: { readonly listingFile: string | undefined }
+): string {
+  const latest = readTyped<unknown>(options.listingFile, artifacts, 'pull-request').values.at(-1);
+  return isObject(latest) && typeof latest.url === 'string' ? latest.url : '';
+}
+
+/**
  * The summary a tail's report node writes when a node failure kept the run from
  * reaching its outcome. It names no result: the engine's terminal record names the
  * failed node, and nothing here may read as a delivery.

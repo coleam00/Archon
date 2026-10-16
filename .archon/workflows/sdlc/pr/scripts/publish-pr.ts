@@ -8,14 +8,18 @@
  *
  * Whether this work already has a pull request is decided here, not in a prompt: an
  * open pull request for the recorded head IS the pull request, and a second one is
- * never opened for it. A run continuing a named pull request pushes to that pull
- * request's head by merge only — the push never forces, so a head that is not an
- * ancestor of this commit refuses.
+ * never opened for it. A run continuing a pull request pushes to that pull request's
+ * own head as the forge reports it, not to the branch prepare declared, and only
+ * while it is open. The push is by merge only — it never forces, so a head that is
+ * not an ancestor of this commit refuses.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_REPO / INPUTS_HEAD_REPO: `{host, path}` of the base and head repositories.
  * - INPUTS_HEAD / INPUTS_BASE: the head and base branch names.
- * - INPUTS_EXISTING: the pull request this run continues, or `null`.
+ * - INPUTS_BRANCH: the branch a new pull request opens from, as the caller resolved
+ *   it; empty uses INPUTS_HEAD.
+ * - INPUTS_EXISTING: the pull request prepare found for this work, or `null`. It is
+ *   continued only when the caller named it or selected no branch.
  * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
  * - INPUTS_TITLE: the title.
  * - INPUTS_BODY: the certified body file.
@@ -28,7 +32,6 @@ import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
-  sameRepo,
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
@@ -41,7 +44,6 @@ function publish(): PrRecord {
   const source = forgeSource();
   const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
-  const head = text(process.env.INPUTS_HEAD);
   const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
   const artifacts = artifactsDir();
 
@@ -52,22 +54,28 @@ function publish(): PrRecord {
     );
   }
 
-  // A continued pull request's head is checked before the push, which would
-  // otherwise land on whatever branch prepare declared.
-  if (existing !== null) {
+  // A branch the caller selected decides the pull request over one prepare found
+  // unnamed, which may sit on the checkout's other branch: only an open pull request
+  // with that head is reused below.
+  const branch = trimmed(process.env.INPUTS_BRANCH);
+  if (existing !== null && named === null && branch) {
+    note(`publish-pr: the caller selected ${branch}; pull request ${String(existing)} is reused only if it has that head.`);
+  } else if (existing !== null) {
     const view = viewPr({ repo, number: existing }, source);
-    const observedHead = view.pr.head_repo;
-    if (view.pr.head !== head || observedHead === null || !sameRepo(observedHead, headRepo)) {
-      throw new Error(
-        `pull request ${String(existing)} has head ${String(view.pr.head_repo?.path)}:${view.pr.head}, not the recorded ${headRepo.path}:${head}`
-      );
+    const prHeadRepo = view.pr.head_repo;
+    if (view.pr.state !== 'open') {
+      throw new Error(`pull request ${String(existing)} is ${view.pr.state}; nothing is pushed`);
     }
+    if (prHeadRepo === null) {
+      throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
+    }
+    pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
+    // The run continues a named pull request: its draft state belongs to its author.
+    return viewPr({ repo, number: existing }, source).pr;
   }
 
+  const head = branch || text(process.env.INPUTS_HEAD);
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
-
-  // The run continues a named pull request: its draft state belongs to its author.
-  if (existing !== null) return viewPr({ repo, number: existing }, source).pr;
 
   const open = findOpenPrByHead(repo, headRepo, head, source);
   if (open) {

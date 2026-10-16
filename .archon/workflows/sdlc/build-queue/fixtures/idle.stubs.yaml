@@ -11,6 +11,9 @@ facts:
   recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
+  pull_request: null
+  continues: null
+  branch: ""
 apply:
   decision: idle
   summary: "stub: No item waits for the build queue."
