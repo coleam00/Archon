@@ -59,6 +59,10 @@ nodes:
   # a value. A failed deploy is reported, never retried here.
   - id: deploy
     depends_on: [resolve]
+    # A real deploy (an image build, migrations) routinely takes longer than the engine's
+    # 120 s bash default, which killed the command mid-build and failed a lap whose merge
+    # was fine. The project's own command bounds itself; this only stops a hung one.
+    timeout: 900000
     bash: |
       CMD=$resolve.output.deploy
       if eval "$CMD" >&2; then
@@ -73,6 +77,9 @@ nodes:
 
   - id: health
     depends_on: [deploy]
+    # The retry loop below runs inside this one step, so the step needs room for every try
+    # against a service that takes minutes to come up (the default 120 s covered all ten).
+    timeout: 600000
     bash: |
       deploy_ok=$deploy.output.ok
       if [ "$deploy_ok" != true ]; then
