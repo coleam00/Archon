@@ -31,6 +31,7 @@ import {
   type Line,
   postedComments,
   runCost,
+  runBatch,
   type Snapshot,
   snapshotChanges,
   toVerdict,
@@ -47,7 +48,7 @@ import {
   type Row,
   toCandidate,
 } from '../../workflows/sdlc/intake/scripts/bench/set';
-import type { FakeConfig } from './fake-intake-bench-cli';
+import { type FakeConfig, install } from './fake-intake-bench-cli';
 
 const track = trackTempRoots();
 const REPO = { host: 'github.com', path: 'o/r' };
@@ -425,34 +426,63 @@ describe('bench run', () => {
     expect(JSON.parse(readFileSync(join(cli, 'created.json'), 'utf8'))).toHaveLength(3);
   });
 
-  it('allows only the exact declared closure comments on scratch issues, including canonical backlinks', () => {
-    const delivered = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
-    const duplicate = { kind: 'duplicate' as const, url: 'https://github.com/me/scratch-base/issues/103', original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
-    for (const declaredClosure of [delivered, duplicate,
-      { ...duplicate, original: { ...duplicate.original, repo: { host: 'GITHUB.COM', path: 'me/scratch-base' } } },
-      { ...duplicate, original: { ...duplicate.original, repo: { host: 'github.com', path: 'Me/Scratch-Base' } } },
-    ]) {
-      const closingUrl = declaredClosure.kind === 'delivered' ? declaredClosure.url : `https://github.com/${declaredClosure.original.repo.path}/issues/103`;
-      const posted = declaredClosure.kind === 'delivered'
-        ? [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }]
-        : [
-            { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${closingUrl}; follow the work there.` },
-            { number: 103, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
-          ];
-      const allowed = benchLive({ declaredClosure, posted });
-      expect([allowed.status, allowed.checks[0]?.checks.posted_text.ok]).toEqual([0, true]);
-      const failed = benchLive({ declaredClosure, posted, runStatus: 'failed' });
-      expect(failed.checks[0].checks.posted_text.ok).toBe(true);
-      const undeclared = benchLive({ posted });
-      expect(undeclared.checks[0].checks.posted_text.ok).toBe(false);
-      const altered = [`${posted[0].body}\nExtra text`, posted[0].body.replace(closingUrl, 'https://github.com/o/r/issues/999')];
-      for (const changed of [
-        [...posted, { number: 101, body: 'Unrelated text' }],
-        ...altered.map(body => [{ ...posted[0], body }, ...posted.slice(1)]),
+  it('allows only the exact declared closure comments on scratch issues, including canonical backlinks', async () => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'intake-bench-comments-')));
+    const scratchRepo = { host: 'github.com', path: 'me/scratch-base' };
+    const version: Version = { label: 'base', pack_sha: 'base', prompt_sha: { triage: 'prompt' }, provider: 'codex', model: 'gpt-x', tier: 'medium' };
+    const baseline = { provider: version.provider, model: version.model };
+    const config = join(dir, 'binding.yaml');
+    writeFileSync(config, Bun.YAML.stringify({ tiers: { medium: baseline } }));
+    const rows = [row(11, { known: { canonical: 'https://github.com/o/r/issues/9' } }), row(12, { id: '12-outside', workflow: 'intake', trust: 'outside' })];
+    const run = async (scenario: Partial<FakeConfig>) => {
+      writeFileSync(join(dir, 'config.json'), JSON.stringify({
+        baseline, repo: REPO, projectKey: 'o/r',
+        issues: [
+          ...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })),
+          ...[101, 102, 103].map(number => ({ number, repo: scratchRepo, labels: [], comments: 0 })),
+        ],
+        ...scenario,
+      } satisfies FakeConfig));
+      return runBatch({
+        set: { bench: 'intake', repo: REPO, selected_at: '2026-10-15T00:00:00Z', rows },
+        rows, batch: 1, base: 'base', outDir: dir, repoRoot: dir,
+        versions: [{ resolved: { version, source: dir, config }, checkout: () => dir }],
+        live: new Map([['base', { scratch: { repo: scratchRepo, checkout: dir }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103 } }]]),
+      });
+    };
+    const { spawn, spawnSync } = Bun;
+    install(dir);
+    try {
+      const delivered = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
+      const duplicate = { kind: 'duplicate' as const, url: 'https://github.com/me/scratch-base/issues/103', original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
+      for (const declaredClosure of [delivered, duplicate,
+        { ...duplicate, original: { ...duplicate.original, repo: { host: 'GITHUB.COM', path: 'me/scratch-base' } } },
+        { ...duplicate, original: { ...duplicate.original, repo: { host: 'github.com', path: 'Me/Scratch-Base' } } },
       ]) {
-        const rejected = benchLive({ declaredClosure, posted: changed });
-        expect([rejected.status, rejected.checks[0]?.checks.posted_text.ok]).toEqual([1, false]);
+        const closingUrl = declaredClosure.kind === 'delivered' ? declaredClosure.url : `https://github.com/${declaredClosure.original.repo.path}/issues/103`;
+        const posted = declaredClosure.kind === 'delivered'
+          ? [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }]
+          : [
+              { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${closingUrl}; follow the work there.` },
+              { number: 103, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
+            ];
+        const allowed = await run({ declaredClosure, posted });
+        expect([allowed.checks.passed, allowed.checks.checks.posted_text.ok]).toEqual([true, true]);
+        const failed = await run({ declaredClosure, posted, runStatus: 'failed' });
+        expect(failed.checks.checks.posted_text.ok).toBe(true);
+        const undeclared = await run({ posted });
+        expect(undeclared.checks.checks.posted_text.ok).toBe(false);
+        const altered = [`${posted[0].body}\nExtra text`, posted[0].body.replace(closingUrl, 'https://github.com/o/r/issues/999')];
+        for (const changed of [
+          [...posted, { number: 101, body: 'Unrelated text' }],
+          ...altered.map(body => [{ ...posted[0], body }, ...posted.slice(1)]),
+        ]) {
+          const rejected = await run({ declaredClosure, posted: changed });
+          expect([rejected.checks.passed, rejected.checks.checks.posted_text.ok]).toEqual([false, false]);
+        }
       }
+    } finally {
+      Object.assign(Bun, { spawn, spawnSync });
     }
   });
 
