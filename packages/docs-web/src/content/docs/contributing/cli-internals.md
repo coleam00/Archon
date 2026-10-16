@@ -277,6 +277,7 @@ archon isolation cleanup [days] (default: 7)
   │    └─ Filter provider = 'worktree'
   │         └─ For each stale worktree:
   │              ├─ Skip environments owned by resumable runs
+  │              ├─ Skip any with a commit on no remote (getCleanupRunLock)
   │              └─ provider.destroy(path, options)
   │                   └─ Mark destroyed only after complete removal
   │
