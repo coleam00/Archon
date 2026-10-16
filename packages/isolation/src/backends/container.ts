@@ -502,7 +502,11 @@ export class ContainerBackend implements IIsolationBackend {
       mounts
     );
     try {
-      await this.store.updateMetadata(envId, { containerId, overlayMode: mode });
+      await this.store.updateMetadata(envId, {
+        containerId,
+        overlayMode: mode,
+        image: this.config.image,
+      });
     } catch (error) {
       try {
         await this.docker(['rm', '-f', containerId]);

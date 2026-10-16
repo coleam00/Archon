@@ -1071,6 +1071,33 @@ describe('ContainerBackend.resumeEnv', () => {
     expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-recreated' });
   });
 
+  test('recreation records the current image for both write-back helpers', async () => {
+    const store = fakeStore();
+    const row = seedContainerRow(store);
+    const image = 'archon-runner:new';
+    const docker = fakeDocker(args => {
+      if (args[0] === 'container') return { stdout: '', stderr: '' };
+      if (args[0] === 'volume') return { stdout: 'archon-res-1-upper', stderr: '' };
+      if (args[0] === 'run' && args.includes('-d')) return { stdout: 'cid-recreated', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({
+      store,
+      config: { ...CONFIG, image },
+      dockerRunner: docker,
+    });
+    await backend.resumeEnv(row.id);
+    expect((await store.getById(row.id))?.metadata?.image).toBe(image);
+    await backend.finalize(row.id);
+    await backend.applyChanges(row.id);
+    const runs = docker.calls.filter(args => args[0] === 'run');
+    expect(runs).toHaveLength(3);
+    for (const args of runs) {
+      expect(args).toContain(image);
+      expect(args).not.toContain(CONFIG.image);
+    }
+  });
+
   test('preserves a failed volume query during resume without claiming work loss or recreating', async () => {
     const store = fakeStore();
     seedContainerRow(store);
