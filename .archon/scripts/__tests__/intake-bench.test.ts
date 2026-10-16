@@ -327,7 +327,7 @@ describe('bench run', () => {
   });
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
-  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' = 'base') {
+  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' | 'ambiguous' = 'base', canonical = 'https://github.com/o/r/issues/9') {
     const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
@@ -335,11 +335,14 @@ describe('bench run', () => {
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
     const remote = track(mkdtempSync(join(tmpdir(), 'intake-bench-remote-')));
     if (defaultBranch === 'empty') ok(remote, 'init', '-q', '--bare');
-    else ok(remote, 'clone', '-q', '--bare', defaultBranch === 'base' ? scratch : repo, '.');
+    else ok(remote, 'clone', '-q', '--bare', defaultBranch === 'other' ? repo : scratch, '.');
     ok(scratch, 'config', `url.${remote}.insteadOf`, 'git@github.com:me/scratch-base.git');
+    if (defaultBranch === 'ambiguous') ok(scratch, 'remote', 'add', 'mirror', 'git@github.com:me/scratch-base.git');
+    const set = JSON.parse(readFileSync(join(out, 'set.json'), 'utf8')) as BenchSet;
+    writeFileSync(join(out, 'set.json'), JSON.stringify({ ...set, rows: set.rows.map(row => row.id === '11' ? { ...row, known: { canonical } } : row) }));
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
     mkdirSync(join(out, 'bench', 'live'), { recursive: true });
-    writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103 } }));
+    writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102, [`canonical:${canonical}`]: 103 } }));
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
     for (const number of [9, 101, 102, 103]) {
       if (!config.issues.some(issue => issue.number === number)) config.issues.push({ number, labels: [], comments: 0 });
@@ -367,9 +370,35 @@ describe('bench run', () => {
     }
   });
 
-  it('copies canonical creation text once alongside unchanged duplicates, including on a resumed copy', () => {
-    const { repo, out, cli } = bench({ issues: [{ number: 9, labels: [], comments: 7, title: 'Edited title', body: 'Edited body', creation: { title: 'Original title', body: 'Original body' } }] });
-    const canonical = 'https://github.com/o/r/issues/9';
+  it('refuses ambiguous scratch remotes before launching', () => {
+    const result = benchLive({}, 'ambiguous');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ambiguous');
+    expect(result.lines).toEqual([]);
+    expect(() => result.argv(1)).toThrow();
+  });
+
+  it('refuses missing scratch remotes and git configuration read failures', () => {
+    const checkout = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
+    ok(checkout, 'init', '-q');
+    const scratch = { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout };
+    expect(() => checkScratch('base', scratch, '0'.repeat(40))).toThrow('no git remote points at');
+    writeFileSync(join(checkout, '.git/config'), '[broken');
+    expect(() => checkScratch('base', scratch, '0'.repeat(40))).toThrow('git config --get-regexp failed');
+  });
+
+  it('runs with an already copied external canonical without reading its repository', () => {
+    const result = benchLive({ unavailableRepos: ['github.com/other/repo'] }, 'base', 'https://github.com/other/repo/issues/9');
+    expect([result.status, result.stderr, result.checks[0]?.passed]).toEqual([0, '', true]);
+    expect(result.lines).toHaveLength(2);
+  });
+
+  it.each([false, true])('copies external canonical creation text alongside unchanged duplicates and resumes (edited: %s)', edited => {
+    const { repo, out, cli } = bench({ issues: [
+      { number: 9, labels: [], comments: 0, title: 'Wrong repository title', body: 'Wrong repository body', creation: { title: 'Wrong creation title', body: 'Wrong creation body' } },
+      { number: 9, repo: { host: 'github.com', path: 'other/repo' }, labels: [], comments: 7, title: edited ? 'Edited title' : 'Original title', body: edited ? 'Edited body' : 'Original body', ...(edited ? { creation: { title: 'Original title', body: 'Original body' } } : {}) },
+    ] });
+    const canonical = 'https://github.com/other/repo/issues/9';
     const rows = [row(11, { known: { canonical } }), row(12, { known: { canonical } })];
     writeFileSync(join(out, 'set.json'), JSON.stringify({ bench: 'intake', repo: REPO, selected_at: '', rows }));
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: repo } }));
@@ -386,7 +415,7 @@ describe('bench run', () => {
       ...rows.map(({ title, body }) => ({ title, body })),
     ]));
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    config.issues[0] = { ...config.issues[0], creation: null };
+    config.issues[1] = { ...config.issues[1], creation: null };
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
     const unavailable = copy('unavailable');
     expect(unavailable.status).toBe(1);

@@ -33,6 +33,7 @@ export interface FakeIssue {
 }
 
 export interface FakeConfig {
+  readonly unavailableRepos?: readonly string[];
   readonly declaredClosure?: Closure;
   readonly recordedContract?: 'NO_ACTION' | 'READY';
   readonly posted?: readonly { number: number; body: string }[];
@@ -242,9 +243,15 @@ function answer(dir: string, args: readonly string[]): string {
 
 function ghAnswer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
+  const host = option(args, '--hostname') ?? config.repo.host;
+  const repoPath = args.includes('graphql')
+    ? (args.some(arg => arg.startsWith('q=')) ? config.repo.path : `${args.find(arg => arg.startsWith('owner='))?.slice(6)}/${args.find(arg => arg.startsWith('name='))?.slice(5)}`)
+    : (args.find(arg => arg.startsWith('repos/')) ?? '').split('/').slice(1, 3).join('/');
+  if (config.unavailableRepos?.includes(`${host}/${repoPath}`)) throw new Error(`fake gh: repository ${host}/${repoPath} is unavailable`);
+  const inRepo = config.issues.filter(issue => (issue.repo?.host ?? config.repo.host).toLowerCase() === host.toLowerCase() && (issue.repo?.path ?? config.repo.path).toLowerCase() === repoPath.toLowerCase());
   if (args.includes('graphql') && args.some(arg => arg.includes('CROSS_REFERENCED_EVENT'))) {
     const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
-    const issue = config.issues.find(entry => entry.number === number);
+    const issue = inRepo.find(entry => entry.number === number);
     if (issue === undefined) throw new Error(`fake gh: no issue ${String(number)}`);
     return JSON.stringify({
       data: {
@@ -263,13 +270,13 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     const q = args.find(arg => arg.startsWith('q='));
     if (q === undefined) {
       const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
-      const issue = config.issues.find(entry => entry.number === number);
+      const issue = inRepo.find(entry => entry.number === number);
       const creation = issue?.creation;
       return JSON.stringify({ data: { repository: { issue: { createdAt: 'x', userContentEdits: { totalCount: creation === undefined ? 0 : 1, nodes: creation ? [{ editedAt: 'x', diff: creation.body }] : [] }, timelineItems: { nodes: creation ? [{ previousTitle: creation.title }] : [] } } } } });
     }
     const hits = Object.entries(config.searches ?? {}).find(([fragment]) => q.includes(fragment))?.[1] ?? [];
     const nodes = hits.map(number => {
-      const issue = config.issues.find(entry => entry.number === number);
+      const issue = inRepo.find(entry => entry.number === number);
       return { number, author: { login: issue?.author ?? 'someone' }, labels: { nodes: (issue?.labels ?? []).map(name => ({ name })) }, timelineItems: { nodes: [] } };
     });
     return JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } });
@@ -284,7 +291,6 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     return JSON.stringify(issue);
   }
   const repo = endpoint.split('/').slice(1, 3).join('/');
-  const inRepo = config.issues.filter(issue => (issue.repo?.path ?? config.repo.path).toLowerCase() === repo.toLowerCase());
   if (endpoint.includes('/issues?')) {
     const page = Number(new URL(`https://fake/${endpoint}`).searchParams.get('page'));
     return JSON.stringify(inRepo.slice((page - 1) * 100, page * 100).map(issue => ({
@@ -301,14 +307,14 @@ function ghAnswer(dir: string, args: readonly string[]): string {
   }
   if (endpoint.includes('/comments?')) {
     const number = Number(endpoint.split('/')[4]);
-    const issue = config.issues.find(entry => entry.number === number);
+    const issue = inRepo.find(entry => entry.number === number);
     if (!issue) throw new Error(`fake gh: no comments for ${number}`);
     const comments = issue.commentBodies ?? Array.from({ length: issue.comments }, (_, i) => ({ id: `old-${i}`, body: 'Old comment' }));
     const page = Number(new URL(`https://fake/${endpoint}`).searchParams.get('page'));
     return JSON.stringify(comments.slice((page - 1) * 100, page * 100).map(comment => ({ ...comment, html_url: 'https://fake/comment' })));
   }
   const number = Number(endpoint.split('/').pop());
-  const issue = config.issues.find(entry => entry.number === number);
+  const issue = inRepo.find(entry => entry.number === number);
   if (args[0] !== 'api' || issue === undefined) throw new Error(`fake gh: unexpected call ${args.join(' ')}`);
   return JSON.stringify({
     number,

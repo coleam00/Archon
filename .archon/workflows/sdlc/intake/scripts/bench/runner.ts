@@ -43,7 +43,7 @@ import { closeComments, type Closure } from '../../../.shared/close.ts';
 import { samePr, sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../../.shared/git.ts';
 import type { Contract, Route } from '../../../.shared/labels.ts';
-import { remoteFor, urlRepo } from '../../../.shared/remote.ts';
+import { remoteFor } from '../../../.shared/remote.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { INTAKE_PATHS } from '../../../.shared/workitem.ts';
 import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts';
@@ -251,14 +251,7 @@ export function loadLive(file: string, set: BenchSet): Map<string, Scratch> {
 
 /** Refuse a scratch checkout that is not of its repository, or not at `base`. */
 export function checkScratch(label: string, scratch: Scratch, base: string): void {
-  const listed = git('-C', scratch.checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
-  const remote = listed.stdout.split('\n').find(line => {
-    const named = urlRepo(line.slice(line.indexOf(' ') + 1));
-    return named !== undefined && sameRepo(named, scratch.repo);
-  })?.split(' ')[0].slice('remote.'.length, -'.url'.length);
-  if (remote === undefined) {
-    throw new Error(`${label}: ${scratch.checkout} has no remote for ${scratch.repo.path}`);
-  }
+  const remote = remoteFor(scratch.repo, scratch.checkout);
   const head = git('-C', scratch.checkout, 'rev-parse', 'HEAD').stdout;
   if (head !== base) throw new Error(`${label}: ${scratch.checkout} is at ${head}, not the batch base ${base}`);
   const advertised = gitOrThrow('-C', scratch.checkout, 'ls-remote', '--symref', remote, 'HEAD');
@@ -1028,10 +1021,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number, canonical } };
     })
   );
-  const originals = [
-    ...rows.map(row => ({ repo: set.repo, number: row.number })),
-    ...rows.flatMap(row => row.known.canonical === undefined ? [] : [canonicalIssue(row.known.canonical)]),
-  ];
+  const originals = rows.map(row => ({ repo: set.repo, number: row.number }));
   const requiredIssues = [
     ...originals,
     ...(live === undefined ? [] : [...live.values()].flatMap(({ scratch, copies }) => Object.values(copies).map(number => ({ repo: scratch.repo, number })))),

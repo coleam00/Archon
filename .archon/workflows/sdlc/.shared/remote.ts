@@ -44,8 +44,8 @@ export function urlRepo(url: string): Repo | undefined {
 }
 
 /** The one remote whose URL names `repo`, undefined when none does; refuses on several. */
-export function findRemote(repo: Repo): string | undefined {
-  const listed = git('config', '--get-regexp', '^remote\\..*\\.url$');
+export function findRemote(repo: Repo, checkout = process.cwd()): string | undefined {
+  const listed = git('-C', checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
   // Exit 1 means no remote is configured at all; anything else non-zero is a failure.
   if (listed.code !== 0 && listed.code !== 1) {
     throw new Error(`git config --get-regexp failed: ${listed.stderr}`);
@@ -67,8 +67,8 @@ export function findRemote(repo: Repo): string | undefined {
 }
 
 /** The one remote whose URL names `repo`; refuses on none or several. */
-export function remoteFor(repo: Repo): string {
-  const remote = findRemote(repo);
+export function remoteFor(repo: Repo, checkout = process.cwd()): string {
+  const remote = findRemote(repo, checkout);
   if (remote === undefined) throw new Error(`no git remote points at ${repo.host}/${repo.path}`);
   return remote;
 }

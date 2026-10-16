@@ -22,7 +22,7 @@ import {
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
-import { type Closure, planClose } from '../../workflows/sdlc/.shared/close';
+import { closeComments, type Closure, planClose } from '../../workflows/sdlc/.shared/close';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -315,13 +315,16 @@ it('closes a resolved item through the plugin, linking it to what resolved it an
   expect(closed(7)).toMatchObject({ state: 'closed', state_reason: 'duplicate' });
   expect(closed(3)).toMatchObject({ state: 'open' });
   expect(closed(8)).toMatchObject({ state: 'closed', state_reason: 'completed' });
-  const on = (number: number) =>
-    state.comments.filter(row => row.issue === number).map(row => row.body);
-  expect(on(7)).toEqual([expect.stringContaining(originalUrl)]);
-  expect(on(3)).toEqual([
-    expect.stringContaining(`https://${FAKE_HOST}/example/repo/issues/7`),
-  ]);
-  expect(on(8)).toEqual([expect.stringContaining(change)]);
+  const expected = [
+    ...closeComments({ repo: PR.repo, number: 7 }, `https://${FAKE_HOST}/example/repo/issues/7`, { kind: 'duplicate', url: originalUrl, original }),
+    ...closeComments({ repo: PR.repo, number: 8 }, `https://${FAKE_HOST}/example/repo/issues/8`, { kind: 'delivered', url: change }),
+  ];
+  expect(state.comments.map(row => ({ number: row.issue, body: row.body }))).toEqual(
+    expected.map(comment => ({ number: comment.item.number, body: comment.body }))
+  );
+  expect(state.calls.filter(call => call.startsWith('POST ') && call.endsWith('/comments'))).toEqual(
+    expected.map(comment => `POST https://${comment.item.repo.host}/api/v3/repos/${comment.item.repo.path}/issues/${comment.item.number}/comments`)
+  );
 }, 120_000);
 
 it('refuses through the plugin to close a duplicate of a pull request', () => {
