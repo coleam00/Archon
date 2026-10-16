@@ -488,7 +488,11 @@ export async function dispatchForge(
         const override =
           discovery.hostConfig.get(selectedHost)?.token_env ??
           discovery.pluginTokenEnv.get(plugin.metadata.name);
-        const github = plugin.metadata.forge === 'github' && !override;
+        const github =
+          plugin.metadata.forge === 'github' &&
+          !override &&
+          plugin.metadata.token_env.length > 0 &&
+          plugin.metadata.token_env.every(name => name === 'GH_TOKEN' || name === 'GITHUB_TOKEN');
         const names = override
           ? [override]
           : github

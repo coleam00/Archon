@@ -35,9 +35,12 @@ async function read(
   expected: string,
   mode = 'ok',
   tokenEnv?: string,
-  path = root
+  path = root,
+  metadataTokens = ['GITHUB_TOKEN', 'GH_TOKEN'],
+  host = 'github.com'
 ) {
   writeFileSync(join(root, 'expected'), expected);
+  writeFileSync(join(root, 'token-env'), JSON.stringify(metadataTokens));
   writeFileSync(join(root, 'mode'), mode);
   writeFileSync(join(root, 'calls'), '');
   return dispatchForge(
@@ -46,14 +49,15 @@ async function read(
       op: 'pr.view',
       selector: {
         kind: 'head',
-        repo: { host: 'github.com', path: 'coleam00/Archon' },
-        headRepo: { host: 'github.com', path: 'coleam00/Archon' },
+        repo: { host, path: 'coleam00/Archon' },
+        headRepo: { host, path: 'coleam00/Archon' },
         head: 'archon-forge-check',
       },
     },
     {
       config: {
         plugins: [{ plugin: 'github', command: executable, token_env: tokenEnv }],
+        hosts: host === 'github.com' ? {} : { [host]: 'github' },
         scanPath: false,
       },
       env: { PATH: path, HOME: root, GH_CONFIG_DIR: root },
@@ -126,6 +130,26 @@ test('an explicit token_env selects only that credential', async () => {
   expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
 });
 
+test.each(['github.com', 'ghe.company.test'])(
+  'honors custom metadata credentials without borrowing a host login on %s',
+  async host => {
+    const present = await read(
+      { COMPANY_TOKEN: 'company-secret', GH_TOKEN: 'other' },
+      'company-secret',
+      'ok',
+      undefined,
+      root,
+      ['COMPANY_TOKEN'],
+      host
+    );
+    expect(present.response.ok).toBe(true);
+    expect(present.credentialSource).toBe('COMPANY_TOKEN');
+    const absent = await read({}, 'unused', 'ok', undefined, root, ['COMPANY_TOKEN'], host);
+    expect(absent.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+    expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
+  }
+);
+
 test('redacts a CLI token echoed by the plugin from responses and audit', async () => {
   const result = await read({}, 'leak');
   expect(result.response).toMatchObject({
@@ -165,6 +189,7 @@ test('personal tokens and credential scrubs never use App refresh or the host lo
 });
 
 test('resolve never consults a logged-out gh login', async () => {
+  writeFileSync(join(root, 'token-env'), JSON.stringify(['GITHUB_TOKEN', 'GH_TOKEN']));
   writeFileSync(join(root, 'mode'), 'error');
   writeFileSync(join(root, 'calls'), '');
   const result = await dispatchForge(

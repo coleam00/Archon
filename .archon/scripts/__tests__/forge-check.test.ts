@@ -33,9 +33,13 @@ function refusal(kind: string, message: string): string {
 }
 
 function check(
-  options: ScriptOptions & { mirror?: boolean; capabilities?: readonly string[] } = {}
+  options: ScriptOptions & {
+    mirror?: boolean;
+    capabilities?: readonly string[];
+    entry?: string;
+  } = {}
 ) {
-  const { mirror, capabilities = REQUIRED_FORGE_OPERATIONS, ...rest } = options;
+  const { mirror, entry = 'deliver', capabilities = REQUIRED_FORGE_OPERATIONS, ...rest } = options;
   if (rest.forge?.kind === 'fake' && rest.forge.response) {
     const reads =
       typeof rest.forge.response === 'string' ? [rest.forge.response] : rest.forge.response;
@@ -50,7 +54,7 @@ function check(
       cwd,
     });
   }
-  return runPackScript('deliver/scripts/forge-check', {
+  return runPackScript(`${entry}/scripts/forge-check`, {
     cwd,
     source: 'forge',
     ...rest,
@@ -65,8 +69,8 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.forge).toEqual([]);
   });
 
-  it('reads through the forge plugin when explicitly selected', () => {
-    const run = check({ forge: { kind: 'fake', response: ANSWERED } });
+  it.each(['deliver', 'pr', 'ship', 'upkeep'])('emits the selected forge source from %s', entry => {
+    const run = check({ entry, forge: { kind: 'fake', response: ANSWERED } });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
     expect(run.gh).toEqual([]);
@@ -79,25 +83,22 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     });
   });
 
-  it.each(['gh', 'forge'])(
-    '%s metadata requests conform to the CLI host input',
-    source => {
-      const run = check({
-        source,
-        gh: { authFail: 'logged out' },
-        forge: { kind: 'fake', response: ANSWERED },
-      });
-      expect(run.code).toBe(source === 'forge' ? 0 : 1);
-      expect(run.forge[0]).toContain('forge metadata');
-      const request = cliForgeMetadataRequestSchema.parse({
-        ...JSON.parse(run.forgeRequests[0] ?? ''),
-        op: 'metadata',
-        operationId: 'cli-operation',
-      });
-      expect(request.host).toBe(PR.repo.host);
-      if (source === 'gh') expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge');
-    }
-  );
+  it.each(['gh', 'forge'])('%s metadata requests conform to the CLI host input', source => {
+    const run = check({
+      source,
+      gh: { authFail: 'logged out' },
+      forge: { kind: 'fake', response: ANSWERED },
+    });
+    expect(run.code).toBe(source === 'forge' ? 0 : 1);
+    expect(run.forge[0]).toContain('forge metadata');
+    const request = cliForgeMetadataRequestSchema.parse({
+      ...JSON.parse(run.forgeRequests[0] ?? ''),
+      op: 'metadata',
+      operationId: 'cli-operation',
+    });
+    expect(request.host).toBe(PR.repo.host);
+    if (source === 'gh') expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge');
+  });
 
   it('accepts a capable installed plugin through host discovery and authenticated dispatch', () => {
     const plugin = `
@@ -251,6 +252,8 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       gh: { authFail: { 'ghe.example.com': 'token expired' } },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(run.stderr).toContain('ghe.example.com: token expired');
+    expect(run.stderr).toContain('gh authenticated for mirror.example.com');
     expect(run.gh).toEqual([
       'auth status --active --hostname ghe.example.com',
       'auth status --active --hostname mirror.example.com',
@@ -260,17 +263,28 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
   it.each(['', 'gh'])(
     'refuses default or explicit gh (%s) when per-user credentials are scrubbed',
     source => {
-      const run = check({ source, inputs: { GH_TOKEN: '', GITHUB_TOKEN: '' } });
+      const run = check({
+        source,
+        inputs: {
+          GH_TOKEN: '',
+          GITHUB_TOKEN: '',
+          GH_ENTERPRISE_TOKEN: '',
+          GITHUB_ENTERPRISE_TOKEN: '',
+        },
+      });
       expect(run.code).not.toBe(0);
-      expect(run.stderr).toContain('`GH_TOKEN=` line');
+      expect(run.stderr).toContain('`GH_ENTERPRISE_TOKEN=` line');
       expect(run.stderr).toContain('archon auth github');
       expect(run.gh).toEqual([]);
-      expect(run.forge).toEqual([]);
+      expect(run.forge).toEqual([expect.stringContaining('forge metadata')]);
     }
   );
 
-  it('passes gh when GH_TOKEN is empty but GITHUB_TOKEN authenticates it', () => {
-    const run = check({ source: 'gh', inputs: { GH_TOKEN: '', GITHUB_TOKEN: 'ghp_example' } });
+  it('passes gh when GH_TOKEN is empty but the Enterprise token authenticates its host', () => {
+    const run = check({
+      source: 'gh',
+      inputs: { GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: 'ghp_example' },
+    });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com']);
   });

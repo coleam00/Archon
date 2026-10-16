@@ -24,7 +24,7 @@ if (args[0] === 'auth') {
       forge: 'github',
       hosts: ['github.com'],
       capabilities: ['pr.view', 'resolve'],
-      token_env: ['GITHUB_TOKEN', 'GH_TOKEN'],
+      token_env: JSON.parse(readFileSync(join(root, 'token-env'), 'utf8')),
     })
   );
 } else {

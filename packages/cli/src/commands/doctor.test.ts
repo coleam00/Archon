@@ -62,7 +62,7 @@ describe('gh credential-source reporting', () => {
     { host: 'tenant.ghe.com', env: { GITHUB_TOKEN: 'second' }, source: 'GITHUB_TOKEN' },
     {
       host: 'ghe.example.com',
-      env: { GH_TOKEN: 'ignored', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
+      env: { GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
       source: 'GH_ENTERPRISE_TOKEN',
     },
     {

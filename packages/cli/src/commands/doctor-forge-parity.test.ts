@@ -35,6 +35,14 @@ const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({ type: 'pkcs1', format: 'pem' })
   .toString();
 const setups = [
+  {
+    name: 'Enterprise token with empty public token',
+    source: 'gh',
+    login: false,
+    enterprise: true,
+    ok: true,
+    detail: 'source: GH_ENTERPRISE_TOKEN',
+  },
   ...(['gh', 'forge'] as const).map(source => ({
     name: `unconnected per-user ${source}`,
     source,
@@ -133,6 +141,9 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
     SystemRoot: process.env.SystemRoot,
     OPENAI_API_KEY: 'fixture-openai-key',
+    ...('enterprise' in setup
+      ? { GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'fixture-enterprise-token' }
+      : {}),
     ...('perUser' in setup
       ? { TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32), ARCHON_USER_ID: 'fixture-user' }
       : {}),

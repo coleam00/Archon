@@ -106,20 +106,6 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
 }
 
 async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<string> {
-  // Per-user GitHub mode hands an unconnected user's run empty `GH_TOKEN` and
-  // `GITHUB_TOKEN`. gh reads an empty token as unset and falls back to `GITHUB_TOKEN`,
-  // then to the host's stored login, so without this refusal the run would push and
-  // write as the host's identity. An empty `GH_TOKEN=` line in an env file looks the
-  // same when no `GITHUB_TOKEN` is set, so the refusal names both causes.
-  if (env.GH_TOKEN === '' && !env.GITHUB_TOKEN) {
-    throw new Error(
-      'ARCHON_SDLC_FORGE=gh selects the GitHub CLI, but GH_TOKEN is set and empty and GITHUB_TOKEN is unset, so gh would act as ' +
-        "the host's stored login. If an env file has an empty `GH_TOKEN=` line (the Docker `.env` starts " +
-        'with one), remove it to use the `gh auth login` login. If per-user GitHub is enabled, the user ' +
-        'who started this run has not connected their identity: connect it with `archon auth github`, ' +
-        '`/archon connect github` in Slack, or the Web UI Settings page'
-    );
-  }
   // A bare `gh auth status` fails when any account on any host is stale, so only the active
   // account of each host a remote names is checked, and one working host is enough, as on the
   // forge path.
@@ -129,6 +115,21 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
   }
   const failures: string[] = [];
   for (const host of hosts) {
+    const tokenNames =
+      host === 'github.com' || host.endsWith('.ghe.com')
+        ? ['GH_TOKEN', 'GITHUB_TOKEN']
+        : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+    // Empty host-specific credentials mark a scrubbed identity. gh otherwise
+    // treats them as unset and falls back to the host's stored login.
+    if (tokenNames.some(name => env[name] === '') && !tokenNames.some(name => env[name])) {
+      failures.push(
+        `${host}: ${tokenNames.join(' or ')} is set and empty, so gh would act as ` +
+          `the host's stored login. Remove an empty \`${tokenNames[0]}=\` line from an env file to use ` +
+          '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github`, ' +
+          '`/archon connect github` in Slack, or the Web UI Settings page'
+      );
+      continue;
+    }
     let result: ReturnType<typeof Bun.spawnSync>;
     try {
       result = Bun.spawnSync(['gh', 'auth', 'status', '--active', '--hostname', host], {
@@ -143,12 +144,11 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
       );
     }
     if (result.exitCode === 0) {
-      const tokenNames =
-        host === 'github.com' || host.endsWith('.ghe.com')
-          ? ['GH_TOKEN', 'GITHUB_TOKEN']
-          : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
       const credentialSource = tokenNames.find(name => env[name]) ?? 'gh auth login';
-      return `gh authenticated for ${host} (source: ${credentialSource})`;
+      return (
+        `gh authenticated for ${host} (source: ${credentialSource})` +
+        (failures.length === 0 ? '' : `; did not authenticate for ${failures.join('; ')}`)
+      );
     }
     failures.push(`${host}: ${result.stderr?.toString().trim()}`);
   }
