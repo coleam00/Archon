@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getProjectSourcePath } from '@archon/paths';
+import { getProjectSourcePath, resolveRunStorageRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { codebaseRowSchema } from '@archon/core/schemas/codebase';
 
@@ -124,56 +124,125 @@ for (const forge of forges) {
   });
 }
 
-test.each(['matching', 'foreign', 'missing'] as const)(
-  'repairs legacy nested GitLab paths with ownership verification: %s',
-  async state => {
-    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-nested-owner-')));
+for (const forge of forges) {
+  test.each(['matching', 'foreign', 'missing'] as const)(
+    `${forge.name} verifies canonical repair targets: %s`,
+    async state => {
+      const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-repair-owner-')));
+      const previousHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = root;
+      try {
+        const path = getProjectSourcePath('acme', 'api');
+        if (state !== 'missing') {
+          await mkdir(path, { recursive: true });
+          execFileSync('git', ['-C', path, 'init', '-q']);
+          execFileSync('git', [
+            '-C',
+            path,
+            'remote',
+            'add',
+            'origin',
+            `https://${forge.host}/${state === 'foreign' ? 'other/repo' : 'acme/api'}`,
+          ]);
+        }
+        const stale = join(root, 'workspaces', 'acme', 'api', 'worktrees', 'old');
+        const existing = codebaseRowSchema.parse({
+          id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+          name: 'acme/api',
+          default_cwd: stale,
+          repository_url: `https://${forge.host}/acme/api`,
+          commands: {},
+          kind: 'repo',
+          default_branch: null,
+          ai_assistant_type: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        findCodebase.mockResolvedValue(existing);
+        if (state === 'foreign') {
+          await expect(forge.route()).rejects.toThrow('/update-project');
+          expect(existing.default_cwd).toBe(stale);
+          expect(updateCodebase).not.toHaveBeenCalled();
+        } else {
+          const result = await forge.route();
+          expect(result.repoPath).toBe(path);
+          expect(updateCodebase).toHaveBeenCalledWith(existing, { default_cwd: path });
+        }
+      } finally {
+        if (previousHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = previousHome;
+      }
+    }
+  );
+
+  test(`${forge.name} reuses an absent saved canonical checkout for clone preparation`, async () => {
+    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-missing-source-')));
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = root;
     try {
-      const path = getProjectSourcePath('group/subgroup', 'repo');
-      if (state !== 'missing') {
-        await mkdir(path, { recursive: true });
-        execFileSync('git', ['-C', path, 'init', '-q']);
-        execFileSync('git', [
-          '-C',
-          path,
-          'remote',
-          'add',
-          'origin',
-          `https://gitlab.example.com/${state === 'foreign' ? 'other/repo' : 'group/subgroup/repo'}`,
-        ]);
-      }
-      const stale = join(root, 'workspaces', 'group', 'subgroup', 'repo', 'worktrees', 'old');
+      const path = getProjectSourcePath('acme', 'api');
       const existing = codebaseRowSchema.parse({
         id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
-        name: 'group/subgroup/repo',
-        default_cwd: stale,
-        repository_url: 'https://gitlab.example.com/group/subgroup/repo',
-        kind: 'repo',
+        name: 'acme/api',
+        default_cwd: path,
+        repository_url: `https://${forge.host}/acme/api`,
         commands: {},
+        kind: 'repo',
         default_branch: null,
         ai_assistant_type: null,
         created_at: new Date(),
         updated_at: new Date(),
       });
       findCodebase.mockResolvedValue(existing);
-      const adapter = new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com');
-      // @ts-expect-error - exercise the private registration boundary
-      const route = adapter.getOrCreateCodebaseForRepo('group/subgroup/repo');
-      if (state === 'foreign') {
-        await expect(route).rejects.toThrow('/update-project');
-        expect(existing.default_cwd).toBe(stale);
-        expect(updateCodebase).not.toHaveBeenCalled();
-      } else {
-        const result = await route;
-        expect(result.repoPath).toBe(path);
-        expect(existing.name).toBe('group/subgroup/repo');
-        expect(updateCodebase).toHaveBeenCalledWith(existing, { default_cwd: path });
-      }
+      const result = await forge.route();
+      expect(result).toEqual({ codebase: existing, repoPath: path, isNew: false });
+      expect(updateCodebase).not.toHaveBeenCalled();
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }
+  });
+}
+
+test('refuses nested GitLab repairs that would move or merge existing storage', async () => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-nested-storage-')));
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = root;
+  try {
+    const adapter = new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com');
+    const storageRoots: (string | null)[] = [];
+    for (const [repo, worktree] of [
+      ['api', 'old-api'],
+      ['web', 'old-web'],
+    ]) {
+      const stale = join(root, 'workspaces', 'group', 'subgroup', repo, 'worktrees', worktree);
+      const existing = codebaseRowSchema.parse({
+        id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+        name: `group/subgroup/${repo}`,
+        default_cwd: stale,
+        repository_url: `https://gitlab.example.com/group/subgroup/${repo}`,
+        commands: {},
+        kind: 'repo',
+        default_branch: null,
+        ai_assistant_type: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      const before = resolveRunStorageRoot({}, existing);
+      expect(before).toBe(join(root, 'workspaces', '_local', worktree));
+      findCodebase.mockResolvedValue(existing);
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo(existing.name)).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe(stale);
+      expect(resolveRunStorageRoot({}, existing)).toBe(before);
+      storageRoots.push(before);
+    }
+    expect(storageRoots[0]).not.toBe(storageRoots[1]);
+    expect(updateCodebase).not.toHaveBeenCalled();
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
   }
-);
+});

@@ -565,12 +565,10 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         (await isWorktreePath(existing.default_cwd)) ||
         (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
       ) {
-        const identity =
-          parseOwnerRepo(existing.name) ??
-          (existing.name === projectPath ? { owner: gitlabOwner, repo: gitlabRepo } : null);
+        const identity = parseOwnerRepo(existing.name);
         if (!identity) {
           throw new Error(
-            `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd}. ` +
+            `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd} without changing its storage location. ` +
               'Restore its original checkout or use /update-project to set its path explicitly.'
           );
         }
@@ -584,7 +582,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           { codebaseName: existing.name, canonicalPath },
           'gitlab.stale_worktree_path_fixed'
         );
-      } else {
+      } else if (existsSync(existing.default_cwd)) {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 

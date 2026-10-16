@@ -948,7 +948,7 @@ export class GitHubAdapter implements IPlatformAdapter {
           { codebaseName: existing.name, canonicalPath },
           'github.stale_worktree_path_fixed'
         );
-      } else {
+      } else if (existsSync(existing.default_cwd)) {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 

@@ -664,7 +664,7 @@ export class GiteaAdapter implements IPlatformAdapter {
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-      } else {
+      } else if (existsSync(existing.default_cwd)) {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 

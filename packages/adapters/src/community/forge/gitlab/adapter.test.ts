@@ -276,7 +276,7 @@ describe('GitLabAdapter', () => {
     });
   });
 
-  test('repairs a legacy nested namespace without changing its project name', async () => {
+  test('refuses legacy nested repair without changing its storage identity', async () => {
     const adapter = createAdapter();
     const existing = {
       id: 'nested',
@@ -285,11 +285,14 @@ describe('GitLabAdapter', () => {
       repository_url: 'https://gitlab.example.com/group/subgroup/repo',
     };
     mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
     // @ts-expect-error - exercise the private registration boundary
-    const result = await adapter.getOrCreateCodebaseForRepo('group/subgroup/repo');
-    expect(result.repoPath).toBe('/tmp/test-workspaces/group/subgroup/repo/source');
+    await expect(adapter.getOrCreateCodebaseForRepo('group/subgroup/repo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/tmp/test-workspaces/group/subgroup/repo/worktrees/old');
     expect(existing.name).toBe('group/subgroup/repo');
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(existing, { default_cwd: result.repoPath });
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
   });
 
   test('allocated checkout path reaches preparation and conversation storage', async () => {
