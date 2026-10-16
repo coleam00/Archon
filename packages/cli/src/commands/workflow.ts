@@ -880,18 +880,8 @@ function buildFolderRegistrationFailureError(error: Error): Error {
  * A no-op once a codebase resolved — the isolation block only reaches it with none, and
  * the pre-flight calls it unconditionally for an isolating run.
  */
-function assertCodebaseResolvedForIsolation(resolved: {
-  codebase: Codebase | null;
-  lookupError: Error | null;
-}): void {
+function assertCodebaseResolvedForIsolation(resolved: { codebase: Codebase | null }): void {
   if (resolved.codebase) return;
-  if (resolved.lookupError) {
-    throw new Error(
-      'Cannot create worktree: database lookup failed.\n' +
-        `Error: ${resolved.lookupError.message}\n` +
-        'Hint: Check your database connection, or use --no-worktree to skip isolation.'
-    );
-  }
   throw new Error(
     'Cannot create worktree: not in a git repository.\n' +
       'Run from within a git repo, or use --no-worktree to skip isolation.'
@@ -1617,11 +1607,9 @@ export async function workflowListCommand(
  * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
  * so the detached child's own call finds what the parent registered.
  *
- * Explicit folder selection fails on unknown or conflicting registration, and any
- * registration failure is fatal. A fresh run also fails when lookup is unavailable;
- * resumes retain the stored project identity for their resume and adoption policy.
- * First-time folder registration is returned too, because detached JSON output
- * cannot include a prose notice.
+ * Explicit folder selection fails on unknown or conflicting registration. Any lookup
+ * or registration failure is fatal. First-time folder registration is returned too,
+ * because detached JSON output cannot include a prose notice.
  */
 async function resolveRunCodebase(
   host: WorkflowHost,
@@ -1629,12 +1617,10 @@ async function resolveRunCodebase(
   options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
 ): Promise<{
   codebase: Codebase | null;
-  lookupError: Error | null;
   /** Set only when THIS call registered a new folder project. */
   registeredFolder?: { name: string; defaultCwd: string };
 }> {
   let codebase: Codebase | null = null;
-  let lookupError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
   cwd = await canonicalizeProjectPath(cwd);
   let repoRoot: string | null = null;
@@ -1650,7 +1636,6 @@ async function resolveRunCodebase(
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
-    lookupError = err;
     getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
     if (
       err.message.includes('connect') ||
@@ -1662,16 +1647,12 @@ async function resolveRunCodebase(
         'cli.db_connection_hint'
       );
     }
-  }
-
-  if (lookupError) {
-    throw new Error(`Cannot run workflow: database lookup failed.\nError: ${lookupError.message}`, {
-      cause: lookupError,
+    throw new Error(`Cannot run workflow: database lookup failed.\nError: ${err.message}`, {
+      cause: err,
     });
   }
 
   if (options.registrationBaseBranch !== undefined) {
-    if (lookupError) throw lookupError;
     if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
       throw new Error('Folder projects have no base branch; remove --base-branch.');
     if (codebase)
@@ -1681,7 +1662,6 @@ async function resolveRunCodebase(
   }
 
   if (options.folder) {
-    if (lookupError) throw buildFolderRegistrationFailureError(lookupError);
     if (codebase && codebase.kind !== 'folder') {
       throw new Error(
         `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
@@ -1689,7 +1669,7 @@ async function resolveRunCodebase(
     }
   }
 
-  if (!codebase && !lookupError && (options.folder || repoRoot)) {
+  if (!codebase && (options.folder || repoRoot)) {
     try {
       const result = options.folder
         ? await registerFolder(host.records.codebases, cwd)
@@ -1715,7 +1695,7 @@ async function resolveRunCodebase(
     }
   }
 
-  return { codebase, lookupError, registeredFolder };
+  return { codebase, registeredFolder };
 }
 
 /**
@@ -2703,11 +2683,7 @@ async function runWorkflowWithOwnedSource(
       : undefined,
   });
 
-  const {
-    codebase,
-    lookupError: codebaseLookupError,
-    registeredFolder,
-  } = await resolveRunCodebase(host, cwd, options);
+  const { codebase, registeredFolder } = await resolveRunCodebase(host, cwd, options);
   if (registeredFolder) {
     console.log(
       `Registered folder project "${registeredFolder.name}" (${registeredFolder.defaultCwd})`
@@ -2827,13 +2803,6 @@ async function runWorkflowWithOwnedSource(
   let resumeBranch: string | undefined;
   if (options.resume) {
     if (!codebase) {
-      if (codebaseLookupError) {
-        throw new Error(
-          'Cannot resume: Database lookup failed.\n' +
-            `Error: ${codebaseLookupError.message}\n` +
-            'Hint: Check your database connection before using --resume.'
-        );
-      }
       throw new Error(
         'Cannot resume: Not in a git repository.\n' +
           'Either run from a git repo or use /clone first.'
@@ -3262,7 +3231,7 @@ async function runWorkflowWithOwnedSource(
     } else if (wantsIsolation) {
       // Isolation was expected (default) but codebase is unavailable — fail fast. The
       // `--detach` pre-flight enforces the same refusal before the fork.
-      assertCodebaseResolvedForIsolation({ codebase, lookupError: codebaseLookupError });
+      assertCodebaseResolvedForIsolation({ codebase });
     }
 
     if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
