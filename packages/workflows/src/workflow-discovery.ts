@@ -1047,13 +1047,17 @@ export async function discoverWorkflows(
       const entrypointByPath = new Map(
         Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
       );
+      const explainedEntrypoints = new Set<string>();
       for (const error of loaded.errors) {
-        const entry = entrypointByPath.get(error.filename.slice(label.length + 1));
-        allErrors.push(
-          entry === undefined
-            ? error
-            : { ...error, workflowName: installedWorkflowName(pack, entry) }
-        );
+        const affected = [...entrypointByPath].filter(([path]) => {
+          const filename = `${label}/${path}`;
+          return filename === error.filename || filename.startsWith(`${error.filename}/`);
+        });
+        if (affected.length === 0) allErrors.push(error);
+        for (const [, entry] of affected) {
+          explainedEntrypoints.add(entry);
+          allErrors.push({ ...error, workflowName: installedWorkflowName(pack, entry) });
+        }
       }
       // A pack workflow is referred to inside its pack by its `name:`. It is known
       // outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
@@ -1066,7 +1070,10 @@ export async function discoverWorkflows(
         qualifiedByName.set(file.parsed.workflow.name, qualified);
       }
       for (const [path, entry] of entrypointByPath) {
-        if (!loaded.files.some(file => `${file.folder}/${file.filename}` === path)) {
+        if (
+          !explainedEntrypoints.has(entry) &&
+          !loaded.files.some(file => `${file.folder}/${file.filename}` === path)
+        ) {
           allErrors.push({
             filename: `${label}/${path}`,
             workflowName: installedWorkflowName(pack, entry),
@@ -1083,6 +1090,7 @@ export async function discoverWorkflows(
         if (supportChildren.length > 0) {
           allErrors.push({
             filename,
+            workflowName: qualifiedByName.get(workflow.name),
             error: `'workflow:' launches support workflow ${supportChildren.map(name => `'${name}'`).join(', ')} as a child run. A child run is dispatch, and only entrypoints are dispatchable: compose it with 'include:', or declare it as an entrypoint in archon-plugin.json.`,
             errorType: 'validation_error',
           });

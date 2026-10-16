@@ -10,7 +10,7 @@ import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { chmod, cp, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
+import { chmod, cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
@@ -215,6 +215,65 @@ describe('installed packs in the catalog', () => {
         }
       } finally {
         if (fault === 'unreadable') await chmod(path, 0o644);
+      }
+    });
+  }
+
+  for (const fault of [
+    'pack-read',
+    'path-read',
+    'directory-read',
+    'cardinality',
+    'support-dispatch',
+  ] as const) {
+    test.skipIf(
+      ['pack-read', 'path-read', 'directory-read'].includes(fault) &&
+        (process.platform === 'win32' || process.getuid?.() === 0)
+    )(`a selected entrypoint retains its actual ${fault} diagnostic`, async () => {
+      const pack = reviewKit();
+      if (fault === 'support-dispatch') {
+        pack.files['review/code-review.yaml'] =
+          'name: code-review\ndescription: Review\nnodes:\n  - id: child\n    workflow: helper\n';
+      }
+      await install(pack);
+      const tree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+      const folder = join(tree, 'review');
+      const denied = join(home, 'denied');
+      if (fault === 'pack-read') await chmod(tree, 0o111);
+      if (fault === 'directory-read') await chmod(folder, 0o000);
+      if (fault === 'path-read') {
+        await mkdir(denied);
+        await rename(folder, join(denied, 'review'));
+        await symlink(join(denied, 'review'), folder);
+        await chmod(denied, 0o000);
+      }
+      if (fault === 'cardinality') await writeFile(join(folder, 'extra.yaml'), 'name: extra');
+      try {
+        const catalog = await discover();
+        const errors = catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW);
+        expect(errors).toHaveLength(1);
+        const diagnostic = errors[0];
+        if (fault === 'support-dispatch' || fault === 'cardinality') {
+          expect(diagnostic.error).toContain(
+            fault === 'support-dispatch' ? 'only entrypoints are dispatchable' : 'exactly one'
+          );
+          expect(
+            await resolveFanOutChildDefinition(
+              { ...deps, providers: providerRegistry },
+              project,
+              REVIEW
+            )
+          ).toEqual({ unresolved: diagnostic.error });
+        } else {
+          expect(diagnostic).toMatchObject({ errorType: 'read_error', cause: { code: 'EACCES' } });
+          await expect(
+            resolveFanOutChildDefinition({ ...deps, providers: providerRegistry }, project, REVIEW)
+          ).rejects.toMatchObject({ code: 'EACCES' });
+        }
+      } finally {
+        if (fault === 'pack-read') await chmod(tree, 0o755);
+        if (fault === 'directory-read') await chmod(folder, 0o755);
+        if (fault === 'path-read') await chmod(denied, 0o755);
       }
     });
   }
