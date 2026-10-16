@@ -18,6 +18,7 @@ import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
 import { type RunDetail, SAMPLES_FILE, appendLine, readLines, returnedValue } from '../../workflows/sdlc/.shared/bench';
+import { closeComments } from '../../workflows/sdlc/.shared/close';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
@@ -31,10 +32,12 @@ import {
   type Line,
   postedComments,
   runCost,
+  runBatch,
   type Snapshot,
   snapshotChanges,
   toVerdict,
   triageNodeId,
+  TRIAGE_VERDICT_NODE,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
 import { MARKS_FILE, closeCheck, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
@@ -46,7 +49,7 @@ import {
   type Row,
   toCandidate,
 } from '../../workflows/sdlc/intake/scripts/bench/set';
-import type { FakeConfig } from './fake-intake-bench-cli';
+import { type FakeConfig, install } from './fake-intake-bench-cli';
 
 const track = trackTempRoots();
 const REPO = { host: 'github.com', path: 'o/r' };
@@ -153,7 +156,7 @@ describe('bench run', () => {
       bench: 'intake',
       repo: REPO,
       selected_at: '2026-10-15T00:00:00Z',
-      rows: [row(11), row(12, { id: '12-outside', group: 'fixed', workflow: 'intake', trust: 'outside', author: 'Maintainer' })],
+      rows: [row(11, { known: { canonical: 'https://github.com/o/r/issues/9' } }), row(12, { id: '12-outside', group: 'fixed', workflow: 'intake', trust: 'outside', author: 'Maintainer' })],
     };
     writeFileSync(join(out, 'set.json'), JSON.stringify(set));
     writeFileSync(join(out, 'base.yaml'), `label: base\npack_sha: ${packSha}\n`);
@@ -165,6 +168,7 @@ describe('bench run', () => {
       repo: REPO,
       issues: [
         { number: 11, labels: [], comments: 0 },
+        { number: 9, labels: [], comments: 0 },
         { number: 12, labels: ['bug'], comments: 2 },
       ],
       projectKey: 'o/r',
@@ -327,20 +331,236 @@ describe('bench run', () => {
   });
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
-  function benchLive(scenario: Partial<FakeConfig> = {}) {
+  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' | 'ambiguous' = 'base', canonical = 'https://github.com/o/r/issues/9') {
     const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
     ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the batch base');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
+    const remote = track(mkdtempSync(join(tmpdir(), 'intake-bench-remote-')));
+    if (defaultBranch === 'empty') ok(remote, 'init', '-q', '--bare');
+    else ok(remote, 'clone', '-q', '--bare', defaultBranch === 'other' ? repo : scratch, '.');
+    ok(scratch, 'config', `url.${remote}.insteadOf`, 'git@github.com:me/scratch-base.git');
+    if (defaultBranch === 'ambiguous') ok(scratch, 'remote', 'add', 'mirror', 'git@github.com:me/scratch-base.git');
+    const set = JSON.parse(readFileSync(join(out, 'set.json'), 'utf8')) as BenchSet;
+    writeFileSync(join(out, 'set.json'), JSON.stringify({ ...set, rows: set.rows.map(row => row.id === '11' ? { ...row, known: { canonical } } : row) }));
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
     mkdirSync(join(out, 'bench', 'live'), { recursive: true });
-    writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102 } }));
+    writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102, [`canonical:${canonical}`]: 103 } }));
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
+    for (const number of [9, 101, 102, 103]) {
+      if (!config.issues.some(issue => issue.number === number)) config.issues.push({ number, labels: [], comments: 0 });
+    }
+    for (const [index, issue] of config.issues.entries()) {
+      if ([101, 102, 103].includes(issue.number)) config.issues[index] = { ...issue, repo: { host: 'github.com', path: 'me/scratch-base' } };
+    }
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
-    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch };
+    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch, remote, packSha };
   }
+
+  it('refuses a missing default branch or one away from the base before launching', () => {
+    for (const branch of ['empty', 'other'] as const) {
+      const result = benchLive({}, branch);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(branch === 'empty' ? 'no default branch' : 'not the batch base');
+      expect(result.stderr).toContain('git push');
+      expect(result.lines).toEqual([]);
+      expect(() => result.argv(1)).toThrow();
+      const target = `bench-${result.packSha.slice(0, 12)}`;
+      expect(result.stderr).toContain(`git push origin ${result.packSha}:refs/heads/${target}`);
+      ok(result.scratch, 'push', 'origin', `${result.packSha}:refs/heads/${target}`);
+      ok(result.remote, 'symbolic-ref', 'HEAD', `refs/heads/${target}`);
+      expect(() => checkScratch('base', { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: result.scratch }, result.packSha)).not.toThrow();
+    }
+  });
+
+  it('refuses ambiguous scratch remotes before launching', () => {
+    const result = benchLive({}, 'ambiguous');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ambiguous');
+    expect(result.lines).toEqual([]);
+    expect(() => result.argv(1)).toThrow();
+  });
+
+  it('refuses missing scratch remotes and git configuration read failures', () => {
+    const checkout = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
+    ok(checkout, 'init', '-q');
+    const scratch = { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout };
+    expect(() => checkScratch('base', scratch, '0'.repeat(40))).toThrow('no git remote points at');
+    writeFileSync(join(checkout, '.git/config'), '[broken');
+    expect(() => checkScratch('base', scratch, '0'.repeat(40))).toThrow('git config --get-regexp failed');
+  });
+
+  it('runs with an already copied external canonical without reading its repository', () => {
+    const result = benchLive({ unavailableRepos: ['github.com/other/repo'] }, 'base', 'https://github.com/other/repo/issues/9');
+    expect([result.status, result.stderr, result.checks[0]?.passed]).toEqual([0, '', true]);
+    expect(result.lines).toHaveLength(2);
+  });
+
+  it.each([false, true])('copies external canonical creation text alongside unchanged duplicates and resumes (edited: %s)', edited => {
+    const { repo, out, cli } = bench({ issues: [
+      { number: 9, labels: [], comments: 0, title: 'Wrong repository title', body: 'Wrong repository body', creation: { title: 'Wrong creation title', body: 'Wrong creation body' } },
+      { number: 9, repo: { host: 'github.com', path: 'other/repo' }, labels: [], comments: 7, title: edited ? 'Edited title' : 'Original title', body: edited ? 'Edited body' : 'Original body', ...(edited ? { creation: { title: 'Original title', body: 'Original body' } } : {}) },
+    ] });
+    const canonical = 'https://github.com/other/repo/issues/9';
+    const rows = [row(11, { known: { canonical } }), row(12, { known: { canonical } })];
+    writeFileSync(join(out, 'set.json'), JSON.stringify({ bench: 'intake', repo: REPO, selected_at: '', rows }));
+    writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: repo } }));
+    const copy = (directory = 'bench') => spawnSync(process.execPath, ['--preload', join(cli, 'preload.ts'), SCRIPT, 'copy', '--set', join(out, 'set.json'), '--batch', '1', '--live', join(out, 'live.yaml'), '--out', join(out, directory)], { cwd: repo, encoding: 'utf8' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = copy();
+      expect([result.status, result.stderr]).toEqual([0, '']);
+    }
+    const created = JSON.parse(readFileSync(join(cli, 'created.json'), 'utf8')) as { endpoint: string; title: string; body: string }[];
+    expect(created).toHaveLength(3);
+    expect(created.every(issue => issue.endpoint === 'repos/me/scratch-base/issues')).toBe(true);
+    expect(created.map(({ title, body }) => ({ title, body }))).toEqual(expect.arrayContaining([
+      { title: 'Original title', body: 'Original body' },
+      ...rows.map(({ title, body }) => ({ title, body })),
+    ]));
+    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+    config.issues[1] = { ...config.issues[1], creation: null };
+    writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
+    const unavailable = copy('unavailable');
+    expect(unavailable.status).toBe(1);
+    expect(unavailable.stderr).toContain('creation text is unavailable');
+    expect(JSON.parse(readFileSync(join(cli, 'created.json'), 'utf8'))).toHaveLength(3);
+  });
+
+  it('allows only the exact declared closure comments on scratch issues, including canonical backlinks', async () => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'intake-bench-comments-')));
+    const scratchRepo = { host: 'github.com', path: 'me/scratch-base' };
+    const version: Version = { label: 'base', pack_sha: 'base', prompt_sha: { triage: 'prompt' }, provider: 'codex', model: 'gpt-x', tier: 'medium' };
+    const baseline = { provider: version.provider, model: version.model };
+    const config = join(dir, 'binding.yaml');
+    writeFileSync(config, Bun.YAML.stringify({ tiers: { medium: baseline } }));
+    const rows = [row(11, { known: { canonical: 'https://github.com/o/r/issues/9' } }), row(12, { id: '12-outside', workflow: 'intake', trust: 'outside' })];
+    const issues = [
+      ...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })),
+      ...[101, 102, 103].map(number => ({ number, repo: scratchRepo, labels: [], comments: 0 })),
+    ];
+    const run = async (scenario: Partial<FakeConfig>) => {
+      writeFileSync(join(dir, 'config.json'), JSON.stringify({
+        baseline, repo: REPO, projectKey: 'o/r', issues,
+        ...scenario,
+      } satisfies FakeConfig));
+      return runBatch({
+        set: { bench: 'intake', repo: REPO, selected_at: '2026-10-15T00:00:00Z', rows },
+        rows, batch: 1, base: 'base', outDir: dir, repoRoot: dir,
+        versions: [{ resolved: { version, source: dir, config }, checkout: () => dir }],
+        live: new Map([['base', { scratch: { repo: scratchRepo, checkout: dir }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103, 'old-row': 999, 'canonical:https://github.com/o/r/issues/8': 998 } }]]),
+      });
+    };
+    const { spawn, spawnSync } = Bun;
+    install(dir);
+    try {
+      const delivered = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
+      const duplicate = { kind: 'duplicate' as const, url: 'https://github.com/me/scratch-base/issues/103', original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
+      for (const declaredClosure of [delivered, duplicate,
+        { ...duplicate, original: { ...duplicate.original, repo: { host: 'GITHUB.COM', path: 'me/scratch-base' } } },
+        { ...duplicate, original: { ...duplicate.original, repo: { host: 'github.com', path: 'Me/Scratch-Base' } } },
+      ]) {
+        const closingUrl = declaredClosure.kind === 'delivered' ? declaredClosure.url : `https://github.com/${declaredClosure.original.repo.path}/issues/103`;
+        const posted = declaredClosure.kind === 'delivered'
+          ? [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }]
+          : [
+              { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${closingUrl}; follow the work there.` },
+              { number: 103, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
+            ];
+        const allowed = await run({ declaredClosure, posted });
+        expect([allowed.checks.passed, allowed.checks.checks.posted_text.ok]).toEqual([true, true]);
+        const failed = await run({ declaredClosure, posted, runStatus: 'failed' });
+        expect(failed.checks.checks.posted_text.ok).toBe(true);
+        const undeclared = await run({ posted });
+        expect(undeclared.checks.checks.posted_text.ok).toBe(false);
+        const altered = [`${posted[0].body}\nExtra text`, posted[0].body.replace(closingUrl, 'https://github.com/o/r/issues/999')];
+        for (const changed of [
+          [...posted, { number: 101, body: 'Unrelated text' }],
+          ...altered.map(body => [{ ...posted[0], body }, ...posted.slice(1)]),
+        ]) {
+          const rejected = await run({ declaredClosure, posted: changed });
+          expect([rejected.checks.passed, rejected.checks.checks.posted_text.ok]).toEqual([false, false]);
+        }
+      }
+      for (const missing of [101, 103]) {
+        await expect(run({ issues: issues.filter(issue => issue.number !== missing) })).rejects.toThrow(
+          `github.com/me/scratch-base#${String(missing)} is missing from the repository snapshot`
+        );
+      }
+    } finally {
+      Object.assign(Bun, { spawn, spawnSync });
+    }
+  });
+
+  it('rejects declared closure text when the recorded verdict is READY', () => {
+    const declaredClosure = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
+    const posted = [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }];
+    for (const runStatus of [undefined, 'failed'] as const) {
+      const result = benchLive({ declaredClosure, posted, recordedContract: 'READY', runStatus });
+      expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([1, false]);
+    }
+  });
+
+  it('uses the forge canonical URL spelling, as the closure writer does', () => {
+    const url = 'https://github.com/Me/Scratch-Base/issues/103';
+    const declaredClosure = { kind: 'duplicate' as const, url: url.toLowerCase(), original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
+    const result = benchLive({ issues: [9, 11, 12, 103].map(number => ({ number, labels: [], comments: 0, ...(number === 103 ? { url } : {}) })), declaredClosure, posted: [{ number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${url}; follow the work there.` }] });
+    expect(result.checks[0].checks.posted_text.ok).toBe(true);
+  });
+
+  it('rejects closure backlinks on the source canonical and unrelated text on a scratch canonical', () => {
+    const declaredClosure = { kind: 'duplicate' as const, url: 'https://github.com/o/r/issues/9', original: { repo: REPO, number: 9 } };
+    const result = benchLive({ declaredClosure, posted: [{ number: 9, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' }] });
+    expect(result.checks[0].checks.writes.ok).toBe(false);
+    expect(result.checks[0].checks.posted_text.problems).toEqual([
+      expect.stringContaining('not the row\'s mapped scratch canonical'),
+      expect.stringContaining('github.com/o/r#9'),
+    ]);
+    const scratch = benchLive({ posted: [{ number: 103, body: 'Unrelated text' }] });
+    expect(scratch.checks[0].checks.posted_text.problems).toEqual([expect.stringContaining('github.com/me/scratch-base#103')]);
+  });
+
+  it('rejects duplicate destinations outside the row mapped canonical', () => {
+    for (const repo of [REPO, { host: 'github.com', path: 'me/scratch-base' }, { host: 'github.com', path: 'other/repo' }]) {
+      const number = 77;
+      const url = `https://${repo.host}/${repo.path}/issues/${number}`;
+      const result = benchLive({
+        issues: [...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })), { number, repo, labels: [], comments: 0 }],
+        declaredClosure: { kind: 'duplicate', url, original: { repo, number } },
+        posted: [
+          { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${url}; follow the work there.` },
+          { number, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
+        ],
+      });
+      expect([repo.path, result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([repo.path, 1, false]);
+      if (repo.path === REPO.path) expect(result.checks[0].checks.writes.ok).toBe(false);
+    }
+  });
+
+  it('detects independent comments on unlisted source and scratch issues', () => {
+    for (const repo of [REPO, { host: 'github.com', path: 'me/scratch-base' }]) {
+      const result = benchLive({
+        issues: [...[9, 11, 12, ...Array.from({ length: 100 }, (_, i) => i + 200)].map(number => ({ number, repo: REPO, labels: [], comments: 0 })), { number: 77, repo, labels: [], comments: 0 }],
+        posted: [{ number: 77, body: 'Unlisted write' }],
+      });
+      expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([1, false]);
+      if (repo.path === REPO.path) expect(result.checks[0].checks.writes.ok).toBe(false);
+    }
+  });
+
+  it('leaves independent posts to other repositories outside the monitored check', () => {
+    const result = benchLive({
+      issues: [...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })), { number: 77, repo: { host: 'github.com', path: 'other/repo' }, labels: [], comments: 0 }],
+      posted: [{ number: 77, body: 'Outside the monitored repositories' }],
+    });
+    expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([0, true]);
+  });
+
+  it('checks comments beyond the first page', () => {
+    const issues = [9, 11, 12, 101].map(number => ({ number, labels: [], comments: number === 101 ? 100 : 0 }));
+    const result = benchLive({ issues, posted: [{ number: 101, body: 'Unexpected comment on page two' }] });
+    expect(result.checks[0].checks.posted_text.ok).toBe(false);
+  });
 
   it('records original merged-base evidence in live scratch runs for scoring', () => {
     const { status, lines, argv } = benchLive({ issues: [
@@ -562,7 +782,7 @@ describe('bench run', () => {
     const { status, checks } = run('base');
     expect(status).toBe(1);
     expect(checks[0].checks.writes.problems).toEqual(expect.arrayContaining([expect.stringMatching(/^state o\/r\/work\/12: revision \d+ became \d+$/)]));
-    expect(checks[0].checks.posted_text.problems).toEqual(expect.arrayContaining([expect.stringContaining('github.com/o/r#12: 1 comment(s) posted')]));
+    expect(checks[0].checks.posted_text.problems).toEqual(expect.arrayContaining([expect.stringContaining('github.com/o/r#12: 1 comment(s) posted or edited outside declared closure')]));
   });
 
   it('fails the batch when a trust: outside row runs an agent node', () => {
@@ -574,24 +794,71 @@ describe('bench run', () => {
 });
 
 describe('hard checks', () => {
-  const facts = { labels: ['bug'], state: 'open', title: 't', body_digest: 'd', comments: 0 };
+  const facts = { labels: ['bug'], state: 'open', title: 't', body_digest: 'd', comments: [] };
   const before: Snapshot = { issues: { 'github.com/o/r#1': facts }, state: { 'o/r': { 'work/1': 2 } } };
 
   it('name a new or revised state document and a posted comment', () => {
-    const after: Snapshot = { issues: { 'github.com/o/r#1': { ...facts, comments: 1 } }, state: { 'o/r': { 'work/1': 3, 'work/2': 1 } } };
+    const after: Snapshot = { issues: { 'github.com/o/r#1': { ...facts, comments: [{ id: '1', body: 'unexpected' }] } }, state: { 'o/r': { 'work/1': 3, 'work/2': 1 } } };
     expect(snapshotChanges(before, after)).toEqual([
-      'github.com/o/r#1: comments changed from 0 to 1',
+      'github.com/o/r#1: comments changed',
       'state o/r/work/1: revision 2 became 3',
       'state o/r/work/2: revision none became 1',
     ]);
-    expect(postedComments(before, after)).toEqual(['github.com/o/r#1: 1 comment(s) posted']);
+    expect(postedComments(before, after)).toEqual(['github.com/o/r#1: 1 comment(s) posted or edited outside declared closure']);
     expect([snapshotChanges(before, before), postedComments(before, before)]).toEqual([[], []]);
+  });
+
+  it('detects added or removed issues and comments on newly created issues', () => {
+    const empty: Snapshot = { issues: {}, state: {} };
+    const created: Snapshot = { issues: { 'github.com/o/r#2': { ...facts, comments: [{ id: 'new', body: 'New issue comment' }] } }, state: {} };
+    expect(snapshotChanges(empty, created)).toEqual(['github.com/o/r#2: issue added']);
+    expect(snapshotChanges(created, empty)).toEqual(['github.com/o/r#2: issue removed']);
+    expect(postedComments(empty, created)).toEqual(['github.com/o/r#2: 1 comment(s) posted or edited outside declared closure']);
+  });
+
+  it('spends each closure allowance on its surviving comment before checking new retry comments', () => {
+    const item = { repo: REPO, number: 1 };
+    const itemUrl = 'https://github.com/o/r/issues/1';
+    const original = { repo: REPO, number: 2 };
+    const comments = [
+      ...closeComments(item, itemUrl, { kind: 'delivered', url: 'https://github.com/o/r/pull/3' }),
+      ...closeComments(item, itemUrl, { kind: 'duplicate', url: 'https://github.com/o/r/issues/2', original }),
+    ];
+    const problems: string[][] = [];
+    const expected: string[][] = [];
+    for (const { item: target, body } of comments) {
+      const key = `github.com/o/r#${String(target.number)}`;
+      const existing = { id: 'old', body };
+      const was: Snapshot = { issues: { [key]: { ...facts, comments: [existing] } }, state: {} };
+      const allowed = new Map([[key, [body]]]);
+      expect(postedComments(was, was, allowed)).toEqual([]);
+      for (const copies of [[existing, { id: 'new', body }], [{ id: 'new', body }, existing]]) {
+        const now: Snapshot = { issues: { [key]: { ...facts, comments: copies } }, state: {} };
+        problems.push(postedComments(was, now, allowed));
+        expected.push([`${key}: 1 comment(s) posted or edited outside declared closure`]);
+      }
+    }
+    expect(problems).toEqual(expected);
+  });
+
+  it('rejects edits, marker-only imitations, and repeated copies of an allowed comment', () => {
+    const body = '<!-- archon-close -->\nClosing as already delivered by https://github.com/o/r/pull/3.';
+    const key = 'github.com/o/r#1';
+    const was: Snapshot = { issues: { [key]: { ...facts, comments: [{ id: 'old', body: 'Old' }] } }, state: {} };
+    for (const comments of [
+      [{ id: 'old', body: 'Edited' }],
+      [{ id: 'new', body: '<!-- archon-close -->\nOther text' }],
+      [{ id: 'new', body }, { id: 'extra', body }],
+    ]) {
+      const now: Snapshot = { issues: { [key]: { ...facts, comments } }, state: {} };
+      expect(postedComments(was, now, new Map([[key, [body]]]))).toHaveLength(1);
+    }
   });
 
   it('fail the batch on a posted comment', () => {
     const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '' } as const;
-    const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted']);
-    expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted'] }]);
+    const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted or edited outside declared closure']);
+    expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted or edited outside declared closure'] }]);
   });
 });
 
@@ -650,6 +917,7 @@ describe('engine names the bench copies', () => {
     const agentIds = (name: string) => (workflows.get(name)?.nodes ?? []).filter(node => node.kind === 'agent').map(node => node.id);
     expect(agentIds('archon-triage')).toEqual([triageNodeId('triage')]);
     expect(agentIds('archon-intake')).toEqual([triageNodeId('intake')]);
+    expect(TRIAGE_VERDICT_NODE).toBe(`triage__${String(definitions.get('archon-triage')?.returns)}`);
   });
 });
 
@@ -833,6 +1101,7 @@ describe('score', () => {
       ['6', [], []],
     ]);
     expect(renderScore(result)).toContain('| duplicates found with the right canonical link (at least 70%, by marks) | 1/1 (100%) right');
+    expect(renderScore(result)).toContain('| text posted in eval or outside a declared live closure |');
   });
 
   it('counts a run that did not pass against its bars as not right', () => {

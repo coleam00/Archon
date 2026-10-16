@@ -420,7 +420,7 @@ are the operator's and stay outside the pack and the repository.
   checkout, so `--concurrency` never puts two runs on one checkout. Every run
   appends one line, labelled with its version, to `samples.jsonl`. The batch then
   fails if any batch issue or state document of the repository changed, if a
-  `trust: outside` row ran an agent node, if any comment was posted, or if a run was
+  `trust: outside` row ran an agent node, if text outside a declared live closure was posted (`posted_text`), or if a run was
   cancelled, did not finish, or failed before any agent ran; a failed batch is
   reported before anyone evaluates it. A run that failed after its agent ran is the
   version's result, not a batch failure. A `trust: auto`
@@ -429,12 +429,27 @@ are the operator's and stay outside the pack and the repository.
   Eval batches are cheap dry checks that the bench works, not fair scored
   comparisons: an eval run can read the issue's current state, including its outcome.
 - **Live batches.** Use live batches on scratch copies for scored comparisons.
-  `copy` opens copies of a batch's issues in scratch repositories
+  `copy` opens copies of a batch's issues and each duplicate's canonical issue in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
-  there, reading each verdict from the copy's work item. The work item keeps no
+  there, reading each verdict from the copy's work item. `posted_text` permits only
+  the exact comments of that run's declared closure on scratch copies, including
+  a duplicate's backlink to that row's mapped canonical copy. A duplicate destination
+  elsewhere fails the check. The bench snapshots all issues and issue comments in the
+  source and scratch repositories, so concurrent changes there can invalidate a batch.
+  Any other new or edited comment in those monitored repositories fails `posted_text`;
+  eval permits no posted text there. Posts to other repositories are outside the bench's view.
+  Recorded batches retain their recorded check values and
+  need a rerun to measure this behavior. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's. Each copy holds
-  the pinned text, so lookups need no rewriting. Each live line records
+  scratch repository may not be the set's own or another version's. Its remote
+  default branch and local checkout must both be at the batch base before `run --live`.
+  An empty repository is refused before any run. From the scratch checkout, publish
+  the base with `git push origin <base>:refs/heads/bench-base`, then set it with
+  `gh repo edit <host/owner/repo> --default-branch bench-base` (use the scratch
+  remote's name if it is not `origin`). The preflight prints the repair commands. Each row copy holds
+  the pinned creation text, and canonical copies use their creation-time title and
+  body. If creation text cannot be recovered, `copy` refuses it. Duplicate text is
+  unchanged: intake finds the canonical by searching the scratch repository. Each live line records
   merged pull requests on the base that reference the original issue, for scoring.
   If that evidence is incomplete, the row does not run and its line says why;
   reference histories exceeding the first 100 events are refused. Rows with

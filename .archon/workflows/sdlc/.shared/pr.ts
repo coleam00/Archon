@@ -282,7 +282,7 @@ interface GhComment {
   readonly url: string;
 }
 
-function ghIssueComments(ref: QualifiedPr): GhComment[] {
+export function ghIssueComments(ref: QualifiedPr): GhComment[] {
   const comments: GhComment[] = [];
   // Paged explicitly rather than through `gh api --paginate`, so what this reads
   // does not depend on how gh chooses to join pages of a JSON array.

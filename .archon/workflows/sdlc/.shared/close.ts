@@ -53,7 +53,7 @@ export function planClose(item: QualifiedPr, closure: Closure): ClosePlan {
     return { refused: null, close: () => closeIssue(item, reason) };
   }
   if (closure.kind === 'delivered') {
-    return { refused: null, close: () => closeDelivered(item, closure.url) };
+    return { refused: null, close: () => closeWithComments(item, closed.url, closure) };
   }
   if (samePr(item, closure.original)) {
     return { refused: `${issueKey(item)} cannot be closed as a duplicate of itself` };
@@ -77,39 +77,29 @@ export function planClose(item: QualifiedPr, closure: Closure): ClosePlan {
   if (original.state !== 'open') {
     return { refused: `the duplicate's original ${original.url} is closed` };
   }
-  return { refused: null, close: () => closeDuplicate(item, closed.url, closure.original, original.url) };
+  return { refused: null, close: () => closeWithComments(item, closed.url, { ...closure, url: original.url }) };
 }
 
-function closeDuplicate(
-  item: QualifiedPr,
-  itemUrl: string,
-  original: QualifiedPr,
-  originalUrl: string
-): void {
-  const source = forgeSource();
-  upsertComment(
-    { kind: 'issue', ref: item },
-    CLOSED_MARKER,
-    `${CLOSED_MARKER}\nClosing as a duplicate of ${originalUrl}; follow the work there.`,
-    source
-  );
-  // One marked comment per duplicate: an original can collect several.
+/** The exact text and destinations of a declared closure, shared with the intake bench. */
+export function closeComments(item: QualifiedPr, itemUrl: string, closure: Closure): readonly {
+  readonly item: QualifiedPr;
+  readonly marker: string;
+  readonly body: string;
+}[] {
+  if (closure.kind === 'delivered') {
+    return [{ item, marker: CLOSED_MARKER, body: `${CLOSED_MARKER}\nClosing as already delivered by ${closure.url}.` }];
+  }
   const backMarker = `<!-- archon-duplicate ${issueKey(item)} -->`;
-  upsertComment(
-    { kind: 'issue', ref: original },
-    backMarker,
-    `${backMarker}\n${itemUrl} was closed as a duplicate of this issue.`,
-    source
-  );
-  closeIssue(item, 'duplicate');
+  return [
+    { item, marker: CLOSED_MARKER, body: `${CLOSED_MARKER}\nClosing as a duplicate of ${closure.url}; follow the work there.` },
+    { item: closure.original, marker: backMarker, body: `${backMarker}\n${itemUrl} was closed as a duplicate of this issue.` },
+  ];
 }
 
-function closeDelivered(item: QualifiedPr, changeUrl: string): void {
-  upsertComment(
-    { kind: 'issue', ref: item },
-    CLOSED_MARKER,
-    `${CLOSED_MARKER}\nClosing as already delivered by ${changeUrl}.`,
-    forgeSource()
-  );
-  closeIssue(item, 'completed');
+function closeWithComments(item: QualifiedPr, itemUrl: string, closure: Closure): void {
+  const source = forgeSource();
+  for (const comment of closeComments(item, itemUrl, closure)) {
+    upsertComment({ kind: 'issue', ref: comment.item }, comment.marker, comment.body, source);
+  }
+  closeIssue(item, closure.kind === 'duplicate' ? 'duplicate' : 'completed');
 }

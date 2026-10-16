@@ -307,6 +307,7 @@ export interface NodeBinding {
 }
 
 export interface RunNode {
+  readonly structuredOutput?: unknown;
   readonly nodeId: string;
   /** The node's state in the run's terminal record. */
   readonly state: string;
@@ -426,7 +427,7 @@ export async function getRun(runId: string): Promise<RunDetail> {
   }
   if (!Array.isArray(events)) return missing('events');
 
-  const executions = new Map<string, { kind?: string; binding?: unknown; readonly attempts: AttemptSpend[] }>();
+  const executions = new Map<string, { kind?: string; binding?: unknown; structuredOutput?: unknown; readonly attempts: AttemptSpend[] }>();
   for (const event of events) {
     if (!isObject(event) || typeof event.step_name !== 'string' || !EXECUTION_ROWS.has(String(event.event_type))) continue;
     // SQLite returns the row's data as JSON text, PostgreSQL as an object.
@@ -436,6 +437,7 @@ export async function getRun(runId: string): Promise<RunDetail> {
     executions.set(event.step_name, execution);
     execution.kind = textOrNone(data.node.kind);
     execution.binding = data.binding;
+    execution.structuredOutput = data.structured_output;
     if (ATTEMPT_ROWS.has(String(event.event_type)) && reportsOwnSpend(data)) {
       const spend = isObject(data.spend) ? data.spend : {};
       execution.attempts.push({ costUsd: spend.costUsd as CostObservation | undefined, tokens: spend.tokens as Observation<TokenUsage> | undefined });
@@ -455,7 +457,7 @@ export async function getRun(runId: string): Promise<RunDetail> {
     nodes: states.map(node => {
       const nodeId = node.node_id as string;
       const execution = executions.get(nodeId);
-      return { nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
+      return { structuredOutput: execution?.structuredOutput, nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
     }),
   };
 }
