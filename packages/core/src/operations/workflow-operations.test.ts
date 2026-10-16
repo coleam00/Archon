@@ -111,6 +111,9 @@ const {
 } = await import('./workflow-operations');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
 const isolationStore: IIsolationStore = {
+  listActive: () => {
+    throw new Error('Unexpected isolation lookup');
+  },
   listByCodebase: () => {
     throw new Error('Unexpected isolation lookup');
   },

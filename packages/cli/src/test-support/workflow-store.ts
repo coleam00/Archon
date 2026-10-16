@@ -119,6 +119,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       countActiveByCodebase: unsupported,
       findActiveByWorkflow: unsupported,
       listByCodebase: async () => [],
+      listActive: async () => [],
       findLatestByCodebaseAndWorkingPath: async () => null,
     },
   };

@@ -104,6 +104,13 @@ export async function findActiveByWorkflow(
   return row ? normalizeEnvironmentRow(row) : null;
 }
 
+export async function listActive(): Promise<readonly IsolationEnvironmentRow[]> {
+  const result = await pool.query<IsolationEnvironmentRow>(
+    "SELECT * FROM remote_agent_isolation_environments WHERE status = 'active'"
+  );
+  return result.rows.map(normalizeEnvironmentRow);
+}
+
 /**
  * Find all active environments for a codebase
  */
@@ -575,6 +582,7 @@ export function createIsolationStore(): IIsolationStore {
   return {
     getById,
     findActiveByWorkflow,
+    listActive,
     listByCodebase,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,

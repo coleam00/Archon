@@ -53,6 +53,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
     getById: async () => null,
     findActiveByWorkflow: async () => null,
     listByCodebase: async () => [],
+    listActive: async () => [],
     create: async env =>
       makeEnvRow({
         codebase_id: env.codebase_id,
@@ -885,7 +886,7 @@ describe('IsolationResolver', () => {
           attempted = true;
           throw insertError;
         },
-        listByCodebase: async () => {
+        listActive: async () => {
           if (attempted) throw new Error('lookup failed');
           return [];
         },
@@ -1053,7 +1054,7 @@ describe('IsolationResolver', () => {
           metadata: { worktree_registration_id: 'adopted-registration' },
         });
         const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
-          listByCodebase: async () => [adopted],
+          listActive: async () => [adopted],
         });
         mockWarn.mockClear();
         await resolver.releaseUnlinked(created);
@@ -1069,7 +1070,7 @@ describe('IsolationResolver', () => {
     test('keeps a created checkout when its final registration lookup fails', async () => {
       const failure = new Error('store unavailable');
       const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
-        listByCodebase: async () => {
+        listActive: async () => {
           throw failure;
         },
       });
@@ -1085,7 +1086,7 @@ describe('IsolationResolver', () => {
 
     test('removes a created checkout still held by its original registration', async () => {
       const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
-        listByCodebase: async () => [created.env],
+        listActive: async () => [created.env],
       });
       await resolver.releaseUnlinked(created);
       expect(destroyCalls).toHaveLength(1);

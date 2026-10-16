@@ -36,6 +36,7 @@ function fakeStore(): IIsolationStore & {
       return rows.get(id) ?? null;
     },
     listByCodebase: async () => [],
+    listActive: async () => [],
     async findActiveByWorkflow() {
       return null;
     },

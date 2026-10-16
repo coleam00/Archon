@@ -274,6 +274,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       countActiveByCodebase: async id => (await records.isolation.listByCodebase(id)).length,
+      listActive: async () => (await readEnvironments()).filter(row => row.status === 'active'),
       listByCodebase: async id =>
         (await readEnvironments())
           .filter(row => row.codebase_id === id && row.status === 'active')

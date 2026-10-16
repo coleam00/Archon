@@ -68,7 +68,7 @@ const isolationCreate = mock<IIsolationStore['create']>(async input => ({
 }));
 const isolationStore = {
   create: isolationCreate,
-  listByCodebase: async () => [],
+  listActive: async () => [],
 } satisfies Parameters<typeof import('./registered-worktree').createRegisteredWorktree>[0];
 
 /** Resume `run` through the host and resolve one child, returning the engine's resume input. */

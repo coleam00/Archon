@@ -536,7 +536,7 @@ export class IsolationResolver {
       };
     }
 
-    const registrationsBeforeCreation = await this.store.listByCodebase(codebase.id);
+    const registrationsBeforeCreation = await this.store.listActive();
     let isolatedEnv: Awaited<ReturnType<typeof this.provider.create>>;
     try {
       isolatedEnv = await this.provider.create(isolationRequest, setupExecutor);
@@ -618,7 +618,7 @@ export class IsolationResolver {
     if (method.type !== 'created') return;
 
     try {
-      const active = await this.store.listByCodebase(env.codebase_id);
+      const active = await this.store.listActive();
       if (
         active.some(
           row =>

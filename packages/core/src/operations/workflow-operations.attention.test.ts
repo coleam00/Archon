@@ -43,6 +43,7 @@ async function setup(): Promise<void> {
         getById: async () => null,
         findActiveByWorkflow: async () => null,
         listByCodebase: async () => [],
+        listActive: async () => [],
         create: async () => {
           throw new Error('unused');
         },

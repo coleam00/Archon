@@ -27,6 +27,7 @@ export interface IIsolationStore {
     workflowType: IsolationWorkflowType,
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
+  listActive(): Promise<readonly IsolationEnvironmentRow[]>;
   listByCodebase(codebaseId: string): Promise<readonly IsolationEnvironmentRow[]>;
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
   /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
@@ -85,7 +86,7 @@ export async function recordWorktreeAdoption(
  */
 export async function registerWorktree(
   deps: {
-    store: Pick<IIsolationStore, 'create' | 'listByCodebase'>;
+    store: Pick<IIsolationStore, 'create' | 'listActive'>;
     registrationsBeforeCreation: readonly IsolationEnvironmentRow[];
     provider: Pick<IIsolationProvider, 'destroy'>;
   },
@@ -116,7 +117,7 @@ export async function registerWorktree(
     if (env.metadata.provenance === 'created') {
       let active: readonly IsolationEnvironmentRow[];
       try {
-        active = await deps.store.listByCodebase(record.codebase_id);
+        active = await deps.store.listActive();
       } catch (lookupError) {
         createLogger('isolation.store').error(
           { err: lookupError, worktreePath: env.workingPath },
