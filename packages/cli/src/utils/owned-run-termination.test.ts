@@ -65,6 +65,7 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
         await new Promise<void>(resolve => setTimeout(resolve, 300));
         descendantAliveAtFail = processExists(descendant);
         failedWith = reason;
+        return { failed: true };
       },
     },
     runId: 'run-1',

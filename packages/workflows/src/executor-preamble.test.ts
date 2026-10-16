@@ -232,7 +232,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
     updateWorkflowRun: mock(async () => {}),
-    failWorkflowRun: mock(async () => {}),
+    failWorkflowRun: mock(async () => ({ failed: true })),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),

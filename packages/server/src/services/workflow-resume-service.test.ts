@@ -60,7 +60,9 @@ const mockStartRunLiveOwner = mock<
   runLiveOwnerCalls.push(`start:${runId}`);
   return { close: mockCloseRunLiveOwner, isStopRequested: () => false };
 });
-const mockStoreFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(async () => undefined);
+const mockStoreFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({
+  failed: true,
+}));
 const mockGetWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(
   async () => 'running'
 );
@@ -173,7 +175,7 @@ describe('workflow continuation scanner', () => {
       summary: 'done',
     });
     mockStoreFailWorkflowRun.mockReset();
-    mockStoreFailWorkflowRun.mockResolvedValue(undefined);
+    mockStoreFailWorkflowRun.mockResolvedValue({ failed: true });
     mockGetWorkflowRunStatus.mockReset();
     mockGetWorkflowRunStatus.mockResolvedValue('running');
     runLiveOwnerCalls.length = 0;
@@ -267,6 +269,7 @@ describe('workflow continuation scanner', () => {
     test('marks the run failed when execution rejects with an ordinary error', async () => {
       mockStoreFailWorkflowRun.mockImplementationOnce(async () => {
         runLiveOwnerCalls.push('fail');
+        return { failed: true };
       });
       await startHeadlessResume(new Error('resume boom'));
 
