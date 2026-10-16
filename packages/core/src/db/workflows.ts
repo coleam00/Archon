@@ -1536,8 +1536,10 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
+    const status = await getWorkflowRunStatus(id);
+    if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return;
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
-    throw new Error(`Workflow run not found or already terminal (id: ${id})`);
+    throw new Error(`Workflow run not found or not in pending/running state (id: ${id})`);
   }
   await reportRunTerminal(id);
 }

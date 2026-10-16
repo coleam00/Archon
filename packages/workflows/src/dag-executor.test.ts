@@ -42750,10 +42750,6 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
 // ───────────────────────────────────────────────────────────────────────────
 // Terminal status write ordering (#2910 R3)
 //
-// The terminal write can now reject. Everything that never depended on it —
-// the transcript, the live SSE event, telemetry, and the chat notification —
-// used to run unconditionally under the old log-and-continue catch, and must
-// keep doing so. These pin the ordering at the completion and failure sites.
 // ───────────────────────────────────────────────────────────────────────────
 describe('executeDagWorkflow -- side effects survive a failed terminal write', () => {
   let testDir: string;
@@ -43000,24 +42996,27 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     expect(emitted).toContain('workflow_completed');
   });
 
-  it('still emits workflow_failed and notifies the user when the failure write rejects', async () => {
-    const store = createMockStore();
-    store.failWorkflowRun = mock(async () => {
-      throw new Error('failure write failed');
-    });
-    const platform = createMockPlatform();
-    const emitted: string[] = [];
+  it.each([false, true])(
+    'withholds live failure when the failure write rejects (successful sibling: %s)',
+    async successfulSibling => {
+      const store = createMockStore();
+      store.failWorkflowRun = mock(async () => {
+        throw new Error('failure write failed');
+      });
+      const platform = createMockPlatform();
+      const emitted: string[] = [];
 
-    // One node succeeds and one fails, so the run reaches the node-failure site
-    // rather than the no-nodes-completed one.
-    await expect(run(store, platform, [okNode, badNode], emitted)).rejects.toThrow(
-      'Failed to persist terminal workflow status'
-    );
+      await expect(
+        run(store, platform, [...(successfulSibling ? [okNode] : []), badNode], emitted)
+      ).rejects.toThrow('Failed to persist terminal workflow status');
 
-    expect(emitted).toContain('workflow_failed');
-    const sent = platform.sendMessage.mock.calls.map(c => c[1]);
-    expect(sent.some(m => m.includes('completed with failures'))).toBe(true);
-  });
+      expect(emitted).not.toContain('workflow_failed');
+      const sent = platform.sendMessage.mock.calls.map(c => c[1]);
+      expect(
+        sent.some(m => m.includes(successfulSibling ? 'completed with failures' : 'failed: node'))
+      ).toBe(true);
+    }
+  );
 });
 
 describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
