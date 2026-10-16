@@ -6,6 +6,7 @@ policy: { defaults: "fixture-policy-defaults" }
 mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: false, code: false, tests: false, errors: false, docs: false, reason: "stub: no prior finding open beyond code; the delta touches no other lens's area" }
 scope:
+  head_matches: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
@@ -18,13 +19,14 @@ synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
-publish:
+publish: &published_verdict
   ready: true
   action: none
   findings_summary: "stub: the correction delta is clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+result: *published_verdict
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed

@@ -26,7 +26,7 @@
  * reviewed everything.
  *
  * The part assignment passes through unchanged: the node's `output_format` owns
- * its shape, so the engine refuses a malformed one before any agent reads it.
+ * its shape, so the engine refuses a malformed one before lenses or synthesis read it.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
