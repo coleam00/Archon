@@ -64,8 +64,8 @@ const READY_POLL_INTERVAL_MS = 250;
  * Overlay mount modes, in PREFERENCE order (least-privileged first). `fuse` runs
  * with only `--device /dev/fuse` (no CAP_SYS_ADMIN — closes the remount escape,
  * but only mounts on rootless/userns daemons); `native` grants CAP_SYS_ADMIN
- * (works everywhere, grants the escape — see SECURITY.md). The backend tries them
- * in this order, falling back only after the runner confirms a failed FUSE mount.
+ * and permits the remount escape (see SECURITY.md). Native fallback requires
+ * the runner's dedicated FUSE mount failure status (78).
  */
 type OverlayMode = 'fuse' | 'native';
 
