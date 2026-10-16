@@ -735,5 +735,9 @@ test('resume reuses a registered worktree with one warning and durable adoption'
   expect(JSON.parse(rows[0].metadata)).toMatchObject({
     ...JSON.parse(created.metadata),
     adopted: true,
+    worktree_registration_id: expect.any(String),
   });
+  expect(JSON.parse(rows[0].metadata).worktree_registration_id).not.toBe(
+    JSON.parse(created.metadata).worktree_registration_id
+  );
 });
