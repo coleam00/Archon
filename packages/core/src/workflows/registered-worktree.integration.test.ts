@@ -508,6 +508,48 @@ for (const persistence of ['sql', 'file'] as const) {
     });
   }
 
+  test(`${persistence}: an older row from another codebase does not retain a resolver-created unregistered checkout`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation.createIsolationStore()
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const staleCodebaseId = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [staleCodebaseId, 'duplicate/repo', repo]
+    );
+    const stale = await store.create({
+      codebase_id: staleCodebaseId,
+      workflow_type: 'task',
+      workflow_id: 'restart',
+      working_path: join(repo, '.worktrees', 'archon', 'task-restart'),
+      branch_name: toBranchName('old-branch'),
+      metadata: {},
+    });
+    const failure = new Error('registration rejected');
+    const resolver = new IsolationResolver({
+      store: {
+        ...store,
+        create: async () => {
+          throw failure;
+        },
+      },
+      provider: getIsolationProvider(),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+        hints: { workflowType: 'task', workflowId: 'restart' },
+        platformType: 'cli',
+      })
+    ).rejects.toBe(failure);
+    expect(git('worktree', 'list', '--porcelain')).not.toContain('task-restart');
+    expect(git('branch', '--list')).not.toContain('task-restart');
+    expect(await store.getById(stale.id)).toEqual(stale);
+  });
+
   for (const adopter of [
     'same-workflow',
     'other-workflow',
