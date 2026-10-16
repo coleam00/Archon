@@ -2382,7 +2382,7 @@ export function describeWorkflowStoreConformance(
       async mode => {
         const run = await running(store);
         const write = (): ReturnType<
-          IWorkflowStore['completeWorkflowRun' | 'cancelWorkflowRun']
+          IWorkflowStore['completeWorkflowRun' | 'failWorkflowRun' | 'cancelWorkflowRun']
         > =>
           mode === 'complete'
             ? store.completeWorkflowRun(run.id, { duration_ms: 5 })
@@ -2392,14 +2392,18 @@ export function describeWorkflowStoreConformance(
                 ? store.cancelWorkflowRun(run.id)
                 : store.cancelFanOutRun(run.id, 'fan_out_sibling');
         const results = await Promise.allSettled(Array.from({ length: 8 }, write));
-        if (mode === 'complete' || mode === 'fail') {
+        if (mode === 'complete') {
           expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
           expect(results.filter(result => result.status === 'rejected')).toHaveLength(7);
         } else {
           for (const result of results) expect(result.status).toBe('fulfilled');
-          expect(
-            results.filter(result => result.status === 'fulfilled' && result.value?.cancelled)
-          ).toHaveLength(1);
+          const won = results.filter(
+            result =>
+              result.status === 'fulfilled' &&
+              result.value !== undefined &&
+              ('failed' in result.value ? result.value.failed : result.value.cancelled)
+          );
+          expect(won).toHaveLength(1);
         }
         const events = await store.listWorkflowEvents(run.id);
         expect(events).toHaveLength(1);
@@ -2483,13 +2487,38 @@ export function describeWorkflowStoreConformance(
         await pending;
       }
     });
+    test.each([...TERMINAL_WORKFLOW_STATUSES])(
+      'failure acknowledges an already %s run without another terminal write',
+      async status => {
+        const run = await running(store);
+        if (status === 'completed') await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        else if (status === 'failed') await store.failWorkflowRun(run.id, 'first failure');
+        else await store.cancelWorkflowRun(run.id);
+        const before = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        const reports = [...harness.terminalReports()];
+
+        expect(
+          await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' })
+        ).toEqual({ failed: false });
+
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+        expect(harness.terminalReports()).toEqual(reports);
+      }
+    );
+    test('failure rejects a missing run', async () => {
+      expect(await rejection(store.failWorkflowRun('missing-run', 'failure'))).toBeInstanceOf(
+        Error
+      );
+    });
     test('terminal writer start-state predicates preserve losers', async () => {
       const pending = await create(store);
       expect(
         await rejection(store.completeWorkflowRun(pending.id, { duration_ms: 0 }))
       ).toBeInstanceOf(Error);
       expect(await types(store, pending.id)).toEqual([]);
-      await store.failWorkflowRun(pending.id, 'setup failed');
+      expect(await store.failWorkflowRun(pending.id, 'setup failed')).toEqual({ failed: true });
       expect(await store.cancelWorkflowRun(pending.id)).toEqual({ cancelled: true });
       const paused = await running(store);
       await store.pauseWorkflowRun(paused.id, approval);

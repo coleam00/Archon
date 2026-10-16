@@ -1111,7 +1111,9 @@ describe('workflows database', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');
 
-      await failWorkflowRun('workflow-run-123', 'Step not found: missing.md');
+      expect(await failWorkflowRun('workflow-run-123', 'Step not found: missing.md')).toEqual({
+        failed: true,
+      });
 
       expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("status = 'failed'"), [
         'workflow-run-123',
@@ -1183,13 +1185,22 @@ describe('workflows database', () => {
       expect(JSON.parse(params[1] as string)).toEqual({ error: 'Bash node failed' });
     });
 
-    test('throws when rowCount is 0', async () => {
+    test('throws when the run does not exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(failWorkflowRun('workflow-run-123', 'some error')).rejects.toThrow(
-        'not found or already terminal'
+        'not found or not in pending/running state'
       );
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    test('preserves a status lookup failure after a lost update', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
+
+      await expect(failWorkflowRun('workflow-run-123', 'some error')).rejects.toThrow(
+        'Failed to get workflow run status: Connection refused'
+      );
     });
 
     test('does not commit failure when its terminal audit insert fails', async () => {
