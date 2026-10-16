@@ -1248,6 +1248,22 @@ describe('project storage collisions', () => {
     expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
 
+  test('a project name that differs only by case from another kind gets a suffix', async () => {
+    const root = await makeHome();
+    const repo = await registerRepository(await gitCheckout(join(root, 'repo')), {
+      name: 'my-app',
+    });
+    await mkdir(join(root, 'folder'));
+    const folder = await registerFolder(join(root, 'folder'), 'My-App');
+
+    expect(folder.codebaseId).not.toBe(repo.codebaseId);
+    expect(folder.name).toBe('My-App-2');
+    await mkdir(join(root, 'other'));
+    await expect(
+      createCodebase({ name: 'MY-APP', default_cwd: join(root, 'other'), kind: 'folder' })
+    ).rejects.toThrow('already owned by "my-app"');
+  });
+
   test('repos without a remote that share a folder name get separate storage', async () => {
     const root = await makeHome();
     const work = await gitCheckout(join(root, 'work', 'api'));

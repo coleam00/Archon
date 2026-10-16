@@ -183,9 +183,10 @@ export async function assertProjectRegistrationAvailable(
       );
     }
   }
+  const name = project.name.toLowerCase();
   const root = storageRoot(project).toLowerCase();
   const conflict = registered.find(
-    existing => existing.name === project.name || storageRoot(existing).toLowerCase() === root
+    existing => existing.name.toLowerCase() === name || storageRoot(existing).toLowerCase() === root
   );
   if (conflict) {
     throw new ProjectRegistrationError(

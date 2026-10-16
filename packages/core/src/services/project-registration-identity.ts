@@ -103,12 +103,16 @@ export function allocateProjectName(
   project: ProjectIdentity,
   registered: readonly ProjectIdentity[]
 ): string {
-  const names = new Set(registered.map(codebase => codebase.name));
-  // Workspace storage may live on a case-insensitive filesystem.
+  // Chat finds a project by name case-insensitively, and workspace storage may
+  // live on a case-insensitive filesystem.
+  const names = new Set(registered.map(codebase => codebase.name.toLowerCase()));
   const roots = new Set(registered.map(project => storageRoot(project).toLowerCase()));
   for (let n = 1; ; n++) {
     const name = candidateName(project.kind, project.name, n);
-    if (!names.has(name) && !roots.has(storageRoot({ ...project, name }).toLowerCase()))
+    if (
+      !names.has(name.toLowerCase()) &&
+      !roots.has(storageRoot({ ...project, name }).toLowerCase())
+    )
       return name;
   }
 }
