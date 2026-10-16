@@ -1726,7 +1726,7 @@ nodes:
 
   - id: summary
     prompt: "Summarize the review findings for the PR author."
-    depends_on: [review]   # resolves to the included workflow's terminal node
+    depends_on: [review]   # waits for both the verdict and scratch cleanup
 ```
 
 Use `archon-review-block` when the parent owns continuation. The standalone
@@ -1771,7 +1771,7 @@ behave exactly as if you had written the nodes by hand. A top-level include prod
 nodes; an include in a `loop_group` body produces body-local nodes. There is no separate child run.
 
 - **Namespacing.** Each included node `n` receives id `<includeId>__<n.id>` (double
-  underscore) within that scope. Including `archon-review` under `id: review` yields
+  underscore) within that scope. Including `archon-review-block` under `id: review` yields
   `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
   body-local events additionally carry their enclosing group prefix.
@@ -1789,13 +1789,13 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
   node with no dependents inside the block), so it waits for the whole block to finish.
-  But `$<includeId>.output` resolves to only the **primary** sink — the first sink in
-  definition order (the same terminal-selection rule `loop_group` uses). For a
-  single-sink block like the review block the two coincide; they differ only when a block
-  has multiple leaf nodes.
-- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink,
+  But `$<includeId>.output` resolves to the declared `returns:` node, or the first sink
+  in definition order when `returns:` is absent. The review block has two sinks,
+  `result` and `prune-scratch`: the summary waits for both, while the output comes from
+  `result`, selected by `returns: result`.
+- **Output.** `$<includeId>.output` in another node resolves to that selected node,
   including when it appears in that node's `command:` or `loop.command` file body. In the
-  example, `$review.output` is the output of the block's `implement-fixes` node.
+  example, `$review.output` is the verdict from `review__result`.
 - **Inside a `loop_group` body.** An include expands inside that sealed body at load time.
   Its nodes keep the usual `<includeId>__<nodeId>` names, then the loop runtime prefixes
   persisted step names with the group id (for example `fix-loop.review__synthesize`). Every
