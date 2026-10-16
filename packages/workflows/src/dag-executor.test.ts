@@ -21394,6 +21394,36 @@ describe('executeDagWorkflow -- script nodes', () => {
           deliveredMessages(platform).some(text => text.includes('Run paused, not failed'))
         ).toBe(false);
       });
+
+      for (const fanOut of [
+        undefined,
+        { items: '[1]', max_parallel: 1, join: 'all_success' as const },
+      ]) {
+        it(`a sub-run system fault fails the parent instead of releasing it${fanOut ? ' (fan-out)' : ''}`, async () => {
+          const mockDeps = createMockDeps();
+          const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+            throw Object.assign(new Error('read ECONNRESET'), {
+              code: 'ECONNRESET',
+              syscall: 'read',
+            });
+          });
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              cwd: testDir,
+              runChildWorkflow,
+              workflow: {
+                name: 'child-system-fault',
+                nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child', fan_out: fanOut }],
+              },
+              workflowRun: makeWorkflowRun('child-system-fault-run'),
+            })
+          );
+          expect(runChildWorkflow).toHaveBeenCalledTimes(1);
+          expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(mockDeps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        });
+      }
     }
   );
 

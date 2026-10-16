@@ -920,6 +920,48 @@ nodes:
         }
         expect(fail).not.toHaveBeenCalled();
       });
+
+      it('a child launch that cannot read the parent source releases the parent', async () => {
+        await writeWorkflow(
+          'source-child',
+          'name: source-child\ndescription: child\nnodes:\n  - id: c\n    prompt: c\n'
+        );
+        await writeWorkflow(
+          'source-parent',
+          'name: source-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: source-child\n'
+        );
+        const store = new InMemoryStore();
+        const released: Parameters<IWorkflowStore['releaseRunForUnreadableSource']>[1][] = [];
+        store.releaseRunForUnreadableSource = async (_id, release) => {
+          released.push(release);
+          return { released: true };
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const persist = store.persistWorkflowEvent;
+        const workflowsDir = join(cwd, '.archon', 'workflows');
+        store.persistWorkflowEvent = async event => {
+          await persist(event);
+          if (event.event_type === 'node_started' && event.step_name === 'sub') {
+            await chmod(workflowsDir, 0o000);
+          }
+        };
+        const parentWorkflow = await discover('source-parent');
+        try {
+          await executeWorkflow(
+            makeDeps(store),
+            makePlatform(),
+            'source-launch-test',
+            cwd,
+            parentWorkflow,
+            'goal'
+          );
+        } finally {
+          await chmod(workflowsDir, 0o755);
+        }
+        expect(fail).not.toHaveBeenCalled();
+        expect(released).toEqual([expect.objectContaining({ nodeId: 'sub' })]);
+        expect([...store.runs.values()].map(run => run.workflow_name)).toEqual(['source-parent']);
+      });
     }
   );
 

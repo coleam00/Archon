@@ -1,6 +1,6 @@
 import { requireProvider } from '@archon/provider-contract';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
-import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
+import { isContainerRun, type OwnedWorktree, type WorkflowRunOrigin } from './schemas/workflow-run';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import {
   prepareRunAiConfiguration,
@@ -23,6 +23,7 @@ import { delimiter, dirname, join } from 'path';
 import {
   MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   attentionAnswerLines,
+  sourceReleaseNotice,
   spellWorkflowCommand,
 } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -80,6 +81,7 @@ import {
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
   isSourceReadFailure,
+  isSystemError,
   captureWorkflowSource,
   capturedSourceRoots,
   recordSelectedWorkflow,
@@ -1295,6 +1297,19 @@ async function gatherDescendantRunIds(deps: WorkflowDeps, rootId: string): Promi
 }
 
 /**
+ * A child launch reads its parent's source before the child runs. The parent releases
+ * itself only for this typed error; anything else escaping the launch is the child's
+ * fault, and the parent's `workflow:` node fails with it.
+ */
+function parentSourceUnreadable(root: string, error: unknown): unknown {
+  if (error instanceof WorkflowSourceUnavailableError || !isSourceReadFailure(error)) return error;
+  return new WorkflowSourceUnavailableError(
+    isSystemError(error) && typeof error.path === 'string' ? error.path : root,
+    error
+  );
+}
+
+/**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
  * run-record creation, path-lock, artifacts, credential/model resolution, resume,
@@ -1345,8 +1360,14 @@ async function runChildWorkflow(
   // discovering from the capture rather than from the live directory is what stops the
   // child executing one moment's YAML against another moment's scripts.
   // Installed packs are the exception: the child takes them from the parent's capture.
-  const parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
-  const installedFrom = await resolveChildInstalledPacks(parentRun.metadata);
+  let parentSourceRoot: string | undefined;
+  let installedFrom: InstalledPacksRoot | undefined;
+  try {
+    parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
+    installedFrom = await resolveChildInstalledPacks(parentRun.metadata);
+  } catch (err) {
+    throw parentSourceUnreadable(cwd, err);
+  }
   // Refusals and recursive execution share one owner until adoption or disposal.
   return withCapturedSource(async owner => {
     let childSource: PreparedWorkflowSource | undefined;
@@ -1357,7 +1378,7 @@ async function runChildWorkflow(
       });
       owner.hold(childSource);
     } catch (err) {
-      if (isSourceReadFailure(err)) throw err;
+      if (isSourceReadFailure(err)) throw parentSourceUnreadable(parentSourceRoot ?? cwd, err);
       return failOutcome(
         `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
@@ -1389,7 +1410,7 @@ async function runChildWorkflow(
       );
       if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
     } catch (err) {
-      if (isSourceReadFailure(err)) throw err;
+      if (isSourceReadFailure(err)) throw parentSourceUnreadable(childSource.anchor.root, err);
       return failOutcome(
         `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
@@ -3033,7 +3054,10 @@ export async function executeWorkflow(
           await safeSendMessage(
             platform,
             conversationId,
-            'Workflow paused because its captured source could not be read. Continuation will retry the source read.'
+            sourceReleaseNotice(platform, workflowRun.id, {
+              path,
+              container: isContainerRun(workflowRun),
+            })
           );
           return { success: true, paused: true, workflowRunId: workflowRun.id };
         }

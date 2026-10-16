@@ -118,6 +118,28 @@ export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: s
 }
 
 /**
+ * The notice for a run released because this host could not read its source (#4209).
+ * Continuation never selects a released container run, so that one is resumed by hand.
+ */
+export function sourceReleaseNotice(
+  surface: WorkflowCommandSurface,
+  runId: string,
+  release: { path?: string; nodeId?: string; container: boolean }
+): string {
+  return (
+    `⏸️ Run paused, not failed: this host could not read its frozen source${
+      release.path !== undefined ? ` at ${release.path}` : ''
+    }${release.nodeId !== undefined ? ` for node '${release.nodeId}'` : ''}. ${
+      release.container
+        ? 'A container run is not continued automatically; resume it by hand.'
+        : 'A host that can read it continues the run on its next continuation scan.'
+    }\n` +
+    `Resume: \`${spellWorkflowCommand(surface, `resume ${runId}`)}\` | ` +
+    `Abandon: \`${spellWorkflowCommand(surface, `abandon ${runId}`)}\``
+  );
+}
+
+/**
  * How to answer an attention wait, one line per way, spelled for `surface`. The verbs are
  * the `approve`, `reject` and `respond` sugar every surface parses. A `multi_select`
  * answer carries several options at once, which only the CLI's `answer` verb (and its

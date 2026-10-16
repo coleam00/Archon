@@ -73,7 +73,7 @@ import type {
   WorkflowDeps,
   WorkflowCommandSurface,
 } from './deps';
-import { attentionAnswerLines, spellWorkflowCommand } from './deps';
+import { attentionAnswerLines, sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -8039,7 +8039,10 @@ async function executeWorkflowNode(
   } catch (err) {
     if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
 
-    if (isSourceReadFailure(err)) throw new RunSourceUnreadableError(executionNodeId, err);
+    // Only a read of the parent's source releases the parent; a child's fault stays the
+    // child's, so the launch types those reads (see runChildWorkflow).
+    if (err instanceof WorkflowSourceUnavailableError)
+      throw new RunSourceUnreadableError(executionNodeId, err);
 
     return failResult(
       `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
@@ -8651,7 +8654,8 @@ async function executeFanOutWorkflowNode(
       ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
       ...(resumeChild ? { resumeChild } : {}),
     }).catch((error: unknown) => {
-      if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+      if (error instanceof WorkflowSourceUnavailableError)
+        throw new RunSourceUnreadableError(stepName, error);
       if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
       throw error;
     });
@@ -12308,15 +12312,11 @@ export async function executeDagWorkflow(
     await safeSendMessage(
       platform,
       conversationId,
-      `⏸️ Run paused, not failed: this host could not read its frozen source${
-        error.path !== undefined ? ` at ${error.path}` : ''
-      } for node '${error.nodeId}'. ${
-        execContext.kind === 'container'
-          ? 'A container run is not continued automatically; resume it by hand.'
-          : 'A host that can read it continues the run on its next continuation scan.'
-      }\n` +
-        `Resume: \`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\` | ` +
-        `Abandon: \`${spellWorkflowCommand(platform, `abandon ${workflowRun.id}`)}\``,
+      sourceReleaseNotice(platform, workflowRun.id, {
+        path: error.path,
+        nodeId: error.nodeId,
+        container: execContext.kind === 'container',
+      }),
       { workflowId: workflowRun.id, nodeName: error.nodeId }
     );
     return true;
