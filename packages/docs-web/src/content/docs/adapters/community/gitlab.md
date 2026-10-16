@@ -111,7 +111,7 @@ Mention your bot in issue or MR comments:
 @archon review this implementation
 ```
 
-**First mention** automatically clones the repository to `~/.archon/workspaces/<group>/<project>`, detects `.archon/commands/` if present, and injects full issue/MR context.
+**First mention** automatically registers and clones the repository, detects `.archon/commands/` if present, and injects full issue/MR context. For a one-level namespace, the checkout is `~/.archon/workspaces/<group>/<project>/source`. Nested namespaces are flattened after the top-level group: `org/team/api` uses `~/.archon/workspaces/org/team-api/source`. If another project owns that storage name, registration allocates a suffix such as `org/team-api-2`, with its checkout under `~/.archon/workspaces/org/team-api-2/source`. See the [directory reference](/reference/archon-directories/) for the full workspace layout.
 
 **Subsequent mentions** resume the existing conversation with full context.
 
