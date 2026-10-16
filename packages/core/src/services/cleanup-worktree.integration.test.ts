@@ -770,6 +770,31 @@ describe('cleanup retires only the registration it observed', () => {
     );
   }
 
+  test('listing reconciles only the observed missing registration', async () => {
+    await git(repo, 'worktree', 'remove', '--force', env.working_path);
+    const { listEnvironments } = await import('../operations/isolation-operations');
+    const mark = isolationDb.markWorktreeDestroyed;
+    const update = isolationDb.updateStatus;
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racingMark = spyOn(isolationDb, 'markWorktreeDestroyed').mockImplementation(
+      async observed => {
+        if (observed.id === env.id) replacement = await reRegister();
+        await mark(observed);
+      }
+    );
+    const racingUpdate = spyOn(isolationDb, 'updateStatus').mockImplementation(async (id, next) => {
+      if (id === env.id && next === 'destroyed') replacement = await reRegister();
+      await update(id, next);
+    });
+    try {
+      await listEnvironments();
+    } finally {
+      racingMark.mockRestore();
+      racingUpdate.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+  });
+
   test('removeEnvironment', async () => {
     const provider = getIsolationProvider();
     const destroy = provider.destroy.bind(provider);

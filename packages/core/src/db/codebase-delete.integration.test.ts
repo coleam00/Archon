@@ -308,3 +308,31 @@ for (const legacy of [false, true]) {
     await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
   });
 }
+
+test('legacy writer replacement cannot be retired by a stale cleanup observation', async () => {
+  const { createCodebase } = await import('./codebases');
+  const { getById, markWorktreeDestroyed, listByCodebase } =
+    await import('./isolation-environments');
+  const project = await createCodebase({
+    name: 'legacy-writer',
+    default_cwd: '/repos/legacy-writer',
+  });
+  await db.query(
+    `INSERT INTO remote_agent_isolation_environments
+     (codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, metadata)
+     VALUES ($1, '42', 'issue', 'worktree', '/repos/legacy-writer/old', 'old', '{}')`,
+    [project.id]
+  );
+  const original = (await listByCodebase(project.id))[0];
+  if (!original) throw new Error('Expected legacy registration');
+  await db.query(
+    "UPDATE remote_agent_isolation_environments SET working_path = '/repos/legacy-writer/new', branch_name = 'new' WHERE id = $1",
+    [original.id]
+  );
+  await expect(markWorktreeDestroyed(original)).rejects.toThrow('changed during cleanup');
+  expect(await getById(original.id)).toMatchObject({
+    status: 'active',
+    working_path: '/repos/legacy-writer/new',
+    branch_name: 'new',
+  });
+});
