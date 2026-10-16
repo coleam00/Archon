@@ -80,7 +80,7 @@ async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<voi
 }
 
 function renderEntries(entries: readonly (readonly [string, unknown])[], indent = '  '): string {
-  // Git conflicts on adjacent changed lines; blank separators let neighboring files merge.
+  // Blank separators let edits to neighboring existing entries merge independently.
   return entries
     .map(([name, value]) => `${indent}${JSON.stringify(name)}: ${JSON.stringify(value)},`)
     .join('\n\n');
@@ -119,12 +119,13 @@ function renderScriptPacks(packs: ReadonlyMap<string, BundledScriptPack>): strin
       .map(([name, pack]) =>
         [
           `  ${JSON.stringify(name)}: {`,
-          '    files: {',
-          renderEntries(Object.entries(pack.files), '      '),
-          '    },',
-          '    scripts: {',
-          renderEntries(Object.entries(pack.scripts), '      '),
-          '    },',
+          ...Object.entries(pack).map(([field, entries]) =>
+            [
+              `    ${JSON.stringify(field)}: {`,
+              renderEntries(Object.entries(entries), '      '),
+              '    },',
+            ].join('\n')
+          ),
           '  },',
         ].join('\n')
       )
