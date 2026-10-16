@@ -260,7 +260,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
-| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into a conflicting PR) |
+| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into any PR that is behind it) |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
