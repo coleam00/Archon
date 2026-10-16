@@ -121,7 +121,7 @@ const TYPE_BAR = 0.8;
 const HARD_CHECKS: Readonly<Record<CheckName, string>> = {
   writes: 'writes in eval',
   outside_agent: 'agent node on a `trust: outside` row',
-  posted_text: 'posted text not built from a template',
+  posted_text: 'text posted in eval or outside a declared live closure',
   finished: 'runs that never finished',
 };
 const CHECK_NAMES = Object.keys(HARD_CHECKS) as CheckName[];

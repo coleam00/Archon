@@ -959,6 +959,7 @@ describe('score', () => {
       ['6', [], []],
     ]);
     expect(renderScore(result)).toContain('| duplicates found with the right canonical link (at least 70%, by marks) | 1/1 (100%) right');
+    expect(renderScore(result)).toContain('| text posted in eval or outside a declared live closure |');
   });
 
   it('counts a run that did not pass against its bars as not right', () => {
