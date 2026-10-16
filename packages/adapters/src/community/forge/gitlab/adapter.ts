@@ -565,7 +565,9 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         (await isWorktreePath(existing.default_cwd)) ||
         (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
       ) {
-        const identity = parseOwnerRepo(existing.name);
+        const identity =
+          parseOwnerRepo(existing.name) ??
+          (existing.name === projectPath ? { owner: gitlabOwner, repo: gitlabRepo } : null);
         if (!identity) {
           throw new Error(
             `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd}. ` +
@@ -573,13 +575,16 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
+        if (existsSync(join(canonicalPath, '.git'))) {
+          await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
+        }
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
+        existing.default_cwd = canonicalPath;
         getLog().info(
           { codebaseName: existing.name, canonicalPath },
           'gitlab.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
-      } else if (looksLikeWorktreePath) {
+      } else {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 

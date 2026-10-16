@@ -127,6 +127,9 @@ mock.module('@archon/core', () => ({
   },
 }));
 
+const registrationRemote = await import('@archon/core/services/registration-remote');
+spyOn(registrationRemote, 'assertCheckoutRemote').mockResolvedValue(undefined);
+
 // Mock @archon/git
 mock.module('@archon/git', () => ({
   ...git,
@@ -271,6 +274,22 @@ describe('GitLabAdapter', () => {
     expect(mockUpdateCodebase).toHaveBeenCalledWith(expect.objectContaining({ id: 'allocated' }), {
       default_cwd: result.repoPath,
     });
+  });
+
+  test('repairs a legacy nested namespace without changing its project name', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'nested',
+      name: 'group/subgroup/repo',
+      default_cwd: '/tmp/test-workspaces/group/subgroup/repo/worktrees/old',
+      repository_url: 'https://gitlab.example.com/group/subgroup/repo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    // @ts-expect-error - exercise the private registration boundary
+    const result = await adapter.getOrCreateCodebaseForRepo('group/subgroup/repo');
+    expect(result.repoPath).toBe('/tmp/test-workspaces/group/subgroup/repo/source');
+    expect(existing.name).toBe('group/subgroup/repo');
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(existing, { default_cwd: result.repoPath });
   });
 
   test('allocated checkout path reaches preparation and conversation storage', async () => {

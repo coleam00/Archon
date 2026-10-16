@@ -658,10 +658,13 @@ export class GiteaAdapter implements IPlatformAdapter {
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
+        if (existsSync(join(canonicalPath, '.git'))) {
+          await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
+        }
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
-      } else if (looksLikeWorktreePath) {
+        getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
+      } else {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 

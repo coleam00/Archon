@@ -96,6 +96,9 @@ const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
 const mockAddSafeDirectory = mock(async () => undefined);
 const mockIsWorktreePath = mock(async () => false);
 
+const registrationRemote = await import('@archon/core/services/registration-remote');
+spyOn(registrationRemote, 'assertCheckoutRemote').mockResolvedValue(undefined);
+
 mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,
   syncRepository: mockSyncRepository,

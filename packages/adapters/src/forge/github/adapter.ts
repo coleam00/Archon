@@ -939,13 +939,16 @@ export class GitHubAdapter implements IPlatformAdapter {
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
+        if (existsSync(join(canonicalPath, '.git'))) {
+          await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
+        }
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
+        existing.default_cwd = canonicalPath;
         getLog().info(
           { codebaseName: existing.name, canonicalPath },
           'github.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
-      } else if (looksLikeWorktreePath) {
+      } else {
         await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
