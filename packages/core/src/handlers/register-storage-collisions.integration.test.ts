@@ -321,7 +321,7 @@ describe('project storage collisions', () => {
   );
 
   test.each(['sql', 'file'] as const)(
-    'lookup isolates unreadable stored local remotes but registration fails closed (%s)',
+    'lookup and registration isolate unreadable stored local remotes (%s)',
     async backend => {
       const root = await makeHome();
       const store =
@@ -354,18 +354,11 @@ describe('project storage collisions', () => {
           }),
         }),
       ]);
-      await expect(store.findCodebaseByRepoUrl('https://github.com/acme/unknown')).rejects.toThrow(
-        ProjectRegistrationError
-      );
+      expect(await store.findCodebaseByRepoUrl('https://github.com/acme/unknown')).toBeNull();
       const candidate = await gitCheckout(join(root, 'candidate'), 'https://github.com/acme/new');
-      try {
-        await registerInStore(store, candidate);
-        throw new Error('Registration unexpectedly succeeded');
-      } catch (error) {
-        expect(error).toBeInstanceOf(ProjectRegistrationError);
-        expect(error instanceof Error && error.cause).toMatchObject({ code: 'ELOOP' });
-      }
-      expect(await store.listCodebases()).toHaveLength(2);
+      const result = await registerInStore(store, candidate);
+      expect(result.alreadyExisted).toBe(false);
+      expect(await store.listCodebases()).toHaveLength(3);
     }
   );
 
@@ -566,50 +559,43 @@ describe('project storage collisions', () => {
     expect(error instanceof Error && error.message).toContain(legacy);
   });
 
-  test.each(['incoming', 'legacy'])(
-    'ambiguous %s remotes cannot clear remote ownership',
-    async side => {
+  test.each(['ambiguous', 'invalid'] as const)(
+    '%s incoming remote configuration still refuses registration',
+    async state => {
       const root = await makeHome();
-      const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
-      const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
-      const ambiguous = side === 'incoming' ? second : first;
-      execFileSync('git', ['-C', ambiguous, 'remote', 'rename', 'origin', 'upstream']);
-      execFileSync('git', [
-        '-C',
-        ambiguous,
-        'remote',
-        'add',
-        'mirror',
-        'https://mirror.example/acme/api.git',
-      ]);
-      await createCodebase({ name: 'Legacy API', default_cwd: first });
-      await expect(registerRepository(second)).rejects.toThrow(first);
-      expect(await listCodebases()).toHaveLength(1);
-      if (side === 'incoming') {
-        await db.query('DELETE FROM remote_agent_codebases');
-        await expect(registerRepository(second)).rejects.toThrow('worktree.remote');
-        expect(await listCodebases()).toHaveLength(0);
+      const path = await gitCheckout(join(root, 'incoming'), 'https://github.com/acme/api.git');
+      if (state === 'ambiguous') {
+        execFileSync('git', ['-C', path, 'remote', 'rename', 'origin', 'upstream']);
+        execFileSync('git', ['-C', path, 'remote', 'add', 'mirror', 'https://mirror.example/api']);
+      } else {
+        await mkdir(join(path, '.archon'));
+        await writeFile(join(path, '.archon/config.yaml'), 'worktree: [');
       }
+      await expect(registerRepository(path)).rejects.toThrow(
+        state === 'ambiguous' ? 'worktree.remote' : path
+      );
+      expect(await listCodebases()).toHaveLength(0);
     }
   );
 
-  test.each(['incoming', 'legacy'])(
-    'invalid %s config refuses registration with the original cause',
-    async side => {
+  test.each(['sql', 'file'] as const)(
+    'direct %s registration refuses a readable legacy remote owner',
+    async backend => {
       const root = await makeHome();
-      const first = await gitCheckout(join(root, 'first'), 'https://github.com/acme/api.git');
-      const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
-      const broken = side === 'incoming' ? second : first;
-      await mkdir(join(broken, '.archon'));
-      await writeFile(join(broken, '.archon/config.yaml'), 'worktree: [');
-      await createCodebase({ name: 'Legacy API', default_cwd: first });
-      const error = await registerRepository(second).catch((error: unknown) => error);
-      expect(error).toBeInstanceOf(Error);
-      expect(error instanceof Error && error.cause).toBeInstanceOf(Error);
-      expect(error instanceof Error && error.message).toContain(broken);
-      if (side === 'legacy')
-        await expect(findCodebaseByRepoUrl('https://github.com/acme/api')).rejects.toThrow();
-      expect(await listCodebases()).toHaveLength(1);
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const path = await gitCheckout(join(root, 'legacy'), 'git@gitlab.example:acme/api.git');
+      await store.createCodebase({ name: 'Legacy API', default_cwd: path });
+      await expect(
+        store.createCodebase({
+          name: 'acme/api',
+          default_cwd: join(root, 'second'),
+          repository_url: 'https://gitlab.example/acme/api',
+        })
+      ).rejects.toThrow(path);
+      expect(await store.listCodebases()).toHaveLength(1);
     }
   );
 
@@ -622,6 +608,8 @@ describe('project storage collisions', () => {
     ['missing', 'legacy', 'file'],
     ['corrupt', 'legacy', 'sql'],
     ['corrupt', 'legacy', 'file'],
+    ['ambiguous', 'legacy', 'sql'],
+    ['ambiguous', 'legacy', 'file'],
   ])(
     'remote reuse survives an unrelated %s checkout with a %s owner (%s)',
     async (state, owner, backend) => {
@@ -631,10 +619,25 @@ describe('project storage collisions', () => {
           ? codebases
           : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
       const legacyPath = join(root, 'legacy');
-      if (state === 'corrupt') {
-        await gitCheckout(legacyPath);
+      if (state !== 'missing') {
+        await gitCheckout(
+          legacyPath,
+          state === 'ambiguous' ? 'https://github.com/unknown/api' : undefined
+        );
         await mkdir(join(legacyPath, '.archon'));
-        await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
+        if (state === 'corrupt')
+          await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
+        else {
+          execFileSync('git', ['-C', legacyPath, 'remote', 'rename', 'origin', 'upstream']);
+          execFileSync('git', [
+            '-C',
+            legacyPath,
+            'remote',
+            'add',
+            'mirror',
+            'https://mirror.example/api',
+          ]);
+        }
       }
       await store.createCodebase({ name: 'Legacy', default_cwd: legacyPath });
       const known = await store.createCodebase({
@@ -662,35 +665,39 @@ describe('project storage collisions', () => {
           message: expect.stringContaining(
             state === 'corrupt'
               ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
-              : 'Remote error: Command failed: git'
+              : state === 'ambiguous'
+                ? 'Cannot select a remote'
+                : 'Remote error: Command failed: git'
           ),
         },
       });
-      const clone = spyOn(git, 'cloneRepository');
+      expect(await store.findCodebaseByRepoUrl('https://github.com/acme/new')).toBeNull();
+      const localPath = await gitCheckout(join(root, 'local'), 'https://github.com/acme/local');
+      const local = await registerInStore(store, localPath);
+      expect(local.alreadyExisted).toBe(false);
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, path) => {
+        await gitCheckout(path, 'https://github.com/acme/new');
+        return { ok: true, value: undefined };
+      });
       try {
         const reopened = await cloneRepository(store, 'https://github.com/acme/api.git');
-        expect(reopened).toMatchObject({
-          codebaseId: known.id,
-          name: known.name,
-          defaultCwd: known.default_cwd,
-          alreadyExisted: true,
-        });
-        await expect(cloneRepository(store, 'https://github.com/acme/new')).rejects.toThrow(
-          legacyPath
-        );
+        expect(reopened).toMatchObject({ codebaseId: known.id, alreadyExisted: true });
         expect(clone).not.toHaveBeenCalled();
-        expect(await store.listCodebases()).toHaveLength(2);
+        const fresh = await cloneRepository(store, 'https://github.com/acme/new');
+        expect(fresh.alreadyExisted).toBe(false);
+        expect(clone).toHaveBeenCalledTimes(1);
+        expect(await store.listCodebases()).toHaveLength(4);
       } finally {
         clone.mockRestore();
       }
-      if (backend === 'sql')
-        await expect(
-          createManagedCodebase({
-            name: 'acme/new',
-            default_cwd: join(root, 'new'),
-            repository_url: 'https://github.com/acme/new',
-          })
-        ).rejects.toThrow(legacyPath);
+      if (backend === 'sql') {
+        const managed = await createManagedCodebase({
+          name: 'acme/managed',
+          default_cwd: join(root, 'managed'),
+          repository_url: 'https://github.com/acme/managed',
+        });
+        expect(managed.repository_url).toBe('https://github.com/acme/managed');
+      }
     }
   );
 
@@ -951,24 +958,6 @@ describe('project storage collisions', () => {
     const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
     await createCodebase({ name: 'Legacy API', default_cwd: first });
     await expect(registerRepository(second)).rejects.toThrow(`already registered at ${first}`);
-    expect(await listCodebases()).toHaveLength(1);
-  });
-
-  test('an unavailable legacy checkout cannot silently lose its remote ownership', async () => {
-    const root = await makeHome();
-    const missing = join(root, 'missing');
-    await createCodebase({ name: 'Legacy API', default_cwd: missing });
-    const second = await gitCheckout(join(root, 'second'), 'https://github.com/acme/api.git');
-    const error = await registerRepository(second).then(
-      () => undefined,
-      (error: unknown) => error
-    );
-    expect(error).toBeInstanceOf(ProjectRegistrationError);
-    if (!(error instanceof ProjectRegistrationError))
-      throw new Error('Expected registration refusal');
-    expect(error.message).toContain('Legacy API');
-    expect(error.message).toContain(missing);
-    expect(error.cause).toBeInstanceOf(Error);
     expect(await listCodebases()).toHaveLength(1);
   });
 

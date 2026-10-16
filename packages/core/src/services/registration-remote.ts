@@ -1,8 +1,12 @@
 import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
-import type { Codebase } from '../schemas/codebase';
-import { remoteIdentity, resolveRegistrationUrl } from './project-registration-identity';
+import {
+  remoteIdentity,
+  resolveRegistrationUrl,
+  storageRoot,
+  type ProjectIdentity,
+} from './project-registration-identity';
 
 export class ProjectRegistrationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -74,15 +78,13 @@ export async function assertCheckoutRemote(path: string, remoteUrl: string): Pro
   }
 }
 
-export async function findRegisteredRemote(
-  registered: readonly Codebase[],
+export async function findRegisteredRemote<T extends ProjectIdentity>(
+  registered: readonly T[],
   remoteUrl: string,
-  purpose: 'lookup' | 'registration' = 'lookup',
   cwd = process.cwd()
-): Promise<Codebase | null> {
+): Promise<T | null> {
   const identity = await remoteIdentity(remoteUrl, cwd);
-  const matches: Codebase[] = [];
-  const failures: ProjectRegistrationError[] = [];
+  const matches: T[] = [];
   for (const project of registered) {
     if (project.kind === 'folder') continue;
     try {
@@ -96,13 +98,16 @@ export async function findRegisteredRemote(
         matches.push(project);
       }
     } catch (error) {
-      failures.push(
-        new ProjectRegistrationError(
-          `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
-            'Restore access to that checkout or repair it with /update-project before registering another repository. ' +
-            `Remote error: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error }
-        )
+      // An unreadable checkout has unknown ownership; it must not veto other projects.
+      const unavailable = new ProjectRegistrationError(
+        `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
+          'Restore access to that checkout or repair it with /update-project. ' +
+          `Remote error: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+      createLogger('registration.remote').warn(
+        { err: unavailable },
+        'registration.lookup_legacy_unavailable'
       );
     }
   }
@@ -111,14 +116,31 @@ export async function findRegisteredRemote(
       `Multiple projects own this remote: ${matches.map(project => `"${project.name}" at ${project.default_cwd}`).join(', ')}. Repair the registrations with /update-project before continuing.`
     );
   }
-  // Routing a readable owner does not claim new storage. Readable legacy
-  // duplicates still make routing ambiguous; unreadable unrelated rows do not.
-  if (failures.length && (purpose === 'registration' || matches.length === 0)) throw failures[0];
-  for (const error of failures) {
-    createLogger('registration.remote').warn(
-      { err: error },
-      'registration.lookup_legacy_unavailable'
+  return matches[0] ?? null;
+}
+
+export async function assertProjectRegistrationAvailable(
+  project: ProjectIdentity,
+  registered: readonly ProjectIdentity[]
+): Promise<void> {
+  const remote = project.kind !== 'folder' && project.repository_url;
+  if (remote) {
+    const existing = await findRegisteredRemote(registered, remote, project.default_cwd);
+    if (existing) {
+      throw new ProjectRegistrationError(
+        `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +
+          'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+      );
+    }
+  }
+  const root = storageRoot(project).toLowerCase();
+  const conflict = registered.find(
+    existing => existing.name === project.name || storageRoot(existing).toLowerCase() === root
+  );
+  if (conflict) {
+    throw new Error(
+      `Project storage for "${project.name}" is already owned by "${conflict.name}" at ${conflict.default_cwd}. ` +
+        'Registration was refused; retry to allocate a free name.'
     );
   }
-  return matches[0] ?? null;
 }

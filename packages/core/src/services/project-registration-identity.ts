@@ -49,38 +49,6 @@ export async function isCheckoutRegistered(
   return false;
 }
 
-export async function assertProjectRegistrationAvailable(
-  project: ProjectIdentity,
-  registered: readonly ProjectIdentity[]
-): Promise<void> {
-  const remote = project.kind !== 'folder' && project.repository_url;
-  if (remote) {
-    const identity = await remoteIdentity(remote, project.default_cwd);
-    for (const existing of registered) {
-      if (
-        existing.kind !== 'folder' &&
-        existing.repository_url &&
-        (await remoteIdentity(existing.repository_url, existing.default_cwd)) === identity
-      ) {
-        throw new Error(
-          `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +
-            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
-        );
-      }
-    }
-  }
-  const root = storageRoot(project).toLowerCase();
-  const conflict = registered.find(
-    existing => existing.name === project.name || storageRoot(existing).toLowerCase() === root
-  );
-  if (conflict) {
-    throw new Error(
-      `Project storage for "${project.name}" is already owned by "${conflict.name}" at ${conflict.default_cwd}. ` +
-        'Registration was refused; retry to allocate a free name.'
-    );
-  }
-}
-
 /**
  * The `n`th candidate name for a project. A repo's storage root comes from an
  * `owner/repo` name, or from its folder name when the name is bare, so a repo

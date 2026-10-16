@@ -20,11 +20,13 @@ import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/p
 import {
   allocateProjectName,
   isCheckoutRegistered,
-  assertProjectRegistrationAvailable,
   resolveRegistrationUrl,
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
-import { findRegisteredRemote } from '../services/registration-remote';
+import {
+  findRegisteredRemote,
+  assertProjectRegistrationAvailable,
+} from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
@@ -77,20 +79,6 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
           project.repository_url,
           project.default_cwd
         );
-      const owner =
-        project.repository_url &&
-        (await findRegisteredRemote(
-          registered.rows,
-          project.repository_url,
-          'registration',
-          project.default_cwd
-        ));
-      if (owner) {
-        throw new Error(
-          `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
-            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
-        );
-      }
       const segments = project.name.split('/');
       if (segments.length > 2 && segments.every(segment => parseOwnerRepo(`owner/${segment}`))) {
         project.name = `${segments[0]}/${segments.slice(1).join('-')}`;

@@ -23,11 +23,11 @@ import {
 } from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
+import { isCheckoutRegistered } from '../services/project-registration-identity';
 import {
+  findRegisteredRemote,
   assertProjectRegistrationAvailable,
-  isCheckoutRegistered,
-} from '../services/project-registration-identity';
-import { findRegisteredRemote } from '../services/registration-remote';
+} from '../services/registration-remote';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
