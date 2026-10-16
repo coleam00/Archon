@@ -39,7 +39,8 @@ import {
   waitRun,
 } from '../../../.shared/bench.ts';
 import { issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
-import type { Closure } from '../../../.shared/close.ts';
+import { ghIssueComments } from '../../../.shared/pr.ts';
+import { closeComments, type Closure } from '../../../.shared/close.ts';
 import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../../.shared/git.ts';
 import type { Contract, Route } from '../../../.shared/labels.ts';
@@ -52,6 +53,7 @@ type Repo = QualifiedPr['repo'];
 type IntakePath = (typeof INTAKE_PATHS)[number];
 
 export const CHECKS_FILE = 'checks.jsonl';
+export const TRIAGE_VERDICT_NODE = 'triage__verdict';
 
 /** What one version pins. Versions differ only in `provider` and `model`. */
 export interface Version {
@@ -287,7 +289,16 @@ export function readCopies(outDir: string, label: string, repo: Repo): Record<st
   return copies.copies as Record<string, number>;
 }
 
-/** Open a copy of every batch row in the scratch repository that has none yet. */
+function canonicalIssue(row: Row): QualifiedPr | undefined {
+  const url = row.known.canonical;
+  if (url === undefined) return undefined;
+  const parsed = new URL(url);
+  const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)$/.exec(parsed.pathname);
+  if (parsed.protocol !== 'https:' || match === null) throw new Error(`row ${row.id}: invalid canonical issue URL ${url}`);
+  return { repo: { host: parsed.host, path: match[1] }, number: Number(match[2]) };
+}
+
+/** Open missing row and canonical copies, using only creation-time text. */
 export function copyRows(outDir: string, label: string, scratch: Scratch, rows: readonly Row[]): Record<string, number> {
   const copies = readCopies(outDir, label, scratch.repo);
   const copy = (id: string, title: string, body: string): void => {
@@ -305,16 +316,12 @@ export function copyRows(outDir: string, label: string, scratch: Scratch, rows: 
   }
   for (const row of rows) {
     if (row.body_from !== 'creation') throw new Error(`row ${row.id}: creation text is unavailable; refusing a live copy`);
-    const url = row.known.canonical;
-    if (url !== undefined) {
-      const parsed = new URL(url);
-      const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)$/.exec(parsed.pathname);
-      if (parsed.protocol !== 'https:' || match === null) throw new Error(`row ${row.id}: invalid canonical issue URL ${url}`);
-      const id = `canonical:${url}`;
+    const item = canonicalIssue(row);
+    if (item !== undefined) {
+      const id = `canonical:${row.known.canonical}`;
       if (copies[id] === undefined) {
-        const item = { repo: { host: parsed.host, path: match[1] }, number: Number(match[2]) };
         const created = issueAtCreation(item, viewIssue(item));
-        if (created.body_from !== 'creation') throw new Error(`${url}: creation text is unavailable; refusing a live copy`);
+        if (created.body_from !== 'creation') throw new Error(`${String(row.known.canonical)}: creation text is unavailable; refusing a live copy`);
         copy(id, created.title, created.body);
       }
     }
@@ -330,7 +337,7 @@ export interface IssueFacts {
   readonly state: string;
   readonly title: string;
   readonly body_digest: string;
-  readonly comments: number;
+  readonly comments: readonly { readonly id: string; readonly body: string }[];
 }
 
 export interface Snapshot {
@@ -360,7 +367,7 @@ function readIssueFacts(repo: Repo, number: number): IssueFacts {
     state: issue.state,
     title: issue.title,
     body_digest: createHash('sha256').update(typeof issue.body === 'string' ? issue.body : '').digest('hex'),
-    comments: issue.comments,
+    comments: ghIssueComments({ repo, number }),
   };
 }
 
@@ -399,7 +406,7 @@ export function snapshotChanges(before: Snapshot, after: Snapshot): string[] {
     if (now === undefined) continue;
     for (const field of ['labels', 'state', 'title', 'body_digest', 'comments'] as const) {
       if (canonical(was[field]) !== canonical(now[field])) {
-        changes.push(`${key}: ${field} changed from ${JSON.stringify(was[field])} to ${JSON.stringify(now[field])}`);
+        changes.push(field === 'comments' ? `${key}: comments changed` : `${key}: ${field} changed from ${JSON.stringify(was[field])} to ${JSON.stringify(now[field])}`);
       }
     }
   }
@@ -412,11 +419,21 @@ export function snapshotChanges(before: Snapshot, after: Snapshot): string[] {
   return changes;
 }
 
-/** Comments added to any snapshotted issue: the bench's posted-text check. */
-export function postedComments(before: Snapshot, after: Snapshot): string[] {
+/** Added or edited comments, except the exact comments of live runs' declared closures. */
+export function postedComments(before: Snapshot, after: Snapshot, allowed: ReadonlyMap<string, readonly string[]> = new Map()): string[] {
   return Object.entries(before.issues).flatMap(([key, was]) => {
     const now = after.issues[key];
-    return now !== undefined && now.comments > was.comments ? [`${key}: ${String(now.comments - was.comments)} comment(s) posted`] : [];
+    if (now === undefined) return [];
+    const earlier = new Map(was.comments.map(comment => [comment.id, comment.body]));
+    const expected = [...(allowed.get(key) ?? [])];
+    const unexpected = now.comments.filter(comment => {
+      if (earlier.get(comment.id) === comment.body) return false;
+      const index = expected.indexOf(comment.body);
+      if (index === -1) return true;
+      expected.splice(index, 1);
+      return false;
+    });
+    return unexpected.length === 0 ? [] : [`${key}: ${String(unexpected.length)} comment(s) posted or edited outside declared closure`];
   });
 }
 
@@ -735,7 +752,7 @@ async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: Int
 }
 
 /** Launch one row on one version, wait for it, and record its line, whatever happened. */
-export async function runRow(run: RowRun, context: BatchContext): Promise<Line> {
+export async function runRow(run: RowRun, context: BatchContext): Promise<{ line: Line; comments: ReturnType<typeof closeComments> }> {
   const { row, resolved } = run;
   const { version } = resolved;
   const workflow = workflowOf(run);
@@ -803,6 +820,21 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   } catch (error) {
     fail(error);
   }
+  let comments: ReturnType<typeof closeComments> = [];
+  try {
+    const live = run.live;
+    const declaration = detail?.nodes.find(node => node.nodeId === TRIAGE_VERDICT_NODE && node.state === 'completed')?.structuredOutput;
+    const closure = isObject(declaration) && declaration.contract === 'NO_ACTION' ? toVerdict(declaration).closure : null;
+    if (live !== undefined && closure != null && runId !== null) {
+      const recorded = status === 'completed' ? decided.verdict : liveVerdict((await archonJson(['state', 'get', `work/${String(live.number)}`], run.cwd)).value, runId);
+      if (recorded?.contract === 'NO_ACTION') {
+        const checked = closure.kind === 'duplicate' ? { ...closure, url: viewIssue(closure.original).url } : closure;
+        comments = closeComments(live, viewIssue(live).url, checked).filter(comment => sameRepo(comment.item.repo, live.repo));
+      }
+    }
+  } catch (error) {
+    fail(error);
+  }
   const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
 
   const line: Line = {
@@ -832,7 +864,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     report,
   };
   appendLine(join(context.outDir, SAMPLES_FILE), line);
-  return line;
+
+  return { line, comments };
 }
 
 // --- the batch's hard checks ----------------------------------------------------------
@@ -853,7 +886,7 @@ export interface BatchChecks {
     readonly writes: Check;
     /** No `trust: outside` row ran an agent node, and each took intake's outside path. */
     readonly outside_agent: Check;
-    /** No comment was posted on any batch issue or copy; intake builds none. */
+    /** No text beyond a live scratch closure's declared comments was posted. */
     readonly posted_text: Check;
     /** Every run completed, or failed after an agent ran, and was read, so the after-read came after its last write. */
     readonly finished: Check;
@@ -958,25 +991,40 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number } };
     })
   );
-  const watched = [
+  const originals = [
     ...rows.map(row => ({ repo: set.repo, number: row.number })),
-    ...runs.flat().flatMap(run => (run.live === undefined ? [] : [run.live])),
+    ...rows.flatMap(row => {
+      const item = canonicalIssue(row);
+      return item === undefined ? [] : [item];
+    }),
+  ];
+  const watched = [
+    ...originals,
+    ...(live === undefined ? [] : [...live.values()].flatMap(({ scratch, copies }) => Object.values(copies).map(number => ({ repo: scratch.repo, number })))),
   ];
   // The state documents of the set's project, from the operator's checkout and from
   // each eval checkout; a live batch writes its scratch projects by design.
   const stateDirs = [options.repoRoot, ...(live === undefined ? runs.flat().map(run => run.cwd) : [])];
   const before = await snapshot(watched, stateDirs);
 
-  const lines =
+  const results =
     live === undefined
       ? await pooled(runs.flat().map(run => () => runRow(run, context)), options.concurrency)
       : (await Promise.all(runs.map(async versionRuns => {
-          const done: Line[] = [];
+          const done: Awaited<ReturnType<typeof runRow>>[] = [];
           for (const run of versionRuns) done.push(await runRow(run, context));
           return done;
         }))).flat();
 
-  const setKeys = new Set(rows.map(row => issueKey(set.repo, row.number)));
+  const lines = results.map(result => result.line);
+  const allowed = new Map<string, string[]>();
+  for (const { comments } of results) {
+    for (const comment of comments) {
+      const key = issueKey(comment.item.repo, comment.item.number);
+      allowed.set(key, [...(allowed.get(key) ?? []), comment.body]);
+    }
+  }
+  const setKeys = new Set(originals.map(item => issueKey(item.repo, item.number)));
   const onSet = (snap: Snapshot): Snapshot => ({
     issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setKeys.has(key))),
     state: snap.state,
@@ -986,7 +1034,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   try {
     const after = await snapshot(watched, stateDirs);
     writes = snapshotChanges(onSet(before), onSet(after));
-    posted = postedComments(before, after);
+    posted = postedComments(before, after, allowed);
   } catch (error) {
     const unproven = `the after-read failed, so the batch is unproven: ${error instanceof Error ? error.message : String(error)}`;
     writes = [unproven];

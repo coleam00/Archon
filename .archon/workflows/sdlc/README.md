@@ -383,7 +383,7 @@ are the operator's and stay outside the pack and the repository.
   checkout, so `--concurrency` never puts two runs on one checkout. Every run
   appends one line, labelled with its version, to `samples.jsonl`. The batch then
   fails if any batch issue or state document of the repository changed, if a
-  `trust: outside` row ran an agent node, if any comment was posted, or if a run was
+  `trust: outside` row ran an agent node, if text outside a declared live closure was posted (`posted_text`), or if a run was
   cancelled, did not finish, or failed before any agent ran; a failed batch is
   reported before anyone evaluates it. A run that failed after its agent ran is the
   version's result, not a batch failure. A `trust: auto`
@@ -394,7 +394,11 @@ are the operator's and stay outside the pack and the repository.
 - **Live batches.** Use live batches on scratch copies for scored comparisons.
   `copy` opens copies of a batch's issues and each duplicate's canonical issue in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
-  there, reading each verdict from the copy's work item. The work item keeps no
+  there, reading each verdict from the copy's work item. `posted_text` permits only
+  the exact comments of that run's declared closure on scratch copies, including
+  a duplicate's canonical backlink. Any other new or edited comment fails it; eval
+  permits no posted text. Recorded batches retain their recorded check values and
+  need a rerun to measure this behavior. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
   scratch repository may not be the set's own or another version's. Its remote
   default branch and local checkout must both be at the batch base before `run --live`.

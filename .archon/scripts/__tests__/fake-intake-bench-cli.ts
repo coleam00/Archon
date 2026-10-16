@@ -13,14 +13,17 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Closure } from '../../workflows/sdlc/.shared/close';
 
 export interface FakeIssue {
   readonly number: number;
   readonly title?: string;
+  readonly url?: string;
   readonly body?: string;
   readonly creation?: { title: string; body: string } | null;
   readonly labels: string[];
   readonly comments: number;
+  readonly commentBodies?: readonly { id: string; body: string }[];
   /** Defaults to closed. */
   readonly state?: 'open' | 'closed';
   readonly author?: string;
@@ -29,6 +32,8 @@ export interface FakeIssue {
 }
 
 export interface FakeConfig {
+  readonly declaredClosure?: Closure;
+  readonly posted?: readonly { number: number; body: string }[];
   /** What the triage tier resolves to with no config layer; null resolves nothing. */
   readonly baseline: { provider: string; model: string; effort?: string } | null;
   readonly repo: { host: string; path: string };
@@ -108,6 +113,7 @@ interface FakeNode {
   /** Absent for a node that recorded no execution row. */
   readonly kind?: string;
   readonly binding?: unknown;
+  readonly structuredOutput?: unknown;
 }
 
 function agent(id: string, state: string, bound: FakeConfig['baseline']): FakeNode {
@@ -121,10 +127,10 @@ function agent(id: string, state: string, bound: FakeConfig['baseline']): FakeNo
 
 /** Each node's execution row, as `workflow get --events` lists them. */
 function events(nodes: readonly FakeNode[]) {
-  return nodes.flatMap(({ id, state, kind, binding }) => {
+  return nodes.flatMap(({ id, state, kind, binding, structuredOutput }) => {
     if (kind === undefined) return [];
     const spend = kind === 'agent' && state !== 'skipped' ? { spend: { costUsd: { source: 'provider', value: 0.5 } } } : {};
-    const data = { node: { id, kind }, binding: binding ?? {}, ...spend };
+    const data = { node: { id, kind }, binding: binding ?? {}, structured_output: structuredOutput, ...spend };
     return [{ step_name: id, event_type: state === 'skipped' ? 'node_skipped' : 'node_completed', data }];
   });
 }
@@ -165,6 +171,14 @@ function answer(dir: string, args: readonly string[]): string {
       config.issues.find(issue => issue.number === Number(given.number))?.labels.push(config.writeLabel);
       save();
     }
+    if (given.number === '101') {
+      for (const post of config.posted ?? []) {
+        const index = config.issues.findIndex(issue => issue.number === post.number);
+        const issue = config.issues[index];
+        config.issues[index] = { ...issue, comments: issue.comments + 1, commentBodies: [...(issue.commentBodies ?? Array.from({ length: issue.comments }, (_, i) => ({ id: `old-${i}`, body: 'Old comment' }))), { id: `post-${n}-${issue.comments}`, body: post.body }] };
+      }
+      save();
+    }
     const bound = binding(args, config);
     const intake = args[2] === 'archon-intake';
     const outside = given.trust === 'outside';
@@ -175,7 +189,7 @@ function answer(dir: string, args: readonly string[]): string {
     const work = join(dir, `work-${given.number}.json`);
     if (given.mode === 'live' && path === 'triage') {
       const field = { value: 'bug', reason: 'r' };
-      const triage = { verdict: { contract: 'READY', route: 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
+      const triage = { verdict: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', route: config.declaredClosure ? null : 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
       writeFileSync(work, JSON.stringify({ triage }));
     } else if (given.mode === 'live' && !existsSync(work)) {
       writeFileSync(work, JSON.stringify({ triage: { verdict: { contract: 'READY', route: 'plan' }, run_id: 'an-earlier-run' } }));
@@ -190,6 +204,7 @@ function answer(dir: string, args: readonly string[]): string {
       ? [
           { id: 'facts', state: 'completed', kind: 'exec' },
           agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
+          { id: 'triage__verdict', state: triageRan ? 'completed' : 'skipped', kind: 'exec', structuredOutput: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', closure: config.declaredClosure ?? null } },
           { id: 'outcome', state: 'completed', kind: 'exec' },
         ]
       : [config.unboundTriage === true ? { id: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)];
@@ -265,6 +280,14 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     writeFileSync(file, JSON.stringify(created));
     return JSON.stringify(issue);
   }
+  if (endpoint.includes('/comments?')) {
+    const number = Number(endpoint.split('/')[4]);
+    const issue = config.issues.find(entry => entry.number === number);
+    if (!issue) throw new Error(`fake gh: no comments for ${number}`);
+    const comments = issue.commentBodies ?? Array.from({ length: issue.comments }, (_, i) => ({ id: `old-${i}`, body: 'Old comment' }));
+    const page = Number(new URL(`https://fake/${endpoint}`).searchParams.get('page'));
+    return JSON.stringify(comments.slice((page - 1) * 100, page * 100).map(comment => ({ ...comment, html_url: 'https://fake/comment' })));
+  }
   const number = Number(endpoint.split('/').pop());
   const issue = config.issues.find(entry => entry.number === number);
   if (args[0] !== 'api' || issue === undefined) throw new Error(`fake gh: unexpected call ${args.join(' ')}`);
@@ -273,7 +296,7 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     title: issue.title ?? `Issue ${String(number)}`,
     body: issue.body ?? 'body',
     state: issue.state ?? 'closed',
-    html_url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
+    html_url: issue.url ?? `https://${config.repo.host}/${endpoint.slice('repos/'.length)}`,
     user: { login: issue.author ?? 'someone' },
     comments: issue.comments,
     labels: issue.labels.map(name => ({ name })),
