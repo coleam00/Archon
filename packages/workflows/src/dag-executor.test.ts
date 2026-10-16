@@ -34144,17 +34144,21 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   }
 
   it.each([
-    ['fuse', { containerId: 'cid-1' }],
-    ['native', { containerId: 'cid-1', overlayMode: 'native', gateBypassable: true }],
+    ['fuse', 'created', { containerId: 'cid-1' }],
+    ['native', 'created', { containerId: 'cid-1', overlayMode: 'native', gateBypassable: true }],
+    ['fuse', 'resumed', { containerId: 'cid-1' }],
+    ['native', 'resumed', { containerId: 'cid-1', overlayMode: 'native', gateBypassable: true }],
   ] as const)(
-    'a fresh %s-overlay run records one container_created row with its facts',
-    async (overlayMode, expectedData) => {
+    'a %s-overlay container_%s event retains its security facts',
+    async (overlayMode, lifecycle, expectedData) => {
       const store = createMockStore();
+      const platform = createMockPlatform();
       const execSpy = stubMissingContainer();
       try {
         await executeDagWorkflow(
           dagOptions({
             deps: createMockDeps(store),
+            platform,
             conversationId: 'conv-created',
             cwd: wbTestDir,
             workflow: {
@@ -34162,6 +34166,9 @@ describe('executeDagWorkflow -- container write-back gate', () => {
               nodes: [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
             },
             workflowRun: makeWorkflowRun('created-run'),
+            ...(lifecycle === 'resumed'
+              ? { priorCompletedNodes: new Map([['a', { output: 'out' }]]) }
+              : {}),
             execContext: CONTAINER_EXEC,
             containerCtx: {
               envId: 'env-x',
@@ -34176,9 +34183,14 @@ describe('executeDagWorkflow -- container write-back gate', () => {
       }
 
       const created = persistedEvents(store).filter(
-        event => event.event_type === 'container_created'
+        event => event.event_type === `container_${lifecycle}`
       );
       expect(created.map(event => event.data)).toEqual([expectedData]);
+      expect(
+        platform.sendMessage.mock.calls.some(([, message]) =>
+          message.includes('NATIVE overlay mode (CAP_SYS_ADMIN)')
+        )
+      ).toBe(overlayMode === 'native');
     }
   );
 

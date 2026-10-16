@@ -306,7 +306,7 @@ describe('ContainerBackend.prepare', () => {
     expect(volumeCreate?.join(' ')).toContain('--label diy.archon.managed=true');
   });
 
-  test.each(['0', '1', '137', 'unknown'])(
+  test.each(['0', '1', '137', '178', 'unknown'])(
     'does not escalate for an exited container with status %s',
     async exitCode => {
       const store = fakeStore();
@@ -323,6 +323,7 @@ describe('ContainerBackend.prepare', () => {
       const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
       await expect(backend.prepare({ codebase: FOLDER })).rejects.toBeInstanceOf(IsolationFailure);
       expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
+      expect(docker.calls.some(args => args.includes('SYS_ADMIN'))).toBe(false);
       expect(store.created).toBeUndefined();
     }
   );
@@ -705,6 +706,40 @@ describe('ContainerBackend.suspend', () => {
 });
 
 describe('ContainerBackend.resumeEnv', () => {
+  test('persists native recreation so successive resumes retain the security mode', async () => {
+    const store = fakeStore();
+    const row = seedContainerRow(store);
+    let runs = 0;
+    const docker = fakeDocker(args => {
+      if (args[0] === 'container')
+        return {
+          stdout: runs === 2 ? 'cid-2\tarchon-res-1\trunning\n' : '',
+          stderr: '',
+        };
+      if (args[0] === 'volume') return { stdout: 'archon-res-1-upper\n', stderr: '' };
+      if (args[0] === 'run') return { stdout: `cid-${++runs}\n`, stderr: '' };
+      if (args[0] === 'exec' && runs === 1) throw new IsolationFailure('unclassified', 'not ready');
+      if (args[0] === 'inspect')
+        return {
+          stdout: args.includes('{{.Id}}')
+            ? 'cid-2\n'
+            : args.includes('{{.State.ExitCode}}')
+              ? '78\n'
+              : 'false\n',
+          stderr: '',
+        };
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const recreated = await backend.resumeEnv(row.id);
+    expect(recreated.overlayMode).toBe('native');
+    const resumed = await backend.resumeEnv(row.id);
+    expect(resumed).toEqual(recreated);
+    expect(resumed.overlayMode).toBe('native');
+    expect(row.metadata).toMatchObject({ containerId: 'cid-2', overlayMode: 'native' });
+    expect(runs).toBe(2);
+  });
+
   test.each(['paused', 'restarting'])(
     'rejects a %s container before returning an execution handle',
     async state => {

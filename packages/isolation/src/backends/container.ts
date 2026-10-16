@@ -234,9 +234,8 @@ export class ContainerBackend implements IIsolationBackend {
       volume,
     ]);
 
-    // 2. Create + start the container, mounting the overlay with the
-    //    least-privileged mode that works (fuse without CAP_SYS_ADMIN first,
-    //    native + CAP_SYS_ADMIN fallback). Fails only after both modes fail.
+    // Native grants CAP_SYS_ADMIN; only a confirmed runner FUSE mount failure
+    // authorizes that fallback.
     let containerId: string;
     let overlayMode: OverlayMode;
     try {
@@ -476,6 +475,7 @@ export class ContainerBackend implements IIsolationBackend {
       codebaseId,
       mounts
     );
+    await this.store.updateMetadata(envId, { containerId, overlayMode: mode });
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
     return this.preparedEnvFor(containerId, workspacePath, envId, mode);
   }
