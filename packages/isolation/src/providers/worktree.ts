@@ -14,6 +14,7 @@ import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
   fetchWithRetry,
+  ConfiguredBaseBranchNotFoundError,
   GitFailure,
   hasUncommittedChangesStrict,
   addSafeDirectory,
@@ -1425,6 +1426,8 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().debug({ repoPath, branch, remote }, 'workspace_synced');
       return branch;
     } catch (error) {
+      // The configured branch is proven absent; its message carries the config remedy.
+      if (error instanceof ConfiguredBaseBranchNotFoundError) throw error;
       const err = error instanceof Error ? error : new Error(String(error));
       throw new Error(
         `Failed to fetch base branch from '${remote}': ${err.message}. Check your network connection and remote configuration.`,

@@ -3707,18 +3707,12 @@ describe('WorktreeProvider', () => {
       provider = new WorktreeProvider(configLoader);
 
       worktreeExistsSpy.mockResolvedValue(false);
-      syncWorkspaceSpy.mockRejectedValue(
-        new Error(
-          "Configured base branch 'does-not-exist' not found on remote. " +
-            'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
-            'or remove the setting to use the auto-detected default branch.'
-        )
-      );
+      const missing = new git.ConfiguredBaseBranchNotFoundError('does-not-exist', 'origin');
+      syncWorkspaceSpy.mockRejectedValue(missing);
 
-      // Configured branch errors should be fatal, not swallowed
-      await expect(provider.create(baseRequest)).rejects.toThrow(
-        "Configured base branch 'does-not-exist' not found"
-      );
+      // The config remedy reaches the operator unwrapped, without network advice.
+      const failure = await provider.create(baseRequest).catch((error: unknown) => error);
+      expect(failure).toBe(missing);
     });
 
     test('throws when network timeout occurs during sync', async () => {
