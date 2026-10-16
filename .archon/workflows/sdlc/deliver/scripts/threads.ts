@@ -23,7 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parsePrRecord, record, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
-import { markPrDraft } from '../../.shared/pr.ts';
+import { ghGraphql, markPrDraft } from '../../.shared/pr.ts';
 
 interface ThreadComment {
   readonly author: string | null;
@@ -49,24 +49,6 @@ interface PrThreads {
   readonly open: boolean;
   readonly draft: boolean;
   readonly threads: readonly Thread[];
-}
-
-function gh(...args: string[]): Record<string, unknown> {
-  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  if (result.exitCode !== 0) {
-    throw new Error(`gh ${args.slice(0, 2).join(' ')} failed: ${result.stderr.toString().trim()}`);
-  }
-  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
-  if (data === undefined) throw new Error('gh api graphql returned no data');
-  return data;
-}
-
-function graphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
-  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(fields)) {
-    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
-  }
-  return gh(...args);
 }
 
 const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
@@ -99,7 +81,7 @@ function nodesOf(connection: unknown, what: string): Record<string, unknown>[] {
 function readThreads(pr: QualifiedPr): PrThreads {
   const [owner, name] = pr.repo.path.split('/');
   const row = record(
-    record(graphql(pr.repo.host, THREADS_QUERY, { owner: owner ?? '', name: name ?? '', number: pr.number }).repository)
+    record(ghGraphql(pr.repo.host, THREADS_QUERY, { owner: owner ?? '', name: name ?? '', number: pr.number }).repository)
       ?.pullRequest
   );
   if (row === undefined) throw new Error(`${pr.repo.path} has no pull request ${String(pr.number)}`);
@@ -147,9 +129,9 @@ function postAnswers(pr: QualifiedPr, threads: readonly Thread[], answers: reado
   }
   for (const answer of answers) {
     if (byId.get(answer.thread)?.resolved) continue;
-    const reply = record(record(graphql(pr.repo.host, REPLY, { thread: answer.thread, body: answer.reply }).addPullRequestReviewThreadReply)?.comment);
+    const reply = record(record(ghGraphql(pr.repo.host, REPLY, { thread: answer.thread, body: answer.reply }).addPullRequestReviewThreadReply)?.comment);
     if (typeof reply?.url !== 'string') throw new Error(`the reply on thread ${answer.thread} did not read back`);
-    graphql(pr.repo.host, RESOLVE, { thread: answer.thread });
+    ghGraphql(pr.repo.host, RESOLVE, { thread: answer.thread });
   }
 }
 

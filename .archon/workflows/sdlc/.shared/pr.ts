@@ -68,6 +68,17 @@ function required(result: Ran, what: string): string {
   return result.stdout;
 }
 
+/** A GitHub GraphQL call through gh; numbers go as typed `-F` fields, strings as `-f`. */
+export function ghGraphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
+  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
+  for (const [key, value] of Object.entries(fields)) {
+    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
+  }
+  const data = record(record(JSON.parse(required(gh(...args), 'gh api graphql')))?.data);
+  if (data === undefined) throw new Error('gh api graphql returned no data');
+  return data;
+}
+
 const PR_FIELDS = [
   'number',
   'url',
