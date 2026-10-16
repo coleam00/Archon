@@ -38,6 +38,7 @@ import {
   spendOf,
   waitRun,
 } from '../../../.shared/bench.ts';
+import { issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
 import type { Closure } from '../../../.shared/close.ts';
 import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../../.shared/git.ts';
@@ -289,18 +290,35 @@ export function readCopies(outDir: string, label: string, repo: Repo): Record<st
 /** Open a copy of every batch row in the scratch repository that has none yet. */
 export function copyRows(outDir: string, label: string, scratch: Scratch, rows: readonly Row[]): Record<string, number> {
   const copies = readCopies(outDir, label, scratch.repo);
-  for (const row of rows) {
-    if (copies[row.id] !== undefined) continue;
+  const copy = (id: string, title: string, body: string): void => {
+    if (copies[id] !== undefined) return;
     const result = Bun.spawnSync(
-      ['gh', 'api', '--hostname', scratch.repo.host, '-X', 'POST', `repos/${scratch.repo.path}/issues`, '-f', `title=${row.title}`, '-f', `body=${row.body}`],
+      ['gh', 'api', '--hostname', scratch.repo.host, '-X', 'POST', `repos/${scratch.repo.path}/issues`, '-f', `title=${title}`, '-f', `body=${body}`],
       { stdout: 'pipe', stderr: 'pipe' }
     );
-    if (result.exitCode !== 0) throw new Error(`copying row ${row.id} to ${scratch.repo.path} failed: ${result.stderr.toString().trim()}`);
+    if (result.exitCode !== 0) throw new Error(`copying row ${id} to ${scratch.repo.path} failed: ${result.stderr.toString().trim()}`);
     const created: unknown = JSON.parse(result.stdout.toString());
-    if (!isObject(created) || typeof created.number !== 'number') throw new Error(`copying row ${row.id} returned no issue number`);
-    copies[row.id] = created.number;
+    if (!isObject(created) || typeof created.number !== 'number') throw new Error(`copying row ${id} returned no issue number`);
+    copies[id] = created.number;
     mkdirSync(join(outDir, 'live'), { recursive: true });
     writeFileSync(copiesFile(outDir, label), `${JSON.stringify({ repo: scratch.repo, copies }, null, 2)}\n`);
+  }
+  for (const row of rows) {
+    if (row.body_from !== 'creation') throw new Error(`row ${row.id}: creation text is unavailable; refusing a live copy`);
+    const url = row.known.canonical;
+    if (url !== undefined) {
+      const parsed = new URL(url);
+      const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)$/.exec(parsed.pathname);
+      if (parsed.protocol !== 'https:' || match === null) throw new Error(`row ${row.id}: invalid canonical issue URL ${url}`);
+      const id = `canonical:${url}`;
+      if (copies[id] === undefined) {
+        const item = { repo: { host: parsed.host, path: match[1] }, number: Number(match[2]) };
+        const created = issueAtCreation(item, viewIssue(item));
+        if (created.body_from !== 'creation') throw new Error(`${url}: creation text is unavailable; refusing a live copy`);
+        copy(id, created.title, created.body);
+      }
+    }
+    copy(row.id, row.title, row.body);
   }
   return copies;
 }

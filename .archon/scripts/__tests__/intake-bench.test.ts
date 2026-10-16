@@ -355,6 +355,26 @@ describe('bench run', () => {
     }
   });
 
+  it('copies canonical creation text once alongside unchanged duplicates, including on a resumed copy', () => {
+    const { repo, out, cli } = bench({ issues: [{ number: 9, labels: [], comments: 7, title: 'Edited title', body: 'Edited body', creation: { title: 'Original title', body: 'Original body' } }] });
+    const canonical = 'https://github.com/o/r/issues/9';
+    const rows = [row(11, { known: { canonical } }), row(12, { known: { canonical } })];
+    writeFileSync(join(out, 'set.json'), JSON.stringify({ bench: 'intake', repo: REPO, selected_at: '', rows }));
+    writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: repo } }));
+    const copy = () => spawnSync(process.execPath, ['--preload', join(cli, 'preload.ts'), SCRIPT, 'copy', '--set', join(out, 'set.json'), '--batch', '1', '--live', join(out, 'live.yaml'), '--out', join(out, 'bench')], { cwd: repo, encoding: 'utf8' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = copy();
+      expect([result.status, result.stderr]).toEqual([0, '']);
+    }
+    const created = JSON.parse(readFileSync(join(cli, 'created.json'), 'utf8')) as { endpoint: string; title: string; body: string }[];
+    expect(created).toHaveLength(3);
+    expect(created.every(issue => issue.endpoint === 'repos/me/scratch-base/issues')).toBe(true);
+    expect(created.map(({ title, body }) => ({ title, body }))).toEqual(expect.arrayContaining([
+      { title: 'Original title', body: 'Original body' },
+      ...rows.map(({ title, body }) => ({ title, body })),
+    ]));
+  });
+
   it('records original merged-base evidence in live scratch runs for scoring', () => {
     const { status, lines, argv } = benchLive({ issues: [
       { number: 11, labels: [], comments: 0, refs: [

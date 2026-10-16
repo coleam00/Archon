@@ -16,6 +16,9 @@ import { join } from 'node:path';
 
 export interface FakeIssue {
   readonly number: number;
+  readonly title?: string;
+  readonly body?: string;
+  readonly creation?: { title: string; body: string } | null;
   readonly labels: string[];
   readonly comments: number;
   /** Defaults to closed. */
@@ -241,8 +244,10 @@ function ghAnswer(dir: string, args: readonly string[]): string {
   if (args.includes('graphql')) {
     const q = args.find(arg => arg.startsWith('q='));
     if (q === undefined) {
-      // An issue's history: never edited or renamed, so its creation text is its current text.
-      return JSON.stringify({ data: { repository: { issue: { createdAt: 'x', userContentEdits: { totalCount: 0, nodes: [] }, timelineItems: { nodes: [] } } } } });
+      const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
+      const issue = config.issues.find(entry => entry.number === number);
+      const creation = issue?.creation;
+      return JSON.stringify({ data: { repository: { issue: { createdAt: 'x', userContentEdits: { totalCount: creation === undefined ? 0 : 1, nodes: creation ? [{ editedAt: 'x', diff: creation.body }] : [] }, timelineItems: { nodes: creation ? [{ previousTitle: creation.title }] : [] } } } } });
     }
     const hits = Object.entries(config.searches ?? {}).find(([fragment]) => q.includes(fragment))?.[1] ?? [];
     const nodes = hits.map(number => {
@@ -252,13 +257,21 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     return JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } });
   }
   const endpoint = args.find(arg => arg.startsWith('repos/')) ?? '';
+  if (args.includes('POST') && endpoint.endsWith('/issues')) {
+    const file = join(dir, 'created.json');
+    const created: { endpoint: string; title: string; body: string; number: number }[] = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+    const issue = { endpoint, title: args.find(arg => arg.startsWith('title='))?.slice(6) ?? '', body: args.find(arg => arg.startsWith('body='))?.slice(5) ?? '', number: 200 + created.length };
+    created.push(issue);
+    writeFileSync(file, JSON.stringify(created));
+    return JSON.stringify(issue);
+  }
   const number = Number(endpoint.split('/').pop());
   const issue = config.issues.find(entry => entry.number === number);
   if (args[0] !== 'api' || issue === undefined) throw new Error(`fake gh: unexpected call ${args.join(' ')}`);
   return JSON.stringify({
     number,
-    title: `Issue ${String(number)}`,
-    body: 'body',
+    title: issue.title ?? `Issue ${String(number)}`,
+    body: issue.body ?? 'body',
     state: issue.state ?? 'closed',
     html_url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
     user: { login: issue.author ?? 'someone' },
