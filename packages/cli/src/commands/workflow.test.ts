@@ -11434,7 +11434,7 @@ describe('workflowAbandonCommand', () => {
     }));
 
     await expect(workflowAbandonCommand(createTestWorkflowHost(), 'run-1')).rejects.toThrow(
-      'Could not stop the live owner of run run-1 (pid 42): process still exists. The run was not changed.'
+      'Could not stop the live owner of run run-1 (pid 42): process still exists. The command did not mark the run cancelled.'
     );
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -11548,7 +11548,9 @@ describe('workflowCancelCommand', () => {
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: false,
       action: 'cancel',
-      error: expect.stringContaining('(pid 4242): process still exists. The run was not changed.'),
+      error: expect.stringContaining(
+        '(pid 4242): process still exists. The command did not mark the run cancelled.'
+      ),
     });
   });
 

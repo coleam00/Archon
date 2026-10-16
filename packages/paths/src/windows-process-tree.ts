@@ -81,12 +81,18 @@ export class WindowsProcessTree {
     const root = listing.rows.find(row => row.pid === rootPid);
     if (!root) return undefined;
     const tree = new WindowsProcessTree(root);
-    tree.observe(listing);
+    tree.trackMembers(listing);
     return tree;
   }
 
   /** Return listed member PIDs; throw if missing ancestry could hide another member. */
   observe(listing: WindowsProcessListing): number[] {
+    this.trackMembers(listing);
+    this.assertAncestryProved(listing);
+    return this.members.filter(member => member.goneBy === undefined).map(member => member.pid);
+  }
+
+  private trackMembers(listing: WindowsProcessListing): void {
     for (const member of this.members) {
       if (member.goneBy !== undefined) continue;
       const listed = listing.rows.some(row => this.isMember(row, member));
@@ -104,9 +110,6 @@ export class WindowsProcessTree {
         }
       }
     }
-
-    this.assertAncestryProved(listing);
-    return this.members.filter(member => member.goneBy === undefined).map(member => member.pid);
   }
 
   /** Missing parents can hide descendants of an intermediate process no listing saw. */
@@ -229,6 +232,9 @@ export async function terminateWindowsProcessTree(
       );
     }
 
+    // Only the post-kill table can prove cleanup. An ambiguous orphan in the
+    // initial table may have exited during taskkill; a surviving orphan or its
+    // orphaned descendants must still fail confirmation.
     // A listing does not pin a survivor's identity through PID reuse. Another
     // PID-only kill could terminate a process outside the owned tree.
     let survivors: number[] = [];

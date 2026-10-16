@@ -803,6 +803,7 @@ for (const survives of [false, true]) {
             takenAt: String(listings * 100),
             rows: [
               ...(rootAlive ? [{ pid: root, parentPid: 1, created: '10' }] : []),
+              ...(listings === 1 ? [{ pid: root + 3, parentPid: root + 2, created: '50' }] : []),
               ...(descendantAlive ? [{ pid: descendant, parentPid: root, created: '150' }] : []),
             ],
           }),

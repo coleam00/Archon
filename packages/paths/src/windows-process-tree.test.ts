@@ -71,10 +71,9 @@ describe('WindowsProcessTree', () => {
     expect(tree.observe(listing(200, [row(10, 1, 50), row(20, 10, 40)]))).toEqual([10]);
   });
 
-  it('rejects an orphan already present when the root is first listed', () => {
-    expect(() => treeFrom(10, listing(100, [row(10, 1, 10), row(12, 11, 50)]))).toThrow(
-      'unproved ancestry'
-    );
+  it('rejects an initial orphan that remains at confirmation', () => {
+    const tree = treeFrom(10, listing(100, [row(10, 1, 10), row(12, 11, 50)]));
+    expect(() => tree.observe(listing(200, [row(12, 11, 50)]))).toThrow('unproved ancestry');
   });
 
   it('ignores orphans born outside the owned lifetime', () => {
@@ -216,6 +215,7 @@ it.each([false, true])(
       expect(commands.mock.calls.map(([command]) => command)).toEqual([
         'powershell.exe',
         'taskkill',
+        'powershell.exe',
       ]);
       expect(commands.mock.calls[1]?.[1]).toEqual(['/PID', '10', '/T', '/F']);
       expect(kill).not.toHaveBeenCalled();
@@ -294,6 +294,47 @@ it('accepts independently confirmed absence after taskkill fails', async () => {
     commands.mockRestore();
   }
 });
+
+it.each([false, true])(
+  'confirms cleanup after an initially ambiguous orphan exits (leaves child=%s)',
+  async leavesChild => {
+    let listings = 0;
+    const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+      if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+      listings++;
+      return {
+        stdout: JSON.stringify(
+          {
+            takenAt: String(listings * 100),
+            rows:
+              listings === 1
+                ? [row(10, 1, 10), row(12, 11, 50)]
+                : leavesChild
+                  ? [row(13, 12, 150)]
+                  : [],
+          },
+          (_key, value: unknown) => (typeof value === 'bigint' ? String(value) : value)
+        ),
+        stderr: '',
+      };
+    });
+    try {
+      const outcome = terminateWindowsProcessTree(10, () => {});
+      if (leavesChild) {
+        await expect(outcome).rejects.toThrow('processes 13 have unproved ancestry');
+      } else {
+        await expect(outcome).resolves.toBeUndefined();
+      }
+      expect(commands.mock.calls.map(([command]) => command)).toEqual([
+        'powershell.exe',
+        'taskkill',
+        'powershell.exe',
+      ]);
+    } finally {
+      commands.mockRestore();
+    }
+  }
+);
 
 it('does not kill an initially ambiguous tree after root ownership is lost', async () => {
   const commands = spyOn(windowsProcessCommands, 'execFile').mockResolvedValue({
