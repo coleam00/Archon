@@ -31,6 +31,7 @@ import {
   afterEach,
 } from 'bun:test';
 import type { Mock } from 'bun:test';
+import type { Codebase } from '@archon/core';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -100,7 +101,9 @@ mock.module('@archon/core/db/conversations', () => ({
 }));
 
 const mockUpdateCodebase = mock(async () => {});
-const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockFindCodebaseByRepoUrl = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
+);
 const mockCreateCodebase = mock(async () => ({
   id: 'codebase-test',
   name: 'testuser/testrepo',

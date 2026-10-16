@@ -474,7 +474,7 @@ export async function cloneRepository(
     rejectExistingChoice(options);
     let missing = false;
     try {
-      await stat(existing.default_cwd);
+      await access(join(existing.default_cwd, '.git'));
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       missing = true;
@@ -489,7 +489,6 @@ export async function cloneRepository(
       await ensureProjectStructure(identity.owner, identity.repo);
       await cloneCheckout(workingUrl, existing.default_cwd, credentials);
     }
-    await access(join(existing.default_cwd, '.git'));
     if (appSource) await setupAppRepository(existing.default_cwd);
     return loadRepositoryCommands(
       codebases,

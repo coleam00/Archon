@@ -104,9 +104,14 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each(['sql', 'file'] as const)(
-    'restores a missing managed checkout at its persisted path (%s)',
-    async backend => {
+  test.each([
+    ['sql', false],
+    ['file', false],
+    ['sql', true],
+    ['file', true],
+  ] as const)(
+    'restores a missing managed checkout at its persisted path (%s, empty directory: %s)',
+    async (backend, emptyDirectory) => {
       const root = await makeHome();
       const store =
         backend === 'sql'
@@ -114,6 +119,7 @@ describe('project storage collisions', () => {
           : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
       const path = join(root, '.archon/workspaces/acme/api-2/source');
       const url = 'https://github.com/acme/api.git';
+      if (emptyDirectory) await mkdir(path, { recursive: true });
       const project = await store.createCodebase({
         name: 'acme/api-2',
         default_cwd: path,
