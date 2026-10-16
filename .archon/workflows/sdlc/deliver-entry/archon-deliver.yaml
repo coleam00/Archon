@@ -1,0 +1,347 @@
+name: archon-deliver
+description: Deliver decided work through capped implement/review/CI batches. Unowned stops and Ready PRs pause for a disposition. Retry authorizes another capped batch; replan plans before delivery; finish leaves the typed outcome as it stands. Composing queues use archon-deliver-block. Never merges.
+inputs:
+  pull_request:
+    default: ""
+    description: "The number of an open pull request this delivery continues instead of opening one, as a caller resolved it. Empty or `null` when the caller names none; the run can still continue one it was launched onto."
+  work:
+    default: ""
+    description: "What to deliver — a plan path, findings, a description, or the repair of an existing pull request when this run was launched on its branch (`--adopt`, or from the pull request). Empty means the run's trigger message is the work."
+  part:
+    default: ""
+    description: "The part of an approved multi-part plan this delivery is, forwarded unchanged to every review in the rounds. archon-review's `part` input owns its shape. Empty delivers the whole contract."
+  errors:
+    default: auto
+    description: "Silent-failure lens — auto, true, or false."
+returns: report
+outcome_field: ready
+nodes:
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: test $settle.output.done = true
+      nodes:
+        - id: prepare
+          script: prepare
+          runtime: bun
+          with:
+            previous: $LOOP_PREV.settle.output
+            answer: $LOOP_PREV.ask.output
+            work: $INPUTS.work
+          output_format:
+            type: object
+            properties:
+              effect:
+                type: string
+                enum:
+                  - retry
+                  - replan
+                  - ci
+                  - finish
+              work:
+                &text
+                type: string
+              previous:
+                type:
+                  - object
+                  - "null"
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - &qualified_pr
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      repo:
+                        type: object
+                        properties:
+                          host:
+                            &nonempty_text
+                            type: string
+                            pattern: \S
+                          path:
+                            *nonempty_text
+                        required:
+                          - host
+                          - path
+                        additionalProperties: false
+                      number:
+                        type: integer
+                        minimum: 1
+                    required:
+                      - repo
+                      - number
+              policy_defaults:
+                *text
+            required:
+              - effect
+              - work
+              - previous
+              - replan
+              - pr
+              - policy_defaults
+        - id: planned
+          include: archon-plan-block
+          depends_on:
+            - prepare
+          when: "$prepare.output.replan == true && $prepare.output.effect != 'finish'"
+          with:
+            work: $prepare.output.work
+            report: ""
+        - id: attempt
+          include: archon-deliver-block
+          depends_on:
+            - prepare
+            - planned
+          trigger_rule: none_failed_min_one_success
+          when: "$prepare.output.effect != 'finish' && $prepare.output.replan == false || $prepare.output.effect != 'finish' && $prepare.output.replan == true && $planned.output.ready == true"
+          with:
+            pull_request: $INPUTS.pull_request
+            work: $prepare.output.work
+            part: $INPUTS.part
+            errors: $INPUTS.errors
+        - id: decide
+          command: decide
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          depends_on:
+            - attempt
+            - prepare
+          trigger_rule: none_failed_min_one_success
+          when: "$prepare.output.effect != 'finish'"
+          with:
+            result:
+              from: $attempt.output
+              if_skipped: null
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            policy_defaults: $prepare.output.policy_defaults
+            plan:
+              from: $planned.output
+              if_skipped: null
+          output_format:
+            type: object
+            additionalProperties: false
+            properties:
+              done:
+                type: boolean
+              attention:
+                anyOf:
+                  - type: "null"
+                  - &attention
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      what:
+                        *nonempty_text
+                      why:
+                        *nonempty_text
+                      recommendation:
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          choice:
+                            *nonempty_text
+                          why:
+                            *nonempty_text
+                          evidence:
+                            *nonempty_text
+                          confidence:
+                            type: string
+                            enum:
+                              - low
+                              - medium
+                              - high
+                          would_change:
+                            *nonempty_text
+                        required:
+                          - choice
+                          - why
+                          - evidence
+                          - confidence
+                          - would_change
+                      choices:
+                        type: array
+                        minItems: 1
+                        items:
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            id:
+                              type: string
+                              pattern: "^[a-z][a-z0-9-]*$"
+                            label:
+                              *nonempty_text
+                            does:
+                              *nonempty_text
+                            effect:
+                              type: string
+                              enum:
+                                - retry
+                                - replan
+                                - finish
+                            ruling:
+                              *text
+                          required:
+                            - id
+                            - label
+                            - does
+                            - effect
+                            - ruling
+                      if_unanswered:
+                        *nonempty_text
+                      links:
+                        type: array
+                        items:
+                          *nonempty_text
+                        minItems: 1
+                    required:
+                      - what
+                      - why
+                      - recommendation
+                      - choices
+                      - if_unanswered
+                      - links
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - done
+              - attention
+              - pr
+        - id: settle
+          script: settle
+          runtime: bun
+          depends_on:
+            - prepare
+            - attempt
+            - decide
+            - planned
+          trigger_rule: none_failed_min_one_success
+          with:
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            result:
+              from: $attempt.output
+              if_skipped: null
+            decision:
+              from: $decide.output
+              if_skipped: null
+            plan:
+              from: $planned.output
+              if_skipped: null
+            replan: $prepare.output.replan
+          output_format:
+            type: object
+            properties:
+              result:
+                &result
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+                  reason:
+                    type: string
+                    enum:
+                      - delivered
+                      - implement_blocked
+                      - review_open
+                      - replan
+                      - needs_human
+                      - ci_pr_caused
+                      - ci_other
+                      - round_cap
+                      - failed
+                  pr_url:
+                    type: string
+                  ci_rerun:
+                    type: string
+                    enum:
+                      - none
+                      - green
+                      - red
+                  summary:
+                    type: string
+                required:
+                  - ready
+                  - reason
+                  - pr_url
+                  - ci_rerun
+                  - summary
+              done:
+                type: boolean
+              message:
+                *text
+              attention:
+                anyOf:
+                  - type: "null"
+                  - *attention
+              class: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      *text
+                    label:
+                      *text
+                  required:
+                    - id
+                    - label
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - result
+              - done
+              - message
+              - class
+              - attention
+              - options
+              - replan
+              - pr
+        - id: ask
+          depends_on:
+            - settle
+          when: "$settle.output.message != ''"
+          wait:
+            attention: $settle.output.message
+            form: select
+            options: $settle.output.options
+            labels:
+              sdlc: deliver
+              decision: $settle.output.class
+  - id: result
+    depends_on:
+      - cycle
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_ENVELOPE).result))
+    with:
+      envelope:
+        from: $cycle.output
+    output_format:
+      *result
+  - id: report
+    depends_on:
+      - result
+    trigger_rule: all_done
+    always_run: true
+    script: report
+    runtime: bun
+    with:
+      outcome:
+        from: $result.output
+        if_skipped: null
+    output_format:
+      *result

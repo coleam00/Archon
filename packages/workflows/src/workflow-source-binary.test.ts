@@ -85,7 +85,7 @@ describe('a binary freezes its embedded bundled source', () => {
   test('bundled workflows are written where discovery expects them', async () => {
     const roots = capturedSourceRoots(capture.anchor);
     const yaml = await readFile(
-      join(roots.bundledWorkflows, 'sdlc', 'review', 'archon-review.yaml'),
+      join(roots.bundledWorkflows, 'sdlc', 'review', 'archon-review-block.yaml'),
       'utf-8'
     );
     expect(yaml).toContain('name: archon-review');

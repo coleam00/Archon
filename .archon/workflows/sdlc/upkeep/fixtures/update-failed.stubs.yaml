@@ -1,11 +1,12 @@
-# Outcome: failed. Delivery dies on the real assert-changed guard; deliver's report
-# completes not ready, upkeep's outcome relays it, and the run fails.
-forge: { source: forge }
-deliver__forge: { source: forge }
+forge:
+  source: forge
 assess:
   action: update
   summary: "stub: locked 1.2.3, target 1.2.9"
-  report: { type: archon_artifact, run_id: "fixture-run", path: "upkeep-assessment.md" }
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: upkeep-assessment.md
 implement__implement:
   done: true
   green: false
@@ -13,6 +14,18 @@ implement__implement:
   summary: "stub: blocked: the version is unavailable"
 fixture:
   expect: failed
-  fail-node: [implement__assert-changed, deliver__rounds]
-  reached: [deliver__report, outcome]
+  fail-node:
+    - implement__assert-changed
+    - attempt__rounds
+    - settle
+    - deliver__cycle
+  reached:
+    - deliver__report
+    - outcome
 exec-code: true
+attempt__forge:
+  source: forge
+decide:
+  done: true
+  attention: null
+  pr: null

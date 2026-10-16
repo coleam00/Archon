@@ -139,7 +139,7 @@ describe('bench run', () => {
     const repo = track(mkdtempSync(join(tmpdir(), 'intake-bench-repo-')));
     ok(repo, 'init', '-q', '-b', 'dev');
     ok(repo, 'remote', 'add', 'origin', 'https://github.com/o/r.git');
-    write(repo, '.archon/workflows/sdlc/triage/archon-triage.yaml', 'name: archon-triage\nmodel: medium\n');
+    write(repo, '.archon/workflows/sdlc/triage/archon-triage-block.yaml', 'name: archon-triage-block\nmodel: medium\n');
     write(repo, '.archon/workflows/sdlc/triage/commands/triage.md', 'Triage.\n');
     write(
       repo,
@@ -217,7 +217,7 @@ describe('bench run', () => {
     expect(status).toBe(0);
 
     const launched = [1, 2, 3, 4].map(argv);
-    const triageRun = launched.find(args => args[2] === 'archon-triage');
+    const triageRun = launched.find(args => args[2] === 'archon-triage-block');
     expect(triageRun).toContain('target=# Issue 11 as opened\n\nThe body 11 was opened with.');
     expect(triageRun).toContain('publish=false');
     const intakeRun = launched.find(args => args[2] === 'archon-intake');
@@ -789,7 +789,7 @@ describe('bench run', () => {
     const { run } = bench({ outsideAgentRuns: true });
     const { status, checks } = run('base');
     expect(status).toBe(1);
-    expect(checks[0].checks.outside_agent.problems).toEqual(['base 12-outside: triage__triage ran']);
+    expect(checks[0].checks.outside_agent.problems).toEqual(['base 12-outside: triage__cycle.attempt__triage ran']);
   });
 });
 
@@ -907,17 +907,19 @@ describe('engine names the bench copies', () => {
     registerBuiltinProviders();
     const pack = join(import.meta.dir, '../../workflows/sdlc');
     const definitions = new Map<string, WorkflowDefinition>();
-    for (const file of ['intake/archon-intake.yaml', 'triage/archon-triage.yaml']) {
+    for (const file of ['intake/archon-intake.yaml', 'triage/archon-triage-block.yaml', 'triage-entry/archon-triage.yaml']) {
       const parsed = parseWorkflow(readFileSync(join(pack, file), 'utf8'), file, providerRegistry);
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       definitions.set(parsed.workflow.name, parsed.workflow);
     }
-    const { workflows, errors } = expandWorkflowIncludes(definitions, new Map([['triage', 'Triage.']]));
+    const { workflows, errors } = expandWorkflowIncludes(definitions, new Map([['triage', 'Triage.'], ['decide', 'Decide the handoff.']]));
     expect(errors).toEqual([]);
-    const agentIds = (name: string) => (workflows.get(name)?.nodes ?? []).filter(node => node.kind === 'agent').map(node => node.id);
-    expect(agentIds('archon-triage')).toEqual([triageNodeId('triage')]);
-    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake')]);
-    expect(TRIAGE_VERDICT_NODE).toBe(`triage__${String(definitions.get('archon-triage')?.returns)}`);
+    const agentIds = (name: string): string[] => (workflows.get(name)?.nodes ?? []).flatMap(node => node.kind === 'loop_group'
+      ? node.loop_group.nodes.filter(child => child.kind === 'agent').map(child => `${node.id}.${child.id}`)
+      : node.kind === 'agent' ? [node.id] : []);
+    expect(agentIds('archon-triage-block')).toEqual([triageNodeId('triage')]);
+    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake'), 'triage__cycle.decide']);
+    expect(TRIAGE_VERDICT_NODE).toBe(`triage__cycle.attempt__${String(definitions.get('archon-triage-block')?.returns)}`);
   });
 });
 
@@ -925,7 +927,7 @@ describe('dry-run stand-ins', () => {
   it('satisfy archon-triage as the pack declares it at this commit', () => {
     registerBuiltinProviders();
     const root = join(import.meta.dir, '../../..');
-    const workflowPath = '.archon/workflows/sdlc/triage/archon-triage.yaml';
+    const workflowPath = '.archon/workflows/sdlc/triage/archon-triage-block.yaml';
     const parsed = parseWorkflow(readFileSync(join(root, workflowPath), 'utf8'), workflowPath, providerRegistry);
     if (parsed.workflow === null) throw new Error(parsed.error.error);
     const stubs = bindingStubs(root, workflowPath);
@@ -1264,7 +1266,7 @@ describe('score', () => {
     const outside = row(2, { id: '2-outside', group: 'typed', workflow: 'intake', trust: 'outside', known: { type: 'bug' } });
     const withOutside: BenchSet = { ...set, rows: [...set.rows, outside] };
     const before = score(withOutside, out).versions[0];
-    appendLine(join(out, SAMPLES_FILE), line('a', outside, '1-x', { workflow: 'intake', agent_nodes: ['triage__triage'] }));
+    appendLine(join(out, SAMPLES_FILE), line('a', outside, '1-x', { workflow: 'intake', agent_nodes: ['triage__cycle.attempt__triage'] }));
     const after = score(withOutside, out);
     expect(after.versions[0].outside).toEqual({ rows: 1, ran_agent: 1 });
     expect(after.versions[0].type).toEqual(before.type);

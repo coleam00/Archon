@@ -4,7 +4,7 @@
  *
  * Selection reads the tracker and writes only the set file. Which workflow judges a
  * row is pinned here too: a listed maintainer's issue runs through intake in eval
- * mode; an outside author's issue runs through archon-triage directly on the same
+ * mode; an outside author's issue runs through archon-triage-block on the same
  * creation text, because eval intake never triages an outside item; and a
  * `trust: outside` row is a maintainer's issue run through intake as an outside
  * author's, to prove no agent starts on it.
@@ -24,7 +24,7 @@ type Repo = QualifiedPr['repo'];
 export const GROUP_OPEN = { duplicate: false, fixed: false, not_planned: false, typed: true, dispositioned: true } as const;
 export type Group = keyof typeof GROUP_OPEN;
 export const GROUPS = Object.keys(GROUP_OPEN) as Group[];
-export const WORKFLOWS = { intake: 'archon-intake', triage: 'archon-triage' } as const;
+export const WORKFLOWS = { intake: 'archon-intake', triage: 'archon-triage-block' } as const;
 export type BenchWorkflow = keyof typeof WORKFLOWS;
 
 export const CONTRACTS = ['READY', ...Object.keys(STATE_LABEL)] as Contract[];

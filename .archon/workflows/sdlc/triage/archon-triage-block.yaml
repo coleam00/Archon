@@ -1,4 +1,4 @@
-name: archon-triage
+name: archon-triage-block
 description: |
   Ground one work item against the current repository before deciding what kind
   of work it needs. Reconciles tracker history, current code, moved branches,

@@ -1,4 +1,4 @@
-name: archon-ship
+name: archon-ship-block
 description: |
   Ground an issue or request against the current repository before spending on
   it, then take the least speculative path: investigate an unknown cause, plan
@@ -55,7 +55,7 @@ nodes:
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
     depends_on: [forge]
     with:
       target: "$INPUTS.target"
@@ -85,7 +85,7 @@ nodes:
   # The planner makes the design calls. Calls only a person can make come back as
   # open questions, which stop the run before delivery.
   - id: planned
-    include: archon-plan
+    include: archon-plan-block
     with:
       work: >-
         Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
@@ -97,7 +97,7 @@ nodes:
     when: "$triage.output.route == 'plan'"
 
   - id: deliver
-    include: archon-deliver
+    include: archon-deliver-block
     with:
       errors: "$INPUTS.errors"
       part: "$INPUTS.part"

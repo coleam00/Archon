@@ -79,8 +79,8 @@ test('every reason the pack closes an issue with is a forge close reason', () =>
 });
 
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
   if (scope === undefined || !('output_format' in scope) || scope.output_format === undefined) {
@@ -119,8 +119,8 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const node = parsed.workflow.nodes.find(node => node.id === 'triage');
   if (!node || !('output_format' in node) || !node.output_format)
@@ -149,8 +149,8 @@ test('triage producer declares qualified identities and its non-tracker sentinel
 });
 
 test('triage requires its five judged fields, each a listed value and a non-empty reason', () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const node = parsed.workflow.nodes.find(node => node.id === 'triage');
   if (!node || !('output_format' in node) || !node.output_format)
@@ -255,7 +255,7 @@ test('standalone new-operation projections carry typed request and result eviden
 
 test('all four preflight source validators conform to the pack source selector', () => {
   for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
-    const file = `archon-${folder}.yaml`;
+    const file = `archon-${folder}${folder === 'deliver' || folder === 'ship' ? '-block' : ''}.yaml`;
     const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
     if (!parsed.workflow) throw new Error('invalid preflight workflow');
     const first = parsed.workflow.nodes[0];
@@ -266,7 +266,7 @@ test('all four preflight source validators conform to the pack source selector',
 
 test('every node of the four preflighted flows runs after the forge check', () => {
   for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
-    const file = `archon-${folder}.yaml`;
+    const file = `archon-${folder}${folder === 'deliver' || folder === 'ship' ? '-block' : ''}.yaml`;
     const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
     if (!parsed.workflow) throw new Error(`invalid workflow ${file}`);
     const dependsOn = new Map(parsed.workflow.nodes.map(node => [node.id, node.depends_on ?? []]));

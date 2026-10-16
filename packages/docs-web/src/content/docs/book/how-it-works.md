@@ -14,15 +14,15 @@ Let's trace exactly what happened when you ran `archon-ship`. What looked like o
 
 ## The Workflow Definition
 
-Here's the YAML you ran, abridged. It lives in Archon's bundled `sdlc` pack at `.archon/workflows/sdlc/ship/archon-ship.yaml`:
+The standalone `archon-ship` entry pauses for an answer when a question or Ready result has no next owner. Its pipeline lives in the bundled `sdlc` pack at `.archon/workflows/sdlc/ship/archon-ship-block.yaml`. Here is that pipeline, abridged:
 
 ```yaml
-name: archon-ship
+name: archon-ship-block
 
 nodes:
   # STAGE 1: TRIAGE. Check the issue against the current code and pick a route
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
 
   # STAGE 2: INVESTIGATE or PLAN, depending on the route triage chose
   - id: inv
@@ -36,13 +36,13 @@ nodes:
     when: "$triage.output.route == 'plan'"
 
   - id: planned
-    include: archon-plan
+    include: archon-plan-block
     depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
   # STAGE 3: DELIVER. Rounds of implement, draft PR, review; then CI flips it ready
   - id: deliver
-    include: archon-deliver
+    include: archon-deliver-block
     depends_on: [triage, inv, planned]
     trigger_rule: none_failed_min_one_success
     when: "$triage.output.route == 'deliver' || ..."

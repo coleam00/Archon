@@ -1,0 +1,91 @@
+attempt__mode: "{\"continuation\":false,\"light\":false,\"head\":\"fixturehead\",\"cursor\":\"\",\"risks\":\"fixture-owned-policy\",\"execution\":{\"path\":\"mode\",\"invocation\":{\"loopPath\":[]}},\"seams\":false,\"code\":false,\"tests\":false,\"errors\":false,\"docs\":false,\"part\":null}"
+attempt__route:
+  seams: true
+  code: true
+  tests: false
+  errors: false
+  docs: true
+  reason: "stub: a typed contract and its docs changed"
+attempt__scope:
+  head_matches: true
+  pr:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 1
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/scope.md
+attempt__seams: 0 findings
+attempt__code: 0 findings
+attempt__docs: 0 findings
+attempt__review-complete: settled
+attempt__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+  discoveries:
+    []
+  contract_left:
+    []
+attempt__publish:
+  &attempt__publish
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+  discoveries:
+    []
+  contract_left:
+    []
+attempt__result:
+  *attempt__publish
+attempt__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+attempt__policy:
+  defaults: fixture-policy-defaults
+decide:
+  done: false
+  attention:
+    what: The standalone review is Ready on a draft pull request.
+    why: The draft has no queue owner to run CI or mark it ready.
+    recommendation:
+      choice: ci
+      why: Complete the reviewed PR handoff.
+      evidence: The review is Ready at the current PR head.
+      confidence: high
+      would_change: New commits or failed checks.
+    choices:
+      - id: ci
+        label: Run CI and mark ready
+        does: "Run the existing current-head CI command, restore draft on red, and finish only when green."
+        effect: ci
+        ruling: ""
+      - id: leave-draft
+        label: Leave draft
+        does: Acknowledge the Ready review and leave the PR draft without a ready write.
+        effect: finish
+        ruling: ""
+    if_unanswered: This run waits indefinitely without additional spend.
+    links:
+      - archon-artifact://fixture-run/review/report.md
+      - https://github.com/example/repo/pull/1
+  pr:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 1
+fixture:
+  inputs:
+    {}
+  expect: paused
+  reached:
+    - settle
+exec-code: true

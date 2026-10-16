@@ -1,0 +1,44 @@
+attempt__plan:
+  ready: true
+  open_questions:
+    []
+  summary: "stub: approach chosen — full plan at plan.md"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: plan.md
+attempt__policy:
+  defaults: fixture-policy-defaults
+decide:
+  done: false
+  attention:
+    what: The standalone plan report is Ready and has no next owner.
+    why: The work has no other owner.
+    recommendation:
+      choice: finish
+      why: Acknowledge the report and leave the work as it stands.
+      evidence: The report names the blocker.
+      confidence: high
+      would_change: An explicit terminal disposition.
+    choices:
+      - id: retry
+        label: Continue
+        does: Revise the plan work once with the ruling.
+        effect: retry
+        ruling: Use the confirmed default.
+      - id: finish
+        label: Leave it
+        does: Accept the report and leave the work as it stands.
+        effect: finish
+        ruling: ""
+    if_unanswered: This run waits indefinitely without additional spend.
+    links:
+      - archon-artifact://fixture-run/plan.md
+  pr: null
+fixture:
+  inputs:
+    {}
+  expect: paused
+  reached:
+    - settle
+exec-code: true

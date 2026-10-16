@@ -2,7 +2,7 @@
  * The intake bench runner: every version on the same batch of five rows, one ordinary
  * run per (version, row), one JSONL line per run.
  *
- * A version is one model on triage's tier, the only tier intake's agent node uses, so
+ * A version is one model on triage's tier, the tier intake's judging and handoff nodes use, so
  * versions differ in nothing else. The baseline is whatever that tier resolves to in
  * the checkout's own configuration today; every version, the baseline included, runs
  * with a config layer pinning that tier, so a config edit mid-bench cannot move it.
@@ -52,14 +52,14 @@ type Repo = QualifiedPr['repo'];
 type IntakePath = (typeof INTAKE_PATHS)[number];
 
 export const CHECKS_FILE = 'checks.jsonl';
-export const TRIAGE_VERDICT_NODE = 'triage__verdict';
+export const TRIAGE_VERDICT_NODE = 'triage__cycle.attempt__verdict';
 
 /** What one version pins. Versions differ only in `provider` and `model`. */
 export interface Version {
   readonly label: string;
   /** The full commit the pack source is read from. */
   readonly pack_sha: string;
-  /** Blob SHA of the triage prompt at `pack_sha`; there is no other agent prompt on intake's path. */
+  /** Blob SHA of the triage judgment at `pack_sha`; handoff prompts belong to the pinned pack source. */
   readonly prompt_sha: { readonly triage: string };
   readonly provider: string;
   readonly model: string;
@@ -600,7 +600,7 @@ export interface Line {
 
 /** The agent node that judges the row: archon-triage's own, or the one intake includes. */
 export function triageNodeId(workflow: BenchWorkflow): string {
-  return workflow === 'intake' ? 'triage__triage' : 'triage';
+  return workflow === 'intake' ? 'triage__cycle.attempt__triage' : 'triage';
 }
 
 const ran = (node: RunNode): boolean => node.state !== 'skipped' && node.state !== 'pending';

@@ -314,7 +314,7 @@ describe('review lens gating', () => {
   // name the same lenses; this holds the three in step.
   it('gates every lens node on the route or recorded boolean of the same name', async () => {
     const source = await Bun.file(
-      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
+      join(import.meta.dir, '../../workflows/sdlc/review/archon-review-block.yaml')
     ).text();
     const workflow = Bun.YAML.parse(source) as {
       nodes: {

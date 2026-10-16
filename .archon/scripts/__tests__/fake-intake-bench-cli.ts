@@ -207,8 +207,8 @@ function answer(dir: string, args: readonly string[]): string {
     const nodes: FakeNode[] = intake
       ? [
           { id: 'facts', state: 'completed', kind: 'exec' },
-          agent('triage__triage', triageRan ? 'completed' : 'skipped', bound),
-          { id: 'triage__verdict', state: triageRan ? 'completed' : 'skipped', kind: 'exec', structuredOutput: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', closure: config.declaredClosure ?? null } },
+          agent('triage__cycle.attempt__triage', triageRan ? 'completed' : 'skipped', bound),
+          { id: 'triage__cycle.attempt__verdict', state: triageRan ? 'completed' : 'skipped', kind: 'exec', structuredOutput: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', closure: config.declaredClosure ?? null } },
           { id: 'outcome', state: 'completed', kind: 'exec' },
         ]
       : [config.unboundTriage === true ? { id: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)];

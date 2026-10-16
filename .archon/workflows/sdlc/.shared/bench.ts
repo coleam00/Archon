@@ -250,8 +250,8 @@ export async function launch(run: Launch): Promise<string> {
 export type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
 /**
- * Wait, with no timeout, until the run finishes. A bench run has no gate and no one
- * to answer it, so any other attention is a broken sample and refuses.
+ * Wait, with no timeout, until the run finishes or needs attention. A benchmark has
+ * no answerer, so attention records an unfinished sample rather than inventing an answer.
  */
 export async function waitRun(runId: string): Promise<TerminalStatus> {
   const result = await archonJson(['workflow', 'wait', runId, '--json']);

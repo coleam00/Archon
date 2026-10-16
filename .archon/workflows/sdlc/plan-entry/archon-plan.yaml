@@ -1,0 +1,309 @@
+name: archon-plan
+description: Plan decided intent without changing the checkout. An unowned Ready plan or a blocking question pauses for an answer. Retry plans once with the ruling; finish acknowledges the report without implementing it. Composing callers use archon-plan-block.
+model: large
+inputs:
+  work:
+    default: ""
+    description: "What to plan — a feature description, an issue reference, or a goal. When empty, the run's trigger message is the work."
+  report:
+    default: ""
+    description: "Optional path to a prior investigation report to build on — its claims are verified, not trusted. Empty means no prior report."
+returns: result
+outcome_field: ready
+nodes:
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: test $settle.output.done = true
+      nodes:
+        - id: prepare
+          script: prepare
+          runtime: bun
+          with:
+            previous: $LOOP_PREV.settle.output
+            answer: $LOOP_PREV.ask.output
+            work: $INPUTS.work
+          output_format:
+            type: object
+            properties:
+              effect:
+                type: string
+                enum:
+                  - retry
+                  - replan
+                  - ci
+                  - finish
+              work:
+                &text
+                type: string
+              previous:
+                type:
+                  - object
+                  - "null"
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - &qualified_pr
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      repo:
+                        type: object
+                        properties:
+                          host:
+                            &nonempty_text
+                            type: string
+                            pattern: \S
+                          path:
+                            *nonempty_text
+                        required:
+                          - host
+                          - path
+                        additionalProperties: false
+                      number:
+                        type: integer
+                        minimum: 1
+                    required:
+                      - repo
+                      - number
+              policy_defaults:
+                *text
+            required:
+              - effect
+              - work
+              - previous
+              - replan
+              - pr
+              - policy_defaults
+        - id: attempt
+          include: archon-plan-block
+          depends_on:
+            - prepare
+          when: "$prepare.output.effect == 'retry'"
+          with:
+            work: $prepare.output.work
+            report: $INPUTS.report
+        - id: decide
+          command: decide
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          depends_on:
+            - attempt
+            - prepare
+          trigger_rule: none_failed_min_one_success
+          when: "$prepare.output.effect != 'finish'"
+          with:
+            result:
+              from: $attempt.output
+              if_skipped: null
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            policy_defaults: $prepare.output.policy_defaults
+          output_format:
+            type: object
+            additionalProperties: false
+            properties:
+              done:
+                type: boolean
+              attention:
+                anyOf:
+                  - type: "null"
+                  - &attention
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      what:
+                        *nonempty_text
+                      why:
+                        *nonempty_text
+                      recommendation:
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          choice:
+                            *nonempty_text
+                          why:
+                            *nonempty_text
+                          evidence:
+                            *nonempty_text
+                          confidence:
+                            type: string
+                            enum:
+                              - low
+                              - medium
+                              - high
+                          would_change:
+                            *nonempty_text
+                        required:
+                          - choice
+                          - why
+                          - evidence
+                          - confidence
+                          - would_change
+                      choices:
+                        type: array
+                        minItems: 1
+                        items:
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            id:
+                              type: string
+                              pattern: "^[a-z][a-z0-9-]*$"
+                            label:
+                              *nonempty_text
+                            does:
+                              *nonempty_text
+                            effect:
+                              type: string
+                              enum:
+                                - retry
+                                - finish
+                            ruling:
+                              *text
+                          required:
+                            - id
+                            - label
+                            - does
+                            - effect
+                            - ruling
+                      if_unanswered:
+                        *nonempty_text
+                      links:
+                        type: array
+                        items:
+                          *nonempty_text
+                        minItems: 1
+                    required:
+                      - what
+                      - why
+                      - recommendation
+                      - choices
+                      - if_unanswered
+                      - links
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - done
+              - attention
+              - pr
+        - id: settle
+          script: settle
+          runtime: bun
+          depends_on:
+            - prepare
+            - attempt
+            - decide
+          trigger_rule: none_failed_min_one_success
+          with:
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            result:
+              from: $attempt.output
+              if_skipped: null
+            decision:
+              from: $decide.output
+              if_skipped: null
+          output_format:
+            type: object
+            properties:
+              result:
+                &result
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+                  open_questions:
+                    type: array
+                    items:
+                      type: string
+                      pattern: \S
+                  summary:
+                    type: string
+                  report:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - archon_artifact
+                      run_id:
+                        type: string
+                      path:
+                        type: string
+                        enum:
+                          - plan.md
+                    required:
+                      - type
+                      - run_id
+                      - path
+                required:
+                  - ready
+                  - open_questions
+                  - summary
+                  - report
+              done:
+                type: boolean
+              message:
+                *text
+              attention:
+                anyOf:
+                  - type: "null"
+                  - *attention
+              class: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      *text
+                    label:
+                      *text
+                  required:
+                    - id
+                    - label
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - result
+              - done
+              - message
+              - class
+              - attention
+              - options
+              - replan
+              - pr
+        - id: ask
+          depends_on:
+            - settle
+          when: "$settle.output.message != ''"
+          wait:
+            attention: $settle.output.message
+            form: select
+            options: $settle.output.options
+            labels:
+              sdlc: plan
+              decision: $settle.output.class
+  - id: result
+    depends_on:
+      - cycle
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_ENVELOPE).result))
+    with:
+      envelope:
+        from: $cycle.output
+    output_format:
+      *result

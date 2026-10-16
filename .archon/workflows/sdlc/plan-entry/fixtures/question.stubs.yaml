@@ -1,0 +1,49 @@
+attempt__plan:
+  ready: false
+  open_questions:
+    - "stub: blocks — a relative MCP path would resolve against the workflow file instead of the checkout, changing what every existing relative path means; no project document rules on it"
+  summary: "stub: stopped on one open question — the plan names it"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: plan.md
+attempt__policy:
+  defaults: fixture-policy-defaults
+decide:
+  done: false
+  attention:
+    what: "stub: blocks — a relative MCP path would resolve against the workflow file instead of the checkout, changing what every existing relative path means; no project document rules on it"
+    why: Planning cannot choose a changed shipped path contract for the operator.
+    recommendation:
+      choice: keep
+      why: Keep existing relative-path behavior.
+      evidence: The planner named a blocking contract change.
+      confidence: high
+      would_change: An explicit decision to change path resolution.
+    choices:
+      - id: keep
+        label: Keep checkout-relative paths
+        does: Plan again with existing relative path resolution.
+        effect: retry
+        ruling: Relative MCP paths continue to resolve against the checkout.
+      - id: change
+        label: Use workflow-relative paths
+        does: Plan the explicitly authorized resolution change.
+        effect: retry
+        ruling: Relative MCP paths now resolve against the workflow file; plan the contract change explicitly.
+      - id: finish
+        label: Leave the question open
+        does: Acknowledge the blocked report without another planner attempt.
+        effect: finish
+        ruling: ""
+    if_unanswered: This run waits indefinitely without additional spend.
+    links:
+      - archon-artifact://fixture-run/plan.md
+  pr: null
+fixture:
+  inputs:
+    work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
+  expect: paused
+  reached:
+    - settle
+exec-code: true

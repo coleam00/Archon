@@ -151,7 +151,7 @@ nodes:
       required: [decision, brief, reason, attention]
 
   - id: ship
-    include: archon-ship
+    include: archon-ship-block
     depends_on: [route]
     when: "$route.output.decision == 'launch' && $INPUTS.mode == 'live'"
     with:

@@ -1,39 +1,117 @@
-# Dry-run fixture: eval mode on a maintainer's issue that triage finds a duplicate.
-# The outcome script runs for real on the verdict's bound closure: it refuses a
-# NO_ACTION verdict that arrives without one, so completing proves the closure
-# reaches intake's outcome. Eval writes nothing; intake.test.ts proves the close.
+# The simulator reads the skipped wait sink as the loop output. Only the unwrap
+# is canned here; sdlc-attention.test.ts proves it with the real executor and store.
+decide:
+  done: true
+  attention: null
+  pr: null
 facts:
   path: triage
-  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  item:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 7
   target: "# Stub title at creation\n\nStub body at creation."
   decision:
     path: triage
     trust: maintainer
     promoted: null
     stage: new
-    body_digest: "sha256:stub"
-    labels: []
-    waiting: []
-    notes: []
-  seen: { title: "Stub title at creation", body_digest: "sha256:stub", body_from: creation }
-triage__triage:
+    body_digest: sha256:stub
+    labels:
+      []
+    waiting:
+      []
+    notes:
+      []
+  seen:
+    title: Stub title at creation
+    body_digest: sha256:stub
+    body_from: creation
+attempt__triage:
   decision:
     contract: NO_ACTION
     closure:
+      &closure
       kind: duplicate
-      url: "https://github.com/example/repo/issues/3"
-      original: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
-  type: { value: feature, reason: "stub: asks for new behavior" }
-  size: { value: s, reason: "stub: size" }
-  complexity: { value: low, reason: "stub: complexity" }
-  importance: { value: medium, reason: "stub: importance" }
-  urgency: { value: none, reason: "stub: urgency" }
-  item: { repo: { host: "", path: "" }, number: 0 }
-  area_labels: []
-  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+      url: https://github.com/example/repo/issues/3
+      original:
+        repo:
+          host: github.com
+          path: example/repo
+        number: 3
+  type:
+    &type
+    value: feature
+    reason: "stub: asks for new behavior"
+  size:
+    &size
+    value: s
+    reason: "stub: size"
+  complexity:
+    &complexity
+    value: low
+    reason: "stub: complexity"
+  importance:
+    &importance
+    value: medium
+    reason: "stub: importance"
+  urgency:
+    &urgency
+    value: none
+    reason: "stub: urgency"
+  item:
+    repo:
+      host: ""
+      path: ""
+    number: 0
+  area_labels:
+    []
+  report:
+    &report
+    type: archon_artifact
+    run_id: fixture-run
+    path: triage.md
   summary: "stub: duplicates the open issue 3"
 fixture:
-  inputs: { repo_host: github.com, repo_path: example/repo, number: "7", mode: eval }
+  inputs:
+    repo_host: github.com
+    repo_path: example/repo
+    number: "7"
+    mode: eval
   expect: completed
-  reached: [facts, triage__verdict, outcome]
+  reached:
+    - facts
+    - attempt__verdict
+    - outcome
 exec-code: true
+triage__result:
+  contract: NO_ACTION
+  route: no_action
+  pull_request: null
+  ready: false
+  type:
+    *type
+  size:
+    *size
+  complexity:
+    *complexity
+  importance:
+    *importance
+  urgency:
+    *urgency
+  labels:
+    - archon-no-action
+    - archon-type-feature
+  published: false
+  proposed_edits:
+    title: ""
+    body: ""
+  blocked_reason: ""
+  blocked_by:
+    []
+  closure:
+    *closure
+  summary: "stub: duplicates the open issue 3"
+  report:
+    *report
