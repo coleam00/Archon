@@ -153,7 +153,7 @@ describe('owned worktree release policy', () => {
   test('a record write failure before removal keeps the checkout', async () => {
     store = {
       ...store,
-      updateStatus: async () => {
+      markWorktreeDestroyed: async () => {
         throw new Error('record write failed');
       },
     };

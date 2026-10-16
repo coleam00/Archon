@@ -111,6 +111,9 @@ const {
 } = await import('./workflow-operations');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
 const isolationStore: IIsolationStore = {
+  listActive: () => {
+    throw new Error('Unexpected isolation lookup');
+  },
   getById: mock(async () => null),
   findActiveByWorkflow: () => {
     throw new Error('Unexpected isolation lookup');
@@ -119,6 +122,9 @@ const isolationStore: IIsolationStore = {
     throw new Error('Unexpected isolation creation');
   },
   updateStatus: () => {
+    throw new Error('Unexpected isolation update');
+  },
+  markWorktreeDestroyed: () => {
     throw new Error('Unexpected isolation update');
   },
   updateMetadata: () => {

@@ -12,6 +12,9 @@ import {
   isContainerRun,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  readSourceRelease,
+  SOURCE_RELEASE_METADATA_KEY,
+  type SourceRelease,
   type AttentionAnswer,
   type ExpectedApprovalGate,
 } from './schemas/workflow-run';
@@ -118,7 +121,12 @@ export type WorkflowResumeCursor =
   | { kind: 'wait'; nodeId: string; resumeAt: string; pauseId?: string }
   | { kind: 'quota'; attempt: number; resumeAt: string }
   /** An answered gate or attention wait (`answeredPauseContinuation`). */
-  | { kind: 'answered'; nodeId: string; pauseId: string };
+  | { kind: 'answered'; nodeId: string; pauseId: string }
+  /** A run released after a host-local source read failure (`readSourceRelease`). */
+  | ({ kind: 'source' } & Omit<SourceRelease, 'path'>);
+
+/** How long an unaccepted continuation, or a run released for unreadable source, waits before the next claim. */
+export const CONTINUATION_RETRY_MS = 60_000;
 
 /**
  * True when `run` is still at the exact occurrence `cursor` names. Every store's resume
@@ -152,6 +160,15 @@ export function resumeCursorMatches(
       const answered = answeredPauseContinuation(run);
       return answered?.nodeId === cursor.nodeId && answered.pauseId === cursor.pauseId;
     }
+    case 'source': {
+      const release = readSourceRelease(run.metadata);
+      return (
+        run.status === 'paused' &&
+        release?.nodeId === cursor.nodeId &&
+        release.releasedAt === cursor.releasedAt &&
+        release.releaseId === cursor.releaseId
+      );
+    }
   }
 }
 
@@ -176,8 +193,9 @@ export type PauseCursor =
  * or event wait on its deadline, or a gate or attention wait, answered or not
  * (`continuablePause`). Only such a pause gives back the run's resource slot. A parent
  * blocked on a child workflow, a fan-out or a write-back keeps its slot: nothing retries
- * it if its continuation is refused for capacity. Container runs are excluded because the
- * host refuses to continue them.
+ * it if its continuation is refused for capacity. A run released for an unreadable source
+ * keeps its slot too: it is due again within a minute and re-enters without competing for
+ * capacity. Container runs are excluded because the host refuses to continue them.
  */
 export function continuablePauseCursor(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
@@ -318,6 +336,10 @@ export const WORKFLOW_EVENT_TYPES = [
   'quota_resume_triggered',
   'quota_resume_exhausted',
   'quota_resume_skipped',
+  // #4209 — this host could not read the run's frozen source for a node, so the run was
+  // paused instead of failed. `data` carries `node_id`, `path` (when known), `error` and
+  // `retry_at`; any host that can read the source continues it.
+  'source_released',
   'workflow_cancelled',
   'workflow_artifact',
   'integration_operation',
@@ -422,6 +444,55 @@ export function waitContinuedEvent(
     event_type: 'wait_continued',
     step_name: workflowWaitStepName(wait),
     data: { kind: wait.kind },
+  };
+}
+
+export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
+
+/** The initial execution has no token; resumes mint one so old executors cannot release a later claim. */
+export function executionClaim(metadata: Record<string, unknown>): string | null {
+  const claim = metadata[EXECUTION_CLAIM_METADATA_KEY];
+  return typeof claim === 'string' ? claim : null;
+}
+
+/** What `releaseRunForUnreadableSource` records about the node whose source could not be read. */
+export interface SourceReleaseWrite {
+  claimId: string | null;
+  nodeId: string;
+  path?: string;
+  error: string;
+  retryAt: string;
+}
+
+/** The metadata patch every store's source release merges into the run row. */
+export function sourceReleaseMetadata(
+  release: SourceReleaseWrite,
+  releasedAt: string
+): Record<string, unknown> {
+  const record: SourceRelease = {
+    nodeId: release.nodeId,
+    releaseId: crypto.randomUUID(),
+    releasedAt,
+    ...(release.path !== undefined ? { path: release.path } : {}),
+  };
+  return { [SOURCE_RELEASE_METADATA_KEY]: record, continuation_retry_at: release.retryAt };
+}
+
+/** The row every store's source release commits with its write. */
+export function sourceReleasedEvent(
+  workflowRunId: string,
+  release: SourceReleaseWrite
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'source_released',
+    step_name: release.nodeId,
+    data: {
+      node_id: release.nodeId,
+      ...(release.path !== undefined ? { path: release.path } : {}),
+      error: release.error,
+      retry_at: release.retryAt,
+    },
   };
 }
 
@@ -760,10 +831,11 @@ export interface IWorkflowStore
   /**
    * Return at most `limit` due continuations, defaulting to 25: time waits past their
    * deadline, signaled event waits, due quota resumes, and answered gates and attention
-   * waits (`answeredPauseContinuation`). Timed ones come earliest first, answered pauses after.
+   * waits (`answeredPauseContinuation`), and runs released for an unreadable source
+   * (`readSourceRelease`). Timed ones come earliest first, answered pauses after.
    */
   listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
-  /** Back off only the unchanged wait, quota or answered occurrence; a stale cursor writes nothing. */
+  /** Back off only the unchanged wait, quota, answered or source occurrence; a stale cursor writes nothing. */
   deferWorkflowContinuation(
     id: string,
     retryAt: string,
@@ -876,6 +948,17 @@ export interface IWorkflowStore
     extraMetadata?: Record<string, unknown>,
     event?: GatePauseEventInput
   ): Promise<void>;
+  /**
+   * Release a running run this host could not read the frozen source for (#4209): a
+   * compare-and-swap from `running` to `paused` that writes `source_release` with a
+   * store-minted `releaseId` and `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
+   * `source_released` in the same transaction. Writes nothing, and returns
+   * `released: false`, when status or `claimId` no longer matches: another execution owns it.
+   */
+  releaseRunForUnreadableSource(
+    id: string,
+    release: SourceReleaseWrite
+  ): Promise<{ released: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or
    * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.

@@ -1,0 +1,73 @@
+name: archon-review-eval-judge
+description: |
+  Judge one review-lens eval sample: for each defect the change was planted with,
+  and each known defect of the change, which lenses stated it and which review
+  finding carries it. `review-eval/scripts/bench.ts` launches it once per sample
+  with the sample's item directory and validates what it returns; it is not meant
+  to be run by hand.
+
+  Use when: the review-lens bench judges a sample.
+  NOT for: reviewing a change (review), running a sample (review-eval).
+
+# It reads only the item directory, so judges of many samples share one checkout.
+mutates_checkout: false
+
+inputs:
+  item:
+    required: true
+    description: >-
+      The absolute path of one sample's item directory, as the bench wrote it.
+
+returns: judge
+
+nodes:
+  - id: read
+    script: read-item
+    runtime: bun
+
+  - id: judge
+    depends_on: [read]
+    model: large
+    allowed_tools: []
+    prompt: |
+      You are judging one sample of a review bench. A code review ran on a change into
+      which the defects below were planted; each lens of the review wrote its own
+      output. The case's known defects are real defects of the unplanted change. Decide,
+      for every planted and every known defect, which lenses caught it.
+
+      $read.output
+
+      Rules:
+      - A lens catches a defect only when its own text states the defect's mechanism at
+        or near the defect's location. Naming the same file, function or area is not a
+        catch, and neither is an adjacent finding about the same code that states some
+        other problem. A known defect has no location: its mechanism stated anywhere in
+        the change is a catch.
+      - Judge each lens on its own text alone. The report and findings say what the
+        review kept; they never make a lens catch something its text does not state.
+      - `caught_by` lists only lens names from the lens list above, and is empty when no
+        lens caught the defect.
+      - `finding` is the `id` of the findings.json record that states the defect, or
+        null when none does.
+      - `evidence` is one sentence saying why. For a borderline case, say what made it
+        borderline and which way you decided.
+      - Judge every planted and known defect exactly once, by its `id`.
+      - `shape_unmatched` is the number of findings in the simplify lens's output that
+        state none of the planted or known defects; 0 when simplify left no output.
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        defects:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string }
+              caught_by: { type: array, items: { type: string } }
+              finding: { type: [string, 'null'] }
+              evidence: { type: string }
+            required: [id, caught_by, finding, evidence]
+        shape_unmatched: { type: integer, minimum: 0 }
+      required: [defects, shape_unmatched]

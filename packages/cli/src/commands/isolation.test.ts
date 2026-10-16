@@ -9,7 +9,7 @@ import type * as CleanupService from '@archon/core/services/cleanup-service';
 import type * as Git from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { toBranchName } from '@archon/git';
-import { readWorktreeCreationId } from '@archon/isolation';
+import { WorktreeRegistrationChangedError, readWorktreeCreationId } from '@archon/isolation';
 import {
   isolationCompleteCommand,
   isolationCleanupCommand,
@@ -36,7 +36,9 @@ const mockFindActiveByBranchName = mock<typeof IsolationDb.findActiveByBranchNam
 const mockFindStaleEnvironments = mock<typeof IsolationDb.findStaleEnvironments>(() =>
   Promise.resolve([])
 );
-const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
+const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>(() =>
+  Promise.resolve()
+);
 
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByBranchName: mockFindActiveByBranchName,
@@ -45,7 +47,8 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebaseWithAge: mock(() => Promise.resolve([])),
   findStaleEnvironments: mockFindStaleEnvironments,
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
-  updateStatus: mockUpdateStatus,
+  updateStatus: mock(() => Promise.resolve()),
+  markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
 
 const mockLoadRepoConfig = mock<typeof Core.loadRepoConfig>(() => Promise.resolve({}));
@@ -852,7 +855,7 @@ describe('isolationCleanupCommand', () => {
       remoteBranchDeleted: null,
       warnings: [],
     });
-    mockUpdateStatus.mockReset();
+    mockMarkWorktreeDestroyed.mockReset();
   });
 
   afterEach(() => {
@@ -869,7 +872,7 @@ describe('isolationCleanupCommand', () => {
       mockCleanupContainerEnvironments.mockClear();
       await isolationCleanupCommand(0);
       expect(mockDestroyWorktree).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(0);
     }
   );
@@ -881,7 +884,7 @@ describe('isolationCleanupCommand', () => {
     );
     await expect(isolationCleanupCommand()).rejects.toThrow('/register-project "legacy"');
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
   });
 
@@ -912,7 +915,9 @@ describe('isolationCleanupCommand', () => {
         canonicalRepoPath: '/test/repo',
         creationId: 'checkout-proof',
       });
-      expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-1', 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-stale-1' })
+      );
       expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Cleaned');
     }
   );
@@ -932,7 +937,7 @@ describe('isolationCleanupCommand', () => {
           warnings: ['Retained directory'],
         });
       await isolationCleanupCommand(7);
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain(
         mode === 'refusal' ? 'ownership changed' : 'Retained directory'
       );
@@ -942,6 +947,19 @@ describe('isolationCleanupCommand', () => {
       );
     }
   );
+
+  it('reports a registration recreated during cleanup as failed, not cleaned', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    mockMarkWorktreeDestroyed.mockRejectedValueOnce(
+      new WorktreeRegistrationChangedError(mockEnv.id)
+    );
+    await isolationCleanupCommand(7);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(mockEnv);
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('changed during cleanup');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '\nCleanup complete: 0 cleaned, 0 skipped, 1 failed'
+    );
+  });
 
   it('skips a stale environment owned by a live run without destroying it', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([
@@ -955,7 +973,7 @@ describe('isolationCleanupCommand', () => {
     await isolationCleanupCommand(7);
 
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Skipped — run run-live is paused');
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '\nCleanup complete: 0 cleaned, 1 skipped, 0 failed'
@@ -1000,7 +1018,7 @@ describe('isolationCleanupCommand', () => {
     await isolationCleanupCommand(7);
 
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '  Status: Skipped — failed run run-fail has 2 unpushed commit(s)'
     );

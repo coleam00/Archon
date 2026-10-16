@@ -9,7 +9,8 @@ export type McpPathResolution =
 export async function resolveMcpPath(
   declaration: string,
   cwd: string,
-  homeYamlDirectory?: string
+  homeYamlDirectory?: string,
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<McpPathResolution> {
   const first = resolve(cwd, declaration);
   const candidates = new Set([first]);
@@ -22,6 +23,13 @@ export async function resolveMcpPath(
     try {
       return { kind: 'found', path, content: await readFile(path, 'utf-8') };
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        try {
+          onMissing?.(path, error);
+        } catch (cause) {
+          return { kind: 'read_error', path, error: cause };
+        }
+      }
       // Only absence permits fallback; an unreadable checkout config still owns the path.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         return { kind: 'read_error', path, error };

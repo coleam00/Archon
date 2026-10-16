@@ -21,6 +21,8 @@ export interface FakeIssue {
   /** Defaults to closed. */
   readonly state?: 'open' | 'closed';
   readonly author?: string;
+  /** Pull requests that reference the issue. */
+  readonly refs?: readonly { connected?: boolean; url: string; merged: boolean; oid: string | null }[];
 }
 
 export interface FakeConfig {
@@ -219,6 +221,23 @@ function answer(dir: string, args: readonly string[]): string {
 
 function ghAnswer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
+  if (args.includes('graphql') && args.some(arg => arg.includes('CROSS_REFERENCED_EVENT'))) {
+    const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
+    const issue = config.issues.find(entry => entry.number === number);
+    if (issue === undefined) throw new Error(`fake gh: no issue ${String(number)}`);
+    return JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            refs: {
+              pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
+              nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { __typename: 'PullRequest', url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
+            },
+          },
+        },
+      },
+    });
+  }
   if (args.includes('graphql')) {
     const q = args.find(arg => arg.startsWith('q='));
     if (q === undefined) {

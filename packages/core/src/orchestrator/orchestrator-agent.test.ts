@@ -2573,7 +2573,12 @@ describe('workflow dispatch routing', () => {
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
     expect(mockAdoptionMetadata).toHaveBeenCalledWith(
       'env-1',
-      { adopted: true },
+      {
+        adopted: true,
+        worktree_registration_id: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+        ),
+      },
       expect.objectContaining({ id: 'env-1' })
     );
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
@@ -3196,7 +3201,16 @@ describe('workflow dispatch routing', () => {
     await handleMessage(platform, 'conv-1', '/workflow resume old-run', { actor: operator });
 
     expect(mockAdoptionMetadata.mock.calls).toEqual([
-      ['env-1', { adopted: true }, expect.objectContaining({ id: 'env-1' })],
+      [
+        'env-1',
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
+        expect.objectContaining({ id: 'env-1' }),
+      ],
     ]);
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(

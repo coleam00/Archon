@@ -11,10 +11,10 @@ import {
 } from '../../../packages/workflows/src/schemas/workflow-run';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import { BODY_SOURCES } from '../../workflows/sdlc/.shared/issue';
+import { claimDisposition, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
-  claimDisposition,
   claimItem,
   decideIntake,
   INTAKE_PATHS,
@@ -30,7 +30,6 @@ import {
   parseWorkItem,
   RANKS,
   sortCandidates,
-  statePut,
   TRUST_INPUTS,
   TRUSTS,
   type TriageFacts,

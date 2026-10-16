@@ -11,7 +11,7 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'path';
 
@@ -278,6 +278,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     }),
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(() => {
+      throw new Error('Unexpected releaseRunForUnreadableSource');
     }),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
@@ -999,6 +1002,73 @@ describe('executeWorkflow', () => {
       });
       expect(result.success).toBe(true);
     });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a resumed container run whose source cannot be read is told to resume by hand',
+      async () => {
+        const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
+        const release = mock(async () => ({ released: true }));
+        const store = makeStore({ releaseRunForUnreadableSource: release });
+        const platform = makePlatform();
+        const preCreatedRun = makeRun({
+          id: 'crun3',
+          metadata: {
+            isolation: 'container',
+            isolation_env_id: 'env-x',
+            workflow_source: {
+              version: 1,
+              root: captureRoot,
+              origin: captureRoot,
+              captured_at: new Date().toISOString(),
+              digest: 'unread',
+              file_count: 0,
+              byte_count: 0,
+            },
+          },
+        });
+        await chmod(captureRoot, 0o000);
+        try {
+          const result = await executeWorkflow(
+            makeDeps(store),
+            platform,
+            'conv-1',
+            '/tmp/ops',
+            makeWorkflow(),
+            'msg',
+            { conversationId: 'db-conv-1' },
+            {
+              preCreatedRun,
+              priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+              execContext: { kind: 'container', containerId: 'cid' },
+              container: {
+                envId: 'env-x',
+                writeBack: 'approve',
+                backend: {
+                  suspend: mock(async () => {}),
+                  finalize: mock(async () => ({ requiresApproval: false })),
+                  applyChanges: mock(async () => ({
+                    filesApplied: 0,
+                    filesDeleted: 0,
+                    warnings: [],
+                  })),
+                  discardChanges: mock(async () => {}),
+                },
+              },
+            }
+          );
+          expect(result).toMatchObject({ success: true, paused: true });
+        } finally {
+          await chmod(captureRoot, 0o755);
+          await removeTempTree(captureRoot);
+        }
+        expect(release).toHaveBeenCalledTimes(1);
+        const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+          String(c[1])
+        );
+        expect(sent.some(text => text.includes('resume it by hand'))).toBe(true);
+        expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
+      }
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -4998,6 +5068,28 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it('source release exits without checking or failing a newly resumed owner', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      getWorkflowRun: mock(async () => {
+        throw new Error('old owner must not read after release');
+      }),
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      { conversationId: 'db-conv-1' }
+    );
+    expect(result).toMatchObject({ success: true, paused: true });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('calls failWorkflowRun when run is still running at finally', async () => {
     const failSpy = mock(async () => {});
     const store = makeStore({

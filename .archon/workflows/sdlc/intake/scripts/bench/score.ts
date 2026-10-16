@@ -6,19 +6,22 @@
  *
  * The judgement bars (duplicates, fixed, not planned) are the operator's marks: a row
  * counts when the operator marked that version's run right. The structured signals
- * the scorer can read on its own stand beside them. A run that did not pass counts
- * against the bars as not right. A row whose batch failed a hard check or whose run
- * looked the issue up is left out of the accuracy numbers and counted separately.
+ * the scorer can read on its own stand beside them. A mark also overrides the
+ * expected answer for false closes and dispositions, but not for `type`, whose ground
+ * truth is the human label. A run that did not pass counts against the bars as not
+ * right. A row whose batch failed a hard check or whose run looked the issue up is
+ * left out of the accuracy numbers and counted separately.
+ * A bar with no applicable rows is not applicable.
  */
 
 import { join } from 'node:path';
-import { SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
+import { MARKS as OPERATOR_MARKS, SAMPLES_FILE, appendLine, isId, latestLines, readLines } from '../../../.shared/bench.ts';
 import type { WorkType } from '../../../.shared/labels.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { type BatchChecks, CHECKS_FILE, type CheckName, type Line } from './runner.ts';
 import { type BenchSet, GROUP_OPEN, type Group, type Row } from './set.ts';
 
-export const MARKS = ['right', 'wrong', 'partly'] as const;
+export const MARKS = OPERATOR_MARKS.defect;
 export type MarkValue = (typeof MARKS)[number];
 export const MARKS_FILE = 'marks.jsonl';
 
@@ -88,12 +91,17 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
 }
 
 /**
- * Whether proposing to close this row is a false close: the issue was still open when
- * the set was pinned, and no disposition of the operator's says it should close. On a
- * closed row, a close proposal is what the duplicate, fixed and not-planned bars reward.
+ * Operator marks decide close proposals on open rows, overriding dispositions and
+ * merged-base evidence. Without a decisive mark, referenced PRs or uncollected live
+ * evidence need judgment; a close disposition accepts the proposal.
  */
-export function falseClose(row: Row, verdict: Line['verdict']): boolean {
-  return verdict?.contract === 'NO_ACTION' && GROUP_OPEN[row.group] && row.known.disposition?.contract !== 'NO_ACTION';
+export function closeCheck(row: Row, line: Line, mark: MarkValue | undefined): 'false' | 'pending' | null {
+  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group]) return null;
+  if (mark === 'right') return null;
+  if (mark === 'wrong') return 'false';
+  if (row.known.disposition?.contract === 'NO_ACTION') return null;
+  if (line.mode === 'live' && line.merged_on_base === undefined) return 'pending';
+  return (line.merged_on_base ?? []).length > 0 ? 'pending' : 'false';
 }
 
 /** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
@@ -118,7 +126,7 @@ const HARD_CHECKS: Readonly<Record<CheckName, string>> = {
 };
 const CHECK_NAMES = Object.keys(HARD_CHECKS) as CheckName[];
 
-export type BarStatus = 'pass' | 'fail' | 'pending' | 'no rows';
+export type BarStatus = 'pass' | 'fail' | 'pending' | 'not applicable';
 
 export interface MarkedBar {
   readonly rows: number;
@@ -144,6 +152,10 @@ export interface VersionScore {
   readonly outside: { readonly rows: number; readonly ran_agent: number };
   readonly bars: Readonly<Record<(typeof BARS)[number]['group'], MarkedBar>>;
   readonly false_closes: readonly string[];
+  /** Closes with referenced PRs or uncollected evidence, awaiting a right or wrong operator mark. */
+  readonly pending_closes: readonly string[];
+  /** Judged lines on rows that were open, where a close can be false. */
+  readonly open_rows: number;
   readonly type: { readonly rows: number; readonly agree: number; readonly matrix: Readonly<Record<string, Readonly<Record<string, number>>>> };
   readonly dispositions: { readonly rows: number; readonly agree: number };
   readonly marks: Readonly<Record<MarkValue | 'unmarked', number>>;
@@ -187,7 +199,7 @@ function scoreVersion(
     const inGroup = judged.filter(line => line.group === group);
     const right = inGroup.filter(line => markOf(line) === 'right').length;
     const unmarked = inGroup.filter(line => markOf(line) === undefined).length;
-    const status: BarStatus = total === 0 ? 'no rows' : unmarked > 0 ? 'pending' : right / total >= atLeast ? 'pass' : 'fail';
+    const status: BarStatus = total === 0 ? 'not applicable' : unmarked > 0 ? 'pending' : right / total >= atLeast ? 'pass' : 'fail';
     return {
       rows: total,
       right,
@@ -215,11 +227,16 @@ function scoreVersion(
     matrix[human] = { ...matrix[human], [predicted]: (matrix[human]?.[predicted] ?? 0) + 1 };
   }
   // A dispositioned run that did not pass counts in the denominator, never as a match.
+  // A right or wrong mark decides a match; otherwise the verdict is compared with the disposition.
   const dispositioned = scored.filter(line => line.group === 'dispositioned');
   const dispositionAgree = dispositioned.filter(line => {
     const expected = rows.get(line.row)?.known.disposition;
-    return line.passed && expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
+    const mark = markOf(line);
+    if (!line.passed) return false;
+    if (mark === 'right' || mark === 'wrong') return mark === 'right';
+    return expected !== undefined && line.verdict?.contract === expected.contract && (expected.route === undefined || line.verdict.route === expected.route);
   }).length;
+  const openLines = judged.filter(line => GROUP_OPEN[line.group]);
 
   // A run in which no agent ran spent nothing on the version, so it would only pull the mean down.
   const costs = lines.filter(line => line.run_id !== null && line.agent_nodes.length > 0);
@@ -234,7 +251,11 @@ function scoreVersion(
     failed_batches: batchRuns.filter(batchRun => checks.get(batchRun)?.passed !== true),
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
     bars: Object.fromEntries(BARS.map(entry => [entry.group, bar(entry.group, entry.at_least)])) as VersionScore['bars'],
-    false_closes: judged.filter(line => falseClose(rows.get(line.row) as Row, line.verdict)).map(line => line.row),
+    false_closes: openLines.filter(line => closeCheck(rows.get(line.row) as Row, line, markOf(line)) === 'false').map(line => line.row),
+    pending_closes: openLines
+      .filter(line => closeCheck(rows.get(line.row) as Row, line, markOf(line)) === 'pending')
+      .map(line => line.row),
+    open_rows: openLines.length,
     type: { rows: typed.length, agree, matrix },
     dispositions: { rows: dispositioned.length, agree: dispositionAgree },
     marks: {
@@ -301,6 +322,8 @@ export function score(set: BenchSet, outDir: string): Score {
 
 const pct = (part: number, whole: number): string => (whole === 0 ? '-' : `${String(part)}/${String(whole)} (${Math.round((part / whole) * 100)}%)`);
 const passFail = (ok: boolean): string => (ok ? 'pass' : 'fail');
+const NOT_APPLICABLE: BarStatus = 'not applicable';
+const listed = (rows: readonly string[]): string => (rows.length > 0 ? ` (${rows.join(', ')})` : '');
 
 /** The score as Markdown: the table, each version's type matrix, then the disagreements. */
 export function renderScore(result: Score): string {
@@ -319,7 +342,7 @@ export function renderScore(result: Score): string {
     ...CHECK_NAMES.map(name => row(HARD_CHECKS[name], each(version => String(version.hard[name])))),
     row('failed batch runs (excluded)', each(version => version.failed_batches.join(', ') || 'none')),
     row('**Bars**', each(() => '')),
-    row('every `trust: outside` row ran no agent node', each(version => `${String(version.outside.ran_agent)} of ${String(version.outside.rows)} ran one: ${passFail(version.outside.ran_agent === 0 && version.outside.rows > 0)}`)),
+    row('every `trust: outside` row ran no agent node', each(version => `${String(version.outside.ran_agent)} of ${String(version.outside.rows)} ran one: ${version.outside.rows === 0 ? NOT_APPLICABLE : passFail(version.outside.ran_agent === 0)}`)),
     ...BARS.map(bar =>
       row(
         `${bar.label} (at least ${Math.round(bar.at_least * 100)}%, by marks)`,
@@ -331,8 +354,15 @@ export function renderScore(result: Score): string {
         })
       )
     ),
-    row('false closes (none allowed)', each(version => `${String(version.false_closes.length)}${version.false_closes.length > 0 ? ` (${version.false_closes.join(', ')})` : ''}: ${passFail(version.false_closes.length === 0)}`)),
-    row(`\`type\` agreement (at least ${String(TYPE_BAR * 100)}%)`, each(version => `${pct(version.type.agree, version.type.rows)}: ${version.type.rows === 0 ? 'no rows' : passFail(version.type.agree / version.type.rows >= TYPE_BAR)}`)),
+    row('false closes (none allowed)', each(version => {
+      const pending = version.pending_closes.length > 0 ? `, ${String(version.pending_closes.length)} awaiting operator judgment${listed(version.pending_closes)}` : '';
+      let status: BarStatus = 'pass';
+      if (version.open_rows === 0) status = NOT_APPLICABLE;
+      else if (version.false_closes.length > 0) status = 'fail';
+      else if (version.pending_closes.length > 0) status = 'pending';
+      return `${String(version.false_closes.length)}${listed(version.false_closes)}${pending}: ${status}`;
+    })),
+    row(`\`type\` agreement (at least ${String(TYPE_BAR * 100)}%)`, each(version => `${pct(version.type.agree, version.type.rows)}: ${version.type.rows === 0 ? NOT_APPLICABLE : passFail(version.type.agree / version.type.rows >= TYPE_BAR)}`)),
     row('cost per item, mean (no bar)', each(version => (version.cost.mean === null ? 'unreported' : `$${version.cost.mean.toFixed(4)}`))),
     row('**Recorded**', each(() => '')),
     row('dispositions matched', each(version => pct(version.dispositions.agree, version.dispositions.rows))),

@@ -173,12 +173,13 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
-import type {
-  WorkflowDefinition,
-  WorkflowLoadError,
-  WorkflowLoadResult,
-  WorkflowSource,
-  WorkflowWithSource,
+import {
+  findWorkflowLoadError,
+  type WorkflowDefinition,
+  type WorkflowLoadError,
+  type WorkflowLoadResult,
+  type WorkflowSource,
+  type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
@@ -1955,12 +1956,7 @@ async function runWorkflowWithOwnedSource(
 
   if (!workflow) {
     // Check if the requested workflow had a load error
-    const loadError = errors.find(
-      e =>
-        e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-        e.filename === `${workflowName}.yaml` ||
-        e.filename === `${workflowName}.yml`
-    );
+    const loadError = findWorkflowLoadError(errors, workflowName);
     if (loadError) {
       throw new Error(
         `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`

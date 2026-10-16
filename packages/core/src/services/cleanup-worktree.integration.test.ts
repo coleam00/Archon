@@ -24,7 +24,9 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { getGitCheckoutIdentity, readWorktreeLock, toRepoPath, toBranchName } from '@archon/git';
 import {
+  IsolationResolver,
   WorktreeProvider,
+  WorktreeRegistrationChangedError,
   configureIsolation,
   getIsolationProvider,
   worktreeRegistrationMetadata,
@@ -265,6 +267,83 @@ async function useSymlinkedBase(): Promise<void> {
   run.metadata = { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } };
 }
 
+for (const persistence of ['sql', 'file'] as const) {
+  for (const replacement of ['same-row', 'other-path', 'restore-failure'] as const) {
+    test(`${persistence}: reclaim recovery preserves the failure and fences ${replacement}`, async () => {
+      const target =
+        persistence === 'sql'
+          ? store
+          : (
+              await (
+                await import('../workflows/file-host')
+              ).createFileWorkflowHost(join(root, 'store'))
+            ).records.isolation;
+      if (persistence === 'file') {
+        env = await target.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'release',
+          working_path: env.working_path,
+          branch_name: toBranchName(env.branch_name),
+          metadata: env.metadata,
+        });
+        run.metadata = {
+          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+        };
+      }
+      const original = new Error('original claimant lookup failed');
+      let newer: IsolationEnvironmentRow | undefined;
+      const racing = {
+        ...target,
+        updateStatus: async (...args: Parameters<IIsolationStore['updateStatus']>) => {
+          if (replacement === 'restore-failure') throw new Error('restore failed');
+          return target.updateStatus(...args);
+        },
+      };
+      const attempt = reclaimRunWorktree(run, racing, {
+        getCodebase: (await import('../db/codebases')).getCodebase,
+        getLiveRunOwningEnv: async () => {
+          if (replacement !== 'restore-failure') {
+            newer = await target.create({
+              codebase_id: codebaseId,
+              workflow_type: 'task',
+              workflow_id: 'release',
+              working_path:
+                replacement === 'same-row' ? env.working_path : join(root, 'replacement'),
+              branch_name: toBranchName(env.branch_name),
+              metadata: { adopted: true },
+            });
+          }
+          throw original;
+        },
+      });
+      const error = await attempt.then(
+        () => {
+          throw new Error('Expected reclaim failure');
+        },
+        (err: unknown) => err
+      );
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('Expected error');
+      expect(error.message).toContain('original claimant lookup failed');
+      if (replacement !== 'same-row') {
+        expect(error.cause).toBeInstanceOf(AggregateError);
+        if (!(error.cause instanceof AggregateError)) throw new Error('Expected recovery evidence');
+        expect(error.cause.cause).toBe(original);
+        expect(error.cause.errors[0]).toBe(original);
+        expect(error.message).toContain('registration recovery failed');
+      }
+      if (newer) {
+        expect(await target.getById(newer.id)).toEqual(newer);
+        expect((await target.listActive()).filter(row => row.codebase_id === codebaseId)).toEqual([
+          newer,
+        ]);
+      }
+      expect(existsSync(env.working_path)).toBe(true);
+    });
+  }
+}
+
 describe('owned worktree release', () => {
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
     const locked = join(env.working_path, 'locked');
@@ -308,27 +387,53 @@ describe('owned worktree release', () => {
     expect(await status()).toBe('active');
   });
 
-  test('a removal that fails while still registered can be retried', async () => {
-    const originalExec = gitModule.execFileAsync;
-    const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
-      async (file, args, options) => {
-        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
-          throw new Error('simulated remove failure');
-        return originalExec(file, args, options);
+  test.each(['sql', 'file'] as const)(
+    '%s: a removal that fails while still registered can be retried',
+    async persistence => {
+      const target =
+        persistence === 'sql'
+          ? store
+          : (
+              await (
+                await import('../workflows/file-host')
+              ).createFileWorkflowHost(join(root, 'store'))
+            ).records.isolation;
+      if (persistence === 'file') {
+        env = await target.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'release',
+          working_path: env.working_path,
+          branch_name: toBranchName(env.branch_name),
+          metadata: env.metadata,
+        });
+        run.metadata = {
+          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+        };
       }
-    );
-    try {
-      await expect(reclaimRunWorktree(run, store)).rejects.toThrow('simulated remove failure');
-    } finally {
-      failing.mockRestore();
-    }
-    expect(await status()).toBe('active');
-    expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+      const originalExec = gitModule.execFileAsync;
+      const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (file, args, options) => {
+          if (file === 'git' && args.includes('worktree') && args.includes('remove'))
+            throw new Error('simulated remove failure');
+          return originalExec(file, args, options);
+        }
+      );
+      try {
+        await expect(reclaimRunWorktree(run, target)).rejects.toThrow('simulated remove failure');
+      } finally {
+        failing.mockRestore();
+      }
+      expect(existsSync(join(env.working_path, 'file'))).toBe(true);
+      expect((await target.getById(env.id))?.status).toBe('active');
+      expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
 
-    await reclaimRunWorktree(run, store);
-    expect(existsSync(env.working_path)).toBe(false);
-    expect(await status()).toBe('destroyed');
-  });
+      const result = await reclaimRunWorktree(run, target);
+      expect(result.released?.path).toBe(env.working_path);
+      expect(existsSync(env.working_path)).toBe(false);
+      expect((await target.getById(env.id))?.status).toBe('destroyed');
+    }
+  );
 
   test('discards uncommitted work, hidden index flags, and unpushed commits; keeps the branch', async () => {
     const wt = env.working_path;
@@ -607,3 +712,167 @@ async function seedMissingPathContainer(): Promise<IsolationEnvironmentRow> {
   if (!row) throw new Error('Container fixture missing');
   return row;
 }
+
+/**
+ * A worktree cleanup observes a registration, then retires it. These tests
+ * re-register the same workflow between the two (an upsert keeps the row id), and
+ * expect the replacement to stay active after the cleanup's retire write.
+ */
+describe('cleanup retires only the registration it observed', () => {
+  const reRegister = (): Promise<IsolationEnvironmentRow> =>
+    isolationDb.create({
+      codebase_id: env.codebase_id,
+      workflow_type: env.workflow_type,
+      workflow_id: env.workflow_id,
+      working_path: env.working_path,
+      branch_name: toBranchName(env.branch_name),
+      metadata: env.metadata,
+    });
+
+  /** A real store that re-registers the environment just before its first retire write. */
+  function racingStore(): {
+    store: IIsolationStore;
+    afterRetire: () => IsolationEnvironmentRow | null | undefined;
+    replacement: () => IsolationEnvironmentRow | undefined;
+  } {
+    const real = isolationDb.createIsolationStore();
+    let replacement: IsolationEnvironmentRow | undefined;
+    let after: IsolationEnvironmentRow | null | undefined;
+    const race = async (write: () => Promise<void>): Promise<void> => {
+      if (replacement) return write();
+      replacement = await reRegister();
+      try {
+        await write();
+      } finally {
+        after = await isolationDb.getById(replacement.id);
+      }
+    };
+    return {
+      store: {
+        ...real,
+        updateStatus: (id, next) =>
+          next === 'destroyed'
+            ? race(() => real.updateStatus(id, next))
+            : real.updateStatus(id, next),
+        markWorktreeDestroyed: observed => race(() => real.markWorktreeDestroyed(observed)),
+      },
+      afterRetire: () => after,
+      replacement: () => replacement,
+    };
+  }
+
+  function expectReplacementActive(
+    after: IsolationEnvironmentRow | null | undefined,
+    replacement: IsolationEnvironmentRow | undefined
+  ): void {
+    expect(replacement?.id).toBe(env.id);
+    expect(after?.status).toBe('active');
+    expect(after?.metadata.worktree_registration_id).toBe(
+      replacement?.metadata.worktree_registration_id
+    );
+  }
+
+  test('listing reconciles only the observed missing registration', async () => {
+    await git(repo, 'worktree', 'remove', '--force', env.working_path);
+    const { listEnvironments } = await import('../operations/isolation-operations');
+    const mark = isolationDb.markWorktreeDestroyed;
+    const update = isolationDb.updateStatus;
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racingMark = spyOn(isolationDb, 'markWorktreeDestroyed').mockImplementation(
+      async observed => {
+        if (observed.id === env.id) replacement = await reRegister();
+        await mark(observed);
+      }
+    );
+    const racingUpdate = spyOn(isolationDb, 'updateStatus').mockImplementation(async (id, next) => {
+      if (id === env.id && next === 'destroyed') replacement = await reRegister();
+      await update(id, next);
+    });
+    try {
+      await listEnvironments();
+    } finally {
+      racingMark.mockRestore();
+      racingUpdate.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+  });
+
+  test('removeEnvironment', async () => {
+    const provider = getIsolationProvider();
+    const destroy = provider.destroy.bind(provider);
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racing = spyOn(provider, 'destroy').mockImplementation(async (...args) => {
+      const result = await destroy(...args);
+      replacement = await reRegister();
+      return result;
+    });
+    try {
+      await expect(removeEnvironment(env.id)).rejects.toBeInstanceOf(
+        WorktreeRegistrationChangedError
+      );
+    } finally {
+      racing.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+  });
+
+  test('run reclaim of a vanished checkout', async () => {
+    await git(repo, 'worktree', 'remove', '--force', env.working_path);
+    const { store: racing, afterRetire, replacement } = racingStore();
+    await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+    expectReplacementActive(afterRetire(), replacement());
+  });
+
+  test('guarded run reclaim keeps the checkout', async () => {
+    const { store: racing, afterRetire, replacement } = racingStore();
+    await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+    expectReplacementActive(afterRetire(), replacement());
+    expect(existsSync(env.working_path)).toBe(true);
+  });
+
+  for (const lookup of ['existing', 'workflow', 'linked'] as const) {
+    test(`resolver ${lookup} lookup of a vanished checkout`, async () => {
+      if (lookup === 'linked') {
+        env = await isolationDb.create({
+          ...env,
+          workflow_type: 'issue',
+          workflow_id: '42',
+          branch_name: toBranchName(env.branch_name),
+          created_by_platform: undefined,
+          created_by_user_id: undefined,
+        });
+      }
+      await git(repo, 'worktree', 'remove', '--force', env.working_path);
+      const { store: racing, afterRetire, replacement } = racingStore();
+      const resolver = new IsolationResolver({ store: racing, provider: getIsolationProvider() });
+      await expect(
+        resolver.resolve({
+          existingEnvId: lookup === 'existing' ? env.id : null,
+          codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+          hints:
+            lookup === 'linked'
+              ? { workflowType: 'task', workflowId: 'linking', linkedIssues: [42] }
+              : { workflowType: env.workflow_type, workflowId: env.workflow_id },
+          platformType: 'cli',
+        })
+      ).rejects.toBeInstanceOf(WorktreeRegistrationChangedError);
+      expectReplacementActive(afterRetire(), replacement());
+      expect(await isolationDb.getById(env.id)).toEqual(replacement() ?? null);
+    });
+  }
+
+  test('resolver release of an unlinked creation', async () => {
+    const { store: racing, afterRetire, replacement } = racingStore();
+    const resolver = new IsolationResolver({ store: racing, provider: getIsolationProvider() });
+    const created = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+      hints: { workflowType: 'task', workflowId: 'unlinked' },
+      platformType: 'cli',
+    });
+    if (created.status !== 'resolved') throw new Error('Expected creation');
+    env = created.env;
+    await resolver.releaseUnlinked(created);
+    expectReplacementActive(afterRetire(), replacement());
+  });
+});

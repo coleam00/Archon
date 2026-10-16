@@ -652,6 +652,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   getById: mock((): Promise<null> => Promise.resolve(null)),
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
+  listActive: mock(() => Promise.resolve([])),
   // Reached only by the --resume path. mock.module() MERGES over the real
   // module, so omitting this would leave the REAL implementation in place and
   // open a live SQLite handle rather than failing loudly (#2240).
@@ -4145,7 +4146,12 @@ describe('workflowRunCommand', () => {
       expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
       expect(isolationDb.updateMetadata).toHaveBeenCalledWith(
         'env-1',
-        { adopted: true },
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
         expect.objectContaining({ id: 'env-1' })
       );
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -14282,7 +14288,16 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect((executed[4] as { description: string }).description).toBe('Branch vintage');
     expect(executed[3]).toBe('/wt/adopted');
     expect((isolationDb.updateMetadata as ReturnType<typeof mock>).mock.calls).toEqual([
-      ['env-9', { adopted: true }, expect.objectContaining({ id: 'env-9' })],
+      [
+        'env-9',
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
+        expect.objectContaining({ id: 'env-9' }),
+      ],
     ]);
   });
 

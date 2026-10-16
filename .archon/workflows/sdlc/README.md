@@ -103,8 +103,9 @@ request, and `publish-review` upserts the one marked review comment. Every pack
 label is declared in `.shared/labels.ts`, and every stage writes labels through its
 `writeLabels`, which adds and removes them as a delta so labels another writer adds
 survive. On the `forge` source it still writes the whole label set back, because
-the forge contract has no single-label add or remove yet. No node files discoveries: the
-run's terminal report relays them to the operator. In `archon-deliver` and
+the forge contract has no single-label add or remove yet. No delivery node files
+discoveries: the run's terminal report relays them to the operator, and
+[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver` and
 `archon-ship` that is the `report` node, which also runs when a node fails, so a
 workflow that includes `archon-deliver` runs after a failed delivery and must gate
 on `$deliver.output.ready`. Each acts on the values the agent
@@ -208,10 +209,13 @@ names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
 falling back to the pack's defaults"; triage names `triage.md`, and plan and review
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
-read before either stops for a person. Agents interpret
+read before either stops for a person. The build queue's agents name `build.md`, what
+the queue may decide on its own, and its route and answer agents `rulings.md` too.
+Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
-A node reaches the defaults through its workflow's `policy` script node. A run
+A node reaches the defaults through a script node of its workflow: its `policy` node,
+or the build queue's `facts`. A run
 captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
@@ -389,25 +393,211 @@ are the operator's and stay outside the pack and the repository.
   version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
-- **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
+  Eval batches are cheap dry checks that the bench works, not fair scored
+  comparisons: an eval run can read the issue's current state, including its outcome.
+- **Live batches.** Use live batches on scratch copies for scored comparisons.
+  `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's.
+  scratch repository may not be the set's own or another version's. Each copy holds
+  the pinned text, so lookups need no rewriting. Each live line records
+  merged pull requests on the base that reference the original issue, for scoring.
+  If that evidence is incomplete, the row does not run and its line says why;
+  reference histories exceeding the first 100 events are refused. Rows with
+  references also require a complete source history: unshallow the source checkout
+  before rerunning. Complete empty reference responses need no history check. Older
+  live lines without collected evidence keep close proposals pending until rerun or
+  marked right or wrong.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
   operator marks each run right, wrong or partly right, and marks land in
-  `marks.jsonl`, so they tally across batches.
+  `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
+  expected answer for false closes and dispositions, not for `type`. The score uses
+  these marks; the page shows the selected mark and any note.
 - **Score.** `score` prints one column per version from each version's latest line
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
   the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a command, fetch or search that looked
-  up the judged issue, left out of the accuracy numbers), cost over the runs in
+  open, unless the operator dispositioned it closed or marked the run right; a wrong
+  mark overrides a close disposition. A merged pull request on the base that only
+  references the issue leaves the close bar pending until the operator marks the
+  run right or wrong),
+  dispositions matched (a right or wrong mark decides), the `type` confusion matrix
+  with `enhancement` read as `feature`, leaks (a command, fetch or search that
+  looked up the judged issue, left out of the accuracy numbers), cost over the runs in
   which an agent ran (`unreported` when no provider reported one) and wall time, and
-  which versions got each disagreement right. It does not choose a winner.
+  which versions got each disagreement right. A bar with no applicable rows reads
+  `not applicable`. It does not choose a winner.
+
+## Build queue
+
+[`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
+items to a reviewed, ready pull request, and stops only for decisions that belong to a
+person. It acts on its own when a case is clear and asks when it is not; the default
+policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
+which a project replaces with its own `.archon/sdlc/policy/build.md`.
+
+- **Pickup.** A run claims one item with intake's claim and order (the `order`
+  input). An item waits for the build queue when its work item's stage is a READY
+  route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
+  recorded it, or recorded it as waiting for its next round. A re-triage after the
+  queue's last decision starts the item over. The build queue's claim takes none of
+  the item's intake requests, so an edit or label request recorded while it holds the
+  item waits for intake's next pickup. The queue writes no labels; intake's mirror
+  stays as it is.
+- **Route.** The `route` agent checks that the issue body is a contract (the six
+  elements, with its dated "Current scope" sections), proves a bug's symptom before
+  its first round, and writes the brief `archon-ship` starts from. A bug that needs a
+  browser is reproduced with the playwright-cli skill, which the prompt names rather
+  than a `skills:` entry, because a provider that cannot load named skills refuses a
+  whole run that declares one.
+- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
+  it ended and decides: `done` when the pull request's latest review says Ready at its
+  head commit, `continue` with a brief when the contract already answers what stopped
+  it (a correctable finding, CI red the change caused, a false blocker naming a later
+  step), or `ask`. It declares the pull request when the round left commits unpushed.
+- **Give up.** When a round ends wanting another and `round_limit` rounds (default 3)
+  have run since the item's scope last changed, by a re-triage or a maintainer's
+  answer, the `give-up` agent compares their reviews. Each round finding new defects
+  asks the scope question instead of running another round.
+- **Writes.** The `apply` script refuses an attention item without the choice it
+  recommends, pushes the declared commits (never forcing, and reading the remote head
+  back), then records the decision on the work item and releases the claim, in one
+  conditional write. A run that asks keeps its claim while it is paused.
+- **Attention.** An unclear decision pauses the run as one `select` attention item
+  labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
+  is, why it matters, the agent's recommendation with its evidence, confidence and
+  what would change it, the choices and what each does, what happens if nobody
+  answers, and the links to the evidence. The answer is one declared choice, so the
+  queue never reads the answer's prose for a decision. The `ruling` script writes the
+  choice's ruling and the person's words into the issue body as one dated "Current
+  scope" section, reads it back, and records the answer: a `continue` choice launches
+  the next round from it, and a `park` choice stops working the item until a
+  re-triage. A run cancelled while it waits leaves the item asking, and only a
+  re-triage starts it over.
+- **Record.** The work item's `facts.build` holds the item's status (`next`,
+  `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
+  rounds and its last twenty decisions with any maintainer's answer.
+- **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
+  issue named by `number`: with an empty `replay` it makes the route decision, and
+  otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
+  are its history), reading the issue body as it was at `as_of`. The agents keep
+  their read tools, so they can still see the pull request and comments as they are
+  now.
+
+The pack installs no binding. A schedule keeps items moving, because a run works one
+item and a continuation waits for the next run. Each run includes `archon-ship`, which
+changes its checkout, so every run needs its own worktree:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-build-queue",
+  "binding": {
+    "bindingId": "build-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:build",
+    "capacity": 2,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-build-queue",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "worktree" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
+
+To start a run as soon as intake routes an item, add a label binding on the same
+resource, with intake's label selector narrowed to the route labels intake writes
+(`archon-ready`, `archon-plan`, `archon-issue`) and the same launch.
+
+## Discoveries
+
+[`archon-discoveries`](discoveries/archon-discoveries.yaml) drains the discoveries
+finished runs recorded outside their own scope. A run's discoveries are its latest
+review verdict's certified records plus any raw `discoveries/*.json` record a node
+wrote after that review ([`.shared/report.ts`](.shared/report.ts)), the same set its
+terminal report lists.
+
+- **Queue.** A pass lists this project's runs that ended (completed, failed or
+  cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
+  them that still have undecided records. A record is decided once a decision record
+  that is not `asked` lists it. A run's work item is the state document
+  `discoveries/runs/<run-id>`, which holds the claim of the pass working it. A claim is
+  released only when the claiming run is completed, failed or cancelled, never on age.
+  A run whose records cannot be read is left queued and named on the pass's stderr.
+- **Decisions.** One agent decides every queued record, under the project's direction
+  document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
+  verifies each claim against the default branch's head with `git show` and
+  `git grep`, merges duplicates across runs and with earlier decisions, and searches
+  the tracker before filing. Each discovery ends in one decision: `file` an issue with
+  a full brief, `track` it on the open issue that already covers it (with one marked
+  evidence comment per key, only when it adds something), `drop` it with a reason, or
+  `ask` a maintainer.
+- **Memory.** Every decision is the state document `discoveries/decisions/<key>`: the
+  outcome, the reason, the commit it was verified at, every run record that found it
+  (`<run-id>:<ref>`), and the last question with its answer. Each pass writes them all as one readable
+  `drain/discovery-decisions.md` in its artifacts, which is what the agent reads. List
+  them with `archon state list --prefix discoveries/decisions/`.
+- **Writes.** The `outcome` script checks before any write that every queued record is
+  decided exactly once and that a key which already has an issue is not filed again,
+  and that a tracking issue is open. It writes every decision record before any public
+  write. A filed record keeps the issue's body until the issue reads back, and a
+  tracked record keeps its evidence comment until it is posted. A filed issue's body
+  begins with `<!-- archon-discovery <key> -->`, and the create looks for that marker
+  across every issue first; the evidence comment carries the same marker and is
+  replaced in place. So the next live pass, idle or not, finishes any write an earlier
+  pass stopped before, without a second issue or comment. Filed issues carry no
+  labels: intake triages them like any other issue, which it does only when the
+  install's forge identity is on `maintainers.json`.
+- **Questions.** Every `ask` in a pass becomes one attention item labelled
+  `discoveries: question`. The answer is stored on each asked record. The runs those
+  records came from stay claimed by the asking run until it ends, so no other pass asks
+  again; the next pass then decides them with the answer in memory.
+- **Eval mode.** `mode: eval` reads the stored decisions and writes nothing: no state
+  document, issue or comment. It ignores which runs earlier passes drained, so it
+  decides the window's runs as unhandled, and returns every decision, and every check
+  that would have refused the pass, as the outcome's `evaluation`.
+
+The pack installs no binding, so the workflow runs only when started by hand until an
+operator adds one. A native schedule starts a pass every few hours; `overlap: skip`
+skips a start while a pass still runs, and a pass paused on a question gives its slot
+back:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-host-discoveries",
+  "binding": {
+    "bindingId": "discoveries",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "discoveries:github.com/acme/widgets",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-discoveries",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 14400, "runAtLoad": false }
+}
+```
+
+To seed decisions an operator already made, put one record per key with
+`archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
+JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
+parse refuses every pass, naming the document.
 
 ## Composition validation
 

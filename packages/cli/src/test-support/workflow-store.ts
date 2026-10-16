@@ -116,10 +116,12 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       getById: unsupported,
       create: unsupported,
       updateStatus: unsupported,
+      markWorktreeDestroyed: unsupported,
       updateMetadata: unsupported,
       countActiveByCodebase: unsupported,
       findActiveByWorkflow: unsupported,
       listByCodebase: async () => [],
+      listActive: async () => [],
       findLatestByCodebaseAndWorkingPath: async () => null,
     },
   };
@@ -254,6 +256,8 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
+    releaseRunForUnreadableSource: (id, release) =>
+      write(view => view.releaseRunForUnreadableSource(id, release)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>

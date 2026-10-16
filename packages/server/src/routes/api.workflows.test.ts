@@ -11,6 +11,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { validationErrorHook } from './openapi-defaults';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { parseYaml } from '@archon/workflows/loader';
+import { workflowLoadErrorSchema } from './schemas/workflow.schemas';
 
 /** Test app factory: includes defaultHook to format validation errors as { error: string }. */
 function createTestApp(): OpenAPIHono {
@@ -20,7 +21,16 @@ function createTestApp(): OpenAPIHono {
 const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
   workflows: [makeTestWorkflowWithSource({ name: 'deploy', description: 'Deploy app' }, 'bundled')],
   errors: [
-    { filename: '/tmp/.archon/workflows/bad.md', error: 'invalid', errorType: 'parse_error' },
+    {
+      filename: '/tmp/.archon/workflows/bad.md',
+      workflowName: 'acme/review-kit:review',
+      error: 'invalid',
+      errorType: 'read_error',
+      cause: Object.assign(new Error('permission denied'), {
+        code: 'EACCES',
+        path: '/private/host/source',
+      }),
+    },
   ],
 }));
 
@@ -163,6 +173,15 @@ describe('GET /api/workflows', () => {
     );
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
+    expect(body.errors).toEqual(body.errors.map(error => workflowLoadErrorSchema.parse(error)));
+    expect(body.errors).toEqual([
+      {
+        filename: '/tmp/.archon/workflows/bad.md',
+        workflowName: 'acme/review-kit:review',
+        error: 'invalid',
+        errorType: 'read_error',
+      },
+    ]);
   });
 
   test('reports the workflow-level provider/model the AUTHOR declared', async () => {
