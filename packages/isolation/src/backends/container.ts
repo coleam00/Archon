@@ -67,7 +67,8 @@ const READY_POLL_INTERVAL_MS = 250;
  * and permits the remount escape (see SECURITY.md). Native fallback requires
  * the runner's dedicated FUSE mount failure status (78).
  */
-type OverlayMode = 'fuse' | 'native';
+export const OVERLAY_MODES = ['fuse', 'native'] as const;
+type OverlayMode = (typeof OVERLAY_MODES)[number];
 
 // The runner reserves this exit status for a failed fuse-overlayfs mount.
 // Older runner images have no such signal and fail without escalating privileges.

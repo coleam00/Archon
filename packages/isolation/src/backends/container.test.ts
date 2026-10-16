@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolveBashPath } from '@archon/git';
 import { getArchonHome } from '@archon/paths';
-import { ContainerBackend } from './container';
+import { ContainerBackend, OVERLAY_MODES } from './container';
 import * as containerModule from './container';
 import type { ContainerBackendConfig } from '../types';
 import type { IIsolationStore } from '../store';
@@ -91,6 +91,40 @@ function fakeDocker(
   runner.calls = calls;
   return runner;
 }
+
+describe('runner overlay modes', () => {
+  test.each([...OVERLAY_MODES, 'unsupported'])('accepts only host modes: %s', mode => {
+    const entrypoint = readFileSync(new URL('../../docker/entrypoint.sh', import.meta.url), 'utf8');
+    const runner = spawnSync(
+      resolveBashPath(),
+      [
+        '-c',
+        `
+        rm() { :; }
+        mkdir() { :; }
+        touch() { :; }
+        fuse-overlayfs() { echo mount:fuse; }
+        mount() { echo mount:native; }
+        exec() { :; }
+        export ARCHON_WORKSPACE_PATH=/workspace ARCHON_OVERLAY_MODE="$1"
+        ${entrypoint.replaceAll('/tmp/overlay-fuse.err', '/dev/null').replaceAll('/tmp/overlay-native.err', '/dev/null')}
+        `,
+        'runner-mode-test',
+        mode,
+      ],
+      { encoding: 'utf8' }
+    );
+    expect(runner.error).toBeUndefined();
+    expect(runner.signal).toBeNull();
+    if (mode === 'unsupported') {
+      expect(runner.status).toBe(1);
+      expect(runner.stdout).not.toContain('mount:');
+    } else {
+      expect(runner.status).toBe(0);
+      expect(runner.stdout).toContain(`mount:${mode}`);
+    }
+  });
+});
 
 describe('ContainerBackend.prepare', () => {
   test.each(['run', 'exec', 'inspect', 'logs', 'rm'] as const)(
@@ -332,8 +366,7 @@ describe('ContainerBackend.prepare', () => {
   );
 
   test.each([
-    ['fuse', 'none', 0, true],
-    ['native', 'none', 0, false],
+    ...OVERLAY_MODES.map(mode => [mode, 'none', 0, mode === 'fuse'] as const),
     ['fuse', 'rm', 73, false],
     ['fuse', 'rm', 78, false],
     ['fuse', 'mkdir', 73, false],
