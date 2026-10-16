@@ -39994,6 +39994,61 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(seenPrompt).toContain('please improve X');
   });
 
+  it('#4290: a non-completing decision at max_iterations fails instead of running past the cap', async () => {
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'should not run' };
+      yield { type: 'result', sessionId: 'unexpected-session' };
+    });
+
+    const store = createEscalationStore('run-escalation-at-cap');
+    const revisedDecision = { decision: 'revise', text: 'please improve X' };
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['grp.work', { output: 'work output' }],
+      ['grp.check', { output: JSON.stringify(revisedDecision), structuredOutput: revisedDecision }],
+    ]);
+    const workflow = gateTerminatedLoopGroupWorkflow();
+    const group = workflow.nodes[0];
+    if (group?.kind !== 'loop_group') throw new Error('expected group');
+    group.loop_group.max_iterations = 1;
+    // Feedback on an interactive_loop gate buys one more iteration; the flag must not
+    // leak that allowance to a body approval gate, whose cap stays autonomous.
+    const workflowRun = makeWorkflowRun('run-escalation-at-cap', {
+      metadata: {
+        approval: {
+          nodeId: 'grp',
+          message: 'Continue?',
+          type: 'approval',
+          bodyGateId: 'check',
+          iteration: 1,
+          decisions: [{ id: 'approve' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        } satisfies ApprovalContext,
+        loop_feedback_given: true,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: ready(workflow),
+        workflowRun,
+        priorCompletedNodes,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    expect(store.persistWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'node_failed',
+        step_name: 'grp',
+        data: expect.objectContaining({ failure_kind: 'max_iterations' }),
+      })
+    );
+  });
+
   it('resume completion recheck resolves an outer-DAG ref inside until_bash, not just the gate decision', async () => {
     mockSendQueryDag.mockClear();
     mockSendQueryDag.mockImplementation(async function* () {
