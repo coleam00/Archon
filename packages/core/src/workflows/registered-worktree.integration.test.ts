@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { toBranchName, toRepoPath } from '@archon/git';
+import { listWorktrees, toBranchName, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   configureIsolation,
   getIsolationProvider,
@@ -405,7 +405,9 @@ test('a reused worktree stays when its re-registration cannot be written', async
     createRegisteredWorktree({ create: async () => Promise.reject(insertError) }, input)
   ).rejects.toBe(insertError);
 
-  expect(git('worktree', 'list', '--porcelain')).toContain(first.env.workingPath);
+  expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+    toWorktreePath(first.env.workingPath)
+  );
   expect((await isolation.getById(first.envId))?.status).toBe('active');
 });
 
