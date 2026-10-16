@@ -453,6 +453,12 @@ const manifestFields = {
   source_config: workflowSourceConfigSchema,
   /** Absent until the caller has selected which workflow this run executes. */
   workflow_name: z.string().optional(),
+  /**
+   * Entrypoint names of installed packs that could not be read at capture. The packs are
+   * left out, so only workflows that name them fail; discovery still reserves the names
+   * so a same-named project or global workflow cannot stand in for them.
+   */
+  unavailable_installed_workflows: z.array(z.string()).optional(),
 };
 
 /**
@@ -1051,15 +1057,21 @@ export async function captureWorkflowSource(opts: {
 
   const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
   const { packs, errors } = await listInstalledPacks(installedFrom);
-  if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
   for (const pack of packs) {
     jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
   }
   let installedRecords: InstalledPluginRecord[];
+  let unavailableWorkflows: string[];
   if (installedFrom.kind === 'receipts') {
     installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
+    unavailableWorkflows = errors.flatMap(error =>
+      error.workflowName ? [error.workflowName] : []
+    );
   } else {
+    // A child copies its parent's frozen packs; one it cannot read is this host's fault.
+    if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
     const parent = await readManifest(installedFrom.captureRoot);
+    unavailableWorkflows = parent.unavailable_installed_workflows ?? [];
     const keys = new Set(packs.map(pack => pack.key));
     installedRecords = parent.version === 2 ? parent.installed_plugins : [];
     for (const record of installedRecords) {
@@ -1115,6 +1127,9 @@ export async function captureWorkflowSource(opts: {
       byte_count: byteCount,
       scopes: [...scopesCaptured],
       source_config: sourceConfig,
+      ...(unavailableWorkflows.length > 0
+        ? { unavailable_installed_workflows: unavailableWorkflows }
+        : {}),
     };
     const manifest: WorkflowSourceManifest =
       installedRecords.length > 0

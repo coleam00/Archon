@@ -39,12 +39,12 @@ import * as archonPaths from '@archon/paths';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import {
   WorkflowSourceUnavailableError,
-  assertWorkflowSourceIntegrity,
   assertCapturedFilesPresent,
   installedWorkflowName,
   isSourceReadFailure,
   listInstalledPacks,
   liveSourceRoots,
+  loadWorkflowSource,
   packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
@@ -756,7 +756,11 @@ export async function discoverWorkflows(
   }
 ): Promise<WorkflowLoadResult> {
   const roots = options.sourceRoots ?? liveSourceRoots(cwd);
-  const verifiedFiles = await assertWorkflowSourceIntegrity(roots);
+  const capture =
+    roots.kind === 'captured'
+      ? await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config)
+      : undefined;
+  const verifiedFiles = capture?.verifiedFiles;
   const projectRoot = roots.project;
   // Names the exec env-read checker treats as "supplied": .archon/.env + ~/.archon/.env
   // (read fresh, not from the process's full ambient environment — see
@@ -1031,11 +1035,21 @@ export async function discoverWorkflows(
         cause,
       });
     }
+    const unavailable = capture?.manifest.unavailable_installed_workflows ?? [];
+    for (const name of unavailable) {
+      allErrors.push({
+        filename: name,
+        workflowName: name,
+        error: `Installed workflow '${name}' could not be read when this run's source was captured.`,
+        errorType: 'validation_error',
+      });
+    }
     const catalogEntrypoints = new Set([
       ...listed.packs.flatMap(pack =>
         Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
       ),
       ...listed.errors.flatMap(error => (error.workflowName ? [error.workflowName] : [])),
+      ...unavailable,
     ]);
     const reservedNames = new Set([...catalogEntrypoints].map(name => name.toLowerCase()));
     for (const pack of listed.packs) {
