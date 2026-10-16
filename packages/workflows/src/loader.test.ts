@@ -2052,8 +2052,9 @@ nodes:
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
-      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } =
-        await import('./workflow-discovery');
+      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } = await import(
+        './workflow-discovery'
+      );
       resetLegacyHomeWarningForTests();
 
       const homeDir = join(

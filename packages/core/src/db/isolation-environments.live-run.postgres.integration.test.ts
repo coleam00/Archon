@@ -58,8 +58,9 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       getDatabaseType: () => 'postgresql',
     }));
 
-    ({ create, getLiveRunOwningEnv, getById, updateMetadata, markWorktreeDestroyed } =
-      await import('./isolation-environments'));
+    ({ create, getLiveRunOwningEnv, getById, updateMetadata, markWorktreeDestroyed } = await import(
+      './isolation-environments'
+    ));
   });
 
   afterAll(async () => {

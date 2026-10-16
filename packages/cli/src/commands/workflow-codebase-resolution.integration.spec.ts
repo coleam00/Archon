@@ -186,10 +186,9 @@ test('legacy relative registration fails with recovery guidance', () => {
       .get();
     if (!project) throw new Error('Missing registration');
     const env = db
-      .query<
-        { id: string; working_path: string; branch_name: string },
-        []
-      >('SELECT id, working_path, branch_name FROM remote_agent_isolation_environments')
+      .query<{ id: string; working_path: string; branch_name: string }, []>(
+        'SELECT id, working_path, branch_name FROM remote_agent_isolation_environments'
+      )
       .get();
     if (!env) throw new Error('Missing isolation environment');
     const gitCallSchema = z.object({ command: z.string(), args: z.array(z.string()) });
@@ -400,10 +399,9 @@ test('first detached git-root folder registration completes in place without Git
       await Bun.sleep(100);
     }
     const project = db
-      .query<
-        CodebaseRow & { kind: string },
-        []
-      >('SELECT id, default_cwd, kind FROM remote_agent_codebases')
+      .query<CodebaseRow & { kind: string }, []>(
+        'SELECT id, default_cwd, kind FROM remote_agent_codebases'
+      )
       .get();
     const canonicalFolder = await canonicalizeProjectPath(folder);
     expect(project).toMatchObject({ kind: 'folder', default_cwd: canonicalFolder });

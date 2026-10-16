@@ -55,7 +55,7 @@ bun run lint
 ```bash
 bun run format:check
 ```
-**Expected:** All files pass Prettier checks
+**Expected:** All files included by the formatter configuration in `biome.jsonc` pass Biome checks
 
 ### 1.4 Unit Tests
 ```bash

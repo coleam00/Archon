@@ -101,8 +101,9 @@ describe('SqliteAdapter failure logging', () => {
       try {
         const insert = (query: SqliteAdapter['query']) =>
           query(sql, ['missing-conversation', 'user', secret]);
-        failure = await (
-          mode === 'query' ? insert(db.query.bind(db)) : db.withTransaction(insert)
+        failure = await (mode === 'query'
+          ? insert(db.query.bind(db))
+          : db.withTransaction(insert)
         ).catch((error: unknown) => error);
         lines = output.mock.calls.map(call => String(call[0]));
       } finally {
@@ -146,8 +147,9 @@ describe('SqliteAdapter failure logging', () => {
     let lines: string[];
     try {
       const query = (execute: SqliteAdapter['query']) => execute(sql, ['{}', secret]);
-      failure = await (
-        mode === 'query' ? query(db.query.bind(db)) : db.withTransaction(query)
+      failure = await (mode === 'query'
+        ? query(db.query.bind(db))
+        : db.withTransaction(query)
       ).catch((error: unknown) => error);
       lines = output.mock.calls.map(call => String(call[0]));
     } finally {

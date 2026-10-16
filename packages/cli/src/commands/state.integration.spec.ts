@@ -73,13 +73,14 @@ nodes:
       .query<
         { revision: number; writer_run_id: string; writer_node_path: string; value: string },
         []
-      >('SELECT revision, writer_run_id, writer_node_path, value FROM remote_agent_state_revisions ORDER BY revision')
+      >(
+        'SELECT revision, writer_run_id, writer_node_path, value FROM remote_agent_state_revisions ORDER BY revision'
+      )
       .all();
     const recorded = db
-      .query<
-        { id: string; status: string },
-        []
-      >('SELECT id, status FROM remote_agent_workflow_runs')
+      .query<{ id: string; status: string }, []>(
+        'SELECT id, status FROM remote_agent_workflow_runs'
+      )
       .get();
     expect(recorded?.status).toBe('completed');
     if (!recorded) throw new Error('Run was not recorded');

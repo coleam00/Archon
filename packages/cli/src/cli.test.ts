@@ -1161,10 +1161,9 @@ describe('CLI workflow event dispatch', () => {
       const verify = new Database(join(archonHome, 'archon.db'), { readonly: true });
       try {
         const event = verify
-          .query<
-            { workflow_run_id: string; event_type: string },
-            []
-          >('SELECT workflow_run_id, event_type FROM remote_agent_workflow_events')
+          .query<{ workflow_run_id: string; event_type: string }, []>(
+            'SELECT workflow_run_id, event_type FROM remote_agent_workflow_events'
+          )
           .get();
         expect(event).toEqual({
           workflow_run_id: fullRunId,

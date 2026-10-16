@@ -57,8 +57,9 @@ import {
 } from '../test/workflow-mock-factories';
 
 beforeAll(async (): Promise<void> => {
-  const { registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers/in-process');
+  const { registerBuiltinProviders, registerCommunityProviders } = await import(
+    '@archon/providers/in-process'
+  );
   registerBuiltinProviders();
   registerCommunityProviders();
 });
@@ -109,7 +110,7 @@ const mockListDueWorkflowContinuations = mock<IWorkflowStore['listDueWorkflowCon
 );
 const mockCancelWorkflowRun = mock(async (_id: string) => ({ cancelled: true }));
 type ListWorkflowRunsOptions = Parameters<
-  (typeof import('@archon/core/db/workflows'))['listWorkflowRuns']
+  typeof import('@archon/core/db/workflows')['listWorkflowRuns']
 >[0];
 
 const mockListWorkflowRuns = mock<
@@ -145,7 +146,7 @@ const mockFindConversationByPlatformId = mock(
       codebase_id: string | null;
     }
 );
-const mockHandleMessage = mock<(typeof import('@archon/core'))['handleMessage']>(async () => {});
+const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(async () => {});
 const mockAddMessage = mock(async () => ({
   id: 'msg-1',
   conversation_id: 'conv-1',
@@ -448,20 +449,20 @@ const mockUpdateWorkflowRun = mock(async (_id: string, _update: unknown) => {});
 // The 3rd arg (approve) / 2nd arg (cancel) is the audit-event batch written in the
 // same transaction as the resolution (#2146).
 const mockResolveApprovalGate = mock<
-  (typeof import('@archon/core/db/workflows'))['resolveApprovalGate']
+  typeof import('@archon/core/db/workflows')['resolveApprovalGate']
 >(async () => ({ resolved: true }));
 const mockResolveAndCancelApprovalGate = mock<
-  (typeof import('@archon/core/db/workflows'))['resolveAndCancelApprovalGate']
+  typeof import('@archon/core/db/workflows')['resolveAndCancelApprovalGate']
 >(async () => ({ resolved: true }));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
 const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload?: unknown) => ({
   signaled: true,
 }));
 const mockAnswerAttentionWait = mock<
-  (typeof import('@archon/core/db/workflows'))['answerAttentionWait']
+  typeof import('@archon/core/db/workflows')['answerAttentionWait']
 >(async () => ({ answered: true }));
 const mockLabelAttentionWait = mock<
-  (typeof import('@archon/core/db/workflows'))['labelAttentionWait']
+  typeof import('@archon/core/db/workflows')['labelAttentionWait']
 >(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
@@ -530,14 +531,14 @@ mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
 }));
 
 const mockHydrateResumableRun = mock<
-  (typeof import('@archon/workflows/executor'))['hydrateResumableRun']
+  typeof import('@archon/workflows/executor')['hydrateResumableRun']
 >(async (_deps, run) => ({
   preCreatedRun: { ...run, status: 'running' },
   priorCompletedNodes: new Map(),
   priorUsage: { costUsd: 0 },
   priorNodeSessions: [],
 }));
-const mockExecuteWorkflow = mock<(typeof import('@archon/workflows/executor'))['executeWorkflow']>(
+const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({ success: true, workflowRunId: 'run-1' })
 );
 mock.module('@archon/workflows/executor', () => ({
@@ -752,8 +753,9 @@ describe('POST /api/workflows/:name/run', () => {
 
   test('accepts a percent-encoded namespaced name and forwards the decoded name', async () => {
     // Regression guard: percent-encoded '/' must be decoded and validate, not raw-route to 400.
-    const { isValidWorkflowName, isValidCommandName } =
-      await import('@archon/workflows/command-validation');
+    const { isValidWorkflowName, isValidCommandName } = await import(
+      '@archon/workflows/command-validation'
+    );
     const segmentOk = (seg: string) =>
       !!seg && !seg.startsWith('.') && !seg.includes('\\') && !seg.includes('..');
     // Real namespaced logic: `triage/review` is valid (one subfolder deep).

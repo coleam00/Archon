@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { applyApiTypes, runOpenApiGenerator } from './generate-api-types';
+import { applyApiTypes, formatApiTypes, runOpenApiGenerator } from './generate-api-types';
 
 const tempRoots: string[] = [];
 
@@ -127,4 +127,22 @@ test('the generator bound kills a stalled child, names the timeout, and unstages
   const stagedPath = (stagedStdin as { name?: string }).name;
   expect(stagedPath).toBeTruthy();
   expect(existsSync(stagedPath as string)).toBe(false);
+});
+
+test('Biome formats API types larger than a pipe buffer with repository style and LF', () => {
+  const output = Array.from(
+    { length: 2_000 },
+    (_, index) => `export type Value${index}={value:"value${index}"}`
+  ).join('\r\n');
+  const formatted = formatApiTypes(output);
+  expect(formatted).toStartWith("export type Value0 = { value: 'value0' };\n");
+  expect(formatted).toEndWith("export type Value1999 = { value: 'value1999' };\n");
+  expect(formatted).not.toContain('\r');
+  expect(formatApiTypes(formatted)).toBe(formatted);
+});
+
+test('Biome rejects invalid generated types instead of returning unformatted output', () => {
+  expect(() => formatApiTypes('export type Broken = {')).toThrow(
+    'Biome failed formatting API types'
+  );
 });

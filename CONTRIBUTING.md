@@ -28,12 +28,17 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
+`generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only), and `tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
 drift, the workflow persistence boundary, and SDK type restatements. Install the Biome
-extension for in-editor diagnostics; ESLint extensions no longer find a config.
+extension for in-editor lint and formatting; disable Prettier for this repository.
+Formatting uses two spaces, single quotes, semicolons, a 100-column width, and LF line
+endings on every OS. On Windows, `bun run format` converts CRLF working files to LF;
+Git still normalizes text through the existing `.gitattributes`. `.archon/**` remains
+excluded from formatting while its TypeScript scripts remain linted. Markdown and HTML
+are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
 The SDK check reads exported types from installed provider SDK declarations and scans
 tracked and untracked TypeScript sources outside `packages/providers/`. Import SDK
@@ -63,8 +68,8 @@ when their execution steps skip. Dispatch runs fixtures regardless of paths.
 Local validation has no fixed duration: tests and typed analysis dominate, and machine
 load matters. The audit for [#3985](https://github.com/coleam00/Archon/issues/3985)
 estimated the previous total at about 25 minutes under load, including fixtures and
-formatting. Those two checks now require explicit selection. Each validate run prints
-its actual elapsed time per check. A local success does not predict service, build,
+formatting. Workflow fixtures require explicit selection; formatting runs by default.
+Each validate run prints its actual elapsed time per check. A local success does not predict service, build,
 or other-platform CI results.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.

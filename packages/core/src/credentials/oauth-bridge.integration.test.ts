@@ -8,8 +8,9 @@ const logger = createMockLogger();
 mock.module('@archon/paths', () => ({ ...paths, createLogger: () => logger }));
 const persist = mock(async () => ({ provider: 'github-copilot', kind: 'oauth' as const }));
 mock.module('./connect-service', () => ({ persistProviderOAuth: persist }));
-const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
-  await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } = await import(
+  './oauth-bridge'
+);
 const realFetch = globalThis.fetch;
 
 afterEach(() => {

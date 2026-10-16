@@ -105,10 +105,9 @@ function readRunById(
   try {
     return (
       database
-        .query<
-          { id: string; status: string; working_path: string | null },
-          [string]
-        >('SELECT id, status, working_path FROM remote_agent_workflow_runs WHERE id = ?')
+        .query<{ id: string; status: string; working_path: string | null }, [string]>(
+          'SELECT id, status, working_path FROM remote_agent_workflow_runs WHERE id = ?'
+        )
         .get(runId) ?? undefined
     );
   } finally {

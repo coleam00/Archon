@@ -60,8 +60,9 @@ mock.module('./openai-oauth', () => ({
   refreshOpenAiOAuthCredentials: async (creds: Record<string, unknown>) => creds,
 }));
 
-const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
-  await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } = await import(
+  './oauth-bridge'
+);
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));

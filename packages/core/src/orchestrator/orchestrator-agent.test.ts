@@ -154,8 +154,9 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 // Tests below derive their expected path from it rather than from a POSIX
 // literal: it makes a path absolute, and on Windows `resolve('/path')` is
 // drive-qualified (`D:\path`).
-const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
-  await import('@archon/paths');
+const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } = await import(
+  '@archon/paths'
+);
 mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: 'test',
@@ -289,8 +290,9 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
 const mockDiscoverWorkflowsWithConfig = mock<typeof WorkflowDiscovery.discoverWorkflowsWithConfig>(
   () => Promise.resolve({ workflows: [], errors: [] })
 );
-const { discoverWorkflowsWithConfig: realDiscoverWorkflowsWithConfig } =
-  await import('@archon/workflows/workflow-discovery');
+const { discoverWorkflowsWithConfig: realDiscoverWorkflowsWithConfig } = await import(
+  '@archon/workflows/workflow-discovery'
+);
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
@@ -353,8 +355,9 @@ const mockPrepareWorkflowSource = mock<typeof WorkflowExecutor.prepareWorkflowSo
     roots: CAPTURED_SOURCE_ROOTS,
   })
 );
-const { resolveContinuationWorkflow: realResolveContinuationWorkflow } =
-  await import('@archon/workflows/executor');
+const { resolveContinuationWorkflow: realResolveContinuationWorkflow } = await import(
+  '@archon/workflows/executor'
+);
 const mockResolveContinuationWorkflow = mock<typeof WorkflowExecutor.resolveContinuationWorkflow>(
   () => Promise.resolve(undefined)
 );
@@ -4492,8 +4495,9 @@ describe('workflow dispatch routing', () => {
       async mode => {
         const { CodexProvider } = await import('@archon/providers/codex/provider');
         const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
-        const { createFakeAppServer, THREAD_ID, TURN_ID, agentMessage } =
-          await import('../../../providers/src/test/codex-app-server-fake');
+        const { createFakeAppServer, THREAD_ID, TURN_ID, agentMessage } = await import(
+          '../../../providers/src/test/codex-app-server-fake'
+        );
         capsMock.mockReturnValue(CODEX_CAPABILITIES);
         const prose =
           '/invoke-workflow test-workflow --project test-repo --prompt "prose must not launch"';
@@ -4549,8 +4553,9 @@ describe('workflow dispatch routing', () => {
     test('a legacy Codex chat visibly asks for a new chat before invoking a model', async () => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
-      const { createFakeAppServer } =
-        await import('../../../providers/src/test/codex-app-server-fake');
+      const { createFakeAppServer } = await import(
+        '../../../providers/src/test/codex-app-server-fake'
+      );
       capsMock.mockReturnValue(CODEX_CAPABILITIES);
       mockGetOrCreateConversation.mockResolvedValueOnce(
         makeConversation({ ai_assistant_type: 'codex' })
@@ -4574,8 +4579,9 @@ describe('workflow dispatch routing', () => {
     test('Codex registration uses the shared primitive and manage_run preserves actor and project authorization', async () => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
-      const { createFakeAppServer, THREAD_ID, TURN_ID } =
-        await import('../../../providers/src/test/codex-app-server-fake');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } = await import(
+        '../../../providers/src/test/codex-app-server-fake'
+      );
       capsMock.mockReturnValue(CODEX_CAPABILITIES);
       const run = makeRun({
         id: 'aaaaaaaa-1111-2222-3333-444444444444',
@@ -5155,8 +5161,9 @@ describe('paused approval gate routing', () => {
     async ({ action, decision }) => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
-      const { createFakeAppServer, THREAD_ID, TURN_ID } =
-        await import('../../../providers/src/test/codex-app-server-fake');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } = await import(
+        '../../../providers/src/test/codex-app-server-fake'
+      );
       capsMock.mockReturnValue(CODEX_CAPABILITIES);
       arrangeGatedChat({
         metadata: { approval: { nodeId: 'gate-1', message: 'Review', onRejectPrompt: 'Rework' } },

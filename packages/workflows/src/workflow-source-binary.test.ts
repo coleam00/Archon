@@ -24,8 +24,9 @@ import { removeTempTree } from '@archon/paths/test-utils';
 const actual = await import('./defaults/bundled-defaults');
 mock.module('./defaults/bundled-defaults', () => ({ ...actual, isBinaryBuild: () => true }));
 
-const { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } =
-  await import('./workflow-source');
+const { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } = await import(
+  './workflow-source'
+);
 const { loadCommandPrompt } = await import('./executor-shared');
 const { discoverScriptsForCwd } = await import('./script-discovery');
 

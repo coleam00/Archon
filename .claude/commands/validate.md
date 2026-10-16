@@ -47,11 +47,13 @@ bun run lint:fix
 
 ---
 
-## Level 3: Prettier Format Check
+## Level 3: Biome Format Check
 
 ```bash
 bun run format:check
 ```
+
+Checks files included by the formatter configuration in `biome.jsonc`.
 
 **What to look for:**
 - Inconsistent indentation (2 spaces)

@@ -392,10 +392,9 @@ function readEventWait(
   const database = openReadOnly(join(archonHome, 'archon.db'));
   try {
     const row = database
-      .query<
-        { metadata: string },
-        [string]
-      >("SELECT metadata FROM remote_agent_workflow_runs WHERE id = ? AND status = 'paused'")
+      .query<{ metadata: string }, [string]>(
+        "SELECT metadata FROM remote_agent_workflow_runs WHERE id = ? AND status = 'paused'"
+      )
       .get(runId);
     if (!row) return undefined;
     const metadata = JSON.parse(row.metadata) as { wait?: unknown };
@@ -1035,49 +1034,47 @@ describe('archon workflow wait against a detached run', () => {
 
 describe('wait immediately after detached resume', () => {
   for (const nextPause of [false, true]) {
-    test(
-      nextPause ? 'reports a new attention pause' : 'does not report the cleared pause',
-      async () => {
-        const name = 'resume-attention';
-        const workflow =
-          `name: ${name}\ndescription: Resume acknowledgement fixture.\nnodes:\n` +
-          '  - id: warmup\n    bash: "echo ready"\n' +
-          '  - id: old-pause\n    depends_on: [warmup]\n    wait:\n      attention: "First action"\n' +
-          (nextPause
-            ? '  - id: new-pause\n    depends_on: [old-pause]\n    wait:\n      attention: "Second action"\n'
-            : '  - id: finish\n    depends_on: [old-pause]\n    bash: "echo done"\n');
-        const fixture = makeFixture('archon-resume-attention-', { [name]: workflow });
-        const { runId } = await launchDetached(fixture, name);
-        await waitFor(
-          'the initial pause',
-          () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? true : undefined),
-          30_000
-        );
-        await waitFor(
-          'the initial owner to release',
-          async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
-          30_000
-        );
-        const resume = await runCli(fixture, ['workflow', 'resume', runId, '--detach', '--json']);
-        expect(resume.exitCode).toBe(0);
-        expect(JSON.parse(resume.stdout)).toMatchObject({
-          ok: true,
-          runId,
-          action: 'resume',
-          detached: true,
-          continues: true,
-        });
-        const { exitCode, payload } = await startWait(fixture, runId, 30).settled();
-        expect(exitCode).toBe(0);
-        expect(payload).toMatchObject({
-          result: 'attention',
-          attention: nextPause
-            ? { kind: 'attention', nodeId: 'new-pause', message: 'Second action', form: 'message' }
-            : { kind: 'terminal', runId, status: 'completed' },
-        });
-      },
-      90_000
-    );
+    test(nextPause
+      ? 'reports a new attention pause'
+      : 'does not report the cleared pause', async () => {
+      const name = 'resume-attention';
+      const workflow =
+        `name: ${name}\ndescription: Resume acknowledgement fixture.\nnodes:\n` +
+        '  - id: warmup\n    bash: "echo ready"\n' +
+        '  - id: old-pause\n    depends_on: [warmup]\n    wait:\n      attention: "First action"\n' +
+        (nextPause
+          ? '  - id: new-pause\n    depends_on: [old-pause]\n    wait:\n      attention: "Second action"\n'
+          : '  - id: finish\n    depends_on: [old-pause]\n    bash: "echo done"\n');
+      const fixture = makeFixture('archon-resume-attention-', { [name]: workflow });
+      const { runId } = await launchDetached(fixture, name);
+      await waitFor(
+        'the initial pause',
+        () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? true : undefined),
+        30_000
+      );
+      await waitFor(
+        'the initial owner to release',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        30_000
+      );
+      const resume = await runCli(fixture, ['workflow', 'resume', runId, '--detach', '--json']);
+      expect(resume.exitCode).toBe(0);
+      expect(JSON.parse(resume.stdout)).toMatchObject({
+        ok: true,
+        runId,
+        action: 'resume',
+        detached: true,
+        continues: true,
+      });
+      const { exitCode, payload } = await startWait(fixture, runId, 30).settled();
+      expect(exitCode).toBe(0);
+      expect(payload).toMatchObject({
+        result: 'attention',
+        attention: nextPause
+          ? { kind: 'attention', nodeId: 'new-pause', message: 'Second action', form: 'message' }
+          : { kind: 'terminal', runId, status: 'completed' },
+      });
+    }, 90_000);
   }
 });
 
@@ -1192,84 +1189,80 @@ describe('a durable wait deadline is enforced by the owning process', () => {
   }, 120_000);
 
   for (const delivery of ['recorded', 'cli'] as const) {
-    test(
-      delivery === 'recorded'
-        ? 'the sleeping owner resumes an event signal that is only recorded'
-        : 'a CLI event signal completes once while the detached owner sleeps',
-      async () => {
-        const fixture = makeFixture(
-          'archon-wait-signaled-',
-          { 'wait-signaled': SIGNALED_EVENT_WAIT },
-          { env: { DATABASE_URL: '' } }
-        );
-        const { startedPath, exitPath } = captureDetachedOwnerExit(fixture);
-        const { runId } = await launchDetached(fixture, 'wait-signaled');
-        const owner = await waitFor(
-          'the detached owner to start',
+    test(delivery === 'recorded'
+      ? 'the sleeping owner resumes an event signal that is only recorded'
+      : 'a CLI event signal completes once while the detached owner sleeps', async () => {
+      const fixture = makeFixture(
+        'archon-wait-signaled-',
+        { 'wait-signaled': SIGNALED_EVENT_WAIT },
+        { env: { DATABASE_URL: '' } }
+      );
+      const { startedPath, exitPath } = captureDetachedOwnerExit(fixture);
+      const { runId } = await launchDetached(fixture, 'wait-signaled');
+      const owner = await waitFor(
+        'the detached owner to start',
+        () =>
+          existsSync(startedPath)
+            ? (JSON.parse(readFileSync(startedPath, 'utf8')) as { pid: number })
+            : undefined,
+        30_000
+      );
+      observedDetachedOwners.add(owner.pid);
+      const wait = await waitFor(
+        'the event-wait run to park',
+        () => readEventWait(fixture.archonHome, runId),
+        30_000
+      );
+      await waitFor(
+        'the paused owner to release its execution endpoint',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        10_000
+      );
+      expect(existsSync(exitPath)).toBe(false);
+      process.kill(owner.pid, 0);
+
+      if (delivery === 'recorded') {
+        expect(await recordEventSignal(fixture, runId, wait)).toEqual({ signaled: true });
+      } else {
+        const signal = await runCli(fixture, [
+          'workflow',
+          'signal',
+          runId,
+          '--event',
+          wait.event,
+          '--resume-at',
+          wait.resumeAt,
+          '--json',
+        ]);
+        expect(signal.exitCode, signal.stderr || signal.stdout).toBe(0);
+        expect(JSON.parse(signal.stdout)).toMatchObject({ ok: true, signaled: true });
+      }
+
+      await waitFor(
+        'the signaled event wait to complete the run before its deadline',
+        () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? true : undefined),
+        20_000
+      );
+      expect(Date.now()).toBeLessThan(Date.parse(wait.resumeAt));
+      expect(readNodeCompletedOutput(fixture.archonHome, runId, 'checks')).toMatchObject({
+        status: 'satisfied',
+        event: 'checks.complete',
+      });
+      if (delivery === 'cli') {
+        const exit = await waitFor(
+          'the detached owner to exit',
           () =>
-            existsSync(startedPath)
-              ? (JSON.parse(readFileSync(startedPath, 'utf8')) as { pid: number })
+            existsSync(exitPath)
+              ? (JSON.parse(readFileSync(exitPath, 'utf8')) as { code: number })
               : undefined,
-          30_000
+          15_000
         );
-        observedDetachedOwners.add(owner.pid);
-        const wait = await waitFor(
-          'the event-wait run to park',
-          () => readEventWait(fixture.archonHome, runId),
-          30_000
-        );
-        await waitFor(
-          'the paused owner to release its execution endpoint',
-          async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
-          10_000
-        );
-        expect(existsSync(exitPath)).toBe(false);
-        process.kill(owner.pid, 0);
-
-        if (delivery === 'recorded') {
-          expect(await recordEventSignal(fixture, runId, wait)).toEqual({ signaled: true });
-        } else {
-          const signal = await runCli(fixture, [
-            'workflow',
-            'signal',
-            runId,
-            '--event',
-            wait.event,
-            '--resume-at',
-            wait.resumeAt,
-            '--json',
-          ]);
-          expect(signal.exitCode, signal.stderr || signal.stdout).toBe(0);
-          expect(JSON.parse(signal.stdout)).toMatchObject({ ok: true, signaled: true });
-        }
-
-        await waitFor(
-          'the signaled event wait to complete the run before its deadline',
-          () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? true : undefined),
-          20_000
-        );
-        expect(Date.now()).toBeLessThan(Date.parse(wait.resumeAt));
-        expect(readNodeCompletedOutput(fixture.archonHome, runId, 'checks')).toMatchObject({
-          status: 'satisfied',
-          event: 'checks.complete',
-        });
-        if (delivery === 'cli') {
-          const exit = await waitFor(
-            'the detached owner to exit',
-            () =>
-              existsSync(exitPath)
-                ? (JSON.parse(readFileSync(exitPath, 'utf8')) as { code: number })
-                : undefined,
-            15_000
-          );
-          observedDetachedOwners.delete(owner.pid);
-          expect(exit).toEqual({ code: 0 });
-        }
-        activeRunIds.delete(runId);
-        expect(countNodeCompletions(fixture.archonHome, runId, 'finish')).toBe(1);
-      },
-      90_000
-    );
+        observedDetachedOwners.delete(owner.pid);
+        expect(exit).toEqual({ code: 0 });
+      }
+      activeRunIds.delete(runId);
+      expect(countNodeCompletions(fixture.archonHome, runId, 'finish')).toBe(1);
+    }, 90_000);
   }
 
   test('workflow wait returns at the run terminal, not at the wait', async () => {

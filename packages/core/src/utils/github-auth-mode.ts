@@ -19,8 +19,8 @@ export type GitHubAuthModeDecision =
 export function selectGitHubAuthMode(env: NodeJS.ProcessEnv): GitHubAuthModeDecision {
   const hasGitHubApp = Boolean(
     env.GITHUB_APP_ID &&
-    GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key])) &&
-    env.WEBHOOK_SECRET
+      GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key])) &&
+      env.WEBHOOK_SECRET
   );
   const hasGitHubPat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
 

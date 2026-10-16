@@ -293,8 +293,9 @@ describe('checkAssistantLogin', () => {
 
   it('loads the merged default assistant without consulting the Pi login', async () => {
     const core = await import('@archon/core');
-    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers/in-process');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
@@ -314,8 +315,9 @@ describe('checkAssistantLogin', () => {
 
   it('checks a Pi key supplied only by merged assistant config', async () => {
     const core = await import('@archon/core');
-    const { registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers/in-process');
+    const { registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
     registerBuiltinProviders();
     registerCommunityProviders();
     const root = mkdtempSync(join(tmpdir(), 'doctor-pi-config-'));
@@ -358,8 +360,9 @@ describe('checkAssistantLogin', () => {
   it("skips native login only for the configured model's connected vendor", async () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
-    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers/in-process');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
@@ -447,8 +450,9 @@ describe('checkAssistantLogin', () => {
   it('logs the error when the connected-credential lookup fails', async () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
-    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers/in-process');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
     registerBuiltinProviders();
     registerCommunityProviders();
     const lookupError = new Error('database unreachable');

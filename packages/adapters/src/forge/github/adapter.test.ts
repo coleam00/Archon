@@ -131,11 +131,11 @@ mock.module('@archon/core/db/users', () => ({
 }));
 
 // Mock @archon/git for ensureRepoReady integration tests
-const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));
-const mockSyncRepository = mock<(typeof import('@archon/git'))['syncRepository']>(async () => ({
+const mockSyncRepository = mock<typeof import('@archon/git')['syncRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));

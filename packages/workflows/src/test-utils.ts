@@ -128,9 +128,7 @@ export async function executeTestDagWorkflow(
 }
 
 /** A persisted workflow event as an in-memory test store records it. */
-export interface InMemoryStoreEvent extends Pick<
-  WorkflowEventInput,
-  'workflow_run_id' | 'step_name' | 'data'
-> {
+export interface InMemoryStoreEvent
+  extends Pick<WorkflowEventInput, 'workflow_run_id' | 'step_name' | 'data'> {
   event_type: string;
 }

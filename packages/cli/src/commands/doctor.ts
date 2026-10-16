@@ -902,8 +902,9 @@ async function checkWorkflowSdlcForge(env: NodeJS.ProcessEnv): Promise<CheckResu
     const cwd = process.cwd();
     const config = await defaultLoadMergedConfig(cwd);
     const { createCliWorkflowHost } = await import('../utils/workflow-host');
-    const { resolveCodebaseForPath } =
-      await import('@archon/core/services/codebase-checkout-resolver');
+    const { resolveCodebaseForPath } = await import(
+      '@archon/core/services/codebase-checkout-resolver'
+    );
     const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
     const host = await createCliWorkflowHost(true);
     const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
