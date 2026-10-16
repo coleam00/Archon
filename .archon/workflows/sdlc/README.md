@@ -611,7 +611,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   refuses unless the verdict says Ready at the head, CI is green there and no review
   thread is unresolved, and the pull request is open, not a draft, into the default
   branch and at the head the sweep named. It merges with `--match-head-commit`,
-  writes a receipt as soon as the forge accepts the merge, and reads it back.
+  writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
+  request that reads back unmerged, as when the forge queues merges, loses its receipt
+  and fails the gate.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
   batch it waits for CI on the default branch, rerunning a red in code the batch did
   not touch once; red after that is raised to a maintainer.
