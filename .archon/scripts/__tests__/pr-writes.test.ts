@@ -112,6 +112,17 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.forge).toEqual([]);
   });
 
+  it('refuses to open a pull request prepare wrote no body for, leaving no claim', () => {
+    const result = publishPr({
+      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+      inputs: { INPUTS_BODY: '{ARTIFACTS}/absent.md' },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('prepare wrote no body');
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+  });
+
   it('reuses the open pull request for that head instead of opening a second one', () => {
     const result = publishPr({ gh: { pr: { headRefName: 'feature' } } });
     expect(result.code).toBe(0);
@@ -238,6 +249,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr list'))).toBe(false);
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
   });
 
   it('adopts a named pull request whose head repository differs only in case', () => {

@@ -58,8 +58,9 @@ nodes:
         base: { type: string, pattern: '\S' }
         existing: { type: [integer, 'null'], minimum: 1 }
         title: { type: string, pattern: '\S' }
+        # null when the run continues a pull request: its description is not archon-pr's to write.
         body:
-          type: object
+          type: [object, 'null']
           properties:
             type: { type: string, enum: [archon_artifact] }
             run_id: { type: string }
