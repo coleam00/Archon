@@ -52,7 +52,7 @@ For each changed file, look for:
 - Concurrency bugs in async code.
 
 ### CLAUDE.md compliance
-- TypeScript: explicit return types? No `any` without justification?
+- TypeScript: do types express meaningful contracts? No `any` without justification?
 - Imports: typed imports for types? Namespace imports for submodules?
 - Logging: structured Pino with `{domain}.{action}_{state}` event names?
 - Error handling: errors surfaced, not swallowed? `classifyIsolationError` used where appropriate?

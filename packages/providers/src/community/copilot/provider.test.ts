@@ -669,7 +669,13 @@ describe('CopilotProvider.sendQuery', () => {
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      env: { COPILOT_GITHUB_TOKEN: 'ghp_copilot' },
+      env: {
+        COPILOT_GITHUB_TOKEN: 'ghp_copilot',
+        GH_TOKEN: 'host-gh',
+        GITHUB_TOKEN: 'host-github',
+      },
+      protectedEnvKeys: ['COPILOT_GITHUB_TOKEN'],
+      assistantConfig: { useLoggedInUser: true },
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));

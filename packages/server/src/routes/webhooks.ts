@@ -9,6 +9,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { GitHubAdapter } from '@archon/adapters';
 import type { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
+import type { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { createLogger } from '@archon/paths';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type {
@@ -156,6 +157,37 @@ export function registerGiteaWebhookRoute(app: OpenAPIHono, gitea: GiteaWebhookT
       return c.text('OK', 200);
     } catch (error) {
       getLog().error({ err: error, eventType }, 'gitea_webhook_endpoint_error');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
+}
+
+/** The slice of GitLabAdapter the webhook route depends on. */
+export type GitlabWebhookTarget = Pick<GitLabAdapter, 'handleWebhook'>;
+
+export function registerGitlabWebhookRoute(app: OpenAPIHono, gitlab: GitlabWebhookTarget): void {
+  app.post('/webhooks/gitlab', async c => {
+    const eventType = c.req.header('x-gitlab-event');
+
+    try {
+      const token = c.req.header('x-gitlab-token');
+      if (!token) {
+        return c.json({ error: 'Missing token header' }, 400);
+      }
+
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
+      if (payload.kind === 'read_failed') throw payload.error;
+      if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
+
+      // The adapter validates the token after this point; process async for a fast response.
+      gitlab.handleWebhook(payload.body, token).catch((error: unknown) => {
+        getLog().error({ err: error, eventType }, 'gitlab.webhook_processing_error');
+      });
+
+      return c.text('OK', 200);
+    } catch (error) {
+      getLog().error({ err: error, eventType }, 'gitlab.webhook_endpoint_error');
       return c.json({ error: 'Internal server error' }, 500);
     }
   });

@@ -110,3 +110,29 @@ describe('isRunTranscriptConversation', () => {
     expect(await workflows.isRunTranscriptConversation('alice-web')).toBe(false);
   });
 });
+
+describe('platform conversation identity', () => {
+  test('bare lookup rejects collisions while qualified lookup selects the requested platform', async () => {
+    for (const platform of ['web', 'slack']) {
+      await db.query(
+        'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, $2, $3)',
+        [`collision-${platform}`, platform, 'shared-id']
+      );
+    }
+    try {
+      await expect(conversations.findConversationByPlatformId('shared-id')).rejects.toThrow(
+        'Ambiguous conversation platform ID'
+      );
+      expect((await conversations.getConversationByPlatformId('web', 'shared-id'))?.id).toBe(
+        'collision-web'
+      );
+      expect((await conversations.getConversationByPlatformId('slack', 'shared-id'))?.id).toBe(
+        'collision-slack'
+      );
+    } finally {
+      await db.query('DELETE FROM remote_agent_conversations WHERE platform_conversation_id = $1', [
+        'shared-id',
+      ]);
+    }
+  });
+});

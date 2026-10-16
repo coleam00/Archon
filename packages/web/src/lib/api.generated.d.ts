@@ -7080,7 +7080,14 @@ export interface components {
       status: string;
       adapter: string;
       concurrency: {
-        [key: string]: unknown;
+        active: number;
+        queuedTotal: number;
+        queuedByConversation: {
+          conversationId: string;
+          queuedMessages: number;
+        }[];
+        maxConcurrent: number;
+        activeConversationIds: string[];
       };
       runningWorkflows: number;
       version?: string;

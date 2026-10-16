@@ -1992,8 +1992,8 @@ which surfaces can read it:
 | Caller | When `$INPUTS` resolves | Reaches `prompt:`/`bash:`/`script:` | Reaches `command:` file bodies |
 |--------|-------------------------|-------------------------------------|--------------------------------|
 | `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | `prompt:` yes; `bash:` as a quoted `INPUTS_<UPPER_SNAKE>` reference; inline `script:` is a load error | **Yes** — resolved command bodies receive the same input binding before execution |
-| `workflow:` sub-run | **Runtime** (values become `$INPUTS` variables on the child run) | Yes | **Yes** — every child node flows through runtime substitution |
-| direct run (`--input` / console form) | **Runtime** — the same path as a sub-run; supplied values are persisted to the run's own metadata, so `$INPUTS` reconstitutes on a cold resume | Yes | **Yes** — every node flows through runtime substitution |
+| `workflow:` sub-run | **Runtime** (values become inputs on the child run) | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes** — command-backed prompts receive runtime substitution |
+| direct run (`--input` / console form) | **Runtime** — the same path as a sub-run; supplied values are persisted to the run's own metadata, so inputs reconstitute on a cold resume | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes** — command-backed prompts receive runtime substitution |
 
 Both composition paths support command-backed prompts; their binding time differs. Includes
 snapshot and bind the resolved command body at load time, while sub-runs resolve inputs at

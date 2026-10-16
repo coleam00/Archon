@@ -4,38 +4,66 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { CollaborationMode } from "../CollaborationMode";
 import type { LegacyAppPathString } from "../LegacyAppPathString";
+import type { MultiAgentMode } from "../MultiAgentMode";
 import type { ReasoningEffort } from "../ReasoningEffort";
+import type { ActivePermissionProfile } from "./ActivePermissionProfile";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { TurnsPage } from "./TurnsPage";
 
-export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
+export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: string | null,
+/**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
  */
-disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, /**
+disabledPluginIds: Array<string>, cwd: AbsolutePathBuf,
+/**
+ * Thread-scoped runtime workspace roots used to materialize
+ * `:workspace_roots`.
+ */
+runtimeWorkspaceRoots: Array<AbsolutePathBuf>,
+/**
  * Environment-native paths to instruction source files currently loaded for this thread.
  */
-instructionSources: Array<LegacyAppPathString>, approvalPolicy: AskForApproval, /**
+instructionSources: Array<LegacyAppPathString>, approvalPolicy: AskForApproval,
+/**
  * Reviewer currently used for approval requests on this thread.
  */
-approvalsReviewer: ApprovalsReviewer, /**
+approvalsReviewer: ApprovalsReviewer,
+/**
  * Legacy sandbox policy retained for compatibility. Experimental clients
  * should prefer `activePermissionProfile` for profile provenance.
  */
-sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, /**
+sandbox: SandboxPolicy,
+/**
+ * Named or implicit built-in profile that produced the active
+ * permissions, when known.
+ */
+activePermissionProfile: ActivePermissionProfile | null, reasoningEffort: ReasoningEffort | null,
+/**
  * Effective collaboration mode. Absent when resuming from an older server.
  */
-collaborationMode: CollaborationMode | null, /**
+collaborationMode: CollaborationMode | null,
+/**
+ * @deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.
+ */
+multiAgentMode: MultiAgentMode,
+/**
+ * `thread/turns/list` page returned when requested by `initialTurnsPage`.
+ */
+initialTurnsPage: TurnsPage | null,
+/**
  * Opaque cursor for hydrating paginated turns backwards.
  *
  * Pass this as `cursor` to `thread/turns/list` with
  * `sortDirection: "desc"`. The first page includes the turn identified by the cursor.
  */
-turnsBackwardsCursor: string | null, /**
+turnsBackwardsCursor: string | null,
+/**
  * Opaque cursor for hydrating paginated items backwards.
  *
  * Pass this as `cursor` to `thread/items/list` with
  * `sortDirection: "desc"`. The first page includes the item identified by the cursor.
  */
-itemsBackwardsCursor: string | null};
+itemsBackwardsCursor: string | null, };

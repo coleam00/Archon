@@ -84,6 +84,7 @@ import {
   attentionForm,
   attentionOccurrence,
   attentionOptions,
+  gateOccurrence,
   type WorkflowAttentionWaitContext,
 } from './schemas/workflow-run';
 import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
@@ -739,7 +740,7 @@ interface WorkflowLevelOptions {
   webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
-  workflowTier?: 'small' | 'medium' | 'large';
+  workflowTier?: TierName;
 }
 
 /**
@@ -1683,6 +1684,20 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Substitute an attention wait's message: node outputs, enclosing loop scopes and
+ * `$INPUTS`, and no other workflow variable. The dry run renders the same field through
+ * this function so its preview cannot drift from what the operator receives.
+ */
+export function substituteWaitMessage(
+  text: string,
+  sources: TemplateSources,
+  inputs: Record<string, JsonValue> | undefined
+): string {
+  const { before, after } = nodeTemplateReferences(text, sources);
+  return substituteTemplate(text, [...before, inputRefToken(inputs), ...after]);
+}
+
+/**
  * Collect the static ids of every node in a loop_group body, recursing into nested
  * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
  * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
@@ -1990,6 +2005,7 @@ async function resolveNodeProviderAndModel(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
+  baseOptions.userCredentialEnvKeys = config.userCredentialEnvKeys;
   if (config.protectedEnvKeys && config.protectedEnvKeys.length > 0) {
     baseOptions.protectedEnvKeys = config.protectedEnvKeys;
   }
@@ -3398,7 +3414,7 @@ function execStdoutPreview(stdout: string, credentialValues: readonly string[]):
  *
  * @throws ExecOutputContractError when stdout is not JSON, or fails the declared schema.
  */
-function certifyExecOutput(
+export function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
@@ -5309,6 +5325,7 @@ async function executeLoopGroupBody(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6875,6 +6892,7 @@ async function executeLoopNode(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6916,7 +6934,8 @@ async function executeLoopNode(
  * queue is where it is answered, so a notice the platform cannot deliver leaves the run
  * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
  * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
- * can see that nobody was told.
+ * can see that nobody was told. It names the pause `occurrence` so the push router can
+ * treat that pause as unannounced and notify the owner itself.
  */
 async function sendPauseNotice(
   deps: WorkflowDeps,
@@ -6924,6 +6943,7 @@ async function sendPauseNotice(
   conversationId: string,
   workflowRunId: string,
   nodeId: string,
+  occurrence: string,
   stepName: string,
   notice: string
 ): Promise<void> {
@@ -6939,7 +6959,7 @@ async function sendPauseNotice(
       workflow_run_id: workflowRunId,
       event_type: 'pause_notice_undelivered',
       step_name: stepName,
-      data: { nodeId, platform: platform.getPlatformType() },
+      data: { nodeId, occurrence, platform: platform.getPlatformType() },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -7088,14 +7108,8 @@ async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string => {
-    const { before, after } = nodeTemplateReferences(text, ctx);
-    return substituteTemplate(text, [
-      ...before,
-      inputRefToken(resolveRunInputs(workflowRun)),
-      ...after,
-    ]);
-  };
+  const resolveEventText = (text: string): string =>
+    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;
@@ -7205,6 +7219,7 @@ async function executeWaitNode(
         conversationId,
         workflowRun.id,
         node.id,
+        attentionOccurrence(context),
         stepNamePrefix + node.id,
         attentionNotification(platform, workflowRun.id, context)
       );
@@ -7551,6 +7566,7 @@ async function executeApprovalNode(
     conversationId,
     workflowRun.id,
     node.id,
+    gateOccurrence(paused),
     stepName,
     approvalMsg
   );
@@ -11429,7 +11445,7 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  await pauseGateRespectingExternalTransition(
+  const paused = await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
@@ -11452,7 +11468,18 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    WRITEBACK_GATE_NODE_ID,
+    gateOccurrence(paused),
+    'container',
+    message
+  );
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */

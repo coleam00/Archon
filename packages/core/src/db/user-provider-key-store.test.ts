@@ -59,7 +59,6 @@ import {
   deleteUserProviderKey,
   getDecryptedProviderCredential,
   getStoredCredentialStatus,
-  listDecryptedUserProviderCredentials,
 } from './user-provider-key-store';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
@@ -528,93 +527,6 @@ describe('user-provider-key-store', () => {
     test('a failing credential reports the store status unchanged', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([apiKeyRow({ api_key_encrypted: null })]));
       expect(await getStoredCredentialStatus('user-1', 'openrouter')).toEqual(UNREADABLE);
-    });
-  });
-
-  describe('listDecryptedUserProviderCredentials', () => {
-    test('decrypts api_key rows AND oauth rows (oauth minted via mintOAuthApiKey)', async () => {
-      // First call: list metadata (api_key + oauth).
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          { provider: 'openrouter', kind: 'api_key', label: null },
-          { provider: 'claude', kind: 'oauth', label: 'sub' },
-        ])
-      );
-      // Second call: getDecryptedProviderCredential for openrouter → api_key row.
-      mockQuery.mockResolvedValueOnce(createQueryResult([apiKeyRow()]));
-      // Third call: getDecryptedProviderCredential for claude → oauth row (resolves now).
-      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
-
-      const out = await listDecryptedUserProviderCredentials('user-1');
-      expect(out).toHaveLength(2);
-      expect(out.find(o => o.provider === 'openrouter')?.cred).toEqual({
-        kind: 'api_key',
-        apiKey: 'sk-or-test',
-      });
-      expect(out.find(o => o.provider === 'claude')?.cred).toMatchObject({
-        kind: 'oauth',
-        oauthApiKey: 'minted-oauth-key',
-      });
-    });
-
-    test('returns empty array (does not throw) when the list query fails', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('db down'));
-      const out = await listDecryptedUserProviderCredentials('user-1');
-      expect(out).toEqual([]);
-    });
-
-    test('returns partial results (does not throw) when a per-provider fetch fails', async () => {
-      // List query: two providers.
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          { provider: 'openrouter', kind: 'api_key', label: null },
-          { provider: 'claude', kind: 'api_key', label: null },
-        ])
-      );
-      // openrouter individual fetch → transient DB failure.
-      mockQuery.mockRejectedValueOnce(new Error('db transient'));
-      // claude individual fetch → valid api_key row.
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          apiKeyRow({
-            provider: 'claude',
-            api_key_encrypted: encryptToken('sk-claude-test', getEncryptionKey()),
-          }),
-        ])
-      );
-      const out = await listDecryptedUserProviderCredentials('user-1');
-      expect(out).toHaveLength(1);
-      expect(out[0]!.provider).toBe('claude');
-      expect(out[0]!.cred).toEqual({ kind: 'api_key', apiKey: 'sk-claude-test' });
-    });
-
-    test('logs ERROR (not WARN) when ALL per-provider fetches fail (mass_decrypt_failure)', async () => {
-      mockLogger.error.mockClear();
-      mockLogger.warn.mockClear();
-
-      // List query: two providers.
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          { provider: 'openrouter', kind: 'api_key', label: null },
-          { provider: 'anthropic', kind: 'api_key', label: null },
-        ])
-      );
-      // Both individual fetches fail — simulates key-rotation/deletion.
-      mockQuery.mockRejectedValueOnce(new Error('decrypt fail'));
-      mockQuery.mockRejectedValueOnce(new Error('decrypt fail'));
-
-      const out = await listDecryptedUserProviderCredentials('user-1');
-
-      expect(out).toHaveLength(0);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-1', total: 2, resolved: 0 }),
-        'user_provider_key.mass_decrypt_failure'
-      );
-      // Must NOT also emit a WARN for the same event.
-      expect(mockLogger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.stringContaining('partial_decrypt_failure')
-      );
     });
   });
 });

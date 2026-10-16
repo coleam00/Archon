@@ -61,7 +61,7 @@ export {
   type EffortRung,
   type AssertNever,
 } from './effort';
-export { mergeTokenUsage } from './result';
+export { addResultUsage, mergeTokenUsage, type ResultUsageTotal } from './result';
 export {
   isObjectSchemaNode,
   findStrictSchemaIssues,
@@ -146,3 +146,5 @@ export {
   normalizedConfigString,
   snapshotConfigSchema,
 } from './config-schema';
+
+export { nativeToolInputParser } from './native-tools';

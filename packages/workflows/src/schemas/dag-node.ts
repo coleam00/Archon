@@ -771,10 +771,14 @@ export const attentionOptionsSchema = z
 /**
  * A label key on an attention wait. It is one CLI token with no `=`, so `--label k=v`
  * and `--set k=v` split unambiguously at the first `=`. The engine gives keys no meaning.
+ *
+ * `__proto__` is refused: assigning it to a plain object sets the prototype instead of
+ * creating a key, so a label write would vanish and a filter on it would match everything.
  */
 export const attentionLabelKeySchema = z
   .string()
-  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace")
+  .refine(key => key !== '__proto__', "'__proto__' cannot be a label key");
 
 /** An attention wait's labels: a flat map of plain strings the engine never interprets. */
 export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());

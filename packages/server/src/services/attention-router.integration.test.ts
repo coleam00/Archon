@@ -7,7 +7,11 @@ import webPush from 'web-push';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { createWorkflowRun } from '@archon/core/db/workflows';
-import { getDagResumeSnapshot, listAttentionNotices } from '@archon/core/db/workflow-events';
+import {
+  getDagResumeSnapshot,
+  insertWorkflowEvent,
+  listAttentionNotices,
+} from '@archon/core/db/workflow-events';
 import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import { listWebPushSubscriptions } from '@archon/core/db/web-push-subscriptions';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -296,6 +300,44 @@ test('inline plugin conversations and their originless children are excluded; we
   await new AttentionRouter([destination], inline).scan();
   expect(sender).toHaveBeenCalledTimes(1);
   expect(webPushPayloadSchema.parse(JSON.parse(String(sender.mock.calls[0]?.[1]))).runId).toBe(web);
+});
+
+test('an inline conversation is pushed once when its pause notice was not delivered', async () => {
+  const sender = mock<typeof webPush.sendNotification>(async () => sent);
+  const inline = new Set(['fixture-chat']);
+  const destination = new WebPushDestination(inline, sender);
+  await destination.subscribe(userId, subscription('one'));
+  const router = new AttentionRouter([destination], inline);
+  const undelivered = await pause('now');
+  const delivered = await pause('now');
+  const staleFailure = await pause('now');
+  const conversation = crypto.randomUUID();
+  const db = getDatabase();
+  await db.query(
+    'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, $2, $3)',
+    [conversation, 'fixture-chat', conversation]
+  );
+  for (const id of [undelivered, delivered, staleFailure])
+    await db.query(
+      'UPDATE remote_agent_workflow_runs SET parent_conversation_id = $1 WHERE id = $2',
+      [conversation, id]
+    );
+  const failed = (runId: string, occurrence: string) =>
+    insertWorkflowEvent((sql, params) => db.query(sql, params), {
+      workflow_run_id: runId,
+      event_type: 'pause_notice_undelivered',
+      step_name: 'review',
+      data: { nodeId: 'review', occurrence, platform: 'fixture-chat' },
+    });
+  await router.scan();
+  await failed(undelivered, 'now');
+  await failed(staleFailure, 'earlier');
+  await router.scan();
+  await router.scan();
+  expect(sender).toHaveBeenCalledTimes(1);
+  expect(webPushPayloadSchema.parse(JSON.parse(String(sender.mock.calls[0]?.[1]))).runId).toBe(
+    undelivered
+  );
 });
 
 test('subscription routes require identity, validate shared schemas and create/delete idempotently', async () => {

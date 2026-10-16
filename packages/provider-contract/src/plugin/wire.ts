@@ -58,6 +58,7 @@ export const providerSessionRequestSchema = z.strictObject({
   appendSystemPrompt: z.string().optional(),
   outputFormat: z.object({ type: z.literal('json_schema'), schema: configSchema }).optional(),
   protectedEnvKeys: z.array(z.string()).readonly().optional(),
+  userCredentialEnvKeys: z.array(z.string()).readonly().optional(),
   maxBudgetUsd: z.number().optional(),
   fallbackModel: z.string().optional(),
   forkSession: z.boolean().optional(),

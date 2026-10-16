@@ -170,6 +170,7 @@ export interface WorkflowConfig {
   envVars?: Record<string, string>;
   /** Archon-managed env entries that nodes cannot override. */
   protectedEnvKeys?: readonly string[];
+  userCredentialEnvKeys?: SendQueryOptions['userCredentialEnvKeys'];
   /** Exact injected credential values, including credentials delivered through files. */
   protectedCredentialValues?: readonly string[];
   aliases?: RawAliasesConfig;
@@ -204,7 +205,7 @@ export interface WorkflowConfig {
 
 export type WorkflowEnvironment = Pick<
   WorkflowConfig,
-  'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'
+  'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues' | 'userCredentialEnvKeys'
 >;
 
 export type AgentProviderFactory = (provider: string) => IAgentProvider;

@@ -194,6 +194,7 @@ test('serializable options and container environment survive', async () => {
     appendSystemPrompt: 'Guide',
     outputFormat: { type: 'json_schema', schema: { type: 'object' } },
     protectedEnvKeys: ['KEY'],
+    userCredentialEnvKeys: ['KEY'],
     maxBudgetUsd: 2,
     fallbackModel: 'fallback',
     forkSession: true,

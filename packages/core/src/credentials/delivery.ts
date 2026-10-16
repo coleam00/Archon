@@ -28,6 +28,7 @@ import {
   normalizeCredentialVendor,
 } from '@archon/providers';
 import { descriptor as piDescriptor } from '@archon/providers/pi/descriptor';
+import { PI_AUTH_PATH_ENV } from '@archon/providers/pi/auth-path-env';
 import { PI_AUTH_JSON_RELATIVE_PATH } from '@archon/workflows/deps';
 
 export { LEGACY_VENDOR_ALIASES, normalizeCredentialVendor } from '@archon/providers';
@@ -157,7 +158,7 @@ type PiAuthCredential = { type: 'api_key'; key: string } | ({ type: 'oauth' } & 
 /** Relative path (under the per-run artifacts dir) for the generated Pi auth.json. */
 export { PI_AUTH_JSON_RELATIVE_PATH };
 /** Env var the Pi provider reads to point `AuthStorage` at the per-run auth.json. */
-export const PI_AUTH_PATH_ENV = 'ARCHON_PI_AUTH_PATH';
+export { PI_AUTH_PATH_ENV };
 
 /**
  * Build a per-run Pi `auth.json` from the user's connected credentials that Pi

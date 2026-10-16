@@ -4091,6 +4091,7 @@ describe('executeWorkflow', () => {
         USER_KEY: 'u_val',
       });
       expect(configArg?.protectedEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual([
         'db_val',
         'reserved-db-secret',
@@ -4173,6 +4174,8 @@ describe('executeWorkflow', () => {
       expect(configArg?.envVars).toMatchObject({
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
+        GH_ENTERPRISE_TOKEN: '',
+        GITHUB_ENTERPRISE_TOKEN: '',
         COPILOT_GITHUB_TOKEN: '',
         GIT_AUTHOR_NAME: 'connected-author',
         GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
@@ -4181,11 +4184,14 @@ describe('executeWorkflow', () => {
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
+        'GH_ENTERPRISE_TOKEN',
+        'GITHUB_ENTERPRISE_TOKEN',
         'COPILOT_GITHUB_TOKEN',
         'GIT_AUTHOR_NAME',
         'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
@@ -4347,6 +4353,26 @@ describe('executeWorkflow', () => {
           expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
         });
       }
+
+      it('hides stored logins from the per-user scrub without redacting its config values', async () => {
+        const environment = await resolveWorkflowGithubEnvironment(
+          githubDeps({ token: undefined }),
+          'codebase-1',
+          'u-1',
+          {}
+        );
+        expect(environment.envVars?.GH_CONFIG_DIR).toContain('archon-gh-scrubbed-');
+        expect(environment.envVars?.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        // Only secrets are protected: protecting the scrub's config values would redact
+        // them, and every `credential.helper` mention, from node output.
+        expect(environment.protectedEnvKeys).toEqual([
+          'GH_TOKEN',
+          'GITHUB_TOKEN',
+          'GH_ENTERPRISE_TOKEN',
+          'GITHUB_ENTERPRISE_TOKEN',
+          'COPILOT_GITHUB_TOKEN',
+        ]);
+      });
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {

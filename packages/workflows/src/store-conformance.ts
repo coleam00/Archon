@@ -1511,6 +1511,17 @@ export function describeWorkflowStoreConformance(
       await store.pauseWorkflowRun(abandoned.id, approval, undefined, suspended(abandoned.id));
       await commits(abandoned.id, () => store.cancelWorkflowRun(abandoned.id));
     });
+    test('rejecting a paused run that records no gate cancels it, exactly once', async () => {
+      const run = await running(store);
+      await store.updateWorkflowRun(run.id, { status: 'paused' });
+      expect(await store.getWorkflowRun(run.id)).toMatchObject({ status: 'paused', metadata: {} });
+      const outcomes = await Promise.all([
+        store.resolveAndCancelApprovalGate(run.id, gateEvents(0), { reason: 'rejected' }),
+        store.resolveAndCancelApprovalGate(run.id, gateEvents(1), { reason: 'rejected' }),
+      ]);
+      expect(outcomes.filter(outcome => outcome.resolved)).toHaveLength(1);
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('cancelled');
+    });
     test('the attention watch follows a run from the store feed alone', async () => {
       const lines: AttentionStreamLine[] = [];
       const watch = await watchAttentionQueue(
