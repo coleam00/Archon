@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  PACK,
   PR,
   PR_URL,
   forgeOperation,
@@ -30,6 +31,7 @@ const REPORT = 'Round 1: ready';
 
 /** The engine's typed-artifact listing for a run with no typed artifacts yet. */
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
+const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
 interface Target {
   readonly headRepo?: { host: string; path: string };
@@ -63,17 +65,37 @@ function publishPr(
       INPUTS_EXISTING: target.existing == null ? '' : JSON.stringify(target.existing),
       INPUTS_TITLE: 'A title',
       WORKFLOW_ID: 'run',
-      INPUTS_BODY: prepareBody ? JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) : '',
+      INPUTS_BODY: prepareBody ? JSON.stringify(PREPARED_BODY) : '',
       INPUTS_DRAFT: 'true',
       TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
     },
-    artifacts: { ...(prepareBody ? { 'pr-body.md': 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
+    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
   });
   return { ...run, head, cwd };
 }
 
 describe('publish-pr opens the pull request at most once', () => {
+  it('keeps prepare schema and command aligned with the body pointer publish accepts', () => {
+    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
+      nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
+    };
+    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties.body).toEqual({
+      type: ['object', 'null'],
+      properties: {
+        type: { type: 'string', enum: [PREPARED_BODY.type] },
+        run_id: { type: 'string' },
+        path: { type: 'string', enum: [PREPARED_BODY.path] },
+      },
+      required: Object.keys(PREPARED_BODY),
+    });
+    const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
+    expect(command).toContain(
+      `{"type": "${PREPARED_BODY.type}", "run_id": "$WORKFLOW_ID", "path": "${PREPARED_BODY.path}"}`
+    );
+    expect(command).toContain(`$ARTIFACTS_DIR/${PREPARED_BODY.path}`);
+  });
+
   it.each(['gh', 'forge'] as const)(
     'refuses another create through %s while the earlier write is unresolved',
     source => {
@@ -152,10 +174,10 @@ describe('publish-pr opens the pull request at most once', () => {
   });
 
   it.each(['gh', 'forge'] as const)('rejects a body pointer outside its declared contract through %s', source => {
-    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: '../pr-body.md' }]) {
+    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: 'other-body.md' }, { path: '../pr-body.md' }]) {
       const result = publishPr({
         source,
-        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md', ...override }) },
+        inputs: { INPUTS_BODY: JSON.stringify({ ...PREPARED_BODY, ...override }) },
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
       });
