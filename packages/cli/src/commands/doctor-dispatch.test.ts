@@ -22,6 +22,7 @@ mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByPathPrefix: async () => null,
 }));
 const { doctorCommand, checkSdlcForge } = await import('./doctor');
+const nativeEnv = process.env;
 
 test('normal doctor dispatch renders registered diagnostics and fails on their failure', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-doctor-dispatch-'));
@@ -59,12 +60,13 @@ test('normal doctor dispatch renders registered diagnostics and fails on their f
   });
   try {
     process.chdir(root);
-    process.env = {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, {
       HOME: root,
       USERPROFILE: root,
       ARCHON_HOME: root,
       ARCHON_TELEMETRY_DISABLED: '1',
-    };
+    });
     expect(await doctorCommand()).toBe(1);
     expect(diagnose).toHaveBeenCalledTimes(1);
     expect(output.mock.calls.flat().join('\n')).toContain(
@@ -74,7 +76,8 @@ test('normal doctor dispatch renders registered diagnostics and fails on their f
   } finally {
     clearRegistry();
     output.mockRestore();
-    process.env = savedEnv;
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
     process.chdir(savedCwd);
     await removeTempTree(root);
   }
@@ -190,8 +193,13 @@ test('released v0.11.1 refuses the same seven missing operations in doctor and r
     expect(result.message).not.toContain('source:');
   } finally {
     output.mockRestore();
-    process.env = savedEnv;
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
     process.chdir(savedCwd);
     await removeTempTree(root);
   }
+});
+
+test('dispatch fixtures preserve the native environment object for Windows PATH lookups', () => {
+  expect(process.env === nativeEnv).toBe(true);
 });
