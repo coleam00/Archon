@@ -130,9 +130,6 @@ mock.module('@archon/core', () => ({
   },
 }));
 
-const registrationRemote = await import('@archon/core/services/registration-remote');
-spyOn(registrationRemote, 'assertSavedCheckoutRemote').mockResolvedValue(undefined);
-
 const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,

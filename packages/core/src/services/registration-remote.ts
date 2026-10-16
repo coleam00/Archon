@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
-import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import { isAbsolute, join } from 'node:path';
+import { execFileAsync, getDefaultRemote, isWorktreePath, toRepoPath } from '@archon/git';
+import { createLogger, getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
 import type { Codebase } from '../schemas/codebase';
 import {
@@ -100,6 +100,36 @@ export async function assertSavedCheckoutRemote(
   if (!existsSync(path)) return;
   if (path === managedSource && (await readdir(path)).length === 0) return;
   await assertCheckoutRemote(path, remoteUrl, path === managedSource);
+}
+
+/**
+ * The checkout forge events use for a saved project. A saved path that is a
+ * worktree, or a worktrees/ path whose checkout is gone, is stale: the
+ * project's managed source replaces it once that source proves ownership.
+ * Callers persist a returned path that differs from the saved one.
+ */
+export async function resolveSavedCheckout(
+  project: Pick<Codebase, 'name' | 'default_cwd'>,
+  remoteUrl: string,
+  recovery = 'Restore its original checkout or use /update-project to set its path explicitly.'
+): Promise<string> {
+  const identity = parseOwnerRepo(project.name);
+  const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
+  const saved = project.default_cwd;
+  const stale =
+    (await isWorktreePath(saved)) ||
+    (/[\\/]worktrees[\\/]/.test(saved) && !existsSync(join(saved, '.git')));
+  if (!stale) {
+    await assertSavedCheckoutRemote(saved, remoteUrl, managedSource);
+    return saved;
+  }
+  if (!managedSource) {
+    throw new ProjectRegistrationError(
+      `Cannot safely repair checkout for project "${project.name}" at ${saved}. ${recovery}`
+    );
+  }
+  await assertSavedCheckoutRemote(managedSource, remoteUrl, managedSource);
+  return managedSource;
 }
 
 async function readableRemoteIdentity(project: ProjectIdentity): Promise<string | null> {

@@ -2,8 +2,7 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
-import { existsSync } from 'node:fs';
-import { assertSavedCheckoutRemote } from '@archon/core/services/registration-remote';
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -29,11 +28,9 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
-  parseOwnerRepo,
   resolveRepoProjectIdentity,
 } from '@archon/paths';
 import {
-  isWorktreePath,
   cloneRepository,
   githubTokenCredentials,
   syncRepository,
@@ -938,28 +935,14 @@ export class GitHubAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      const identity = parseOwnerRepo(existing.name);
-      const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
-      const looksLikeWorktreePath = /[\\/]worktrees[\\/]/.test(existing.default_cwd);
-      if (
-        (await isWorktreePath(existing.default_cwd)) ||
-        (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
-      ) {
-        if (!managedSource) {
-          throw new Error(
-            `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd}. ` +
-              'Restore its original checkout or use /update-project to set its path explicitly.'
-          );
-        }
-        await assertSavedCheckoutRemote(managedSource, repoUrlNoGit, managedSource);
-        await codebaseDb.updateCodebase(existing, { default_cwd: managedSource });
-        existing.default_cwd = managedSource;
+      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath: managedSource },
+          { codebaseName: existing.name, canonicalPath: checkout },
           'github.stale_worktree_path_fixed'
         );
-      } else {
-        await assertSavedCheckoutRemote(existing.default_cwd, repoUrlNoGit, managedSource);
       }
 
       getLog().info(
