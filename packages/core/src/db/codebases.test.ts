@@ -419,12 +419,15 @@ describe('codebases', () => {
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
+        'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
+        ['https://github.com/user/repo']
       );
     });
 
     test('returns null when not found', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]));
 
       const result = await findCodebaseByRepoUrl('https://github.com/other/repo');
 

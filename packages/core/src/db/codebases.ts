@@ -24,7 +24,7 @@ import {
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import {
-  findRegisteredRemote,
+  findRoutableRemoteOwner,
   assertProjectRegistrationAvailable,
 } from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
@@ -185,7 +185,12 @@ export async function getCodebaseCommands(
 }
 
 export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase | null> {
-  return findRegisteredRemote(await listCodebases(), repoUrl);
+  const result = await pool.query<Codebase>(
+    'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
+    [repoUrl]
+  );
+  const row = result.rows[0];
+  return row ? validateCodebase(row) : findRoutableRemoteOwner(await listCodebases(), repoUrl);
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {

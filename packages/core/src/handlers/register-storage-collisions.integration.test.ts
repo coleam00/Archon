@@ -345,7 +345,7 @@ describe('project storage collisions', () => {
       const warnings: unknown[] = [];
       setLogLevel('warn');
       setLogSink(line => warnings.push(JSON.parse(line)));
-      expect((await store.findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(known.id);
+      expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
       expect(warnings).toEqual([
         expect.objectContaining({
           err: expect.objectContaining({
@@ -514,33 +514,50 @@ describe('project storage collisions', () => {
     }
   );
 
-  test('legacy duplicate remote owners are refused instead of picking one', async () => {
-    const root = await makeHome();
-    const first = await createCodebase({
-      name: 'acme/one',
-      default_cwd: join(root, 'first'),
-      repository_url: 'git@github.com:acme/api.git',
-    });
-    const second = await createCodebase({
-      name: 'acme/two',
-      default_cwd: join(root, 'second'),
-      repository_url: 'https://other.example/acme/api',
-    });
-    await db.query('UPDATE remote_agent_codebases SET repository_url = $1 WHERE id = $2', [
-      'https://github.com/acme/api',
-      second.id,
-    ]);
-    const error = await findCodebaseByRepoUrl('https://github.com/acme/api.git').catch(
-      (error: unknown) => error
-    );
-    expect(error).toBeInstanceOf(ProjectRegistrationError);
-    for (const project of [first, second]) {
-      expect(error instanceof Error && error.message).toContain(project.name);
-      expect(error instanceof Error && error.message).toContain(project.default_cwd);
-    }
-  });
+  test.each(['sql', 'file'] as const)(
+    '%s forge lookup keeps routing a remote that legacy rows share',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const first = await store.createCodebase({
+        name: 'acme/one',
+        default_cwd: join(root, 'first'),
+        repository_url: 'https://github.com/acme/api',
+      });
+      const second = await store.createCodebase({
+        name: 'acme/two',
+        default_cwd: join(root, 'second'),
+        repository_url: 'https://other.example/acme/api',
+      });
+      // Older binaries registered a second clone of a remote as its own row.
+      await store.updateCodebase(second, { repository_url: 'git@github.com:acme/api.git' });
 
-  test('a persisted match does not hide a readable legacy duplicate', async () => {
+      expect((await store.findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(first.id);
+      expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(
+        second.id
+      );
+      expect(await store.findCodebaseByRepoUrl('https://github.com/acme/api.git')).toBeNull();
+
+      const refusal = await store
+        .createCodebase({
+          name: 'acme/api',
+          default_cwd: join(root, 'third'),
+          repository_url: 'https://github.com/acme/api.git',
+        })
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(ProjectRegistrationError);
+      for (const project of [first, second]) {
+        expect(refusal instanceof Error && refusal.message).toContain(project.default_cwd);
+      }
+      expect(refusal instanceof Error && refusal.message).toContain('/remove-project');
+      expect(await store.listCodebases()).toHaveLength(2);
+    }
+  );
+
+  test('a persisted match routes past a readable legacy duplicate', async () => {
     const root = await makeHome();
     const known = await createCodebase({
       name: 'acme/api',
@@ -553,14 +570,26 @@ describe('project storage collisions', () => {
       legacy,
     ]);
     await createCodebase({ name: 'Unavailable', default_cwd: join(root, 'missing') });
-    const error = await findCodebaseByRepoUrl('https://github.com/acme/api').catch(
-      (error: unknown) => error
-    );
-    expect(error).toBeInstanceOf(ProjectRegistrationError);
-    expect(error instanceof Error && error.message).toContain('Multiple projects');
-    expect(error instanceof Error && error.message).toContain(known.default_cwd);
-    expect(error instanceof Error && error.message).toContain(legacy);
+    expect((await findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(known.id);
+    expect(await findCodebaseByRepoUrl('git@github.com:acme/api.git')).toBeNull();
   });
+
+  test.each(['sql', 'file'] as const)(
+    '%s insert-time storage conflicts are registration refusals',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      await store.createCodebase({ name: 'app', kind: 'folder', default_cwd: join(root, 'a') });
+      const refusal = await store
+        .createCodebase({ name: 'app', kind: 'folder', default_cwd: join(root, 'b') })
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(ProjectRegistrationError);
+      expect(refusal instanceof Error && refusal.message).toContain('storage');
+    }
+  );
 
   test.each(['ambiguous', 'invalid'] as const)(
     '%s incoming remote configuration still refuses registration',
@@ -958,6 +987,30 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each(['sql', 'file'] as const)(
+    '%s cleanup removes an unowned checkout past a project with broken Git metadata',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const broken = await gitCheckout(join(root, 'broken'), 'https://github.com/acme/broken.git');
+      await store.createCodebase({ name: 'acme/broken', default_cwd: broken });
+      await rm(join(broken, '.git'), { recursive: true });
+      const checkout = await gitCheckout(join(root, 'fresh'), 'https://github.com/acme/api.git');
+      const remove = mock(async () => {
+        await fsPromises.rm(checkout, { recursive: true });
+      });
+
+      await store.removeUnregisteredCheckout(checkout, remove);
+
+      expect(remove).toHaveBeenCalledTimes(1);
+      await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+      await access(broken);
+    }
+  );
+
   test('concurrent folder claims cannot insert two owners of one storage root', async () => {
     const root = await makeHome();
     await mkdir(join(root, 'a'));
@@ -971,7 +1024,10 @@ describe('project storage collisions', () => {
     expect(new Set(roots.map(root => root.toLowerCase())).size).toBe(projects.length);
     expect(results.some(result => result.status === 'fulfilled')).toBe(true);
     for (const result of results) {
-      if (result.status === 'rejected') expect(String(result.reason)).toContain('storage');
+      if (result.status === 'rejected') {
+        expect(result.reason).toBeInstanceOf(ProjectRegistrationError);
+        expect(String(result.reason)).toContain('storage');
+      }
     }
   });
 

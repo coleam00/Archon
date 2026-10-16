@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getGitCheckoutIdentity } from '@archon/git';
 import {
+  createLogger,
   isPathInside,
   getProjectStoragePaths,
   resolveProjectStorageKey,
@@ -40,13 +41,28 @@ export async function isCheckoutRegistered(
     )
       return true;
     if (project.kind !== 'folder' && physicalCwd) {
-      const identity = await getGitCheckoutIdentity(physicalCwd);
-      for (const metadata of [identity.gitDir, identity.commonGitDir]) {
-        if (isPathInside(checkout, await realpath(metadata), { includeRoot: true })) return true;
+      for (const metadata of await readableGitMetadata(physicalCwd)) {
+        if (isPathInside(checkout, metadata, { includeRoot: true })) return true;
       }
     }
   }
   return false;
+}
+
+/** A registered checkout's Git directories, which a linked worktree keeps outside itself. */
+async function readableGitMetadata(cwd: string): Promise<string[]> {
+  try {
+    const identity = await getGitCheckoutIdentity(cwd);
+    return await Promise.all([identity.gitDir, identity.commonGitDir].map(dir => realpath(dir)));
+  } catch (error) {
+    // The project's own path is still protected by the containment check; its broken
+    // Git metadata must not block cleanup for every other checkout.
+    createLogger('registration.identity').warn(
+      { err: error, path: cwd },
+      'registration.checkout_identity_unavailable'
+    );
+    return [];
+  }
 }
 
 /**

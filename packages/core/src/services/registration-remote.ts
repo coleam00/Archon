@@ -100,28 +100,50 @@ async function readableRemoteIdentity(project: ProjectIdentity): Promise<string 
   }
 }
 
+/** The project that owns a remote; registration refuses a remote that several rows claim. */
 export async function findRegisteredRemote<T extends ProjectIdentity>(
   registered: readonly T[],
   remoteUrl: string,
   cwd = process.cwd()
 ): Promise<T | null> {
-  return findRemoteIdentityOwner(registered, await remoteIdentity(remoteUrl, cwd));
+  return soleRemoteIdentityOwner(registered, await remoteIdentity(remoteUrl, cwd));
 }
 
-async function findRemoteIdentityOwner<T extends ProjectIdentity>(
+/**
+ * Routing fallback after an exact stored-URL match missed. Older binaries could
+ * register one remote twice, so a remote several rows claim routes nowhere
+ * rather than failing every event; registering it again is then refused.
+ */
+export async function findRoutableRemoteOwner<T extends ProjectIdentity>(
+  registered: readonly T[],
+  remoteUrl: string
+): Promise<T | null> {
+  const owners = await remoteIdentityOwners(registered, await remoteIdentity(remoteUrl));
+  return owners.length === 1 ? (owners[0] ?? null) : null;
+}
+
+async function remoteIdentityOwners<T extends ProjectIdentity>(
+  registered: readonly T[],
+  identity: string
+): Promise<T[]> {
+  const owners: T[] = [];
+  for (const project of registered) {
+    if ((await readableRemoteIdentity(project)) === identity) owners.push(project);
+  }
+  return owners;
+}
+
+async function soleRemoteIdentityOwner<T extends ProjectIdentity>(
   registered: readonly T[],
   identity: string
 ): Promise<T | null> {
-  const matches: T[] = [];
-  for (const project of registered) {
-    if ((await readableRemoteIdentity(project)) === identity) matches.push(project);
-  }
-  if (matches.length > 1) {
+  const owners = await remoteIdentityOwners(registered, identity);
+  if (owners.length > 1) {
     throw new ProjectRegistrationError(
-      `Multiple projects own this remote: ${matches.map(project => `"${project.name}" at ${project.default_cwd}`).join(', ')}. Repair the registrations with /update-project before continuing.`
+      `Multiple projects own this remote: ${owners.map(project => `"${project.name}" at ${project.default_cwd}`).join(', ')}. Remove the duplicate registrations with /remove-project before continuing.`
     );
   }
-  return matches[0] ?? null;
+  return owners[0] ?? null;
 }
 
 export async function assertProjectRegistrationAvailable(
@@ -135,7 +157,7 @@ export async function assertProjectRegistrationAvailable(
         ? await remoteIdentity(project.repository_url, project.default_cwd)
         : await readableRemoteIdentity(project);
   if (identity) {
-    const existing = await findRemoteIdentityOwner(registered, identity);
+    const existing = await soleRemoteIdentityOwner(registered, identity);
     if (existing) {
       throw new ProjectRegistrationError(
         `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +
@@ -148,7 +170,7 @@ export async function assertProjectRegistrationAvailable(
     existing => existing.name === project.name || storageRoot(existing).toLowerCase() === root
   );
   if (conflict) {
-    throw new Error(
+    throw new ProjectRegistrationError(
       `Project storage for "${project.name}" is already owned by "${conflict.name}" at ${conflict.default_cwd}. ` +
         'Registration was refused; retry to allocate a free name.'
     );
