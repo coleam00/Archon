@@ -319,7 +319,7 @@ export class IsolationResolver {
    * alone is not enough because stack traces and call sites vary.
    *
    * Throws on mismatch (re-throws the original error so `classifyIsolationError`
-   * and `isKnownIsolationError` pattern-match against the user-facing message).
+   * and `isKnownIsolationError` retain its typed cause).
    */
   private async assertWorktreeOwnership(
     worktreePath: WorktreePath,

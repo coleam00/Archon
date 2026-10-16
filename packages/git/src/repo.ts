@@ -1,3 +1,4 @@
+import { GitFailure } from './errors';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
@@ -25,6 +26,35 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * Fetch is repeatable, but Git has no distinct ref-contention exit status.
+ * Bound recovery for exited subprocess failures without guessing their cause
+ * from stderr. Known failures and spawn/termination errors propagate immediately.
+ */
+export async function fetchWithRetry(
+  repoPath: RepoPath,
+  fetchArgs: string[],
+  options: { timeout: number }
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'fetch', ...fetchArgs], options);
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof GitFailure) ||
+        error.kind !== 'unclassified' ||
+        typeof error.code !== 'number' ||
+        error.code <= 0
+      )
+        throw error;
+      if (attempt === 2) throw error;
+      getLog().warn({ err: error, repoPath, attempt: attempt + 1 }, 'git.fetch_retry');
+      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+}
+
+/**
  * Find the root of the git repository containing the given path
  * Returns null if not in a git repository
  */
@@ -35,35 +65,15 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
       ['-C', startPath, 'rev-parse', '--show-toplevel'],
       {
         timeout: 10000,
-        env: {
-          ...process.env,
-          // Trace output shares stderr with the discovery diagnostic; Trace2
-          // targets can also come from global config without environment keys.
-          ...Object.fromEntries(
-            Object.keys(process.env)
-              .filter(key => key.startsWith('GIT_TRACE'))
-              .map(key => [key, '0'])
-          ),
-          GIT_TRACE2: '0',
-          GIT_TRACE2_EVENT: '0',
-          GIT_TRACE2_PERF: '0',
-          LC_ALL: 'C',
-        },
       }
     );
     return toRepoPath(stdout.trim());
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    // Git uses the same exit code for failed discovery and broken metadata.
-    // Only its discovery diagnostic proves absence; the command echo and
-    // "not a git repository: <gitdir>" from a broken pointer do not.
-    const diagnostic = err.stderr?.trim();
-    if (
-      diagnostic === 'fatal: not a git repository (or any of the parent directories): .git' ||
-      diagnostic?.startsWith('fatal: not a git repository (or any parent up to mount point ')
-    ) {
+    // A missing start path also reads as no repository; callers rely on this
+    // function to refuse it rather than treat it as a folder.
+    if (error instanceof GitFailure && error.kind === 'not_repository' && existsSync(startPath))
       return null;
-    }
 
     // Unexpected error - surface it
     getLog().error({ startPath, err, stderr: err.stderr }, 'find_repo_root_failed');
@@ -134,69 +144,31 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
     return stdout.trim() || null;
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Expected: no remote with that name
-    if (
-      errorText.includes('No such remote') ||
-      errorText.includes('does not have a url configured')
-    ) {
-      return null;
+    if (error instanceof GitFailure && error.kind === 'unclassified' && error.code === 2) {
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', repoPath, 'config', '--local', '--get', `remote.${remote}.url`],
+          {
+            timeout: 10000,
+          }
+        );
+      } catch (inspectionError) {
+        if (
+          inspectionError instanceof GitFailure &&
+          inspectionError.kind === 'unclassified' &&
+          inspectionError.code === 1
+        )
+          return null;
+      }
     }
 
     // Unexpected error - surface it
     getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'get_remote_url_failed');
-    throw new Error(`Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`);
-  }
-}
-
-const MAX_FETCH_RETRIES = 3;
-
-/**
- * Run `git fetch <remote> <refspec>` with bounded retry on Git's ref-lock race.
- *
- * Two concurrent fetches that write the same named ref — a remote-tracking ref,
- * or a local branch via a `pull/N/head:branch` refspec — collide on Git's shared
- * lock file and fail transiently with `cannot lock ref ... unable to update local
- * ref`. This helper owns the single ref-lock classifier and backoff budget for
- * the codebase: race failures are retried up to MAX_FETCH_RETRIES times with
- * 50ms doubling backoff, then the original error object is rethrown untouched
- * (stderr preserved for callers). Any other failure is rethrown immediately —
- * unrelated git errors are attempted once and stay loud.
- */
-export async function fetchWithRefLockRetry(
-  repoPath: RepoPath,
-  remote: string,
-  refspec: string | undefined,
-  options?: { timeoutMs?: number }
-): Promise<{ stdout: string; stderr: string }> {
-  const args =
-    refspec === undefined
-      ? ['-C', repoPath, 'fetch', remote]
-      : ['-C', repoPath, 'fetch', remote, refspec];
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await execFileAsync('git', args, {
-        timeout: options?.timeoutMs,
-      });
-    } catch (error) {
-      const err = error as Error;
-      const errorMessage = err.message.toLowerCase();
-      const isRefLockRace =
-        errorMessage.includes('cannot lock ref') &&
-        errorMessage.includes('unable to update local ref');
-
-      if (!isRefLockRace || attempt >= MAX_FETCH_RETRIES) {
-        throw error;
-      }
-
-      const backoffMs = 50 * Math.pow(2, attempt);
-      getLog().debug(
-        { err, attempt: attempt + 1, backoffMs, remote, refspec },
-        'git.fetch_ref_lock_retry'
-      );
-      await new Promise(resolve => setTimeout(resolve, backoffMs));
-    }
+    throw new Error(
+      `Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`,
+      { cause: error }
+    );
   }
 }
 
@@ -233,10 +205,10 @@ export async function syncWorkspace(
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
-  // Concurrent fetches of the same remote-tracking ref can collide on Git's
-  // shared ref lock; fetchWithRefLockRetry owns the bounded retry.
   try {
-    await fetchWithRefLockRetry(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
+    await fetchWithRetry(workspacePath, [remote, branchToSync], {
+      timeout: 60000,
+    });
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {
@@ -285,7 +257,9 @@ export async function syncWorkspace(
       );
     } catch (error) {
       const err = error as Error;
-      throw new Error(`Fast-forward to ${remote}/${branchToSync} failed: ${err.message}`);
+      throw new Error(`Fast-forward to ${remote}/${branchToSync} failed: ${err.message}`, {
+        cause: err,
+      });
     }
 
     const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -312,7 +286,7 @@ export async function syncWorkspace(
     );
   } catch (error) {
     const err = error as Error;
-    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`);
+    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`, { cause: err });
   }
 
   const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -411,7 +385,9 @@ async function isAncestor(
       { err, workspacePath, ancestor, descendant, stderr: err.stderr },
       'workspace.merge_base_check_failed'
     );
-    throw new Error(`Failed to compare git ancestry in ${workspacePath}: ${err.message}`);
+    throw new Error(`Failed to compare git ancestry in ${workspacePath}: ${err.message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -506,6 +482,34 @@ export function validateCloneUrl(
   return { ok: true, url: parsed.href, httpUrl: parsed };
 }
 
+function stderrOf(error: unknown): string {
+  return error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
+    ? error.stderr
+    : '';
+}
+
+/**
+ * Git reports these causes only as stderr lines, not exit codes. Matching whole
+ * fatal lines keeps a URL, path, or branch name from changing the result. An
+ * HTTP 403 matches on curl's status text ending a fatal line, whatever prefix
+ * precedes it. The cause only chooses the guidance a GitResult reports; it
+ * never decides retry.
+ */
+function reportedCause(error: unknown): 'missing' | 'denied' | 'no_space' | undefined {
+  const stderr = stderrOf(error);
+  if (/^fatal: repository '.*' not found\r?$/m.test(stderr)) return 'missing';
+  if (
+    /^fatal: (?:Authentication failed for|could not read (?:Username|Password) for) '/m.test(
+      stderr
+    ) ||
+    /^fatal: Could not read from remote repository\.\r?$/m.test(stderr) ||
+    /^fatal: .*The requested URL returned error: 403\r?$/m.test(stderr)
+  )
+    return 'denied';
+  if (/: No space left on device\r?$/m.test(stderr)) return 'no_space';
+  return undefined;
+}
+
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
@@ -538,27 +542,20 @@ export async function cloneRepository(
     return { ok: true, value: undefined };
   } catch (error) {
     const sanitizedMessage = sanitizeGitError(error, options?.credentials);
-    const message = sanitizedMessage.toLowerCase();
-
-    if (message.includes('not found') || message.includes('404')) {
-      return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
-    }
-    if (
-      message.includes('authentication failed') ||
-      message.includes('could not read') ||
-      message.includes('access denied') ||
-      message.includes('403')
-    ) {
-      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
-    }
-    if (message.includes('no space')) {
-      return { ok: false, error: { code: 'no_space', path: targetPath } };
-    }
-
     getLog().error(
       { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
       'clone_repository_failed'
     );
+    // GitHub over SSH prints this before the generic "Could not read from remote
+    // repository" line. Dev reported it as not found on clone but as denied on
+    // fetch, so only clone reads it.
+    const cause = /^ERROR: Repository not found\.\r?$/m.test(stderrOf(error))
+      ? 'missing'
+      : reportedCause(error);
+    if (cause === 'missing') return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
+    if (cause === 'denied')
+      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
+    if (cause === 'no_space') return { ok: false, error: { code: 'no_space', path: targetPath } };
     return { ok: false, error: { code: 'unknown', message: sanitizedMessage } };
   }
 }
@@ -567,9 +564,6 @@ export async function cloneRepository(
  * Sync a repository to match a remote branch.
  * Runs sequential fetch + reset --hard. If fetch fails, reset is skipped.
  * Uses execFileAsync (no shell interpolation) for safety.
- *
- * Note: the reset uses the `cwd` option; the fetch goes through
- * fetchWithRefLockRetry, which uses `-C`. Both are functionally equivalent.
  *
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
@@ -582,21 +576,17 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await fetchWithRefLockRetry(repoPath, remote, undefined, { timeoutMs: 60000 });
+    await fetchWithRetry(repoPath, [remote], { timeout: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_fetch_failed');
-
-    if (errorText.includes('not a git repository')) {
+    if (error instanceof GitFailure && error.kind === 'not_repository') {
       return { ok: false, error: { code: 'not_a_repo', path: repoPath } };
     }
-    if (errorText.includes('authentication failed') || errorText.includes('could not read')) {
+    const cause = reportedCause(error);
+    if (cause === 'denied')
       return { ok: false, error: { code: 'permission_denied', path: repoPath } };
-    }
-    if (errorText.includes('no space')) {
-      return { ok: false, error: { code: 'no_space', path: repoPath } };
-    }
+    if (cause === 'no_space') return { ok: false, error: { code: 'no_space', path: repoPath } };
     return { ok: false, error: { code: 'unknown', message: `Fetch failed: ${err.message}` } };
   }
 
@@ -607,12 +597,11 @@ export async function syncRepository(
     });
   } catch (error) {
     const err = error as Error;
-    const message = err.message.toLowerCase();
-
-    if (message.includes('unknown revision') || message.includes('not a valid object')) {
+    if (
+      stderrOf(err).startsWith(`fatal: ambiguous argument '${remote}/${branch}': unknown revision`)
+    ) {
       return { ok: false, error: { code: 'branch_not_found', branch } };
     }
-
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_reset_failed');
     return { ok: false, error: { code: 'unknown', message: `Reset failed: ${err.message}` } };
   }
@@ -743,6 +732,6 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');
-    throw new Error(`Failed to add safe directory '${path}': ${err.message}`);
+    throw new Error(`Failed to add safe directory '${path}': ${err.message}`, { cause: err });
   }
 }

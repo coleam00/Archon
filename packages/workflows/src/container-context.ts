@@ -7,6 +7,13 @@
  */
 
 /**
+ * `fuse` needs only /dev/fuse; `native` grants CAP_SYS_ADMIN and permits the
+ * read-only lower to be remounted read-write (see SECURITY.md).
+ */
+export const OVERLAY_MODES = ['fuse', 'native'] as const;
+export type OverlayMode = (typeof OVERLAY_MODES)[number];
+
+/**
  * Summary of the changes an overlay upper layer holds relative to the read-only
  * lower (the live project root). By overlayfs construction the upper layer IS the
  * diff, so this is a directory walk, not a tree comparison. File lists are capped
@@ -96,7 +103,7 @@ export interface ContainerRunContext {
    * an adversarial agent could bypass the write-back gate. The engine emits a loud
    * run-start warning when this is `native` (H4; see SECURITY.md).
    */
-  overlayMode?: 'fuse' | 'native';
+  overlayMode?: OverlayMode;
 }
 
 /** Synthetic node id for the engine-level write-back gate (there is no DAG node). */

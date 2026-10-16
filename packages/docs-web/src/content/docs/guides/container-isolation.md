@@ -35,13 +35,15 @@ The overlay's upper layer **is** the diff by overlayfs construction, so computin
 ## Prerequisites
 
 1. **Docker** running on the host (Engine ≥ 20.10 / Docker Desktop).
-2. **The runner image**, built once from the in-repo Dockerfile:
+2. **The runner image**, built from the current in-repo Dockerfile:
 
    ```bash
    bun run build:runner-image
    ```
 
    This tags `archon-runner:<version>` and `archon-runner:latest` (the default). It bakes in the Claude native binary, git, bash, bun, uv, and `fuse-overlayfs`.
+
+   Rebuild existing runner images after upgrading Archon, including custom images with their own tags. The current entrypoint reports FUSE mount failure with exit status 78; older entrypoints that return a generic status cannot authorize native fallback.
 
 ## Running
 
@@ -99,12 +101,12 @@ A non-Claude node in a container run **fails fast before any node executes**, na
 
 The container is the isolation boundary: read-only lower bind + overlay upper on a VM-local volume + Archon-managed env only (the host `process.env` never crosses) + approval-gated write-back. The apply is the **one** moment the live root is written.
 
-Overlay mount mode is chosen least-privilege-first: `fuse-overlayfs` (only `--device /dev/fuse`, no `CAP_SYS_ADMIN`) is attempted first and works on rootless / userns-remap daemons; a standard rootful daemon falls back to `native` (kernel overlay + `CAP_SYS_ADMIN`), which lets in-container root remount the read-only lower — so `native` is isolation-hardening, **not** a sandbox against a hostile agent. The full threat model, the `native` caveat, and the `docker exec -e` secrets-in-`ps` limitation are documented in `packages/isolation/docker/SECURITY.md` — read it before running untrusted work.
+Overlay mount mode is chosen least-privilege-first: `fuse-overlayfs` (only `--device /dev/fuse`, no `CAP_SYS_ADMIN`) is attempted first and works on rootless / userns-remap daemons. Native fallback requires the runner to report a FUSE mount failure with exit status 78. Docker startup failures, including a missing `/dev/fuse`, readiness timeouts, unconfirmed exit status, and failed log checks stop preparation without fallback. A transient inspection failure can recover: a later inspection confirming exit 78 permits fallback. On a standard rootful daemon, a confirmed FUSE mount failure permits `native` (kernel overlay + `CAP_SYS_ADMIN`), which lets in-container root remount the read-only lower — so `native` is isolation-hardening, **not** a sandbox against a hostile agent. The full threat model, the `native` caveat, and the `docker exec -e` secrets-in-`ps` limitation are documented in `packages/isolation/docker/SECURITY.md` — read it before running untrusted work.
 
-Two Archon-owned host directories are bound into the container at their host paths: the run's frozen workflow source, read-only, and `$ARTIFACTS_DIR`, read-write. The artifacts bind is what lets an in-container node leave screenshots, reports, or the `evidence_policy` marker where the engine and the operator read them. It is the only host directory the container can write; its contents are run output and the host never executes them. On a rootful Linux daemon the container's root user owns what it writes there, so Archon hands the directory back to the host user when the container is suspended or destroyed.
+Two Archon-owned host directories are bound into the container at their host paths: the run's frozen workflow source, read-only, and `$ARTIFACTS_DIR`, read-write. The artifacts bind is what lets an in-container node leave screenshots, reports, or the `evidence_policy` marker where the engine and the operator read them. It is the only host directory the container can write; its contents are run output and the host never executes them. On a rootful Linux daemon the container's root user owns what it writes there, so Archon attempts to restore host ownership when the container is suspended or destroyed. This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed` and do not stop suspension or destruction.
 
 Before a named script or other capture-backed read is dispatched, Archon hashes the host capture and compares it with the run's pinned source identity. This refuses a mismatch present at that checkpoint; it does not close the check-to-exec race, contain a same-UID host process, or cancel parallel nodes already running.
 
 ## macOS / Linux notes
 
-The overlay upper/work dirs live on a VM-local named volume, never a host bind mount (a host-bind upperdir hits `EACCES` on macOS). The merged overlay is mounted at the **same absolute path** as the host cwd, so `working_path` and every path substitution are unchanged inside the container. On a standard Docker Desktop / rootful Engine daemon, expect the `native` (CAP_SYS_ADMIN) overlay mode.
+The overlay upper/work dirs live on a VM-local named volume, never a host bind mount (a host-bind upperdir hits `EACCES` on macOS). The merged overlay is mounted at the **same absolute path** as the host cwd, so `working_path` and every path substitution are unchanged inside the container. On a standard Docker Desktop / rootful Engine daemon, `native` (CAP_SYS_ADMIN) is available only after the runner starts and reports the dedicated FUSE mount failure status; a missing `/dev/fuse` stops the run before that point.

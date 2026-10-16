@@ -724,8 +724,6 @@ describe('WorktreeProvider', () => {
       expect(environment.branchName).toBe(git.toBranchName('feature/auth'));
       expect(environment.metadata).toHaveProperty('branchCreated', true);
 
-      // PR branch fetch is delegated to syncWorkspace with fetch-only mode so
-      // the bounded ref-lock retry lives in @archon/git.
       expect(syncWorkspaceSpy).toHaveBeenCalledWith(
         '/workspace/repo',
         git.toBranchName('feature/auth'),
@@ -1184,12 +1182,7 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('delegates same-repo PR fetch to syncWorkspace so ref-lock race is absorbed', async () => {
-      // Mirrors syncWorkspace's race-recovery contract: the bounded ref-lock
-      // retry lives in syncWorkspace, so createFromSameRepoPR must delegate
-      // the fetch there. Concurrent launches that would collide on the
-      // shared remote-tracking ref now succeed because syncWorkspace retries
-      // internally (its own tests cover the retry mechanics).
+    test('delegates same-repo PR fetch to syncWorkspace', async () => {
       syncWorkspaceSpy.mockImplementation(async (_repo, branch) => {
         if (branch === git.toBranchName('feature/auth')) {
           return {
@@ -1231,10 +1224,7 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('throws when syncWorkspace exhausts its retry budget on persistent same-repo PR fetch lock-race error', async () => {
-      // When syncWorkspace exhausts its ref-lock retry budget it throws;
-      // createFromSameRepoPR must surface that failure as a loud launch error
-      // before any worktree is created.
+    test('preserves a same-repo PR fetch lock failure', async () => {
       syncWorkspaceSpy.mockImplementation(async (_repo, branch) => {
         if (branch === git.toBranchName('feature/auth')) {
           throw new Error(
@@ -1271,7 +1261,7 @@ describe('WorktreeProvider', () => {
       // inner wrap (createFromSameRepoPR) keeps the contract that
       // distinguishes fetch failures from worktree-add failures.
       await expect(provider.create(request)).rejects.toThrow(
-        'Failed to create worktree for PR #42: Fetch origin/feature/auth failed: error: cannot lock ref'
+        'Failed to create worktree for PR #42: Fetch origin/feature/auth failed: Sync fetch from origin/feature/auth failed: error: cannot lock ref'
       );
 
       expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
@@ -1313,7 +1303,7 @@ describe('WorktreeProvider', () => {
       // is preserved as `Fetch <remote>/<branch> failed: <original>` inside
       // the surrounding `createFromPR` prefix.
       await expect(provider.create(request)).rejects.toThrow(
-        "Failed to create worktree for PR #42: Fetch origin/feature/auth failed: fatal: 'origin' does not appear to be a git repository"
+        "Failed to create worktree for PR #42: Fetch origin/feature/auth failed: Sync fetch from origin/feature/auth failed: fatal: 'origin' does not appear to be a git repository"
       );
 
       expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
@@ -1467,114 +1457,34 @@ describe('WorktreeProvider', () => {
       });
     });
 
-    test('handles stale branch when creating fork PR without SHA', async () => {
-      const request: IsolationRequest = {
-        ...baseRequest,
-        workflowType: 'pr',
-        identifier: '42',
-        prBranch: git.toBranchName('feature/auth'),
-        isForkPR: true,
-      };
-
-      let fetchAttempts = 0;
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        // First fetch with branch creation fails
-        if (args.includes('fetch') && args.some(a => a.includes('pull/42/head:pr-42-review'))) {
-          fetchAttempts++;
-          if (fetchAttempts === 1) {
-            const error = new Error('fatal: already exists') as Error & { stderr?: string };
-            error.stderr =
-              "fatal: cannot lock ref 'refs/heads/pr-42-review': reference already exists";
+    test.each(['already exists', 'cannot lock ref: unable to update local ref'])(
+      'a fork fetch failure containing %s never deletes a branch and has bounded retries',
+      async text => {
+        const request: IsolationRequest = {
+          ...baseRequest,
+          workflowType: 'pr',
+          identifier: '42',
+          prBranch: git.toBranchName('feature/auth'),
+          isForkPR: true,
+        };
+        const error = new git.GitFailure(
+          'unclassified',
+          `git fetch failed: ${text}`,
+          Object.assign(new Error(text), { code: 128, stderr: text })
+        );
+        let fetches = 0;
+        execSpy.mockImplementation(async (_cmd, args) => {
+          if (args.includes('fetch')) {
+            fetches++;
             throw error;
           }
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await provider.create(request);
-
-      // Verify branch deletion was called to clean up stale branch
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'branch', '-D', 'pr-42-review'],
-        expect.any(Object)
-      );
-
-      // Verify fetch was retried
-      expect(fetchAttempts).toBe(2);
-    });
-
-    test('throws error when stale branch deletion fails during fork PR creation', async () => {
-      const request: IsolationRequest = {
-        ...baseRequest,
-        workflowType: 'pr',
-        identifier: '42',
-        prBranch: git.toBranchName('feature/auth'),
-        isForkPR: true,
-      };
-
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch') && args.some(a => a.includes('pull/42/head:pr-42-review'))) {
-          const error = new Error('already exists') as Error & { stderr?: string };
-          error.stderr = 'reference already exists';
-          throw error;
-        }
-        if (args.includes('branch') && args.includes('-D')) {
-          throw new Error('error: permission denied');
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await expect(provider.create(request)).rejects.toThrow(
-        'Failed to create worktree for PR #42'
-      );
-    });
-
-    test('absorbs ref-lock race on concurrent fork-PR launches', async () => {
-      // Two concurrent fork-PR launches race on the local branch refspec's
-      // ref lock (refs/heads/pr-42-review). The first attempt per launch fails
-      // with the lock-race error; the bounded retry absorbs it.
-      const request: IsolationRequest = {
-        ...baseRequest,
-        workflowType: 'pr',
-        identifier: '42',
-        prBranch: git.toBranchName('feature/auth'),
-        isForkPR: true,
-      };
-
-      const raceText =
-        "error: cannot lock ref 'refs/heads/pr-42-review': is at de581e24 but expected 8eaa8d42\n" +
-        '! 8eaa8d420..de581e24b pr-42-review -> pr-42-review (unable to update local ref)';
-      const raceError = new Error(raceText) as Error & { stderr?: string };
-      raceError.stderr = raceText;
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch') && args.some(a => a.includes('pull/42/head:pr-42-review'))) {
-          fetchCalls++;
-          if (fetchCalls <= 2) {
-            throw raceError;
-          }
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await Promise.all([provider.create(request), provider.create(request)]);
-
-      expect(fetchCalls).toBeGreaterThan(2);
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        expect.arrayContaining([
-          '-C',
-          '/workspace/repo',
-          'worktree',
-          'add',
-          expect.any(String),
-          'pr-42-review',
-        ]),
-        expect.any(Object)
-      );
-    });
+          return { stdout: '', stderr: '' };
+        });
+        await expect(provider.create(request)).rejects.toThrow(text);
+        expect(fetches).toBe(3);
+        expect(execSpy.mock.calls.some(([, args]) => args.includes('-D'))).toBe(false);
+      }
+    );
 
     test('adopts the registered review checkout when concurrent fork-PR worktree creation loses the race', async () => {
       const request: PRIsolationRequest = {
@@ -1934,7 +1844,7 @@ describe('WorktreeProvider', () => {
       expect(findWorktreeByBranchSpy).not.toHaveBeenCalled();
     });
 
-    test('exhausts the bounded budget on persistent fork-PR fetch lock-race and fails before worktree creation', async () => {
+    test('does not infer fork-PR fetch retry from lock prose without an exit status', async () => {
       const request: IsolationRequest = {
         ...baseRequest,
         workflowType: 'pr',
@@ -1962,7 +1872,7 @@ describe('WorktreeProvider', () => {
         'Failed to create worktree for PR #42: error: cannot lock ref'
       );
 
-      expect(fetchCalls).toBe(4); // 1 initial + 3 retries
+      expect(fetchCalls).toBe(1);
 
       const addCalls = execSpy.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[];
@@ -1971,7 +1881,7 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
-    test('does not retry non-race fork-PR fetch errors', async () => {
+    test('does not retry fork-PR fetch errors without a numeric exit status', async () => {
       const request: IsolationRequest = {
         ...baseRequest,
         workflowType: 'pr',
@@ -2010,7 +1920,7 @@ describe('WorktreeProvider', () => {
         Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
       );
 
-      await expect(provider.create(request)).rejects.toThrow('Permission denied');
+      await expect(provider.create(request)).rejects.toThrow('EACCES: permission denied');
     });
 
     test('creates worktree under project-scoped path for locally-registered repo', async () => {
@@ -2783,7 +2693,12 @@ describe('WorktreeProvider', () => {
       const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/issue-42');
       getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
 
+      listWorktreesSpy.mockResolvedValue([
+        { path: git.toWorktreePath('/other'), branch: git.toBranchName('issue-42') },
+      ]);
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('rev-parse') && args.includes('--verify'))
+          return { stdout: 'abc123', stderr: '' };
         if (args.includes('branch') && args.includes('-D')) {
           const error = new Error('error: checked out at') as Error & { stderr?: string };
           error.stderr = "error: Cannot delete branch 'issue-42' checked out at '/workspace/repo'";
@@ -2844,11 +2759,38 @@ describe('WorktreeProvider', () => {
       expect(result.warnings).toHaveLength(0);
     });
 
+    for (const remote of [false, true]) {
+      test(`failed ${remote ? 'remote' : 'local'} deletion cannot hide a surviving ref behind not-found prose`, async () => {
+        const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/pr-99');
+        getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if ((remote && args.includes('push')) || (!remote && args.includes('-D'))) {
+            throw Object.assign(new Error('branch not found; remote ref does not exist'), {
+              stderr: "couldn't find remote ref; did not match any branch",
+            });
+          }
+          if (args.includes('ls-remote') || args.includes('rev-parse')) {
+            return { stdout: 'abc123\trefs/heads/feature-branch\n', stderr: '' };
+          }
+          return { stdout: '', stderr: '' };
+        });
+        const result = await provider.destroy(worktreePath, {
+          ...ownedDestroyOptions,
+          branchName: git.toBranchName('feature-branch'),
+          deleteRemoteBranch: remote,
+        });
+        expect(remote ? result.remoteBranchDeleted : result.branchDeleted).toBe(false);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain('feature-branch');
+      });
+    }
+
     test('returns remoteBranchDeleted=false with warning on network error', async () => {
       const worktreePath = git.toWorktreePath('/workspace/worktrees/repo/pr-99');
       getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
 
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote')) throw new Error('network unreachable');
         if (args.includes('push') && args.includes('--delete')) {
           throw new Error('fatal: Could not read from remote repository');
         }
@@ -2890,6 +2832,8 @@ describe('WorktreeProvider', () => {
       getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
 
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('rev-parse') && args.includes('--verify'))
+          return { stdout: 'abc123', stderr: '' };
         if (args.includes('branch') && args.includes('-D')) {
           throw new Error('unexpected git internal error');
         }
@@ -3103,7 +3047,9 @@ describe('WorktreeProvider', () => {
 
     test('returns null when path is not a git repository', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
-      getCanonicalRepoPathSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      getCanonicalRepoPathSpy.mockRejectedValue(
+        new git.GitFailure('not_repository', 'fatal: not a git repository')
+      );
 
       const result = await provider.adopt('/workspace/worktrees/repo/feature-auth');
       expect(result).toBeNull();
@@ -3214,6 +3160,72 @@ describe('WorktreeProvider', () => {
 
       expect(copyWorktreeFilesSpy).not.toHaveBeenCalled();
     });
+
+    for (const path of ['canonicalization', 'config', 'ancestry']) {
+      test(`${path} preserves its infrastructure cause through the resolver`, async () => {
+        const cause =
+          path === 'ancestry'
+            ? new git.GitFailure(
+                'unclassified',
+                'merge-base failed',
+                Object.assign(new Error('ancestry command'), {
+                  code: 128,
+                  stderr: 'original git evidence',
+                })
+              )
+            : Object.assign(new Error('read denied'), { code: 'EACCES' });
+        provider = new WorktreeProvider(async () => {
+          if (path === 'config') throw cause;
+          return { baseBranch: git.toBranchName('main') };
+        });
+        if (path === 'canonicalization') {
+          getCanonicalRepoPathSpy.mockRestore();
+          mockReadFile.mockRejectedValue(cause);
+        }
+        if (path === 'ancestry') {
+          syncWorkspaceSpy.mockRestore();
+          execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+            if (args.includes('merge-base')) throw cause;
+            if (args.includes('rev-parse'))
+              return { stdout: args.includes('HEAD') ? 'local-sha' : 'remote-sha', stderr: '' };
+            return { stdout: '', stderr: '' };
+          });
+        }
+        const store: IIsolationStore = {
+          getById: async () => null,
+          findActiveByWorkflow: async () => null,
+          listActive: async () => [],
+          create: async () => {
+            throw new Error('must not persist a failed creation');
+          },
+          updateStatus: async () => undefined,
+          updateMetadata: async () => undefined,
+          markWorktreeDestroyed: async () => undefined,
+          countActiveByCodebase: async () => 0,
+        };
+        const resolver = new IsolationResolver({ store, provider });
+        const resolution = resolver.resolve({
+          existingEnvId: null,
+          codebase: { id: 'cb-123', defaultCwd: '/workspace/repo', name: 'owner/repo' },
+          hints: { workflowType: 'issue', workflowId: '42' },
+          platformType: 'web',
+        });
+        if (path === 'ancestry') {
+          const error = await resolution.catch((error: unknown) => error);
+          expect(error).toBeInstanceOf(Error);
+          if (!(error instanceof Error)) throw error;
+          expect(error.cause).toMatchObject({ cause });
+          expect(error.message).toContain('merge-base failed');
+          expect(error.message).toContain('original git evidence');
+          expect(error.message).toContain('exit code 128');
+        } else {
+          const result = await resolution;
+          expect(result.status).toBe('blocked');
+          if (result.status !== 'blocked') throw new Error('expected blocked result');
+          expect(result.userMessage).toContain('Permission denied');
+        }
+      });
+    }
 
     test('throws with config error details when config load fails and no fromBranch', async () => {
       const configLoader: RepoConfigLoader = async () => {
@@ -3699,18 +3711,12 @@ describe('WorktreeProvider', () => {
       provider = new WorktreeProvider(configLoader);
 
       worktreeExistsSpy.mockResolvedValue(false);
-      syncWorkspaceSpy.mockRejectedValue(
-        new Error(
-          "Configured base branch 'does-not-exist' not found on remote. " +
-            'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
-            'or remove the setting to use the auto-detected default branch.'
-        )
-      );
+      const missing = new git.ConfiguredBaseBranchNotFoundError('does-not-exist', 'origin');
+      syncWorkspaceSpy.mockRejectedValue(missing);
 
-      // Configured branch errors should be fatal, not swallowed
-      await expect(provider.create(baseRequest)).rejects.toThrow(
-        "Configured base branch 'does-not-exist' not found"
-      );
+      // The config remedy reaches the operator unwrapped, without network advice.
+      const failure = await provider.create(baseRequest).catch((error: unknown) => error);
+      expect(failure).toBe(missing);
     });
 
     test('throws when network timeout occurs during sync', async () => {

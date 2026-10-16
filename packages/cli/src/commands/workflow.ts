@@ -45,6 +45,7 @@ import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { OverlayMode } from '@archon/workflows/container-context';
 import type {
   AttentionWatch,
   IWorkflowEngine,
@@ -2744,7 +2745,7 @@ async function runWorkflowWithOwnedSource(
   let containerEnvId: string | undefined;
   // Overlay mode the backend actually mounted (fuse = unprivileged; native =
   // CAP_SYS_ADMIN, gate-bypassable). Threaded to the engine for the H4 run-start warning.
-  let containerOverlayMode: 'fuse' | 'native' | undefined;
+  let containerOverlayMode: OverlayMode | undefined;
 
   // Between-run continuation (#2747): resolve the declared adoption BEFORE any
   // lane decision — it dictates the lane, fail-loud (never a silent fresh
@@ -3080,8 +3081,8 @@ async function runWorkflowWithOwnedSource(
             }
             prepared = await backend.prepare({ codebase: folderCodebase, ...(mounts ?? {}) });
           } catch (prepErr) {
-            // Map docker/daemon/image failures to an actionable message (daemon down,
-            // runner image missing, docker-group permission — see errors.ts).
+            // Map docker/daemon/image failures to an actionable message (daemon
+            // unreachable, runner image missing — see errors.ts).
             const err = prepErr as Error;
             getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
             throw new Error(classifyIsolationError(err));
