@@ -180,7 +180,9 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     checkout_baseline: null,
   });
 });
-const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
+const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() =>
+  Promise.resolve({ failed: true })
+);
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
@@ -754,6 +756,7 @@ describe('dispatchBackgroundWorkflow', () => {
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('exec boom'));
     mockFailWorkflowRun.mockImplementationOnce(async () => {
       runLiveOwnerCalls.push('fail');
+      return { failed: true };
     });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);

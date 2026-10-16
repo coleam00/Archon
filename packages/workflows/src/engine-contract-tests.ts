@@ -116,7 +116,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     claimPendingWorkflowRun: async () => makeRun(),
     recordWorkflowRunCheckoutBaseline: async (_id, baseline) => baseline,
     updateWorkflowRun: noop,
-    failWorkflowRun: noop,
+    failWorkflowRun: async () => ({ failed: true }),
     getWorkflowRun: async () => ({ ...makeRun(), status: 'completed' as const }),
     getWorkflowRunStatus: async () => 'completed' as const,
     createWorkflowEvent: noop,
@@ -360,6 +360,7 @@ export function runWorkflowEngineContractTests(
           },
           failWorkflowRun: async () => {
             terminalWrites += 1;
+            return { failed: true };
           },
         });
         const result = await makeEngine(
@@ -684,6 +685,7 @@ nodes:
         failWorkflowRun: async (id, message) => {
           durableStatus = 'failed';
           failures.push({ id, message });
+          return { failed: true };
         },
       });
       const admission = await makeEngine(
@@ -740,6 +742,7 @@ nodes:
         getWorkflowRunStatus: async () => 'running',
         failWorkflowRun: async () => {
           compensationWrites += 1;
+          return { failed: true };
         },
       });
       const admission = await makeEngine(
