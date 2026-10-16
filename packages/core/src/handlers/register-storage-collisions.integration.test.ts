@@ -867,28 +867,30 @@ describe('project storage collisions', () => {
       setLogLevel('warn');
       setLogSink(line => warnings.push(JSON.parse(line)));
       expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
-      expect(warnings).toEqual([
-        expect.objectContaining({
-          level: 40,
-          module: 'registration.remote',
-          msg: 'registration.lookup_legacy_unavailable',
-          err: expect.objectContaining({
-            type: 'ProjectRegistrationError',
-            message: expect.stringContaining(legacyPath),
+      // A checkout with several remotes and no origin owns none of them; it is not unreadable.
+      if (state === 'ambiguous') expect(warnings).toEqual([]);
+      else {
+        expect(warnings).toEqual([
+          expect.objectContaining({
+            level: 40,
+            module: 'registration.remote',
+            msg: 'registration.lookup_legacy_unavailable',
+            err: expect.objectContaining({
+              type: 'ProjectRegistrationError',
+              message: expect.stringContaining(legacyPath),
+            }),
           }),
-        }),
-      ]);
-      expect(warnings[0]).toMatchObject({
-        err: {
-          message: expect.stringContaining(
-            state === 'corrupt'
-              ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
-              : state === 'ambiguous'
-                ? 'Cannot select a remote'
+        ]);
+        expect(warnings[0]).toMatchObject({
+          err: {
+            message: expect.stringContaining(
+              state === 'corrupt'
+                ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
                 : 'Remote error: Command failed: git'
-          ),
-        },
-      });
+            ),
+          },
+        });
+      }
       expect(await store.findCodebaseByRepoUrl('https://github.com/acme/new')).toBeNull();
       const localPath = await gitCheckout(join(root, 'local'), 'https://github.com/acme/local');
       const local = await registerInStore(store, localPath);

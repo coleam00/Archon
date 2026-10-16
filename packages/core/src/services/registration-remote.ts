@@ -37,23 +37,11 @@ export async function registrationRemotes(path: string): Promise<{
   return { selected: null, names };
 }
 
-async function registrationRemote(path: string): Promise<string | null> {
-  const { selected, names } = await registrationRemotes(path);
-  if (!selected && names.length > 0) {
-    throw new ProjectRegistrationError(
-      `Cannot select a remote for ${path}: ${names.join(', ')}. Set worktree.remote in .archon/config.yaml before registering this repository.`
-    );
-  }
-  return selected;
-}
-
 export async function effectiveRegistrationUrl(
   path: string,
-  remote?: string
+  remote: string
 ): Promise<string | null> {
-  const selected = remote ?? (await registrationRemote(path));
-  if (!selected) return null;
-  const { stdout } = await execFileAsync('git', ['-C', path, 'remote', 'get-url', selected]);
+  const { stdout } = await execFileAsync('git', ['-C', path, 'remote', 'get-url', remote]);
   return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
@@ -91,11 +79,13 @@ async function readableRemoteIdentity(project: ProjectIdentity): Promise<string 
   try {
     // Older chat registrations omitted repository_url even for remote-backed repos. Git
     // would resolve a relative stored path against this process's directory instead.
-    const url =
-      project.repository_url ||
-      (isAbsolute(project.default_cwd)
-        ? await effectiveRegistrationUrl(project.default_cwd)
-        : null);
+    let url = project.repository_url;
+    if (!url && isAbsolute(project.default_cwd)) {
+      // A checkout with several remotes and none selected registers without a URL
+      // and owns none of them: matching every remote would reroute forge events.
+      const { selected } = await registrationRemotes(project.default_cwd);
+      url = selected ? await effectiveRegistrationUrl(project.default_cwd, selected) : null;
+    }
     return url ? await remoteIdentity(url, project.default_cwd) : null;
   } catch (error) {
     // An unreadable checkout has unknown ownership; it must not veto other projects.

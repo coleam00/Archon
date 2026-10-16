@@ -631,8 +631,9 @@ export async function registerRepository(
 
   const { selected, names } = await registrationRemotes(localPath);
   // With several remotes and none selected, the checkout registers without a
-  // URL, as before remote selection existed; any remote another project owns
-  // still makes it a second clone.
+  // URL, as before remote selection existed. It is refused when another project
+  // already owns one of its remotes, but it owns none of them itself, so a
+  // later clone of one still registers separately.
   for (const remote of selected ? [] : names) {
     const url = await effectiveRegistrationUrl(localPath, remote);
     const owner = url && (await findRegisteredRemote(codebases, url));
