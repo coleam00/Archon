@@ -111,7 +111,25 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
 }
 
 async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
-  if (await localBranchExists(repoPath, branchName)) return true;
+  try {
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        `${branchName}^{commit}`,
+      ],
+      { timeout: 10000 }
+    );
+    return true;
+  } catch (error) {
+    if (!(error instanceof GitFailure) || error.kind !== 'unclassified' || error.code !== 1)
+      throw error;
+  }
   const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
     timeout: 10000,
   });
