@@ -16,7 +16,8 @@ import { discoverWorkflows } from '../../../packages/workflows/src/workflow-disc
 import { pausedAttentionWait } from '../../../packages/workflows/src/schemas/workflow-run';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas/workflow';
 import { STAGE_EFFECTS, type Decision, type Stage } from '../../workflows/sdlc/.shared/standalone';
-import { CONFIDENCES, type Attention } from '../../workflows/sdlc/.shared/queue';
+import { CONFIDENCES, type Attention, type Choice, type Recommendation } from '../../workflows/sdlc/.shared/queue';
+import { record } from '../../workflows/sdlc/.shared/forge';
 import { gitCheckout, packScriptRunner, PR } from './deliver-checks-harness';
 
 registerBuiltinProviders();
@@ -105,21 +106,36 @@ describe('entry contracts and composed ownership', () => {
     if (group.kind !== 'loop_group') throw new Error('missing cycle');
     const decide = group.loop_group.nodes.find(n => n.id === 'decide');
     if (decide?.kind !== 'agent') throw new Error('missing decision');
-    expect(decide.output_format).toMatchObject({
-      properties: {
-        attention: {
-          anyOf: [
-            { type: 'null' },
-            {
-              properties: {
-                recommendation: { properties: { confidence: { enum: [...CONFIDENCES] } } },
-                choices: { items: { properties: { effect: { enum: [...STAGE_EFFECTS[stage]] } } } },
-              },
-            },
-          ],
-        },
-      },
+    const text = { type: 'string' };
+    const nonempty = { ...text, pattern: '\\S' };
+    const recommendation = {
+      choice: nonempty,
+      why: nonempty,
+      evidence: nonempty,
+      confidence: { type: 'string', enum: [...CONFIDENCES] },
+      would_change: nonempty,
+    } satisfies Record<keyof Recommendation, unknown>;
+    const choice = {
+      id: { type: 'string', pattern: '^[a-z][a-z0-9-]*$' },
+      label: nonempty,
+      does: nonempty,
+      effect: { type: 'string', enum: [...STAGE_EFFECTS[stage]] },
+      ruling: text,
+    } satisfies Record<keyof Choice<string>, unknown>;
+    const object = (properties: Record<string, unknown>) => ({
+      type: 'object', additionalProperties: false, properties, required: Object.keys(properties),
     });
+    const attention = object({
+      what: nonempty,
+      why: nonempty,
+      recommendation: object(recommendation),
+      choices: { type: 'array', minItems: 1, items: object(choice) },
+      if_unanswered: nonempty,
+      links: { type: 'array', items: nonempty, minItems: 1 },
+    } satisfies Record<keyof Attention<string>, unknown>);
+    const schema = decide.output_format;
+    if (!schema) throw new Error('missing decision schema');
+    expect(record(schema.properties)?.attention).toEqual({ anyOf: [{ type: 'null' }, attention] });
   });
   test('CI uses the delivery contract and one authored command', () => {
     const review = parse('review').nodes[0];
@@ -184,7 +200,8 @@ async function harness(
   stage: Stage,
   result: Record<string, unknown>,
   decision: Decision = ASK,
-  ciState?: 'green' | 'pr_caused' | 'other'
+  ciState?: 'green' | 'pr_caused' | 'other',
+  ciAllowed = true
 ) {
   const root = track(mkdtempSync(join(testHome, 'run-')));
   const cwd = join(root, 'repo');
@@ -203,7 +220,7 @@ async function harness(
           id: n.id,
           kind: 'exec',
           runtime: 'bun',
-          script: `console.log(await Bun.file(${JSON.stringify(decisionFile)}).text())`,
+          script: `await Bun.write(${JSON.stringify(join(root, 'decision-bindings.json'))}, JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('INPUTS_'))))); console.log(await Bun.file(${JSON.stringify(decisionFile)}).text())`,
           depends_on: n.depends_on,
           trigger_rule: n.trigger_rule,
           when: n.when,
@@ -219,7 +236,7 @@ async function harness(
       const value =
         n.id === 'ci'
           ? { state: ciState, rerun: 'none', summary: 'The current-head CI conclusion.' }
-          : { allowed: true, summary: 'Current reviewed head.', source: 'gh', pr: PR };
+          : { allowed: ciAllowed, summary: ciAllowed ? 'Current reviewed head.' : 'The reviewed head moved.', source: 'gh', pr: PR };
       return {
         id: n.id,
         kind: 'exec',
@@ -633,6 +650,31 @@ describe('review CI continuation', () => {
       if (state !== 'green') expect((await h.answer('finish')).status).toBe('completed');
     }
   );
+  test('a refused CI target asks again without invoking CI or replacing the reviewed result', async () => {
+    const h = await harness('review', REVIEW, {
+      ...ASK,
+      pr: PR,
+      attention: {
+        ...ATTENTION,
+        choices: [{ ...ATTENTION.choices[0], effect: 'ci' }, ATTENTION.choices[1]],
+      },
+    }, 'green', false);
+    pointAtRun(h, REVIEW, 'review/report.md');
+    expect((await h.execute()).status).toBe('paused');
+    expect((await h.answer('retry')).status).toBe('paused');
+    expect(pausedAttentionWait(h.run())).toMatchObject({ iteration: 2 });
+    expect(h.attempts()).toBe(1);
+    const decisionBindings = JSON.parse(readFileSync(join(h.root, 'decision-bindings.json'), 'utf8'));
+    expect(JSON.parse(decisionBindings.INPUTS_CI_TARGET)).toMatchObject({ allowed: false, summary: 'The reviewed head moved.' });
+    expect(JSON.parse(decisionBindings.INPUTS_PREVIOUS)).toMatchObject({ result: { ready: true, findings_summary: REVIEW.findings_summary } });
+    const events = await h.events();
+    expect(events.filter(e => e.step_name === 'cycle.ci' && e.event_type === 'node_completed')).toHaveLength(0);
+    expect(events.filter(e => e.step_name === 'cycle.ci-target' && e.event_type === 'node_completed').at(-1)?.data).toMatchObject({ structured_output: { allowed: false } });
+    expect((await h.answer('finish')).status).toBe('completed');
+    expect((await h.events()).reverse().find(e => e.step_name === 'result' && e.event_type === 'node_completed')?.data).toMatchObject({
+      structured_output: { ...REVIEW, report: { ...REVIEW.report, run_id: h.run().id }, findings_summary: expect.stringContaining(REVIEW.findings_summary) },
+    });
+  });
   test.each(['current', 'moved', 'closed', 'merged'] as const)(
     'the CI boundary checks the qualified reviewed PR when %s',
     state => {

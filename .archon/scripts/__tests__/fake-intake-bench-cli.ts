@@ -33,6 +33,7 @@ export interface FakeIssue {
 }
 
 export interface FakeConfig {
+  readonly historicalTriage?: boolean;
   readonly unavailableRepos?: readonly string[];
   readonly declaredClosure?: Closure;
   readonly recordedContract?: 'NO_ACTION' | 'READY';
@@ -204,11 +205,12 @@ function answer(dir: string, args: readonly string[]): string {
       transcriptPath = join(dir, `transcript-run-${n}.jsonl`);
       writeFileSync(transcriptPath, '');
     }
+    const triagePrefix = config.historicalTriage ? 'triage__' : 'triage__cycle.attempt__';
     const nodes: FakeNode[] = intake
       ? [
           { id: 'facts', state: 'completed', kind: 'exec' },
-          agent('triage__cycle.attempt__triage', triageRan ? 'completed' : 'skipped', bound),
-          { id: 'triage__cycle.attempt__verdict', state: triageRan ? 'completed' : 'skipped', kind: 'exec', structuredOutput: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', closure: config.declaredClosure ?? null } },
+          agent(`${triagePrefix}triage`, triageRan ? 'completed' : 'skipped', bound),
+          { id: `${triagePrefix}verdict`, state: triageRan ? 'completed' : 'skipped', kind: 'exec', structuredOutput: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', closure: config.declaredClosure ?? null } },
           { id: 'outcome', state: 'completed', kind: 'exec' },
         ]
       : [config.unboundTriage === true ? { id: 'triage', state: 'completed' } : agent('triage', 'completed', config.triageRanAs ?? bound)];

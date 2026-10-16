@@ -24,8 +24,7 @@ type Repo = QualifiedPr['repo'];
 export const GROUP_OPEN = { duplicate: false, fixed: false, not_planned: false, typed: true, dispositioned: true } as const;
 export type Group = keyof typeof GROUP_OPEN;
 export const GROUPS = Object.keys(GROUP_OPEN) as Group[];
-export const WORKFLOWS = { intake: 'archon-intake', triage: 'archon-triage-block' } as const;
-export type BenchWorkflow = keyof typeof WORKFLOWS;
+export type BenchWorkflow = 'intake' | 'triage';
 
 export const CONTRACTS = ['READY', ...Object.keys(STATE_LABEL)] as Contract[];
 export const ROUTES = Object.keys(ROUTE_LABEL) as Route[];

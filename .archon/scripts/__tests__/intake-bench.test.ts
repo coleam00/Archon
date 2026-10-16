@@ -36,8 +36,7 @@ import {
   type Snapshot,
   snapshotChanges,
   toVerdict,
-  triageNodeId,
-  TRIAGE_VERDICT_NODE,
+  resolveLayout,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
 import { MARKS_FILE, closeCheck, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
@@ -135,18 +134,20 @@ describe('bench run', () => {
    * judged by archon-triage; row 12-outside is a maintainer's run through intake as
    * an outside author's.
    */
-  function bench(scenario: Partial<FakeConfig> = {}) {
+  function bench(scenario: Partial<FakeConfig> = {}, historical = false) {
     const repo = track(mkdtempSync(join(tmpdir(), 'intake-bench-repo-')));
     ok(repo, 'init', '-q', '-b', 'dev');
     ok(repo, 'remote', 'add', 'origin', 'https://github.com/o/r.git');
-    write(repo, '.archon/workflows/sdlc/triage/archon-triage-block.yaml', 'name: archon-triage-block\nmodel: medium\n');
+    const triageName = historical ? 'archon-triage' : 'archon-triage-block';
+    write(repo, `.archon/workflows/sdlc/triage/${triageName}.yaml`, `name: ${triageName}\nmodel: medium\nreturns: verdict\nnodes: [{id: triage, prompt: Judge}, {id: verdict, script: verdict}]\n`);
+    if (!historical) write(repo, '.archon/workflows/sdlc/triage-entry/archon-triage.yaml', 'name: archon-triage\nnodes: [{id: cycle, loop_group: {nodes: [{id: attempt, include: archon-triage-block}]}}]\n');
     write(repo, '.archon/workflows/sdlc/triage/commands/triage.md', 'Triage.\n');
     write(
       repo,
       '.archon/workflows/sdlc/triage/fixtures/deliver.stubs.yaml',
       'triage:\n  decision: { contract: READY, route: deliver }\nfixture:\n  expect: completed\nexec-code: true\n'
     );
-    write(repo, '.archon/workflows/sdlc/intake/archon-intake.yaml', 'name: archon-intake\n');
+    write(repo, '.archon/workflows/sdlc/intake/archon-intake.yaml', 'name: archon-intake\nnodes: [{id: triage, include: archon-triage}]\n');
     ok(repo, 'add', '-A');
     ok(repo, 'commit', '-q', '-m', 'pack');
     const packSha = ok(repo, 'rev-parse', 'HEAD');
@@ -172,6 +173,7 @@ describe('bench run', () => {
         { number: 12, labels: ['bug'], comments: 2 },
       ],
       projectKey: 'o/r',
+      historicalTriage: historical,
       ...scenario,
     };
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
@@ -209,6 +211,22 @@ describe('bench run', () => {
       writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, baseline }));
     return { run, runWith, argv, packSha, setBaseline, repo, out, cli };
   }
+
+  it('resolves, launches and proves bindings and closure evidence from a pre-rename pack SHA', () => {
+    const h = bench({ declaredClosure: { kind: 'delivered', url: 'https://github.com/o/r/pull/30' } }, true);
+    const { status, stderr, lines } = h.run('base');
+    expect(stderr).toBe('');
+    expect(status).toBe(0);
+    expect(h.argv(1)[2]).toBe('archon-triage');
+    expect(h.argv(2)[2]).toBe('archon-intake');
+    expect(lines).toHaveLength(2);
+    expect(lines.every(line => line.passed && line.version.pack_sha === h.packSha)).toBe(true);
+    expect(resolveLayout(h.repo, h.packSha).layout).toEqual({
+      workflows: { triage: 'archon-triage', intake: 'archon-intake' },
+      judges: { triage: 'triage', intake: 'triage__triage' },
+      intakeVerdict: 'triage__verdict',
+    });
+  });
 
   it('judges each row on its pinned text with each version, and labels every line', () => {
     const { run, argv, packSha } = bench();
@@ -331,8 +349,8 @@ describe('bench run', () => {
   });
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
-  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' | 'ambiguous' = 'base', canonical = 'https://github.com/o/r/issues/9') {
-    const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
+  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' | 'ambiguous' = 'base', canonical = 'https://github.com/o/r/issues/9', historical = false) {
+    const { runWith, argv, repo, out, cli, packSha } = bench(scenario, historical);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
     ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the batch base');
@@ -357,6 +375,17 @@ describe('bench run', () => {
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
     return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch, remote, packSha };
   }
+
+  it('reads historical intake bindings and closure evidence at the pinned node paths', () => {
+    const url = 'https://github.com/o/r/pull/30';
+    const result = benchLive({
+      declaredClosure: { kind: 'delivered', url },
+      posted: [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${url}.` }],
+    }, 'base', 'https://github.com/o/r/issues/9', true);
+    expect([result.status, result.stderr, result.checks[0]?.passed]).toEqual([0, '', true]);
+    expect(result.lines[0].binding).toMatchObject({ provider: 'codex', requested: 'gpt-x' });
+    expect(result.lines[0].agent_nodes).toContain('triage__triage');
+  });
 
   it('refuses a missing default branch or one away from the base before launching', () => {
     for (const branch of ['empty', 'other'] as const) {
@@ -447,7 +476,7 @@ describe('bench run', () => {
       return runBatch({
         set: { bench: 'intake', repo: REPO, selected_at: '2026-10-15T00:00:00Z', rows },
         rows, batch: 1, base: 'base', outDir: dir, repoRoot: dir,
-        versions: [{ resolved: { version, source: dir, config }, checkout: () => dir }],
+        versions: [{ resolved: { version, source: dir, config, layout: { workflows: { triage: 'archon-triage-block', intake: 'archon-intake' }, judges: { triage: 'triage', intake: 'triage__cycle.attempt__triage' }, intakeVerdict: 'triage__cycle.attempt__verdict' } }, checkout: () => dir }],
         live: new Map([['base', { scratch: { repo: scratchRepo, checkout: dir }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103, 'old-row': 999, 'canonical:https://github.com/o/r/issues/8': 998 } }]]),
       });
     };
@@ -917,9 +946,10 @@ describe('engine names the bench copies', () => {
     const agentIds = (name: string): string[] => (workflows.get(name)?.nodes ?? []).flatMap(node => node.kind === 'loop_group'
       ? node.loop_group.nodes.filter(child => child.kind === 'agent').map(child => `${node.id}.${child.id}`)
       : node.kind === 'agent' ? [node.id] : []);
-    expect(agentIds('archon-triage-block')).toEqual([triageNodeId('triage')]);
-    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake'), 'triage__cycle.decide']);
-    expect(TRIAGE_VERDICT_NODE).toBe(`triage__cycle.attempt__${String(definitions.get('archon-triage-block')?.returns)}`);
+    const { layout } = resolveLayout(join(import.meta.dir, '../../..'), 'HEAD');
+    expect(agentIds('archon-triage-block')).toEqual([layout.judges.triage]);
+    expect(agentIds('archon-intake')).toEqual([layout.judges.intake, 'triage__cycle.decide']);
+    expect(layout.intakeVerdict).toBe(`triage__cycle.attempt__${String(definitions.get('archon-triage-block')?.returns)}`);
   });
 });
 

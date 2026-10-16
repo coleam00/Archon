@@ -234,10 +234,13 @@ current run at load time.
   isolation: worktree
 
 - id: review-inline
-  include: archon-review
+  include: archon-review-block
   with:
     scope: "$INPUTS.branch"
 ```
+
+`archon-review` is the standalone entry and may pause for an attention answer.
+Use `archon-review-block` when the parent owns continuation, including fan-out.
 
 The `workflow:` target name is static YAML but resolves when the node executes,
 so a prior node may author the child workflow. `workflow:` also accepts `input:`
@@ -253,7 +256,7 @@ static block should run inside the parent run:
   bash: printf '["packages/cli","packages/workflows"]'
 
 - id: review-each
-  include: archon-review
+  include: archon-review-block
   depends_on: [list-scopes]
   fan_out:
     items: "$list-scopes.output"

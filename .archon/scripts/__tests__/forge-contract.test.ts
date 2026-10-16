@@ -94,6 +94,10 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     { repo, number: 1 },
     { repo, number: 0 },
     { repo, number: -3 },
+    { repo, number: 1.5 },
+    { repo, number: '1' },
+    { repo },
+    { number: 1 },
     { repo: { ...repo, host: '' }, number: 1 },
     { repo: { ...repo, host: '  ' }, number: 1 },
     { repo: { ...repo, path: '' }, number: 1 },
@@ -113,6 +117,30 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     };
   });
 
+  const nonempty = { type: 'string', pattern: '\\S' };
+  const repoProperties = { host: nonempty, path: nonempty } satisfies Record<keyof QualifiedPr['repo'], unknown>;
+  const properties = {
+    repo: { type: 'object', properties: repoProperties, required: Object.keys(repoProperties), additionalProperties: false },
+    number: { type: 'integer', minimum: 1 },
+  } satisfies Record<keyof QualifiedPr, unknown>;
+  const qualified = { type: 'object', additionalProperties: false, properties, required: Object.keys(properties) };
+  for (const stage of ['plan', 'triage', 'review', 'deliver', 'ship']) {
+    const filename = `archon-${stage}.yaml`;
+    const entry = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${stage}-entry/${filename}`), 'utf8'), filename, providerRegistry);
+    if (!entry.workflow) throw new Error(entry.error.error);
+    const cycle = entry.workflow.nodes[0];
+    if (cycle.kind !== 'loop_group') throw new Error('missing cycle');
+    for (const node of cycle.loop_group.nodes) {
+      if (!['prepare', 'decide', 'settle'].includes(node.id)) continue;
+      const prSchema = 'output_format' in node ? record(record(node.output_format?.properties)?.pr) : undefined;
+      if (!prSchema) throw new Error(`missing ${stage}.${node.id} qualified PR schema`);
+      expect(prSchema).toEqual({ anyOf: [{ type: 'null' }, qualified] });
+      for (const { pr, parserAccepts } of verdicts) {
+        expect(validateStructuredOutput(pr, prSchema).valid).toBe(parserAccepts);
+      }
+    }
+    expect(cycle.loop_group.nodes.some(node => node.id === 'decide' && 'output_format' in node && record(node.output_format?.properties)?.pr)).toBe(true);
+  }
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0].parserAccepts).toBe(true);

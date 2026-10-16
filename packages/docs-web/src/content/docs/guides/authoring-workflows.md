@@ -1719,9 +1719,9 @@ nodes:
   - id: pr
     include: archon-pr
 
-  # Inlines every node from archon-review, attached after pr.
+  # Inlines the pause-free review block, attached after pr.
   - id: review
-    include: archon-review
+    include: archon-review-block
     depends_on: [pr]
 
   - id: summary
@@ -1729,7 +1729,11 @@ nodes:
     depends_on: [review]   # resolves to the included workflow's terminal node
 ```
 
-The include target (`archon-review` here) is an ordinary workflow file discovered by
+Use `archon-review-block` when the parent owns continuation. The standalone
+`archon-review` entry may pause for an [attention answer](/guides/attention/) before
+returning, so including it would also pause this parent before the summary.
+
+The include target (`archon-review-block` here) is an ordinary workflow file discovered by
 name, honoring the usual precedence (`bundled` < `~/.archon/workflows/` < repo
 `.archon/workflows/`).
 
