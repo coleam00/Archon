@@ -323,6 +323,7 @@ describe('reclaimContainerEnv', () => {
     const store: IIsolationStore = {
       getById: async () => null,
       findActiveByWorkflow: async () => null,
+      listByCodebase: async () => [],
       create: async () => {
         throw new Error('Unexpected create');
       },

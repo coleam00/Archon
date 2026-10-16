@@ -52,6 +52,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
   return {
     getById: async () => null,
     findActiveByWorkflow: async () => null,
+    listByCodebase: async () => [],
     create: async env =>
       makeEnvRow({
         codebase_id: env.codebase_id,
@@ -872,6 +873,31 @@ describe('IsolationResolver', () => {
       ]);
     });
   }
+
+  test('a failed final registration recheck preserves the checkout and original insert error', async () => {
+    const insertError = new Error('insert failed');
+    const destroy = mock(makeMockProvider().destroy);
+    const resolver = createResolver({
+      provider: { ...makeMockProvider(), destroy },
+      store: makeMockStore({
+        create: async () => {
+          throw insertError;
+        },
+        listByCodebase: async () => {
+          throw new Error('lookup failed');
+        },
+      }),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: { workflowType: 'issue', workflowId: '602' },
+        platformType: 'web',
+      })
+    ).rejects.toBe(insertError);
+    expect(destroy).not.toHaveBeenCalled();
+  });
 
   test('incomplete rollback reports the leftover without masking the store failure', async () => {
     mockCleanupError.mockClear();

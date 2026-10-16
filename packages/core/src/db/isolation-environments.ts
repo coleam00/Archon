@@ -553,6 +553,7 @@ export function createIsolationStore(): IIsolationStore {
   return {
     getById,
     findActiveByWorkflow,
+    listByCodebase,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
     updateMetadata,

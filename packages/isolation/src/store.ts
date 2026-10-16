@@ -6,7 +6,11 @@ import {
 } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
-import { worktreeRegistrationMetadata } from './types';
+import {
+  readWorktreeCreationId,
+  sameWorktreeRegistration,
+  worktreeRegistrationMetadata,
+} from './types';
 import type {
   IsolationEnvironmentRow,
   CreateEnvironmentParams,
@@ -22,6 +26,7 @@ export interface IIsolationStore {
     workflowType: IsolationWorkflowType,
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
+  listByCodebase(codebaseId: string): Promise<readonly IsolationEnvironmentRow[]>;
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
   /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
   updateMetadata(
@@ -68,13 +73,12 @@ export async function recordWorktreeAdoption(
  * `complete` see it. Every path that creates a worktree registers it through here.
  *
  * A failed insert may have committed. Preserve a checkout with a matching active
- * registration, or when the store cannot be read. The lookup is a snapshot, not
- * an ownership claim: concurrent adoption and registration are not serialized
- * with rollback. Rethrow the insert error even if cleanup fails.
+ * registration identifying this checkout, or when the store cannot be read.
+ * Rethrow the insert error even if cleanup fails.
  */
 export async function registerWorktree(
   deps: {
-    store: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow'>;
+    store: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow' | 'listByCodebase'>;
     provider: Pick<IIsolationProvider, 'destroy'>;
   },
   env: WorktreeCreationEnvironment,
@@ -103,12 +107,14 @@ export async function registerWorktree(
     );
     if (env.metadata.provenance === 'created') {
       let registered: IsolationEnvironmentRow | null;
+      let active: readonly IsolationEnvironmentRow[];
       try {
         registered = await deps.store.findActiveByWorkflow(
           record.codebase_id,
           record.workflow_type,
           record.workflow_id
         );
+        active = await deps.store.listByCodebase(record.codebase_id);
       } catch (lookupError) {
         createLogger('isolation.store').error(
           { err: lookupError, worktreePath: env.workingPath },
@@ -116,11 +122,26 @@ export async function registerWorktree(
         );
         throw storeError;
       }
-      // Adoption clears creation provenance, so the path, not the creation token,
-      // determines whether the recovered registration still needs this checkout.
-      if (registered && isSameWorktreePath(registered.working_path, env.workingPath)) {
+      const stale =
+        registered &&
+        readWorktreeCreationId(registered.metadata) !== null &&
+        readWorktreeCreationId(registered.metadata) !== env.metadata.creationId
+          ? registered
+          : null;
+      const retained = active.find(
+        row =>
+          isSameWorktreePath(row.working_path, env.workingPath) &&
+          !(stale && sameWorktreeRegistration(row, stale))
+      );
+      if (retained) {
+        createLogger('isolation.store').warn(
+          { envId: retained.id, worktreePath: env.workingPath },
+          'isolation_store_rollback_skipped_registered'
+        );
         throw storeError;
       }
+      // Registration and removal share no ownership claim. The window for an
+      // adoption after this final recheck and before removal is accepted.
       await removeCreatedWorktree(deps.provider, env.workingPath, {
         canonicalRepoPath,
         creationId: env.metadata.creationId,

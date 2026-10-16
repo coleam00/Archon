@@ -39,7 +39,7 @@ export interface RegisteredWorktree {
  * filesystem error stays on `cause`. The caller configures isolation first.
  */
 export async function createRegisteredWorktree(
-  isolation: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow'>,
+  isolation: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow' | 'listByCodebase'>,
   input: RegisteredWorktreeInput
 ): Promise<RegisteredWorktree> {
   const provider = getIsolationProvider();
