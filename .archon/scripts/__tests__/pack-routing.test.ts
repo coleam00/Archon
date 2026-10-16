@@ -5,8 +5,9 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PACK, PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -245,6 +246,28 @@ describe("ship's continued pull request", () => {
     const result = continues('42', '43');
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('the caller resolved pull request 42, but triage routed the run to continue 43');
+  });
+});
+
+describe("deliver's reasons", () => {
+  interface Node { id: string; output_format?: { properties: { reason: { enum: string[] } } }; loop_group?: { nodes: Node[] } }
+  const reasons = (workflow: string, path: string[]): string[] => {
+    let nodes = (Bun.YAML.parse(readFileSync(join(PACK, workflow), 'utf8')) as { nodes: Node[] }).nodes;
+    let node: Node | undefined;
+    for (const id of path) {
+      node = nodes.find(candidate => candidate.id === id);
+      nodes = node?.loop_group?.nodes ?? [];
+    }
+    return node?.output_format?.properties.reason.enum ?? [];
+  };
+
+  // A dry run ends after one round, so any round's reason can reach both reports.
+  it('reach the deliver and ship reports from every round ending', () => {
+    const round = reasons('deliver/archon-deliver.yaml', ['rounds', 'round']);
+    const report = reasons('deliver/archon-deliver.yaml', ['report']);
+    expect(round).toContain('threads_open');
+    expect(report).toEqual([...round, 'failed']);
+    expect(reasons('ship/archon-ship.yaml', ['report'])).toEqual(expect.arrayContaining(report));
   });
 });
 
