@@ -559,6 +559,9 @@ describe('Slack workflow resume composition', () => {
     },
     { GH_TOKEN: 'gh-only-identity', GITHUB_TOKEN: undefined, expected: undefined },
   ])('server PAT API auth uses the shared token order after activation: %j', async env => {
+    const logSpies = (['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const).map(level =>
+      spyOn(logger, level)
+    );
     for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
       if (env[key] === undefined) delete process.env[key];
       else process.env[key] = env[key];
@@ -576,7 +579,13 @@ describe('Slack workflow resume composition', () => {
       } else {
         expect(mockGitHubAuth).not.toHaveBeenCalled();
       }
+      for (const log of logSpies) {
+        for (const token of [env.GH_TOKEN, env.GITHUB_TOKEN]) {
+          if (token) expect(JSON.stringify(log.mock.calls)).not.toContain(token);
+        }
+      }
     } finally {
+      for (const log of logSpies) log.mockRestore();
       serveSpy.mockRestore();
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
