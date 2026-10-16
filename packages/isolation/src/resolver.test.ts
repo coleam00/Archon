@@ -875,16 +875,19 @@ describe('IsolationResolver', () => {
   }
 
   test('a failed final registration recheck preserves the checkout and original insert error', async () => {
+    let attempted = false;
     const insertError = new Error('insert failed');
     const destroy = mock(makeMockProvider().destroy);
     const resolver = createResolver({
       provider: { ...makeMockProvider(), destroy },
       store: makeMockStore({
         create: async () => {
+          attempted = true;
           throw insertError;
         },
         listByCodebase: async () => {
-          throw new Error('lookup failed');
+          if (attempted) throw new Error('lookup failed');
+          return [];
         },
       }),
     });

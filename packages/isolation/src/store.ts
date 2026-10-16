@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   isSameWorktreePath,
   toRepoPath,
@@ -7,7 +8,7 @@ import {
 import type { BranchName, RepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import {
-  readWorktreeCreationId,
+  WORKTREE_REGISTRATION_ID,
   sameWorktreeRegistration,
   worktreeRegistrationMetadata,
 } from './types';
@@ -34,8 +35,12 @@ export interface IIsolationStore {
     metadata: Record<string, unknown>,
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
-  /** Container status changes and worktree rollback; retire worktrees with markWorktreeDestroyed. */
-  updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void>;
+  /** With an observation, restore only that retired worktree without replacing an active workflow. */
+  updateStatus(
+    id: string,
+    status: 'active' | 'destroyed',
+    observed?: IsolationEnvironmentRow
+  ): Promise<void>;
   /**
    * Retire only the observed worktree registration, atomically. Succeeds if that
    * registration is already destroyed; throws WorktreeRegistrationChangedError
@@ -53,7 +58,8 @@ export async function recordWorktreeAdoption(
 ): Promise<IsolationEnvironmentRow> {
   if (env.provider !== 'worktree') return env;
   await verifyWorktreeOwnership(toWorktreePath(env.working_path), toRepoPath(repoPath));
-  await store.updateMetadata(env.id, { adopted: true }, env);
+  const metadata = { adopted: true, [WORKTREE_REGISTRATION_ID]: randomUUID() };
+  await store.updateMetadata(env.id, metadata, env);
   createLogger('isolation.store').warn(
     {
       envId: env.id,
@@ -65,7 +71,7 @@ export async function recordWorktreeAdoption(
     },
     'worktree_adopted'
   );
-  return { ...env, metadata: { ...env.metadata, adopted: true } };
+  return { ...env, metadata: { ...env.metadata, ...metadata } };
 }
 
 /**
@@ -73,12 +79,14 @@ export async function recordWorktreeAdoption(
  * `complete` see it. Every path that creates a worktree registers it through here.
  *
  * A failed insert may have committed. Preserve a checkout with a matching active
- * registration identifying this checkout, or when the store cannot be read.
+ * registration changed since creation began, or when the store cannot be read.
+ * Unchanged older registrations describe the missing prior checkout.
  * Rethrow the insert error even if cleanup fails.
  */
 export async function registerWorktree(
   deps: {
-    store: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow' | 'listByCodebase'>;
+    store: Pick<IIsolationStore, 'create' | 'listByCodebase'>;
+    registrationsBeforeCreation: readonly IsolationEnvironmentRow[];
     provider: Pick<IIsolationProvider, 'destroy'>;
   },
   env: WorktreeCreationEnvironment,
@@ -106,14 +114,8 @@ export async function registerWorktree(
       'isolation_store_create_failed'
     );
     if (env.metadata.provenance === 'created') {
-      let registered: IsolationEnvironmentRow | null;
       let active: readonly IsolationEnvironmentRow[];
       try {
-        registered = await deps.store.findActiveByWorkflow(
-          record.codebase_id,
-          record.workflow_type,
-          record.workflow_id
-        );
         active = await deps.store.listByCodebase(record.codebase_id);
       } catch (lookupError) {
         createLogger('isolation.store').error(
@@ -122,16 +124,10 @@ export async function registerWorktree(
         );
         throw storeError;
       }
-      const stale =
-        registered &&
-        readWorktreeCreationId(registered.metadata) !== null &&
-        readWorktreeCreationId(registered.metadata) !== env.metadata.creationId
-          ? registered
-          : null;
       const retained = active.find(
         row =>
           isSameWorktreePath(row.working_path, env.workingPath) &&
-          !(stale && sameWorktreeRegistration(row, stale))
+          !deps.registrationsBeforeCreation.some(old => sameWorktreeRegistration(row, old))
       );
       if (retained) {
         createLogger('isolation.store').warn(

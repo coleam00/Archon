@@ -362,6 +362,7 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
     label: 'legacy',
     '1': 'step result',
     adopted: true,
+    worktree_registration_id: expect.any(String),
   });
   expectAdoptionWarning(observed.branch_name, observed.working_path, 'legacy-merge');
 });
@@ -369,7 +370,6 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
 test('a worktree whose record cannot be written is removed and the insert error rethrown', async () => {
   const insertError = new Error('database is locked');
   const failing = {
-    findActiveByWorkflow: isolation.findActiveByWorkflow,
     listByCodebase: isolation.listByCodebase,
     create: async (): Promise<never> => Promise.reject(insertError),
   };
@@ -392,8 +392,16 @@ test('a worktree whose record cannot be written is removed and the insert error 
 });
 
 for (const persistence of ['sql', 'file'] as const) {
-  for (const stalePath of ['same', 'different'] as const) {
-    test(`${persistence}: an older ${stalePath}-path workflow row does not retain a newly created unregistered checkout`, async () => {
+  for (const staleKind of [
+    'missing',
+    'null',
+    'old-proof',
+    'other-missing',
+    'other-null',
+    'other-old-proof',
+    'different',
+  ] as const) {
+    test(`${persistence}: an older ${staleKind} workflow row does not retain a newly created unregistered checkout`, async () => {
       const store =
         persistence === 'sql'
           ? isolation
@@ -402,19 +410,20 @@ for (const persistence of ['sql', 'file'] as const) {
       const stale = await store.create({
         codebase_id: codebaseId,
         workflow_type: 'task',
-        workflow_id: 'restart',
+        workflow_id: staleKind.startsWith('other-') ? 'other' : 'restart',
         working_path:
-          stalePath === 'same'
+          staleKind !== 'different'
             ? join(repo, '.worktrees', 'archon', 'task-restart-new')
             : join(root, 'missing-checkout'),
         branch_name: toBranchName('old-branch'),
-        metadata: { worktree_creation_id: 'old-creation' },
+        metadata: staleKind.endsWith('missing')
+          ? {}
+          : { worktree_creation_id: staleKind.endsWith('old-proof') ? 'old-creation' : null },
       });
       const failure = new Error('registration rejected');
       await expect(
         createRegisteredWorktree(
           {
-            findActiveByWorkflow: store.findActiveByWorkflow,
             listByCodebase: store.listByCodebase,
             create: async () => {
               throw failure;
@@ -440,7 +449,7 @@ for (const persistence of ['sql', 'file'] as const) {
   }
 
   for (const adopter of ['same-workflow', 'other-workflow', 'replaced-stale'] as const) {
-    test(`${persistence}: rollback preserves a concurrent ${adopter} adoption after its first lookup`, async () => {
+    test(`${persistence}: rollback preserves a concurrent ${adopter} adoption before the final lookup`, async () => {
       const store =
         persistence === 'sql'
           ? isolation
@@ -457,19 +466,12 @@ for (const persistence of ['sql', 'file'] as const) {
         });
       }
       const failure = new Error('registration rejected');
-      let pending: Parameters<typeof store.create>[0] | undefined;
       let adopted: Awaited<ReturnType<typeof store.create>> | undefined;
       await expect(
         createRegisteredWorktree(
           {
-            create: async input => {
-              pending = input;
-              throw failure;
-            },
             listByCodebase: store.listByCodebase,
-            findActiveByWorkflow: async (...args) => {
-              const snapshot = await store.findActiveByWorkflow(...args);
-              if (!pending) throw new Error('expected attempted registration');
+            create: async pending => {
               const reused = await getIsolationProvider().create({
                 workflowType: 'task',
                 identifier: 'concurrent',
@@ -484,7 +486,7 @@ for (const persistence of ['sql', 'file'] as const) {
                 metadata: { adopted: true, worktree_creation_id: null },
               });
               await writeFile(join(adopted.working_path, 'in-progress.txt'), 'keep this work');
-              return snapshot;
+              throw failure;
             },
           },
           {
@@ -516,6 +518,55 @@ for (const persistence of ['sql', 'file'] as const) {
     });
   }
 
+  test(`${persistence}: rollback preserves a resolver adoption of the stale row`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const stale = await store.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'resolver-race',
+      working_path: join(repo, '.worktrees', 'archon', 'task-resolver-race'),
+      branch_name: toBranchName('archon/task-resolver-race'),
+      metadata: { worktree_creation_id: 'old-creation', adopted: true },
+    });
+    const failure = new Error('registration rejected');
+    await expect(
+      createRegisteredWorktree(
+        {
+          ...store,
+          create: async () => {
+            const resolver = new IsolationResolver({ store, provider: getIsolationProvider() });
+            const result = await resolver.resolve({
+              existingEnvId: stale.id,
+              platformType: 'cli',
+              codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+              hints: { workflowType: 'task', workflowId: 'resolver-race' },
+            });
+            expect(result.status).toBe('resolved');
+            await writeFile(join(stale.working_path, 'in-progress.txt'), 'keep this work');
+            throw failure;
+          },
+        },
+        {
+          request: {
+            workflowType: 'task',
+            identifier: 'resolver-race',
+            codebaseId,
+            codebaseName: 'test/repo',
+            canonicalRepoPath: toRepoPath(repo),
+          },
+          createdByPlatform: 'cli',
+        }
+      )
+    ).rejects.toBe(failure);
+    expect(await Bun.file(join(stale.working_path, 'in-progress.txt')).text()).toBe(
+      'keep this work'
+    );
+  });
+
   test(`${persistence}: a recovered adoption retains the checkout after a failed create`, async () => {
     const store =
       persistence === 'sql'
@@ -527,7 +578,6 @@ for (const persistence of ['sql', 'file'] as const) {
     await expect(
       createRegisteredWorktree(
         {
-          findActiveByWorkflow: store.findActiveByWorkflow,
           listByCodebase: store.listByCodebase,
           create: async input => {
             registered = await store.create({
@@ -574,7 +624,6 @@ test('a reused worktree stays when its re-registration cannot be written', async
   await expect(
     createRegisteredWorktree(
       {
-        findActiveByWorkflow: isolation.findActiveByWorkflow,
         listByCodebase: isolation.listByCodebase,
         create: async () => Promise.reject(insertError),
       },

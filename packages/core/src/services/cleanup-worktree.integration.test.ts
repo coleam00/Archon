@@ -267,6 +267,81 @@ async function useSymlinkedBase(): Promise<void> {
   run.metadata = { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } };
 }
 
+for (const persistence of ['sql', 'file'] as const) {
+  for (const replacement of ['same-row', 'other-path', 'restore-failure'] as const) {
+    test(`${persistence}: reclaim recovery preserves the failure and fences ${replacement}`, async () => {
+      const target =
+        persistence === 'sql'
+          ? store
+          : (
+              await (
+                await import('../workflows/file-host')
+              ).createFileWorkflowHost(join(root, 'store'))
+            ).records.isolation;
+      if (persistence === 'file') {
+        env = await target.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'release',
+          working_path: env.working_path,
+          branch_name: toBranchName(env.branch_name),
+          metadata: env.metadata,
+        });
+        run.metadata = {
+          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+        };
+      }
+      const original = new Error('original claimant lookup failed');
+      let newer: IsolationEnvironmentRow | undefined;
+      const racing = {
+        ...target,
+        updateStatus: async (...args: Parameters<IIsolationStore['updateStatus']>) => {
+          if (replacement === 'restore-failure') throw new Error('restore failed');
+          return target.updateStatus(...args);
+        },
+      };
+      const attempt = reclaimRunWorktree(run, racing, {
+        getCodebase: (await import('../db/codebases')).getCodebase,
+        getLiveRunOwningEnv: async () => {
+          if (replacement !== 'restore-failure') {
+            newer = await target.create({
+              codebase_id: codebaseId,
+              workflow_type: 'task',
+              workflow_id: 'release',
+              working_path:
+                replacement === 'same-row' ? env.working_path : join(root, 'replacement'),
+              branch_name: toBranchName(env.branch_name),
+              metadata: { adopted: true },
+            });
+          }
+          throw original;
+        },
+      });
+      const error = await attempt.then(
+        () => {
+          throw new Error('Expected reclaim failure');
+        },
+        (err: unknown) => err
+      );
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('Expected error');
+      expect(error.message).toContain('original claimant lookup failed');
+      if (replacement !== 'same-row') {
+        expect(error.cause).toBeInstanceOf(AggregateError);
+        if (!(error.cause instanceof AggregateError)) throw new Error('Expected recovery evidence');
+        expect(error.cause.cause).toBe(original);
+        expect(error.cause.errors[0]).toBe(original);
+        expect(error.message).toContain('registration recovery failed');
+      }
+      if (newer) {
+        expect(await target.getById(newer.id)).toEqual(newer);
+        expect(await target.listByCodebase(codebaseId)).toEqual([newer]);
+      }
+      expect(existsSync(env.working_path)).toBe(true);
+    });
+  }
+}
+
 describe('owned worktree release', () => {
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
     const locked = join(env.working_path, 'locked');

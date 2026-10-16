@@ -294,6 +294,7 @@ for (const persistent of [false, true]) {
         registerWorktree(
           {
             store: host.records.isolation,
+            registrationsBeforeCreation: [],
             provider: {
               destroy: async () => {
                 removed = true;

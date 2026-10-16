@@ -242,11 +242,24 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           row.metadata = { ...row.metadata, ...metadata };
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
-      updateStatus: (id, status) =>
+      updateStatus: (id, status, observed) =>
         commit(root, [], async () => {
           const rows = await environments();
           const row = rows.find(row => row.id === id);
           if (!row) throw new Error(`Isolation environment ${id} not found`);
+          if (
+            observed &&
+            (row.status !== 'destroyed' ||
+              !sameWorktreeRegistration(row, observed) ||
+              rows.some(
+                candidate =>
+                  candidate.status === 'active' &&
+                  candidate.codebase_id === observed.codebase_id &&
+                  candidate.workflow_type === observed.workflow_type &&
+                  candidate.workflow_id === observed.workflow_id
+              ))
+          )
+            throw new WorktreeRegistrationChangedError(id);
           row.status = status;
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),

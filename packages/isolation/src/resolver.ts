@@ -531,6 +531,7 @@ export class IsolationResolver {
       };
     }
 
+    const registrationsBeforeCreation = await this.store.listByCodebase(codebase.id);
     let isolatedEnv: Awaited<ReturnType<typeof this.provider.create>>;
     try {
       isolatedEnv = await this.provider.create(isolationRequest, setupExecutor);
@@ -564,7 +565,7 @@ export class IsolationResolver {
     }
 
     const env = await registerWorktree(
-      { store: this.store, provider: this.provider },
+      { store: this.store, provider: this.provider, registrationsBeforeCreation },
       isolatedEnv,
       canonicalPath,
       {

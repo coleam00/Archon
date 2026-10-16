@@ -206,13 +206,35 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
 /**
  * Update environment status
  */
-export async function updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void> {
+export async function updateStatus(
+  id: string,
+  status: 'active' | 'destroyed',
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
+  const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
-    'UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2',
-    [status, id]
+    `UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2${
+      predicate
+        ? ` AND status = 'destroyed'${predicate.sql}
+      AND NOT EXISTS (
+        SELECT 1 FROM remote_agent_isolation_environments replacement
+        WHERE replacement.codebase_id = $${3 + predicate.params.length}
+          AND replacement.workflow_type = $${4 + predicate.params.length}
+          AND replacement.workflow_id = $${5 + predicate.params.length}
+          AND replacement.status = 'active'
+      )`
+        : ''
+    }`,
+    [
+      status,
+      id,
+      ...(predicate && observed
+        ? [...predicate.params, observed.codebase_id, observed.workflow_type, observed.workflow_id]
+        : []),
+    ]
   );
-
   if (result.rowCount === 0) {
+    if (observed) throw new WorktreeRegistrationChangedError(id);
     throw new Error(
       `Failed to update isolation environment status: no environment found with id '${id}'`
     );

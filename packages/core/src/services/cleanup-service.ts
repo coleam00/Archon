@@ -1366,7 +1366,21 @@ async function reclaimOwnedWorktree(
       return refuse('filesystem removal incomplete');
     return { released: { path, branch: env.branch_name }, warnings: result.warnings };
   } catch (err) {
-    if (marked && (await pathExists())) await store.updateStatus(env.id, 'active');
+    if (marked) {
+      try {
+        if (await pathExists()) await store.updateStatus(env.id, 'active', env);
+      } catch (recoveryError) {
+        getLog().error(
+          { err: recoveryError, isolationEnvId: env.id },
+          'worktree_reclaim_recovery_failed'
+        );
+        throw new AggregateError(
+          [err, recoveryError],
+          `${err instanceof Error ? err.message : String(err)}; registration recovery failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+          { cause: err }
+        );
+      }
+    }
     throw err;
   }
 }

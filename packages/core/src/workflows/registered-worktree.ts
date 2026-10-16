@@ -39,10 +39,11 @@ export interface RegisteredWorktree {
  * filesystem error stays on `cause`. The caller configures isolation first.
  */
 export async function createRegisteredWorktree(
-  isolation: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow' | 'listByCodebase'>,
+  isolation: Pick<IIsolationStore, 'create' | 'listByCodebase'>,
   input: RegisteredWorktreeInput
 ): Promise<RegisteredWorktree> {
   const provider = getIsolationProvider();
+  const registrationsBeforeCreation = await isolation.listByCodebase(input.request.codebaseId);
   let env: WorktreeCreationEnvironment;
   try {
     env = await provider.create(input.request, input.setupExecutor);
@@ -51,7 +52,7 @@ export async function createRegisteredWorktree(
     throw new Error(classifyIsolationError(error), { cause: error });
   }
   const record = await registerWorktree(
-    { store: isolation, provider },
+    { store: isolation, provider, registrationsBeforeCreation },
     env,
     input.request.canonicalRepoPath,
     {
