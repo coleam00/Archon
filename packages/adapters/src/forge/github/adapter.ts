@@ -939,7 +939,7 @@ export class GitHubAdapter implements IPlatformAdapter {
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        if (existsSync(canonicalPath)) {
+        if (existsSync(canonicalPath) && (await readdir(canonicalPath)).length > 0) {
           await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
         }
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
@@ -949,7 +949,13 @@ export class GitHubAdapter implements IPlatformAdapter {
           'github.stale_worktree_path_fixed'
         );
       } else if (existsSync(existing.default_cwd)) {
-        await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
+        const identity = parseOwnerRepo(existing.name);
+        const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
+        if (
+          existing.default_cwd !== managedSource ||
+          (await readdir(existing.default_cwd)).length > 0
+        )
+          await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
       getLog().info(
