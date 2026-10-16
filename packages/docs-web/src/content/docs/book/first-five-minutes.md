@@ -77,10 +77,10 @@ Replace `<issue-number>` with a real issue number from your repo. Then watch wha
 1. **Triage** — Archon reads the issue and checks it against the current code
 2. **Investigate or plan** — It proves the root cause of a bug, or plans the shape of a feature
 3. **Implement** — It makes the change and runs your project's checks
-4. **Create PR and review** — It opens a draft pull request, reviews it, and fixes what the review finds
-5. **Ready** — It marks the PR ready for your review and waits for CI; if the checks are red, it puts the PR back in draft
+4. **Create PR, review and CI** — It opens a draft pull request, reviews it, fixes what the review finds, then marks it ready and waits for CI. Red checks put it back in draft.
+5. **Decide in attention** — An unowned Ready result pauses in the [attention queue](/guides/attention-queue/). Answer a declared choice to continue: retry runs the pipeline again with your ruling, and finish accepts the current outcome without more work. Earlier unresolved questions pause there too; an unanswered item keeps waiting.
 
-**You just ran a multi-stage automated workflow.** Each stage wrote its findings to files called artifacts, and the next stage read them. The PR is waiting for your review; Archon never merges.
+**You just ran a multi-stage automated workflow.** Each stage wrote its findings to files called artifacts, and the next stage read them. If delivery succeeds, the PR is ready for your review. Check the attention queue for any decision still waiting on you; finishing a blocked result leaves it blocked. Archon never merges.
 
 > **No GitHub issues handy?** Describe the change instead: `archon workflow run archon-ship --branch feat/test "Add a simple hello world endpoint"`. The run still needs a GitHub remote to open the PR.
 

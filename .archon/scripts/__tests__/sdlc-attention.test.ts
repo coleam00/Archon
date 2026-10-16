@@ -214,7 +214,8 @@ async function harness(
   result: Record<string, unknown>,
   decision: Decision = ASK,
   ciState?: 'green' | 'pr_caused' | 'other',
-  ciAllowed = true
+  ciAllowed = true,
+  readyHandoff: 'false' | 'true' = 'false'
 ) {
   const root = track(mkdtempSync(join(testHome, 'run-')));
   const cwd = join(root, 'repo');
@@ -233,7 +234,18 @@ async function harness(
           id: n.id,
           kind: 'exec',
           runtime: 'bun',
-          script: `await Bun.write(${JSON.stringify(join(root, 'decision-bindings.json'))}, JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('INPUTS_'))))); console.log(await Bun.file(${JSON.stringify(decisionFile)}).text())`,
+          script: `
+            await Bun.write(${JSON.stringify(join(root, 'decision-bindings.json'))},
+              JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('INPUTS_')))));
+            const decision = await Bun.file(${JSON.stringify(decisionFile)}).json();
+            ${stage === 'triage' ? `
+              if (JSON.parse(process.env.INPUTS_RESULT).contract === 'READY' && process.env.INPUTS_READY_HANDOFF === 'true') {
+                decision.done = true;
+                decision.attention = null;
+              }
+            ` : ''}
+            console.log(JSON.stringify(decision));
+          `,
           depends_on: n.depends_on,
           trigger_rule: n.trigger_rule,
           when: n.when,
@@ -301,7 +313,7 @@ async function harness(
         ),
         work: 'Original work',
         target: 'Original target',
-        ready_handoff: 'false',
+        ready_handoff: readyHandoff,
         errors: 'false',
         part: '{"delivers":1,"parts":[{"part":1,"items":["A"]}]}',
         pull_request: '42',
@@ -688,6 +700,34 @@ describe('review CI continuation', () => {
       structured_output: { ...REVIEW, report: { ...REVIEW.report, run_id: h.run().id }, findings_summary: expect.stringContaining(REVIEW.findings_summary) },
     });
   });
+  test.each(['gh', 'forge'] as const)('a failed %s PR read refuses CI with an answerable target', source => {
+    const run = runPackScript('review-entry/scripts/ci-target', {
+      source,
+      inputs: { INPUTS_PR: JSON.stringify(PR) },
+      artifacts: { 'review/reviewed-head': 'reviewed-sha' },
+      preload: `const spawn = Bun.spawnSync.bind(Bun);
+        Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) =>
+          argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view'
+            ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('PR read unavailable') }
+            : spawn(argv, options) });`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      allowed: false, pr: PR, source, summary: expect.stringContaining('failed'),
+    });
+    expect([...run.gh, ...run.forge].some(argv => argv.includes('pr ready'))).toBe(false);
+  });
+  test.each([
+    { inputs: { INPUTS_PR: 'not JSON' }, artifacts: { 'review/reviewed-head': 'sha' } },
+    { source: 'invalid', artifacts: { 'review/reviewed-head': 'sha' } },
+    { source: 'forge', forge: { kind: 'no-host' as const }, artifacts: { 'review/reviewed-head': 'sha' } },
+    {},
+  ])('CI target keeps invalid input, configuration and missing evidence as failures', options => {
+    const run = runPackScript('review-entry/scripts/ci-target', options);
+    expect(run.code).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr.trim()).not.toBe('');
+  });
   test.each(['current', 'moved', 'closed', 'merged'] as const)(
     'the CI boundary checks the qualified reviewed PR when %s',
     state => {
@@ -762,6 +802,27 @@ describe('triage and unowned Ready outcomes', () => {
           .find(e => e.step_name === 'result' && e.event_type === 'node_completed')?.data
           .structured_output
       ).toMatchObject({ contract, ready: contract === 'READY', report: { path: 'triage.md' } });
+    }
+  );
+  test.each(['false', 'true'] as const)(
+    'Ready triage respects ready_handoff=%s at the decision boundary',
+    async readyHandoff => {
+      const result = {
+        ...TRIAGE,
+        contract: 'READY',
+        ready: true,
+        report: { ...PLAN.report, path: 'triage.md' },
+      };
+      const h = await harness('triage', result, ASK, undefined, true, readyHandoff);
+      pointAtRun(h, result, 'triage.md');
+      expect((await h.execute()).status).toBe(readyHandoff === 'true' ? 'completed' : 'paused');
+      const bindings = JSON.parse(readFileSync(join(h.root, 'decision-bindings.json'), 'utf8'));
+      expect(bindings.INPUTS_READY_HANDOFF).toBe(readyHandoff);
+      expect((await h.events()).filter(e => e.event_type === 'wait_started')).toHaveLength(
+        readyHandoff === 'true' ? 0 : 1
+      );
+      if (readyHandoff === 'false') expect((await h.answer('finish')).status).toBe('completed');
+      expect(h.attempts()).toBe(1);
     }
   );
   test.each(['deliver', 'ship'] as const)(

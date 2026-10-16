@@ -1730,7 +1730,7 @@ nodes:
 ```
 
 Use `archon-review-block` when the parent owns continuation. The standalone
-`archon-review` entry may pause for an [attention answer](/guides/attention/) before
+`archon-review` entry may pause for an [attention answer](/guides/attention-queue/) before
 returning, so including it would also pause this parent before the summary.
 
 The include target (`archon-review-block` here) is an ordinary workflow file discovered by

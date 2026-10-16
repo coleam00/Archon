@@ -59,7 +59,7 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 **What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why.
 
-Standalone runs pause in [attention](/guides/attention/) for unresolved decisions or an unowned Ready result. Answer a declared choice to continue: retry runs the pipeline again with your ruling; finish accepts the current outcome without more work. An unanswered item waits without further spend. The workflow never merges; merging stays with you.
+Standalone runs pause in [attention](/guides/attention-queue/) for unresolved decisions or an unowned Ready result. Answer a declared choice to continue: retry runs the pipeline again with your ruling; finish accepts the current outcome without more work. An unanswered item waits without further spend. The workflow never merges; merging stays with you.
 
 `--input pull_request=<number>` has delivery finish that open PR whichever route triage takes; a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
 
@@ -89,7 +89,7 @@ archon workflow run archon-triage "#142"
 
 **What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue.
 
-Standalone questions and Ready acknowledgements pause in [attention](/guides/attention/): a retry choice reassesses the item with your answer, while finish accepts the verdict without another assessment. No-action outcomes complete directly. Intake owns its Ready handoff, so it skips that acknowledgement but still pauses for questions.
+Standalone questions and Ready acknowledgements pause in [attention](/guides/attention-queue/): a retry choice reassesses the item with your answer, while finish accepts the verdict without another assessment. No-action outcomes complete directly. Intake owns its Ready handoff, so it skips that acknowledgement but still pauses for questions.
 
 ---
 
@@ -159,7 +159,7 @@ archon workflow run archon-plan "Add CSV export to the reports page"
 
 **What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops for a person. The SDLC pack README's sidecar section describes the rulings document.
 
-Blocking questions and a completed plan awaiting acknowledgement pause in [attention](/guides/attention/). Answer a retry choice to plan again with your ruling, or finish to accept the report without more planning. Non-blocking questions do not prevent a ready plan; accepting a blocked report leaves it blocked. Unanswered items wait without further spend.
+Blocking questions and a completed plan awaiting acknowledgement pause in [attention](/guides/attention-queue/). Answer a retry choice to plan again with your ruling, or finish to accept the report without more planning. Non-blocking questions do not prevent a ready plan; accepting a blocked report leaves it blocked. Unanswered items wait without further spend.
 
 ---
 
@@ -195,7 +195,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to four rounds. Each correction is reviewed on its delta, leaving out code a merge of the base brought in: after review findings, by the general code reviewer plus every lens with a finding still open or whose area the delta touches; after a CI fix, by the general code reviewer alone. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. `--input branch=<name>` opens the PR from that branch instead of the checkout's, or updates the open PR that already has it as its head. `--input part=<json>` delivers one part of a multi-part plan, as described for `archon-ship`.
 
-Standalone stops such as a round cap, replan or human decision, and an unowned Ready result, pause in [attention](/guides/attention/). Answer a declared choice: retry authorizes another capped batch, replan runs planning before more delivery, and finish accepts the current outcome without more work. Finishing an undelivered result leaves it undelivered. An unanswered item waits without further spend. A composing queue owns its own decision and uses the pause-free delivery block.
+Standalone stops such as a round cap, replan or human decision, and an unowned Ready result, pause in [attention](/guides/attention-queue/). Answer a declared choice: retry authorizes another capped batch, replan runs planning before more delivery, and finish accepts the current outcome without more work. Finishing an undelivered result leaves it undelivered. An unanswered item waits without further spend. A composing queue owns its own decision and uses the pause-free delivery block.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
@@ -230,7 +230,7 @@ Use the fork's actual clone URL, head ref and full head SHA, and choose a review
 
 **What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff.
 
-A standalone Ready review on a draft PR pauses in [attention](/guides/attention/). Choose CI to check the reviewed PR at its current head through the existing CI/ready path, which can mark it ready or restore draft on red. A moved head or failed CI returns to attention. Choose finish to leave the PR as it stands without CI or another review; retry requests another review with your ruling. Unanswered items wait without further spend. Working-diff reviews offer no CI action.
+A standalone Ready review on a draft PR pauses in [attention](/guides/attention-queue/). Choose CI to check the reviewed PR at its current head through the existing CI/ready path, which can mark it ready or restore draft on red. A moved head or failed CI returns to attention. Choose finish to leave the PR as it stands without CI or another review; retry requests another review with your ruling. Unanswered items wait without further spend. Working-diff reviews offer no CI action.
 
 ---
 
