@@ -599,8 +599,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   It merges the default branch into any whose head lacks commits of it, resolving each
   conflict and regenerating generated files with their owning script, and pushes
   without force. Each merge moves the default branch, so the pull requests after it
-  sync and wait for their delta review and CI: a sweep merges at most one pull request
-  that was not already up to date. A
+  sync and wait for their delta review and CI: a sweep merges at most one pull request. A
   push, by the sweep or anyone else, makes the verdict stale, and so does a comment
   published before verdicts were stamped: one such pull request gets a delta review in
   the same run, through an included `archon-review` continuing from its last report,
