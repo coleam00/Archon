@@ -325,12 +325,16 @@ describe('bench run', () => {
   });
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
-  function benchLive(scenario: Partial<FakeConfig> = {}) {
+  function benchLive(scenario: Partial<FakeConfig> = {}, defaultBranch: 'base' | 'empty' | 'other' = 'base') {
     const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
     ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the batch base');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
+    const remote = track(mkdtempSync(join(tmpdir(), 'intake-bench-remote-')));
+    if (defaultBranch === 'empty') ok(remote, 'init', '-q', '--bare');
+    else ok(remote, 'clone', '-q', '--bare', defaultBranch === 'base' ? scratch : repo, '.');
+    ok(scratch, 'config', `url.${remote}.insteadOf`, 'git@github.com:me/scratch-base.git');
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
     mkdirSync(join(out, 'bench', 'live'), { recursive: true });
     writeFileSync(join(out, 'bench', 'live', 'base.json'), JSON.stringify({ repo: { host: 'github.com', path: 'me/scratch-base' }, copies: { '11': 101, '12-outside': 102 } }));
@@ -339,6 +343,17 @@ describe('bench run', () => {
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
     return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch };
   }
+
+  it('refuses a missing default branch or one away from the base before launching', () => {
+    for (const branch of ['empty', 'other'] as const) {
+      const result = benchLive({}, branch);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(branch === 'empty' ? 'no default branch' : 'not the batch base');
+      expect(result.stderr).toContain('git push');
+      expect(result.lines).toEqual([]);
+      expect(() => result.argv(1)).toThrow();
+    }
+  });
 
   it('records original merged-base evidence in live scratch runs for scoring', () => {
     const { status, lines, argv } = benchLive({ issues: [

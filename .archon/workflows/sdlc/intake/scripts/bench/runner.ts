@@ -250,12 +250,26 @@ export function loadLive(file: string, set: BenchSet): Map<string, Scratch> {
 /** Refuse a scratch checkout that is not of its repository, or not at `base`. */
 export function checkScratch(label: string, scratch: Scratch, base: string): void {
   const listed = git('-C', scratch.checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
-  const names = listed.stdout.split('\n').map(line => urlRepo(line.slice(line.indexOf(' ') + 1)));
-  if (!names.some(named => named !== undefined && sameRepo(named, scratch.repo))) {
+  const remote = listed.stdout.split('\n').find(line => {
+    const named = urlRepo(line.slice(line.indexOf(' ') + 1));
+    return named !== undefined && sameRepo(named, scratch.repo);
+  })?.split(' ')[0].slice('remote.'.length, -'.url'.length);
+  if (remote === undefined) {
     throw new Error(`${label}: ${scratch.checkout} has no remote for ${scratch.repo.path}`);
   }
   const head = git('-C', scratch.checkout, 'rev-parse', 'HEAD').stdout;
   if (head !== base) throw new Error(`${label}: ${scratch.checkout} is at ${head}, not the batch base ${base}`);
+  const advertised = gitOrThrow('-C', scratch.checkout, 'ls-remote', '--symref', remote, 'HEAD');
+  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(advertised)?.[1];
+  const commit = /^([a-f0-9]+)\tHEAD$/m.exec(advertised)?.[1];
+  if (branch === undefined || commit !== base) {
+    const target = branch ?? 'bench-base';
+    throw new Error(
+      `${label}: ${remote} ${branch === undefined ? 'reports no default branch' : `default branch ${branch} is at ${String(commit)}, not the batch base ${base}`}. ` +
+      `In ${scratch.checkout}, publish the base with: git push ${remote} ${base}:refs/heads/${target}; ` +
+      `then set it as default: gh repo edit ${scratch.repo.host}/${scratch.repo.path} --default-branch ${target}`
+    );
+  }
 }
 
 function copiesFile(outDir: string, label: string): string {

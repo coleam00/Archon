@@ -396,7 +396,12 @@ are the operator's and stay outside the pack and the repository.
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's. Each copy holds
+  scratch repository may not be the set's own or another version's. Its remote
+  default branch and local checkout must both be at the batch base before `run --live`.
+  An empty repository is refused before any run. From the scratch checkout, publish
+  the base with `git push origin <base>:refs/heads/bench-base`, then set it with
+  `gh repo edit <host/owner/repo> --default-branch bench-base` (use the scratch
+  remote's name if it is not `origin`). The preflight prints the repair commands. Each copy holds
   the pinned text, so lookups need no rewriting. Each live line records
   merged pull requests on the base that reference the original issue, for scoring.
   If that evidence is incomplete, the row does not run and its line says why;
