@@ -30,6 +30,7 @@ import {
   type PrRead,
   readBase,
   readPr,
+  receiptsDir,
   requireGh,
   UNREADABLE,
 } from '../../.shared/merge.ts';
@@ -180,7 +181,7 @@ function main(): void {
     '--method',
     method,
     '--receipts',
-    join(artifactsDir(), 'merge', 'receipts'),
+    receiptsDir(),
   ]
     .map(quoted)
     .join(' ');

@@ -247,6 +247,8 @@ interface FakePr {
   readonly unreadable?: boolean;
   /** Every pull request read after a merge fails. */
   readonly unreadableAfterMerge?: boolean;
+  /** `gh pr merge` succeeds and the pull request stays open, as when the forge queues merges. */
+  readonly queuesMerge?: boolean;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
 }
@@ -268,6 +270,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[1] === 'pr' && argv[2] === 'merge') {
     answered();
     if (argv[argv.indexOf('--match-head-commit') + 1] !== forgePr.headRefOid) return out(1, '', 'Head branch was modified');
+    if (forgePr.queuesMerge) return out(0);
     forgePr.state = 'MERGED';
     forgePr.mergeCommit = '3333333333333333333333333333333333333333';
     forgePr.unreadable = forgePr.unreadableAfterMerge === true;
@@ -428,6 +431,16 @@ describe('the merge queue scripts', () => {
     expect(JSON.parse(readFileSync(join(gated.artifacts, 'merge/receipts/42.json'), 'utf8'))).toMatchObject({ head: HEAD });
   }, 60_000);
 
+  test('a merge the forge accepts but does not make leaves no receipt, and the gate fails', () => {
+    const at = install();
+    const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/merge/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const gated = run(at, 'gate', {}, { args, pr: { queuesMerge: true } });
+    expect(gated.code).not.toBe(0);
+    expect(gated.stderr).toContain(`it reads back open at ${HEAD}, so it did not merge`);
+    expect(merges(gated)).toHaveLength(1);
+    expect(existsSync(join(gated.artifacts, 'merge/receipts/42.json'))).toBe(false);
+  }, 60_000);
+
   test('the gate refuses a verdict on an older commit, a red check or an open thread, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
@@ -522,12 +535,12 @@ describe('the merge queue scripts', () => {
     expect((stored(at).value as WorkItem).facts.merge?.decisions[0]?.reason).toContain('merged outside this run');
   }, 60_000);
 
-  test('a merge the gate made stands on its receipt when the read-back fails; anything else unreadable waits', () => {
+  test('a pull request that cannot be read back waits for the next sweep, a merge the gate made included', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const unreadable = { pr: { unreadable: true } } as const;
-    expect(ok(run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...unreadable, artifacts: RECEIPT }))).toMatchObject({ merged: [42] });
-    expect((stored(at).value as WorkItem).facts.merge?.decisions[0]?.reason).toContain("by the gate's receipt; the read-back failed");
+    expect(ok(run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...unreadable, artifacts: RECEIPT }))).toMatchObject({ merged: [] });
+    expect((stored(at).value as WorkItem).facts.merge).toMatchObject({ status: 'waiting' });
 
     seed(at, item(BUILT, undefined, CLAIMED));
     ok(run(at, 'record', recordInputs([decision({ action: 'return', brief: 'fix it' })]), unreadable));

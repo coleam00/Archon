@@ -28,7 +28,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type DevAttention,
   type DevState,
@@ -44,6 +44,7 @@ import {
   type Receipt,
   type Rerun,
   readPr,
+  receiptsDir,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
@@ -146,7 +147,7 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
 type Receipts = ReadonlyMap<number, Receipt>;
 
 function readReceipts(): Receipts {
-  const dir = join(artifactsDir(), 'merge', 'receipts');
+  const dir = receiptsDir();
   if (!existsSync(dir)) return new Map();
   return new Map(
     readdirSync(dir).map(name => [Number(name.replace(/\.json$/, '')), JSON.parse(readFileSync(join(dir, name), 'utf8')) as Receipt])
@@ -181,18 +182,14 @@ function settle(decision: Decision, after: PrFacts, receipts: Receipts): Outcome
 }
 
 /**
- * Read one pull request back. A merge the gate made already read back merged at its
- * head when the gate wrote its receipt, so its receipt stands when this read fails;
- * any other pull request that cannot be read waits for the next sweep.
+ * Read one pull request back. One that cannot be read waits for the next sweep, whose
+ * facts settle it, a merge the gate made included: only the forge says it merged.
  */
 function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<string>, receipts: Receipts): Outcome {
   let after: PrFacts;
   try {
     after = readPr(item.pr, maintainers).facts;
   } catch (error) {
-    if (decision.action === 'merged') {
-      return { status: 'merged', reason: `${decision.reason} (merged at ${decision.head} by the gate's receipt; the read-back failed: ${message(error)})` };
-    }
     return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}` };
   }
   return settle(decision, after, receipts);

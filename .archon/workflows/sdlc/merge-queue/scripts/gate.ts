@@ -7,22 +7,25 @@
  * Ready at `head`, CI is green at `head`, no review thread is unresolved, and the pull
  * request is open, not a draft, into the default branch and still at `head`. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
- * receipt as soon as the forge accepts the merge, and reads the merge back. The record
- * node holds the sweep to the receipts: a pull request with one was merged by this run,
- * and one the sweep says it merged must have one.
+ * receipt as soon as the forge accepts the merge, and reads the merge back. A pull
+ * request that reads back unmerged, as on a branch whose merges the forge queues, loses
+ * its receipt and fails the gate. The record node holds the sweep to the receipts: a
+ * pull request with one was merged by this run, and one the sweep says it merged must
+ * have one.
  *
  * Prints one JSON document: `{pr, head, refusals, merge_commit}`. A refused merge or a
- * failed one exits nonzero; a merge that failed only its read-back says it was made.
+ * failed one exits nonzero; a merge whose read-back itself failed says it was made.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, refuse } from '../../.shared/io.ts';
 import {
   gateRefusals,
   MERGE_METHODS,
   mergeAtHead,
-  mergedAt,
+  mergeCommitAt,
+  type PrFacts,
   prFromUrl,
   type Receipt,
   readPr,
@@ -56,14 +59,22 @@ function main(): void {
   }
   mergeAtHead(pr, head, method);
   const receipt: Receipt = { pr: url, head, at: new Date().toISOString() };
+  const receiptPath = join(receipts, `${String(pr.number)}.json`);
   mkdirSync(receipts, { recursive: true });
-  writeFileSync(join(receipts, `${String(pr.number)}.json`), `${JSON.stringify(receipt)}\n`);
-  let commit: string;
+  writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`);
+  let after: PrFacts;
   try {
-    commit = mergedAt(pr, head, maintainers);
+    after = readPr(pr, maintainers).facts;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`merged ${url} at ${head}, so declare it merged, but the read-back failed: ${reason}`);
+  }
+  const commit = mergeCommitAt(after, head);
+  if (commit === null) {
+    rmSync(receiptPath);
+    throw new Error(
+      `the forge accepted the merge of ${url} at ${head}, but it reads back ${after.state} at ${after.head_revision}, so it did not merge`
+    );
   }
   emit({ pr: url, head, refusals, merge_commit: commit });
 }

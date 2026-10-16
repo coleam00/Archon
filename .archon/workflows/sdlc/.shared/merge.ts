@@ -11,7 +11,9 @@
  * merge queue refuses the forge source instead of gating on less.
  */
 
+import { join } from 'node:path';
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
+import { artifactsDir } from './io.ts';
 import { ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { readReviewStamp } from './review-comment.ts';
@@ -398,9 +400,10 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
 }
 
 /**
- * What the gate writes beside the run's artifacts for every merge it made, as soon as
- * the forge accepts it and before it reads the merge back, so a failed read-back still
- * leaves the record node evidence of the merge.
+ * What the gate writes for a merge the forge accepted, before it reads the merge back.
+ * It stays when the merge reads back merged at its head or the read fails, and is
+ * removed when the read shows the pull request unmerged, so a receipt is the record
+ * node's evidence that this run merged.
  */
 export interface Receipt {
   readonly pr: string;
@@ -408,16 +411,17 @@ export interface Receipt {
   readonly at: string;
 }
 
+/** Where the gate writes this run's receipts and the record node reads them. */
+export function receiptsDir(): string {
+  return join(artifactsDir(), 'merge', 'receipts');
+}
+
 /** Merge at exactly `head`; the forge refuses when the head has moved since it was read. */
 export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): void {
   gh('pr', 'merge', String(pr.number), '--repo', `${pr.repo.host}/${pr.repo.path}`, `--${method}`, '--match-head-commit', head);
 }
 
-/** The merge commit of a pull request that must read back merged with `head`. */
-export function mergedAt(pr: QualifiedPr, head: string, maintainers: ReadonlySet<string>): string {
-  const after = readPr(pr, maintainers).facts;
-  if (after.state !== 'merged' || after.head_revision !== head || after.merge_commit === null) {
-    throw new Error(`${after.url} does not read back merged at ${head}; it is ${after.state} at ${after.head_revision}`);
-  }
-  return after.merge_commit;
+/** The merge commit of a pull request that reads back merged at `head`; null otherwise. */
+export function mergeCommitAt(facts: PrFacts, head: string): string | null {
+  return facts.state === 'merged' && facts.head_revision === head ? facts.merge_commit : null;
 }
