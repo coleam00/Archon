@@ -8,7 +8,7 @@ import {
   type ProjectBaseBranchInspection,
 } from '../schemas/codebase';
 import { access, rm, stat } from 'fs/promises';
-import { join, basename, resolve } from 'path';
+import { join, basename, isAbsolute, resolve } from 'path';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 import type { Codebase } from '../types';
 import {
@@ -252,6 +252,12 @@ async function setupAppRepository(path: string): Promise<void> {
   }
 }
 
+/** A clone source that names a local directory, which registers in place instead of cloning. */
+function localCloneSource(url: string): string | null {
+  if (url.startsWith('~')) return expandTilde(url);
+  return isAbsolute(url) || url.startsWith('.') ? resolve(url) : null;
+}
+
 function rejectExistingChoice(options: RegistrationOptions): void {
   if (options.baseBranch !== undefined)
     throw new ProjectRegistrationError(
@@ -322,12 +328,8 @@ export async function inspectProjectBaseBranch(
   if (source.url !== undefined) {
     const validated = validateCloneUrl(source.url);
     if (!validated.ok) throw new ProjectRegistrationError(validated.error);
-    if (
-      validated.url.startsWith('/') ||
-      validated.url.startsWith('~') ||
-      validated.url.startsWith('.')
-    )
-      return inspectProjectBaseBranch({ path: validated.url });
+    const localPath = localCloneSource(validated.url);
+    if (localPath) return inspectProjectBaseBranch({ path: localPath });
     result = await inspectRemoteBranches({
       kind: 'url',
       url: validated.url,
@@ -458,7 +460,7 @@ async function cloneCheckout(
 
 /**
  * Clone a repository from a URL and register it in the supplied store.
- * Local paths (starting with /, ~, or .) are delegated to registerRepository
+ * Local paths (absolute, or starting with ~ or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
  */
 export async function cloneRepository(
@@ -473,10 +475,8 @@ export async function cloneRepository(
   repoUrl = validatedUrl.url;
 
   // Local paths should be registered (symlink), not cloned (copied)
-  if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
-    const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(codebases, resolvedPath, options);
-  }
+  const localPath = localCloneSource(repoUrl);
+  if (localPath) return registerRepository(codebases, localPath, options);
 
   const appSource = appRepository(repoUrl, options);
   const derived = deriveRepoCloneTarget(repoUrl);
