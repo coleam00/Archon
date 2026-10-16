@@ -784,6 +784,32 @@ describe('ContainerBackend.suspend', () => {
 });
 
 describe('ContainerBackend.resumeEnv', () => {
+  for (const state of ['running', 'exited']) {
+    test.each(['bogus', '', null, 1])(
+      `rejects invalid persisted overlay mode %j for a ${state} container`,
+      async overlayMode => {
+        const store = fakeStore();
+        const row = seedContainerRow(store);
+        await store.updateMetadata(row.id, { overlayMode });
+        const docker = fakeDocker(args => {
+          if (args[0] === 'container')
+            return { stdout: `cid-orig\tarchon-res-1\t${state}\n`, stderr: '' };
+          if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+            return { stdout: 'cid-orig\n', stderr: '' };
+          return { stdout: '', stderr: '' };
+        });
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        const error = await backend.resumeEnv(row.id).catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(IsolationFailure);
+        if (!(error instanceof IsolationFailure)) throw error;
+        expect(error.kind).toBe('unclassified');
+        expect(error.message).toContain('invalid persisted overlay mode');
+        expect(isKnownIsolationError(error)).toBe(false);
+        expect(docker.calls.some(args => args[0] === 'start' || args[0] === 'exec')).toBe(false);
+      }
+    );
+  }
+
   test('persists native recreation so successive resumes retain the security mode', async () => {
     const store = fakeStore();
     const row = seedContainerRow(store);
@@ -916,41 +942,51 @@ describe('ContainerBackend.resumeEnv', () => {
     }
   );
 
-  test('reuses a still-running container', async () => {
-    const store = fakeStore();
-    seedContainerRow(store);
-    const docker = fakeDocker(args => {
-      if (args[0] === 'container' && args[1] === 'ls') {
-        return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
-      }
-      if (args[0] === 'inspect' && args.includes('{{.Id}}'))
-        return { stdout: 'cid-orig\n', stderr: '' };
-      return { stdout: '', stderr: '' };
-    });
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
-    expect(docker.calls.find(c => c[0] === 'start')).toBeUndefined();
-  });
+  test.each([...OVERLAY_MODES, undefined])(
+    'reuses a still-running container (mode: %s)',
+    async mode => {
+      const store = fakeStore();
+      const row = seedContainerRow(store, { overlayMode: mode });
+      if (mode === undefined) delete row.metadata.overlayMode;
+      const docker = fakeDocker(args => {
+        if (args[0] === 'container' && args[1] === 'ls') {
+          return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
+        }
+        if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+          return { stdout: 'cid-orig\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.resumeEnv('env-c');
+      expect(prepared.overlayMode).toBe(mode ?? 'native');
+      expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
+      expect(docker.calls.find(c => c[0] === 'start')).toBeUndefined();
+    }
+  );
 
-  test('starts a stopped container and waits for the overlay', async () => {
-    const store = fakeStore();
-    seedContainerRow(store);
-    const docker = fakeDocker(args => {
-      if (args[0] === 'container' && args[1] === 'ls') {
-        return { stdout: 'cid-orig\tarchon-res-1\texited\n', stderr: '' };
-      }
-      if (args[0] === 'inspect' && args.includes('{{.Id}}'))
-        return { stdout: 'cid-orig\n', stderr: '' };
-      if (args[0] === 'start') return { stdout: '', stderr: '' };
-      if (args[0] === 'exec' && args.includes('test')) return { stdout: '', stderr: '' }; // ready
-      return { stdout: '', stderr: '' };
-    });
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
-    expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'cid-orig']);
-  });
+  test.each([...OVERLAY_MODES, undefined])(
+    'starts a stopped container and waits for the overlay (mode: %s)',
+    async mode => {
+      const store = fakeStore();
+      const row = seedContainerRow(store, { overlayMode: mode });
+      if (mode === undefined) delete row.metadata.overlayMode;
+      const docker = fakeDocker(args => {
+        if (args[0] === 'container' && args[1] === 'ls') {
+          return { stdout: 'cid-orig\tarchon-res-1\texited\n', stderr: '' };
+        }
+        if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+          return { stdout: 'cid-orig\n', stderr: '' };
+        if (args[0] === 'start') return { stdout: '', stderr: '' };
+        if (args[0] === 'exec' && args.includes('test')) return { stdout: '', stderr: '' }; // ready
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.resumeEnv('env-c');
+      expect(prepared.overlayMode).toBe(mode ?? 'native');
+      expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-orig' });
+      expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'cid-orig']);
+    }
+  );
 
   test('recreates the container over the surviving volume when the container is gone', async () => {
     const store = fakeStore();

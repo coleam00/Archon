@@ -24,10 +24,11 @@ import { randomUUID } from 'crypto';
 import { isAbsolute, sep } from 'path';
 import type { BranchName } from '@archon/git';
 import { createLogger, isInsideArchonHome } from '@archon/paths';
-import type {
-  OverlayMode,
-  WriteBackFinalizeResult,
-  WriteBackApplySummary,
+import {
+  OVERLAY_MODES,
+  type OverlayMode,
+  type WriteBackFinalizeResult,
+  type WriteBackApplySummary,
 } from '@archon/workflows/container-context';
 import type {
   BackendPrepareRequest,
@@ -103,7 +104,7 @@ interface HostMounts {
  * `resourceId` is the stable handle used for container/volume names + the
  * `env-id` label; `destroy()` reads `containerId`/`volume` back off the row.
  */
-interface ContainerEnvMetadata {
+type ContainerEnvMetadata = {
   containerId: string;
   containerName: string;
   volume: string;
@@ -127,8 +128,7 @@ interface ContainerEnvMetadata {
    * hand-back on suspend and destroy knows which host tree the container wrote into.
    */
   artifactsMount?: string;
-  [key: string]: unknown;
-}
+};
 
 /**
  * Reject a host mount that is not Archon's to mount.
@@ -413,9 +413,6 @@ export class ContainerBackend implements IIsolationBackend {
     }
     const row = await this.store.getById(envId);
     const codebaseId = row?.codebase_id ?? '';
-    // The mode the row recorded; the recreate branch below may re-probe and override.
-    const priorMode: OverlayMode = meta.overlayMode ?? 'native';
-
     const presence = await this.describeContainer(containerName);
     if (presence === 'paused' || presence === 'restarting') {
       throw new IsolationFailure(
@@ -424,6 +421,17 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
     if (presence === 'running' || presence === 'stopped') {
+      const priorMode =
+        meta.overlayMode === undefined
+          ? 'native'
+          : OVERLAY_MODES.find(mode => mode === meta.overlayMode);
+      if (priorMode === undefined) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': invalid persisted overlay mode ` +
+            `'${String(meta.overlayMode)}'. Expected one of: ${OVERLAY_MODES.join(', ')}.`
+        );
+      }
       const containerId = await this.getContainerId(containerName);
       if (containerId !== meta.containerId) {
         throw new IsolationFailure(
@@ -597,12 +605,14 @@ export class ContainerBackend implements IIsolationBackend {
    * store normalizes `metadata` to a parsed object on every dialect (SQLite returns
    * it as a JSON string otherwise), so this reads it directly.
    */
-  private async loadMetadata(envId: string): Promise<Partial<ContainerEnvMetadata>> {
+  private async loadMetadata(
+    envId: string
+  ): Promise<Partial<Omit<ContainerEnvMetadata, 'overlayMode'>> & { overlayMode?: unknown }> {
     const row = await this.store.getById(envId);
     if (!row) {
       throw new Error(`Container env '${envId}' not found (its tracking row is gone).`);
     }
-    return row.metadata as Partial<ContainerEnvMetadata>;
+    return row.metadata;
   }
 
   private preparedEnvFor(
