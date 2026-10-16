@@ -48,7 +48,7 @@ mock.module('@archon/core', () => ({
       this.name = 'ConversationNotFoundError';
     }
   },
-  generateAndSetTitle: mockGenerateAndSetTitle,
+  generateTitleForUser: mockGenerateAndSetTitle,
   resolveTitleRequest: mockResolveTitleRequest,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   createLogger: () => ({
@@ -422,9 +422,7 @@ describe('POST /api/conversations with message (atomic create+send)', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     const lastCall = mockGenerateAndSetTitle.mock.calls.at(-1);
-    expect(lastCall?.[2]).toBe('codex'); // resolved provider, not the raw assistant type
-    expect(lastCall?.[5]).toEqual(titleOptions.assistantConfig);
-    expect(lastCall?.[6]).toEqual(titleOptions);
+    expect(lastCall?.[2]).toEqual({ provider: 'codex', options: titleOptions });
   });
 
   test('skips title generation for slash commands', async () => {

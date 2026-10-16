@@ -3,7 +3,8 @@
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { ConfigReadResponse } from './protocol/v2/ConfigReadResponse';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -185,7 +186,8 @@ function codexLogin(env: Record<string, string>): CodexLogin | undefined {
  */
 function codexLaunch(
   assistantConfig: Record<string, unknown> | undefined,
-  requestEnv?: Record<string, string>
+  requestEnv?: Record<string, string>,
+  userCredentialEnvKeys?: readonly string[]
 ): {
   config: CodexProviderDefaults;
   env: Record<string, string>;
@@ -196,6 +198,18 @@ function codexLaunch(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
   const env = { ...baseEnv, ...requestEnv };
+  const deliveredKey =
+    userCredentialEnvKeys?.includes(CODEX_CREDENTIAL_ENV.apiKey) &&
+    requestEnv?.[CODEX_CREDENTIAL_ENV.apiKey];
+  const deliveredSubscription =
+    userCredentialEnvKeys?.includes(CODEX_CREDENTIAL_ENV.chatgptAccessToken) &&
+    requestEnv?.[CODEX_CREDENTIAL_ENV.chatgptAccessToken];
+  if (deliveredKey) {
+    delete env[CODEX_CREDENTIAL_ENV.chatgptAccessToken];
+    delete env[CODEX_CREDENTIAL_ENV.chatgptAccountId];
+  } else if (deliveredSubscription) {
+    delete env[CODEX_CREDENTIAL_ENV.apiKey];
+  }
   return {
     config,
     env,
@@ -601,6 +615,7 @@ interface TurnRequest {
    * concurrent runs that continue one thread never write into it together.
    */
   forkSession: boolean;
+  authoritativeCredential: boolean;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
   /**
@@ -614,6 +629,54 @@ interface TurnRequest {
   onThread: (threadId: string) => void;
   /** Receives the turn id as soon as it exists, so cancel can interrupt it. */
   onTurn: (turnId: string) => void;
+}
+
+async function withDeliveredCredentialConfig(
+  connection: AppServerConnection,
+  cwd: string,
+  threadParams: TurnRequest['threadParams']
+): Promise<TurnRequest['threadParams']> {
+  const { config } = (await connection.request('config/read', {
+    cwd,
+  })) as ConfigReadResponse;
+  const providers = config.model_providers;
+  if (providers && typeof providers === 'object' && !Array.isArray(providers)) {
+    const selected = providers[config.model_provider ?? 'openai'];
+    if (selected && typeof selected === 'object' && !Array.isArray(selected)) {
+      const provider = Object.fromEntries(
+        Object.entries(selected).filter(([, value]) => value !== null && value !== undefined)
+      );
+      delete provider.auth;
+      delete provider.env_key;
+      delete provider.experimental_bearer_token;
+      provider.requires_openai_auth = true;
+      for (const field of ['http_headers', 'env_http_headers']) {
+        const headers = provider[field];
+        if (headers && typeof headers === 'object' && !Array.isArray(headers)) {
+          provider[field] = Object.fromEntries(
+            Object.entries(headers).filter(
+              ([name, value]) =>
+                value !== undefined &&
+                !['authorization', 'api-key', 'x-api-key', 'chatgpt-account-id'].includes(
+                  name.toLowerCase()
+                )
+            )
+          );
+        }
+      }
+      // A fresh entry avoids native recursive config merging restoring removed auth fields.
+      const id = `archon_request_${randomUUID().replaceAll('-', '')}`;
+      threadParams = {
+        ...threadParams,
+        config: {
+          ...threadParams.config,
+          model_provider: id,
+          [`model_providers.${id}`]: provider,
+        },
+      };
+    }
+  }
+  return threadParams;
 }
 
 /**
@@ -638,6 +701,9 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   }
 
   let { threadParams } = request;
+  if (request.authoritativeCredential) {
+    threadParams = await withDeliveredCredentialConfig(connection, request.cwd, threadParams);
+  }
   let declared: string[] | undefined;
   if (nodePlugins) {
     const inventory = await readCodexInventory(connection, {
@@ -1128,7 +1194,11 @@ export class CodexProvider implements IAgentProvider {
       });
     };
 
-    const launch = codexLaunch(requestOptions?.assistantConfig, requestOptions?.env);
+    const launch = codexLaunch(
+      requestOptions?.assistantConfig,
+      requestOptions?.env,
+      requestOptions?.userCredentialEnvKeys
+    );
     const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
     const titleRequest = requestOptions?.purpose === 'title-generation';
@@ -1217,6 +1287,9 @@ export class CodexProvider implements IAgentProvider {
         cwd,
         resumeSessionId: resumeThreadId,
         forkSession: requestOptions?.forkSession === true,
+        authoritativeCredential: Object.values(CODEX_CREDENTIAL_ENV).some(
+          key => requestOptions?.userCredentialEnvKeys?.includes(key) && requestOptions.env?.[key]
+        ),
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',
           approvalPolicy: 'never',
