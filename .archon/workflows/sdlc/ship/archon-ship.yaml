@@ -203,6 +203,7 @@ nodes:
             - delivered
             - implement_blocked
             - review_open
+            - threads_open
             - replan
             - ci_pr_caused
             - ci_other
@@ -214,7 +215,7 @@ nodes:
             - needs_contract
             - refuted
             - not_rooted
-            # a planning stop, or a review that needs a check only a person can make
+            # a planning stop, or a review or review thread that needs a person
             - needs_human
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }

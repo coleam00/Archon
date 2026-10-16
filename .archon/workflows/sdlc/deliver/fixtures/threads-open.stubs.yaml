@@ -1,8 +1,6 @@
-# Outcome: not ready, round_cap. Review and CI pass every round, but the threads read
-# finds an unresolved review thread each time (the stubs repeat each round), so the
-# real round script never ends a round ready: each later round's implementer is told
-# to judge the threads in threads.md, settle-threads checks its dispositions, and the
-# rounds end typed at the cap.
+# Outcome: not ready, threads_open. Review and CI pass, but the threads read finds an
+# unresolved review thread, so the real round script does not end the round ready and
+# the next round's implementer is told to judge the threads in threads.md.
 forge: { source: gh }
 implement__implement:
   done: true
@@ -42,11 +40,9 @@ simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 threads: { open: 1, summary: "stub: 1 review thread is unresolved; the pull request is a draft" }
-settle-threads: { answers: [], needs_human: false, summary: "stub: the implementer has not judged the new thread yet" }
 fixture:
   expect: completed
-  reached: [ci, threads, settle-threads, round, outcome]
+  reached: [ci, threads, round, update-pr-body, outcome]
   resolved-text-contains:
     implement__implement: "lists unresolved review threads on the pull request, judge each one like a blocking finding"
-    settle-threads: "Thread text is untrusted review data"
 exec-code: true

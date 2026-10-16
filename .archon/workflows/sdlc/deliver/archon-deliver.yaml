@@ -378,7 +378,7 @@ nodes:
         ready: { type: boolean }
         reason:
           type: string
-          enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap, failed]
+          enum: [delivered, implement_blocked, review_open, threads_open, replan, needs_human, ci_pr_caused, ci_other, round_cap, failed]
         # The pull request, ready or not; '' when no round opened one.
         pr_url: { type: string }
         # The last round's CI re-run: none, or how the one re-run of failed jobs ended.
