@@ -771,8 +771,8 @@ test('Windows taskkill success without an observed root exit is a bounded cleanu
   }
 });
 
-for (const denied of [false, true]) {
-  test(`Windows timeout confirms descendants spawned during taskkill (kill denied=${denied})`, async () => {
+for (const survives of [false, true]) {
+  test(`Windows timeout confirms descendants spawned during taskkill without signaling stale PIDs (survives=${survives})`, async () => {
     const platform = process.platform;
     const child = new childProcess.ChildProcess();
     const root = 123456;
@@ -797,6 +797,7 @@ for (const denied of [false, true]) {
           return { stdout: 'SUCCESS', stderr: '' };
         }
         listings++;
+        if (listings > 2 && !survives) descendantAlive = false;
         return {
           stdout: JSON.stringify({
             takenAt: String(listings * 100),
@@ -809,23 +810,15 @@ for (const denied of [false, true]) {
         };
       }
     );
-    const kill = spyOn(process, 'kill').mockImplementation(pid => {
-      expect(pid).toBe(descendant);
-      if (denied) throw Object.assign(new Error('descendant kill denied'), { code: 'EPERM' });
-      descendantAlive = false;
-      return true;
-    });
+    const kill = spyOn(process, 'kill').mockReturnValue(true);
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
       const error = await runNode('unused', 1).catch((e: unknown) => e as RawSubprocessRejection);
       expect(error).toMatchObject({ timedOut: true, observedExit: { code: 1, signal: null } });
-      expect(kill).toHaveBeenCalled();
-      expect(descendantAlive).toBe(denied);
-      if (denied) {
+      expect(kill).not.toHaveBeenCalled();
+      expect(descendantAlive).toBe(survives);
+      if (survives) {
         expect((error as RawSubprocessRejection).cleanupError?.message).toContain('still running');
-        expect((error as RawSubprocessRejection).cleanupError?.message).toContain(
-          'descendant kill denied'
-        );
       } else {
         expect((error as RawSubprocessRejection).cleanupError).toBeUndefined();
         expect(listings).toBe(3);
