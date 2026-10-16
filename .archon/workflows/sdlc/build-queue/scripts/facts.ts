@@ -72,7 +72,7 @@ function writeIssue(title: string, url: string, body: string, asOf: string): voi
   writeFileSync(join(dir, 'issue.md'), `# ${title}\n\n${url}, ${when}.\n\n${body}\n`);
 }
 
-/** Exactly one of `continues` and `branch` is set on an item's path. */
+/** For an open item, exactly one of `continues` and `branch` is set. */
 interface ItemPr {
   readonly pull_request: PrRecord | null;
   readonly continues: number | null;

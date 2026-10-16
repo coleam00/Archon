@@ -91,8 +91,8 @@ nodes:
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
         policy_defaults: { type: string }
-        # The item's pull request as the forge reports it now: its latest round's, or
-        # the one triage routed it to continue; null when it has none.
+        # The item's pull request as the forge reports it now: the latest round's that
+        # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
         # The number of that pull request when the round continues it: it is open and
         # its head is in the item's repository. Null otherwise.
