@@ -9,6 +9,7 @@ import { getProviderCapabilities, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import { RUN_STOP_REASON_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
 import { wakeDueWorkflowContinuations } from './continuation-resume';
@@ -219,20 +220,24 @@ test('a rejected quota pause write fails the run without leaving a durable wait'
   }
 });
 
+const setupThenImplementNodes = [
+  { id: 'setup', prompt: 'Set it up' },
+  { id: 'implement', prompt: 'Implement it', depends_on: ['setup'] },
+];
 const setupThenImplement = makeTestResolvedWorkflow({
   name: 'rate-limit',
-  nodes: [
-    { id: 'setup', prompt: 'Set it up' },
-    { id: 'implement', prompt: 'Implement it', depends_on: ['setup'] },
-  ],
+  nodes: setupThenImplementNodes,
 });
 
 /** Submit with the rate-limit retry delays shortened, so the retries run at once. */
-async function submitThroughRetries(engine: InProcessWorkflowEngine): Promise<string> {
+async function submitThroughRetries(
+  engine: InProcessWorkflowEngine,
+  submitted: typeof workflow = setupThenImplement
+): Promise<string> {
   const realSetTimeout = globalThis.setTimeout;
   globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
   try {
-    return await submit(engine, setupThenImplement);
+    return await submit(engine, submitted);
   } finally {
     globalThis.setTimeout = realSetTimeout;
   }
@@ -295,4 +300,29 @@ test('a rate-limit pause resumed by hand continues before its deadline', async (
   expect(finished?.status).toBe('completed');
   expect(finished?.metadata.wait).toBeUndefined();
   expect(calls()).toBe(8);
+});
+
+test('a rate-limit pause keeps the run budget: the continuation is refused once the paid retries used it up', async () => {
+  const budgeted = makeTestResolvedWorkflow({
+    name: 'rate-limit-budgeted',
+    nodes: setupThenImplementNodes,
+    budget: { max_work_units: 7 },
+  });
+  const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+  const { engine, store, calls } = harness([...rateLimitedTurns(resetAt), 'ok']);
+
+  // `setup` and the six rate-limited `implement` attempts spend all seven work units.
+  const runId = await submitThroughRetries(engine, budgeted);
+  expect(await store.getWorkflowRunStatus(runId)).toBe('paused');
+  expect(calls()).toBe(7);
+
+  expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000), budgeted)).toEqual([
+    runId,
+  ]);
+  const refused = await store.getWorkflowRun(runId);
+  expect(refused?.status).toBe('failed');
+  expect(refused?.metadata[RUN_STOP_REASON_METADATA_KEY]).toMatchObject({
+    reason: 'budget_refused',
+  });
+  expect(calls()).toBe(7);
 });
