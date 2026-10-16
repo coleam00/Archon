@@ -472,6 +472,23 @@ export type WorkflowLoadError = Readonly<z.infer<typeof workflowLoadErrorSchema>
   readonly cause?: unknown;
 };
 
+/** Errors without a known workflow name keep their full path to avoid aliasing a bare target. */
+export function workflowLoadErrorName(error: WorkflowLoadError): string {
+  return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
+}
+
+export function findWorkflowLoadError(
+  errors: readonly WorkflowLoadError[],
+  name: string
+): WorkflowLoadError | undefined {
+  return (
+    errors.find(error => error.workflowName === name) ??
+    errors.find(error => error.workflowName?.toLowerCase() === name.toLowerCase()) ??
+    errors.find(error => workflowLoadErrorName(error) === name) ??
+    errors.find(error => workflowLoadErrorName(error).toLowerCase() === name.toLowerCase())
+  );
+}
+
 /** Errors after parsing retain the authored identity even when the filename differs. */
 export interface ParsedWorkflowLoadError extends WorkflowLoadError {
   readonly workflowName: string;

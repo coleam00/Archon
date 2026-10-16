@@ -53,11 +53,8 @@ import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
-import {
-  discoverWorkflowsWithConfig,
-  resolveWorkflowCommandContents,
-  findWorkflowLoadError,
-} from './workflow-discovery';
+import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
+import { findWorkflowLoadError } from './schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
   capturedSourceReadGuard,

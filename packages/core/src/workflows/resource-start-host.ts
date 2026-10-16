@@ -44,16 +44,16 @@ import {
   type ResourceStartDisposition,
   type ResourceStartRunMetadata,
 } from '@archon/workflows/schemas/resource-start';
-import type { WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
+import {
+  findWorkflowLoadError,
+  type WorkflowExecutionResult,
+} from '@archon/workflows/schemas/workflow';
 import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
-import {
-  discoverWorkflowsWithConfig,
-  findWorkflowLoadError,
-} from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   resolveDeclaredInputs,
   WorkflowInputContractError,

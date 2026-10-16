@@ -5,12 +5,8 @@ import { dirname, join } from 'path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  discoverWorkflows,
-  liveSourceRoots,
-  workflowLoadErrorName,
-  findWorkflowLoadError,
-} from './workflow-discovery';
+import { discoverWorkflows, liveSourceRoots } from './workflow-discovery';
+import { workflowLoadErrorName, findWorkflowLoadError } from './schemas/workflow';
 import * as sourceIntegrity from './workflow-source';
 import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';

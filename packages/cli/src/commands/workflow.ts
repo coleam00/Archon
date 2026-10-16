@@ -128,10 +128,7 @@ import {
   startRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError,
 } from '@archon/core/services/run-live-owner';
-import {
-  discoverWorkflowsWithConfig,
-  findWorkflowLoadError,
-} from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   disposeWorkflowSource,
@@ -172,12 +169,13 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
-import type {
-  WorkflowDefinition,
-  WorkflowLoadError,
-  WorkflowLoadResult,
-  WorkflowSource,
-  WorkflowWithSource,
+import {
+  findWorkflowLoadError,
+  type WorkflowDefinition,
+  type WorkflowLoadError,
+  type WorkflowLoadResult,
+  type WorkflowSource,
+  type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {

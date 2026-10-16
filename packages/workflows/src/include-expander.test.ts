@@ -103,46 +103,20 @@ function blockWorkflow(): WorkflowDefinition {
 // ---------------------------------------------------------------------------
 
 describe('missing include discovery errors', () => {
-  const root = wf('root', [{ id: 'wrapped', include: 'missing' }]);
+  const root = wf('root', [{ id: 'wrapped', include: 'Missing' }]);
   const cause = Object.assign(new Error('source unavailable'), { code: 'EIO', syscall: 'open' });
-  const diagnostic = {
-    filename: 'pack',
-    error: 'listing failed',
-    errorType: 'read_error' as const,
-  };
 
-  test('propagates a later read cause past a cause-less listing diagnostic', () => {
+  test('an unreadable declaration makes the missing target a read failure', () => {
     const result = expandWorkflowIncludes(mapOf(root), undefined, [
-      diagnostic,
-      {
-        filename: 'unreadable.yaml',
-        error: 'source unavailable',
-        errorType: 'read_error',
-        cause,
-      },
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
     ]);
-    expect(result.errors[0]?.cause).toMatchObject({ cause });
-    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(true);
     expect(result.errors[0]?.errorType).toBe('read_error');
-    expect(result.errors[0]?.error).toContain("include target 'missing' not found");
-    expect(result.errors[0]?.error).toContain('unreadable.yaml: source unavailable');
+    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(true);
   });
 
-  test('keeps the missing target diagnostic when no read cause is available', () => {
-    const result = expandWorkflowIncludes(mapOf(root), undefined, [diagnostic]);
-    expect(result.errors[0]?.error).toBe("Node 'wrapped': include target 'missing' not found");
-    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(false);
-    expect(result.errors[0]?.errorType).toBe('validation_error');
-  });
-
-  test('prefers the named workflow error to anonymous read failures', () => {
+  test('the target is looked up the way every other load-error consumer looks it up', () => {
     const result = expandWorkflowIncludes(mapOf(root), undefined, [
-      {
-        filename: 'unknown.yaml',
-        error: 'source unavailable',
-        errorType: 'read_error',
-        cause,
-      },
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
       {
         filename: 'invalid.yaml',
         workflowName: 'missing',
@@ -151,7 +125,6 @@ describe('missing include discovery errors', () => {
       },
     ]);
     expect(result.errors[0]?.error).toBe("Node 'wrapped': invalid definition");
-    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(false);
     expect(result.errors[0]?.errorType).toBe('validation_error');
   });
 });

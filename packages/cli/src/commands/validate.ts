@@ -5,10 +5,8 @@
  */
 
 import { providerRegistry } from '@archon/providers';
-import {
-  discoverWorkflowsWithConfig,
-  workflowLoadErrorName,
-} from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,

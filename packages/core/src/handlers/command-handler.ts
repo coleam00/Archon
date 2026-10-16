@@ -30,15 +30,13 @@ import {
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
-import {
-  discoverWorkflowsWithConfig,
-  findWorkflowLoadError,
-} from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type {
-  WorkflowWithSource,
-  WorkflowLoadError,
-  ResolvedWorkflow,
+import {
+  findWorkflowLoadError,
+  type WorkflowWithSource,
+  type WorkflowLoadError,
+  type ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
 import {

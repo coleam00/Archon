@@ -41,6 +41,7 @@ import type {
   WorkflowRequirement,
   ResolvedWorkflow,
 } from './schemas';
+import { findWorkflowLoadError } from './schemas/workflow';
 import {
   isIncludeDirective,
   isAgentNode,
@@ -1305,7 +1306,7 @@ export function expandWorkflowIncludes(
       // fires when the name was reached as an unresolvable include TARGET.
       // An unreadable declaration has no known workflow name. Until every declaration
       // is readable, a missing include cannot be distinguished from that read failure.
-      const named = loadErrors.find(error => error.workflowName === name);
+      const named = findWorkflowLoadError(loadErrors, name);
       const unreadable =
         named ??
         loadErrors.find(

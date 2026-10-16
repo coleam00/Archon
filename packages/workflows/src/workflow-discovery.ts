@@ -88,23 +88,6 @@ import {
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
-/** Errors without a known workflow name keep their full path to avoid aliasing a bare target. */
-export function workflowLoadErrorName(error: WorkflowLoadError): string {
-  return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
-}
-
-export function findWorkflowLoadError(
-  errors: readonly WorkflowLoadError[],
-  name: string
-): WorkflowLoadError | undefined {
-  return (
-    errors.find(error => error.workflowName === name) ??
-    errors.find(error => error.workflowName?.toLowerCase() === name.toLowerCase()) ??
-    errors.find(error => workflowLoadErrorName(error) === name) ??
-    errors.find(error => workflowLoadErrorName(error).toLowerCase() === name.toLowerCase())
-  );
-}
-
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

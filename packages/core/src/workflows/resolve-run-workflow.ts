@@ -4,17 +4,14 @@ import {
   resolveContinuationWorkflow,
 } from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import { findWorkflowLoadError, type ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   spellWorkflowCommand,
   type WorkflowDeps,
   type WorkflowCommandSurface,
 } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import {
-  discoverWorkflowsWithConfig,
-  findWorkflowLoadError,
-} from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { toError } from '../utils/error';
 
 const log = createLogger('resolve-run-workflow');
