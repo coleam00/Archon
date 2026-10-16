@@ -22315,8 +22315,17 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
   });
 
   it.each([
-    // Captured output would otherwise replace the termination error in the message.
-    ['Bash', { id: 'slow', bash: 'echo started; exec sleep 30', timeout: 500, on_timeout: 'skip' }],
+    // Captured output would otherwise replace the termination error in the message. The
+    // root ignores SIGTERM, so only a SIGKILL fallback lets the node settle.
+    [
+      'Bash',
+      {
+        id: 'slow',
+        bash: "trap '' TERM; echo started; exec sleep 30",
+        timeout: 500,
+        on_timeout: 'skip',
+      },
+    ],
     [
       'Script',
       {
