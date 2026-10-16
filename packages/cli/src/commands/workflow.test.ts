@@ -15402,6 +15402,46 @@ describe('run codebase resolution', () => {
     expectChildExecution();
   });
 
+  it.each([{ noWorktree: true }, { detach: true }])(
+    'refuses to launch when a newly registered project cannot be read back (%j)',
+    async options => {
+      (codebases.getCodebase as ReturnType<typeof mock>).mockResolvedValue(null);
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', options)
+      ).rejects.toThrow('cb-child');
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['missing', 'error'] as const)(
+    'requires the supplied project ID when its lookup is %s',
+    async mode => {
+      const lookup = codebases.getCodebase as ReturnType<typeof mock>;
+      if (mode === 'error') lookup.mockRejectedValue(new Error('stored project lookup failed'));
+      else lookup.mockResolvedValue(null);
+      (core.registerRepository as ReturnType<typeof mock>).mockClear();
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+          noWorktree: true,
+          codebaseId: 'stored-project',
+        })
+      ).rejects.toThrow(mode === 'error' ? 'stored project lookup failed' : 'stored-project');
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses the supplied project ID even when the path matches another project', async () => {
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(parent);
+    await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+      noWorktree: true,
+      codebaseId: child.id,
+    });
+    expectChildExecution();
+  });
+
   it('a registration failure is fatal instead of running unregistered', async () => {
     (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('Source symlink at /w/_local/child/source already points to /a, expected /b')

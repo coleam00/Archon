@@ -1639,7 +1639,10 @@ async function resolveRunCodebase(
   cwd = await canonicalizeProjectPath(cwd);
   let repoRoot: string | null = null;
   try {
-    if (options.folder) {
+    if (options.codebaseId) {
+      codebase = await host.records.codebases.getCodebase(options.codebaseId);
+      if (!codebase) throw new Error(`Project "${options.codebaseId}" no longer exists.`);
+    } else if (options.folder) {
       codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
     } else {
       ({ codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases));
@@ -1661,23 +1664,7 @@ async function resolveRunCodebase(
     }
   }
 
-  // If the caller supplied a codebase ID (e.g., from a stored run record on resume),
-  // use it directly to avoid path-based lookup that fails for worktree paths.
-  if (!codebase && !lookupError && options.codebaseId) {
-    try {
-      codebase = await host.records.codebases.getCodebase(options.codebaseId);
-    } catch (error) {
-      if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-      const err = error as Error;
-      getLog().warn(
-        { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
-        'cli.codebase_id_lookup_failed'
-      );
-      // Intentional: don't set lookupError — fall through to auto-registration
-    }
-  }
-
-  if (lookupError && !options.codebaseId) {
+  if (lookupError) {
     throw new Error(`Cannot run workflow: database lookup failed.\nError: ${lookupError.message}`, {
       cause: lookupError,
     });
@@ -1710,6 +1697,8 @@ async function resolveRunCodebase(
             baseBranch: options.registrationBaseBranch,
           });
       codebase = await host.records.codebases.getCodebase(result.codebaseId);
+      if (!codebase)
+        throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
       if (!result.alreadyExisted) {
         if (options.folder) registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
         getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
