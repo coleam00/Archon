@@ -28,6 +28,7 @@ import { isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import * as pluginProcess from '@archon/paths/plugin-process';
+import * as subprocess from './subprocess';
 import { recordNodeProcessTrees } from './subprocess';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
 
@@ -840,6 +841,25 @@ function stubMissingContainer(): ReturnType<typeof spyOn<typeof git, 'execFileAs
     throw new Error('Error response from daemon: No such container');
   });
 }
+
+/**
+ * Spy on `execFileAsync` as the transport of a host bash or script node. On Windows such a
+ * node runs through the owned process group instead, so its deadline can end the whole tree;
+ * that path is routed into the same spy until the test ends.
+ */
+function spyOnNodeExec(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
+  const execSpy = spyOn(git, 'execFileAsync');
+  if (process.platform === 'win32')
+    ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+      (cmd, args, options) => git.execFileAsync(cmd, args, options)
+    );
+  return execSpy;
+}
+let ownedGroupSpy: { mockRestore(): void } | undefined;
+afterEach(() => {
+  ownedGroupSpy?.mockRestore();
+  ownedGroupSpy = undefined;
+});
 
 /** The `docker` calls that dispatch node work, leaving out the checkout observation's probe. */
 function nodeDockerCalls(
@@ -3620,7 +3640,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('passes config.envVars to bash subprocesses', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('bash-env-run-id');
@@ -3698,7 +3718,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   it('passes user message through env vars, not string substitution, preventing shell injection', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -3763,7 +3783,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('bun script delivers the user message via env var, never spliced into source', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const workflowRun = makeWorkflowRun('script-inject-bun', {
         workflow_name: 'script-inject',
@@ -3809,7 +3829,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('leaves a literal $ARGUMENTS in the script body inert (not substituted)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const workflowRun = makeWorkflowRun('script-literal', {
         workflow_name: 'script-literal',
@@ -3844,7 +3864,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('uv/python script delivers the user message and issue context via env vars', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const workflowRun = makeWorkflowRun('script-inject-uv', {
         workflow_name: 'script-inject-uv',
@@ -3887,7 +3907,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('a configured project env var cannot shadow an engine-reserved value (#2115)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const workflowRun = makeWorkflowRun('script-env-collision', {
         workflow_name: 'script-env-collision',
@@ -3935,7 +3955,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
 
   it('still substitutes $nodeId.output raw into the script source (item 3 preserved)', async () => {
     // upstream bash → 'UPSTREAM_RAW'; downstream bun script assigns $upstream.output directly.
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
+    const execSpy = spyOnNodeExec().mockImplementation(
       async (_cmd: string, args: string[]) =>
         args[0] === '-c'
           ? { stdout: 'UPSTREAM_RAW\n', stderr: '' } // bash upstream
@@ -3981,7 +4001,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('warns when a script body still uses a literal user-controlled variable', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun('script-warn', {
@@ -4021,7 +4041,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   it('does not warn when the script reads values from the environment (correct form)', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     try {
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun('script-nowarn', {
@@ -22136,7 +22156,7 @@ describe('executeDagWorkflow -- script nodes', () => {
   });
 
   it('passes config.envVars to script subprocesses', async () => {
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('script-env-run-id');
@@ -25943,7 +25963,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     let outerGatesRun = 0;
     const exitCodeErr = (code: number) =>
       Object.assign(new Error(`exit ${String(code)}`), { code });
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_cmd, args) => {
+    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, args) => {
       const script = String(args?.[1] ?? '');
       observedScripts.push(script);
       if (script === `echo "inner's ready"`) return { stdout: "inner's ready\n", stderr: '' };
@@ -26154,7 +26174,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Resumed interactive group: the approval-gate free-text must reach the body script
     // as an env var, not as text interpolated into the executed TS source.
     const injection = '"); process.exit(1); //';
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -26229,7 +26249,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // indirect env read behaves — which the splice cannot touch and which previously read
     // as empty because executeBashNode's subprocess env hardcoded LOOP_USER_INPUT: ''.
     const feedback = 'looks good, ship it';
-    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
     try {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
@@ -29841,7 +29861,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
       const realSetTimeout = globalThis.setTimeout;
       globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
       let calls = 0;
-      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async command => {
+      const execSpy = spyOnNodeExec().mockImplementation(async command => {
         if (command === 'git') return { stdout: '', stderr: '' };
         calls++;
         if (calls % 2 === 1)
@@ -33571,24 +33591,22 @@ describe('subprocess credential redaction', () => {
     let rejection:
       | (Error & { code: number; killed: boolean; cmd: string; stdout: string; stderr: string })
       | undefined;
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
-      async (command: string, args: string[]) => {
-        const commandLine = [command, ...args].join(' ');
-        rejection = Object.assign(
-          new Error(
-            `Command failed: ${commandLine}\nmessage echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`
-          ),
-          {
-            code: 1,
-            killed: false,
-            cmd: commandLine,
-            stdout: `stdout echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
-            stderr: `stderr echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
-          }
-        );
-        throw rejection;
-      }
-    );
+    const execSpy = spyOnNodeExec().mockImplementation(async (command: string, args: string[]) => {
+      const commandLine = [command, ...args].join(' ');
+      rejection = Object.assign(
+        new Error(
+          `Command failed: ${commandLine}\nmessage echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`
+        ),
+        {
+          code: 1,
+          killed: false,
+          cmd: commandLine,
+          stdout: `stdout echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
+          stderr: `stderr echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
+        }
+      );
+      throw rejection;
+    });
 
     try {
       await executeDagWorkflow(
@@ -34152,7 +34170,7 @@ describe('retained exec output', () => {
     // Node reports a timeout kill as `code: null` with the signal set. Falling back
     // straight to 'unknown' would erase the most operationally interesting failure —
     // and an `until_bash` probe has no sibling node_error row to say it timed out.
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async () => {
+    const execSpy = spyOnNodeExec().mockImplementation(async () => {
       throw Object.assign(new Error('Command failed: bash -c sleep 999'), {
         code: null,
         signal: 'SIGTERM',

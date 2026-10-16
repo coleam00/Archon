@@ -347,7 +347,8 @@ async function confirmGroupGone(pid: number): Promise<void> {
   }
 }
 
-async function execOwnedProcessGroup(
+/** Exported for tests, which mock it where a Windows bash or script node runs through it. */
+export async function execOwnedProcessGroup(
   cmd: string,
   args: string[],
   options: {
