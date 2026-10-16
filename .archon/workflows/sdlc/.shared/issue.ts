@@ -7,7 +7,13 @@
  * closed as the issue.
  * `issueAtCreation` recovers the text an issue was opened with, from GitHub's edit
  * history; the forge source has no history and answers with the current text.
+ * `issueBodyAt` recovers the body at a past moment the same way, and `appendSection`
+ * adds a dated section to the body, the one body write the pack makes.
  */
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   forgeSource,
@@ -202,32 +208,7 @@ export function issueAtCreation(item: QualifiedPr, current: IssueView): IssueAtC
   if (forgeSource() === 'forge') {
     return { title: current.title, body: current.body, body_from: 'current' };
   }
-  const slash = item.repo.path.indexOf('/');
-  const result = Bun.spawnSync(
-    [
-      'gh',
-      'api',
-      'graphql',
-      '--hostname',
-      item.repo.host,
-      '-f',
-      `query=${CREATION_QUERY}`,
-      '-f',
-      `owner=${item.repo.path.slice(0, slash)}`,
-      '-f',
-      `name=${item.repo.path.slice(slash + 1)}`,
-      '-F',
-      `number=${String(item.number)}`,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `gh api graphql (issue ${String(item.number)} history) failed: ${result.stderr.toString().trim()}`
-    );
-  }
-  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
-  const history = record(record(data?.repository)?.issue);
+  const history = graphql(item, CREATION_QUERY, `issue ${String(item.number)} history`);
   const edits = record(history?.userContentEdits);
   if (history === undefined || typeof edits?.totalCount !== 'number') {
     throw new Error(`issue ${String(item.number)} has no edit history to read`);
@@ -249,4 +230,119 @@ export function issueAtCreation(item: QualifiedPr, current: IssueView): IssueAtC
     body: recovered ?? current.body,
     body_from: recovered === undefined ? 'current' : 'creation',
   };
+}
+
+function graphql(item: QualifiedPr, query: string, what: string): Record<string, unknown> | undefined {
+  const slash = item.repo.path.indexOf('/');
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      'graphql',
+      '--hostname',
+      item.repo.host,
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${item.repo.path.slice(0, slash)}`,
+      '-f',
+      `name=${item.repo.path.slice(slash + 1)}`,
+      '-F',
+      `number=${String(item.number)}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`gh api graphql (${what}) failed: ${result.stderr.toString().trim()}`);
+  }
+  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
+  return record(record(data?.repository)?.issue);
+}
+
+const EDITS_QUERY = [
+  'query($owner: String!, $name: String!, $number: Int!) {',
+  'repository(owner: $owner, name: $name) { issue(number: $number) {',
+  'createdAt body',
+  'userContentEdits(first: 100) { totalCount nodes { editedAt diff } }',
+  '} } }',
+].join(' ');
+
+/**
+ * The issue's body as it was at `at`, from GitHub's edit history. Edits are newest
+ * first and each holds the whole body at that revision. A history it cannot read
+ * whole, a deleted revision, or a time before the issue existed refuses: a replay must
+ * never judge text the issue did not have at that moment.
+ */
+export function issueBodyAt(item: QualifiedPr, at: string): string {
+  if (forgeSource() === 'forge') {
+    throw new Error('the forge source has no edit history, so the body at a past time is unknown');
+  }
+  const issue = graphql(item, EDITS_QUERY, `issue ${String(item.number)} history`);
+  const edits = record(issue?.userContentEdits);
+  if (
+    typeof issue?.createdAt !== 'string' ||
+    typeof issue.body !== 'string' ||
+    typeof edits?.totalCount !== 'number' ||
+    !Array.isArray(edits.nodes)
+  ) {
+    throw new Error(`issue ${String(item.number)} has no edit history to read`);
+  }
+  if (at < issue.createdAt) throw new Error(`issue ${String(item.number)} did not exist at ${at}`);
+  if (edits.totalCount === 0) return issue.body;
+  if (edits.totalCount > edits.nodes.length) {
+    throw new Error(`issue ${String(item.number)} has more edits than one history read returns`);
+  }
+  const revision = edits.nodes.map(record).find(
+    edit => typeof edit?.editedAt === 'string' && edit.editedAt <= at
+  );
+  if (typeof revision?.diff !== 'string') {
+    throw new Error(`issue ${String(item.number)} has no readable revision at ${at}`);
+  }
+  return revision.diff;
+}
+
+/**
+ * Append `## <heading>` and `text` to the issue's body and read it back. A body that
+ * already ends with that section is left as it is, so a repeated write adds nothing.
+ * GitHub has no conditional body write: an edit someone saves between the read here
+ * and the write is lost, and the read-back cannot tell.
+ */
+export function appendSection(item: QualifiedPr, heading: string, text: string): void {
+  if (forgeSource() === 'forge') {
+    throw new Error('the forge contract has no issue body write, so the section cannot be added');
+  }
+  const section = `## ${heading}\n\n${text.trim()}\n`;
+  const before = ghIssue(item);
+  const body = typeof before.body === 'string' ? before.body : '';
+  if (body.trimEnd().endsWith(section.trimEnd())) return;
+  const dir = mkdtempSync(join(tmpdir(), 'archon-issue-body-'));
+  try {
+    const request = join(dir, 'body.json');
+    writeFileSync(request, JSON.stringify({ body: `${body.trimEnd()}\n\n\n${section}` }));
+    const result = Bun.spawnSync(
+      [
+        'gh',
+        'api',
+        '--hostname',
+        item.repo.host,
+        '--method',
+        'PATCH',
+        `repos/${item.repo.path}/issues/${String(item.number)}`,
+        '--input',
+        request,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `gh api body write of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const after = ghIssue(item);
+  if (typeof after.body !== 'string' || !after.body.trimEnd().endsWith(section.trimEnd())) {
+    throw new Error(`${after.html_url} does not read back with the section "${heading}"; it may have it`);
+  }
 }

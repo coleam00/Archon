@@ -97,6 +97,16 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 ---
 
+#### `archon-build-queue`
+
+The stage after intake, started by a schedule binding. Each run claims one triaged item, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section. With `mode: eval` it launches and writes nothing and replays a recorded run's ending.
+
+**When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack installs no binding; the SDLC pack README's "Build queue" section shows the one to add.
+
+**What it produces**: Pull requests from `archon-ship`, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
+
+---
+
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -220,6 +230,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
+| `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

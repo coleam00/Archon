@@ -45,6 +45,7 @@ Archon ships the `sdlc` workflow pack, which covers the software development lif
 | `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
 | `archon-triage` | Check an issue against the current code and decide what it needs next |
 | `archon-intake` | Triage new issues from listed maintainers automatically; label outside issues for a maintainer. Started by trigger bindings |
+| `archon-build-queue` | Work triaged issues to reviewed PRs, asking a person only what the issue and policy don't answer. Started by a trigger binding |
 | `archon-investigate` | Prove the root cause of a bug or open question |
 | `archon-plan` | Turn decided intent into an implementable plan |
 | `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |

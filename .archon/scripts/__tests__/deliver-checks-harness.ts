@@ -81,6 +81,8 @@ export interface GhApiIssue {
     readonly createdBody?: string | null;
     readonly firstEditedBody?: string;
     readonly createdTitle?: string;
+    /** Every revision, newest first, as a full history read reports them. */
+    readonly edits?: readonly { readonly editedAt: string; readonly diff: string }[];
   };
 }
 
@@ -128,6 +130,8 @@ export interface ScriptRun {
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
   /** Every issue state change the fake gh received. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
+  /** Every issue body the fake gh was asked to write, in order. */
+  readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
@@ -242,6 +246,12 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('api graphql')) {
     const history = fake.issue?.history ?? {};
     const createdAt = '2026-01-01T00:00:00Z';
+    if (text.includes('userContentEdits(first: 100)')) {
+      const edits = history.edits ?? [];
+      return result(0, JSON.stringify({ data: { repository: { issue: {
+        createdAt, body: subject.body, userContentEdits: { totalCount: edits.length, nodes: edits },
+      } } } }));
+    }
     const nodes = history.firstEditedBody !== undefined
       ? [{ editedAt: '2026-02-01T00:00:00Z', diff: history.firstEditedBody }]
       : history.createdBody === undefined ? []
@@ -264,7 +274,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     const input = () => JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8'));
     if (endpoint.endsWith('/issues/' + String(subject.number))) {
-      if (method === 'PATCH') {
+      if (method === 'PATCH' && argv.includes('--input')) {
+        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+        appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(input().body) + '\\n');
+        if (!fake.writeLost) subject.body = input().body;
+      } else if (method === 'PATCH') {
         if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
         const field = (name) => argv.find(part => part.startsWith(name + '='))?.slice(name.length + 1);
         const change = { state: field('state'), state_reason: field('state_reason') };
@@ -445,6 +459,7 @@ else {
     createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
     comments: lines(`${ghLog}.comments`).map(line => JSON.parse(line) as ScriptRun['comments'][number]),
     closes: lines(`${ghLog}.closes`).map(line => JSON.parse(line) as ScriptRun['closes'][number]),
+    bodies: lines(`${ghLog}.bodies`).map(line => JSON.parse(line) as string),
     artifacts,
   };
 }
