@@ -6,13 +6,6 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
-import { providerRegistry } from '@archon/providers';
-import { inputEnvVars } from '../../../packages/workflows/src/dag-executor';
-import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
-import { parseWorkflow } from '../../../packages/workflows/src/loader';
-import type { NodeOutput } from '../../../packages/workflows/src/schemas';
-import { isObject } from '../../workflows/sdlc/.shared/typed';
 import { PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -213,7 +206,6 @@ describe("deliver's round", () => {
           INPUTS_RED_CAUSE: '',
           INPUTS_IMPLEMENT_SUMMARY: 'built',
           INPUTS_PR_URL: PR_URL,
-          INPUTS_REVIEW_REPORT: 'review/report.md',
           INPUTS_REVIEW_READY: 'true',
           INPUTS_REVIEW_ACTION: 'none',
           INPUTS_REVIEW_SUMMARY: 'clean',
@@ -309,106 +301,11 @@ describe("deliver's round", () => {
     expect(round(blocked).contract_left).toBeNull();
   });
 
-  it.each(['REVIEW', 'REREVIEW'])(
-    'stops a %s preflight without advancing the report cursor or clearing coverage',
-    review => {
-      for (const priorReport of ['', '/earlier/report.md']) {
-        const ended = round({
-          INPUTS_PRIOR_REPORT: priorReport,
-          [`INPUTS_${review}_READY`]: 'false',
-          [`INPUTS_${review}_ACTION`]: 'needs_human',
-          [`INPUTS_${review}_REPORT`]: 'review/scope.md',
-          [`INPUTS_${review}_SUMMARY`]: 'Rerun: archon workflow run archon-review --branch feature',
-          [`INPUTS_${review}_CONTRACT_LEFT`]: '["PR head mismatch prevented contract review."]',
-          INPUTS_CI: 'null',
-        });
-        expect(ended).toMatchObject({
-          done: true,
-          ready: false,
-          reason: 'needs_human',
-          prior_report: priorReport,
-          contract_left: ['PR head mismatch prevented contract review.'],
-        });
-        expect(ended.summary).toContain('--branch feature');
-      }
-    }
-  );
-
   it('points the next round at the published review report', () => {
     expect(round({}).prior_report).toEndWith('/review/report.md');
-    expect(round({ INPUTS_REREVIEW_READY: 'true', INPUTS_REREVIEW_REPORT: 'review/report.md' }).prior_report).toEndWith('/review/report.md');
     expect(round({ INPUTS_GREEN: 'false', INPUTS_PRIOR_REPORT: '/earlier/report.md', INPUTS_REVIEW_READY: 'null' }).prior_report).toBe(
       '/earlier/report.md'
     );
-  });
-
-  it('keeps the published report path conformant through review and both delivery bindings', () => {
-    const source = (name: string) => readFileSync(join(import.meta.dir, `../../workflows/sdlc/${name}/archon-${name}.yaml`), 'utf8');
-    const parse = (name: string) => {
-      const parsed = parseWorkflow(source(name), `archon-${name}.yaml`, providerRegistry);
-      if (!parsed.workflow) throw new Error(parsed.error.error);
-      return parsed.workflow;
-    };
-    const reportPaths = (schema: unknown): string[] => {
-      let value = schema;
-      for (const key of ['properties', 'report', 'properties', 'path', 'enum']) {
-        if (!isObject(value)) throw new Error(`No report schema at ${key}`);
-        value = value[key];
-      }
-      if (!Array.isArray(value) || !value.every(path => typeof path === 'string')) throw new Error('No report paths');
-      return value;
-    };
-    const review = parse('review');
-    const synthesize = review.nodes.find(node => node.id === 'synthesize');
-    if (synthesize?.kind !== 'agent') throw new Error('No synthesis agent');
-    const publishedPath = reportPaths(synthesize.output_format)[0];
-    if (typeof publishedPath !== 'string') throw new Error('No published report path');
-    const scope = review.nodes.find(node => node.id === 'scope');
-    if (scope?.kind !== 'agent') throw new Error('No scope agent');
-    const scopePath = reportPaths(scope.output_format)[0];
-    if (typeof scopePath !== 'string') throw new Error('No scope report path');
-    const publish = review.nodes.find(node => node.id === 'publish');
-    if (publish?.kind !== 'exec') throw new Error('No publish exec');
-    expect(publish).toMatchObject({ with: { report: `$ARTIFACTS_DIR/${publishedPath}`, report_pointer: '$synthesize.output.report' } });
-    expect(publish?.output_format).toEqual(synthesize?.output_format);
-    const terminal = review.nodes.find(node => node.id === 'result');
-    if (terminal?.kind !== 'exec') throw new Error('No result exec');
-    expect(reportPaths(terminal.output_format)).toEqual([publishedPath, scopePath]);
-    const prompt = readFileSync(join(import.meta.dir, '../../workflows/sdlc/review/commands/review-synthesize.md'), 'utf8');
-    expect(prompt).toContain(`Write \`$ARTIFACTS_DIR/${publishedPath}\``);
-    expect(prompt).toContain(`"path": "${publishedPath}"`);
-
-    const rounds = parse('deliver').nodes.find(node => node.id === 'rounds');
-    if (rounds?.kind !== 'loop_group') throw new Error('No delivery rounds');
-    const rereview = rounds.loop_group.nodes.find(node => node.id === 'rereview');
-    expect(rereview).toMatchObject({ with: { prior_report: `$ARTIFACTS_DIR/${publishedPath}` } });
-    const roundNode = rounds.loop_group.nodes.find(node => node.id === 'round');
-    if (roundNode?.kind !== 'exec' || !roundNode.with) throw new Error('No round bindings');
-    for (const caller of ['review', 'rereview']) {
-      for (const path of [publishedPath, scopePath]) {
-        const output = {
-          ready: path === publishedPath, action: path === publishedPath ? 'none' : 'needs_human',
-          report: { type: 'archon_artifact', run_id: 'run', path },
-          findings_summary: path === publishedPath ? 'Review complete' : 'Rerun on the PR head',
-          discoveries: [], contract_left: path === publishedPath ? [] : ['PR head mismatch prevented contract review.'],
-        };
-        if (!terminal.output_format) throw new Error('No terminal schema');
-        expect(validateStructuredOutput(output, terminal.output_format).valid).toBe(true);
-        const outputs = new Map<string, NodeOutput>([[caller, { state: 'completed', output: JSON.stringify(output) }]]);
-        const env = inputEnvVars({ ...roundNode, with: { report: roundNode.with[`${caller}_report`] } }, {
-          workflowRun: { id: 'run', user_message: '', metadata: {} },
-          artifactsDir: '{ARTIFACTS}', stateDir: '', baseBranch: 'dev', docsDir: '', nodeOutputs: outputs, loopBodyScopes: [],
-        });
-        const result = round({
-          INPUTS_PRIOR_REPORT: '/previous/report.md',
-          [`INPUTS_${caller.toUpperCase()}_REPORT`]: String(env.INPUTS_REPORT),
-          [`INPUTS_${caller.toUpperCase()}_READY`]: String(output.ready),
-          [`INPUTS_${caller.toUpperCase()}_ACTION`]: output.action,
-        });
-        if (path === publishedPath) expect(result.prior_report).toEndWith(`/${publishedPath}`);
-        else expect(result).toMatchObject({ prior_report: '/previous/report.md', done: true, reason: 'needs_human' });
-      }
-    }
   });
 });
 

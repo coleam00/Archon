@@ -208,12 +208,10 @@ nodes:
             red_cause: "$implement.output.red_cause"
             implement_summary: "$implement.output.summary"
             pr_url: { from: "$pr.output.url", if_skipped: null }
-            review_report: { from: "$review.output.report.path", if_skipped: null }
             review_ready: { from: "$review.output.ready", if_skipped: null }
             review_action: { from: "$review.output.action", if_skipped: null }
             review_summary: { from: "$review.output.findings_summary", if_skipped: null }
             review_contract_left: { from: "$review.output.contract_left", if_skipped: null }
-            rereview_report: { from: "$rereview.output.report.path", if_skipped: null }
             rereview_ready: { from: "$rereview.output.ready", if_skipped: null }
             rereview_action: { from: "$rereview.output.action", if_skipped: null }
             rereview_summary: { from: "$rereview.output.findings_summary", if_skipped: null }

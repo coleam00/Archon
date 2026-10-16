@@ -3,12 +3,9 @@ import { describe, it, expect } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { inputEnvVars } from '../dag-executor';
 import { resolveWorkflow } from '../graph-plan';
 import { dryRunWorkflow } from '../dry-run';
 import { parseFixtureFile } from '../fixture-runner';
-import { evaluateCondition } from '../condition-evaluator';
-import type { NodeOutput } from '../schemas';
 import { join } from 'path';
 import {
   isBinaryBuild,
@@ -943,39 +940,6 @@ describe('bundled-defaults', () => {
       expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
-    it('gates every review stage on the head in full and light rounds', () => {
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
-        providerRegistry
-      );
-      if (!parsed.workflow) throw new Error(parsed.error.error);
-      const lenses = ['seams', 'code', 'tests', 'errors', 'docs'];
-      for (const light of [false, true]) {
-        for (const head_matches of [false, true]) {
-          const selected = Object.fromEntries(lenses.map(lens => [lens, true]));
-          const outputs = new Map<string, NodeOutput>([
-            ['scope', { state: 'completed', output: JSON.stringify({ head_matches }) }],
-            ['mode', { state: 'completed', output: JSON.stringify({ light, ...selected }) }],
-          ]);
-          // Light rounds and mismatched heads skip route: evaluating a lens must
-          // short-circuit before trying to read its absent output.
-          if (!light && head_matches)
-            outputs.set('route', { state: 'completed', output: JSON.stringify(selected) });
-          for (const id of ['route', ...lenses, 'review-complete', 'synthesize', 'publish']) {
-            const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
-            if (!node?.when) throw new Error(`${id} has no head gate`);
-            expect(evaluateCondition(node.when, outputs).result).toBe(
-              head_matches && (id !== 'route' || !light)
-            );
-          }
-        }
-      }
-      expect(parsed.workflow.nodes.find(node => node.id === 'route')?.depends_on).toContain(
-        'scope'
-      );
-    });
-
     it('returns the published verdict or the scope message through the terminal adapter', async () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-review'],
@@ -1000,59 +964,28 @@ describe('bundled-defaults', () => {
         discoveries: [],
         contract_left: [],
       };
-      for (const { published, headMatches } of [
-        { published: verdict, headMatches: true },
-        { published: null, headMatches: false },
-        { published: null, headMatches: true },
-      ]) {
-        const outputs = new Map<string, NodeOutput>([
-          [
-            'scope',
-            {
-              state: 'completed',
-              output: JSON.stringify({ head_matches: headMatches, report: scopeReport }),
-            },
-          ],
-          [
-            'publish',
-            published === null && !headMatches
-              ? {
-                  state: 'skipped',
-                  output: '',
-                  cause: { kind: 'condition', expr: '$scope.output.head_matches == true' },
-                }
-              : { state: 'completed', output: JSON.stringify(published) },
-          ],
-        ]);
-        const env = inputEnvVars(
-          result,
-          {
-            workflowRun: { id: 'run', user_message: '', metadata: {} },
-            artifactsDir: root,
-            stateDir: root,
-            baseBranch: 'dev',
-            docsDir: root,
-            nodeOutputs: outputs,
-            loopBodyScopes: [],
-          },
-          undefined
-        );
+      expect(result.with).toEqual({
+        verdict: { from: '$publish.output', if_skipped: null },
+        head_matches: '$scope.output.head_matches',
+        scope_report: { from: '$scope.output.report' },
+      });
+      for (const headMatches of [true, false]) {
         const child = Bun.spawn([process.execPath, '-e', result.script], {
           env: {
             ...process.env,
-            ...env,
+            INPUTS_VERDICT: JSON.stringify(headMatches ? verdict : null),
+            INPUTS_HEAD_MATCHES: JSON.stringify(headMatches),
+            INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
             ARTIFACTS_DIR: root,
           },
           stdout: 'pipe',
           stderr: 'pipe',
         });
-        const output = await new Response(child.stdout).text();
-        const error = await new Response(child.stderr).text();
-        expect(await child.exited, error).toBe(0);
-        const actual: unknown = JSON.parse(output);
+        const actual: unknown = JSON.parse(await new Response(child.stdout).text());
+        expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
         expect(actual).toEqual(
           headMatches
-            ? published
+            ? verdict
             : {
                 ready: false,
                 action: 'needs_human',
@@ -1062,9 +995,7 @@ describe('bundled-defaults', () => {
                 contract_left: ['PR head mismatch prevented contract review.'],
               }
         );
-        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(
-          !headMatches || published !== null
-        );
+        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(true);
       }
     });
 

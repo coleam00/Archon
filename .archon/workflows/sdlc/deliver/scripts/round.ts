@@ -13,7 +13,7 @@
  *   `round`, `prior_report` and `pr_url` ('' on the first round).
  * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
  * - INPUTS_PR_URL: this round's pull request.
- * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION / INPUTS_REVIEW_REPORT: the review verdict and report path.
+ * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
  * - INPUTS_REREVIEW_*: the light review of reshape's delta, which decides in the
  *   review's place when it ran.
  * - INPUTS_REVIEW_CONTRACT_LEFT / INPUTS_REREVIEW_CONTRACT_LEFT / INPUTS_PREVIOUS_CONTRACT_LEFT:
@@ -93,9 +93,7 @@ emit({
   // A round whose CI agent never ran re-ran nothing.
   ci_rerun: ciRerun === 'null' ? 'none' : ciRerun,
   prior_report:
-    reviewReady !== 'null' && text(process.env[`INPUTS_${review}_REPORT`]) === 'review/report.md'
-      ? `${artifactsDir()}/review/report.md`
-      : text(process.env.INPUTS_PRIOR_REPORT),
+    reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
   summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,
