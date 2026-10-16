@@ -1,6 +1,11 @@
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { resolveWorkflow } from '../graph-plan';
+import { dryRunWorkflow } from '../dry-run';
+import { parseFixtureFile } from '../fixture-runner';
 import { join } from 'path';
 import {
   isBinaryBuild,
@@ -11,6 +16,7 @@ import {
 } from './bundled-defaults';
 import {
   formatPackagedResourceReference,
+  qualifyWorkflowResources,
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
@@ -29,6 +35,7 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();
+const track = trackTempRoots();
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -454,12 +461,13 @@ describe('bundled-defaults', () => {
       );
       expect(waits).toEqual([]);
       expect(nodes.map(candidate => candidate.id)).toEqual([
+        'forge',
         'rounds',
         'update-pr-body',
         'outcome',
         'report',
       ]);
-      const rounds = nodes[0];
+      const rounds = nodes[1];
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
         'implement',
@@ -474,6 +482,35 @@ describe('bundled-defaults', () => {
       expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
       expect(parsed.workflow.returns).toBe('report');
       expect(parsed.workflow.outcome_field).toBe('ready');
+    });
+
+    // The forge source is checked before any agent spends, and the agents that act on
+    // the forge read the source that check certified rather than the environment.
+    it('checks the forge source first and admits a run without a GitHub identity', () => {
+      interface RawNode {
+        id: string;
+        script?: string;
+        depends_on?: string[];
+        with?: Record<string, unknown>;
+        loop_group?: { nodes: RawNode[] };
+      }
+      const raw = (name: string) =>
+        Bun.YAML.parse(BUNDLED_WORKFLOWS[name]) as { requires?: unknown; nodes: RawNode[] };
+      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
+        expect(raw(name).requires).toBeUndefined();
+      }
+      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
+        const [first, ...rest] = raw(name).nodes;
+        expect(first).toMatchObject({ id: 'forge', script: 'forge-check' });
+        const roots = rest.filter(
+          node => !node.depends_on?.some(dependency => dependency !== 'forge')
+        );
+        expect(roots.length).toBeGreaterThan(0);
+        for (const node of roots) expect(node.depends_on).toEqual(['forge']);
+      }
+      const rounds = raw('archon-deliver').nodes.find(node => node.id === 'rounds');
+      const ci = rounds?.loop_group?.nodes.find(node => node.id === 'ci');
+      expect(ci?.with).toEqual({ pr: '$pr.output', source: '$forge.output.source' });
     });
 
     // A delivery ending travels from round through deliver's report and ship's outcome
@@ -540,7 +577,11 @@ describe('bundled-defaults', () => {
       expect(parsed.workflow.inputs?.pr_number).toBeUndefined();
       expect(parsed.workflow.inputs?.pr_head).toBeUndefined();
       const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
-      expect(scope?.depends_on).toEqual(['mode']);
+      expect(scope?.depends_on).toBeUndefined();
+      expect(parsed.workflow.nodes.find(node => node.id === 'mode')).toMatchObject({
+        depends_on: ['scope'],
+        when: '$scope.output.head_matches == true',
+      });
       expect(scope?.kind).toBe('agent');
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       const scopeSchema = scope.output_format;
@@ -548,6 +589,7 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
+          head_matches: { type: 'boolean' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -573,16 +615,20 @@ describe('bundled-defaults', () => {
             required: ['type', 'run_id', 'path'],
           },
         },
-        required: ['pr', 'report'],
+        required: ['head_matches', 'pr', 'report'],
       });
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
-      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
-        true
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: null, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(true);
+      expect(validateStructuredOutput({ head_matches: true, pr: null }, scopeSchema).valid).toBe(
+        false
       );
-      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(false);
       expect(
         validateStructuredOutput(
           {
+            head_matches: true,
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -592,9 +638,10 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: {}, report: scopeReport }, scopeSchema).valid).toBe(
-        false
-      );
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: {}, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(false);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
@@ -627,7 +674,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['policy', 'scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['policy', 'mode', 'scope', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
@@ -915,7 +962,7 @@ describe('bundled-defaults', () => {
       // A command node carries its bindings on `source`, not the node root.
       expect(updateNode.source).toMatchObject({
         kind: 'command',
-        with: { pr: '$rounds.output.pr_url' },
+        with: { pr: '$rounds.output.pr_url', source: '$forge.output.source' },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
@@ -927,6 +974,94 @@ describe('bundled-defaults', () => {
       expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
+    it('returns the published verdict or the scope message through the terminal adapter', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const result = parsed.workflow.nodes.find(node => node.id === 'result');
+      if (result?.kind !== 'exec' || !result.output_format || !result.with)
+        throw new Error('result is not a typed exec');
+      const root = track(mkdtempSync(join(tmpdir(), 'archon-review-result-')));
+      mkdirSync(join(root, 'review'));
+      const message =
+        'Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature\n';
+      const scopeReport = {
+        type: 'archon_artifact',
+        run_id: 'run',
+        path: 'review/renamed-scope.md',
+      };
+      writeFileSync(join(root, scopeReport.path), message);
+      const verdict = {
+        ready: true,
+        action: 'none',
+        findings_summary: 'clean',
+        report: { ...scopeReport, path: 'review/report.md' },
+        discoveries: [],
+        contract_left: [],
+      };
+      expect(result.with).toEqual({
+        verdict: { from: '$publish.output', if_skipped: null },
+        head_matches: '$scope.output.head_matches',
+        scope_report: { from: '$scope.output.report' },
+      });
+      for (const headMatches of [true, false]) {
+        const child = Bun.spawn([process.execPath, '-e', result.script], {
+          env: {
+            ...process.env,
+            INPUTS_VERDICT: JSON.stringify(headMatches ? verdict : null),
+            INPUTS_HEAD_MATCHES: JSON.stringify(headMatches),
+            INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
+            ARTIFACTS_DIR: root,
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const actual: unknown = JSON.parse(await new Response(child.stdout).text());
+        expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
+        expect(actual).toEqual(
+          headMatches
+            ? verdict
+            : {
+                ready: false,
+                action: 'needs_human',
+                findings_summary: message,
+                report: scopeReport,
+                discoveries: [],
+                contract_left: ['PR head mismatch prevented contract review.'],
+              }
+        );
+      }
+    });
+
+    it('shows the mismatch command in the top-level summary alongside cleanup', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const owner = BUNDLED_WORKFLOW_OWNERS['archon-review'];
+      if (!owner) throw new Error('review has no owner');
+      qualifyWorkflowResources(parsed.workflow, { ...owner, source: 'bundled' });
+      const workflow = resolveWorkflow(parsed.workflow);
+      const { stubs } = parseFixtureFile(
+        readFileSync(
+          join(REPO_ROOT, '.archon/workflows/sdlc/review/fixtures/head-mismatch.stubs.yaml'),
+          'utf8'
+        ),
+        'head-mismatch.stubs.yaml'
+      );
+      expect(workflow.plan.sinks).toEqual(['result', 'prune-scratch']);
+      const run = await dryRunWorkflow({ workflow, cwd: REPO_ROOT, userMessage: '', stubs });
+      expect(run.outcome, JSON.stringify(run)).toBe('completed');
+      expect(run.summary).toContain('archon workflow run archon-review --input scope=');
+      expect(run.summary).toContain('--branch feature');
+      expect(run.trace.find(node => node.nodeId === 'prune-scratch')?.state).toBe('stubbed');
+    });
+
     it('publishes the review report from a deterministic node, not the reviewer', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-review'],
@@ -934,7 +1069,7 @@ describe('bundled-defaults', () => {
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      expect(parsed.workflow.returns).toBe('publish');
+      expect(parsed.workflow.returns).toBe('result');
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({
         kind: 'exec',

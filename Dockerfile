@@ -127,6 +127,8 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 # CLAUDE_BIN_PATH is set at container startup (docker-entrypoint.sh).
 # The entrypoint pins the glibc variant to bypass the SDK's musl-first resolver.
 
+ENV HOME=/home/appuser
+
 # Create non-root user for running Claude Code
 # Claude Code refuses to run with --dangerously-skip-permissions as root for security
 # /app is still empty here (only WORKDIR created it) — non-recursive chown suffices.

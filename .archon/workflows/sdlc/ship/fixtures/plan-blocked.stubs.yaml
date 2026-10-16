@@ -1,6 +1,7 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
 # needs a human decision completes honestly: the planner's open question stops the
 # run before delivery, and the real outcome node relays it with plan.md.
+forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: plan }
   type: { value: feature, reason: "stub: asks for new behavior" }

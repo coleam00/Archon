@@ -686,7 +686,7 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 | Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
 | --- | --- | --- | --- |
 | `<cwd>/.env` | **yes** (safety guard) | never | never |
-| `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope) | yes iff `--scope project` |
+| `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope with CLI exceptions below) | yes iff `--scope project` |
 | `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
 **Load order at boot** (every entry point — CLI and server):
@@ -695,7 +695,7 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
 3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
-Inside a workflow, a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the CLI inherited, including an empty one, wins over both files. See [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
+The CLI makes exceptions to this order: repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 

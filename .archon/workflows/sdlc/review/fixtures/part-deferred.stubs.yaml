@@ -4,6 +4,7 @@
 # filed for it.
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
 scope:
+  head_matches: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }

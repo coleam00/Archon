@@ -17,20 +17,18 @@ import {
   type PluginMetadata,
 } from './operations';
 import type { ForgeSubjectRef, PrRef, RepoRef } from './identity';
-import {
-  discoverPlugins,
-  PluginDiscoveryError,
-  type DiscoveredPlugin,
-  type PluginDiscovery,
-} from './discovery';
+import { discoverPlugins, PluginDiscoveryError, type PluginDiscovery } from './discovery';
 import { normalizeHost, type ForgePluginConfig } from './plugin-config';
 import { runPluginProcess } from './plugin-process';
+import { selectCredential } from './credentials';
+import { GH_DOTCOM_TOKEN_KEYS } from '@archon/paths/github-token-env';
 
 export type ForgeOperationAudit = z.infer<typeof forgeOperationAuditSchema>;
 export interface ForgeDispatchResult {
   response: ForgeResponse;
   plugin: Pick<PluginMetadata, 'name' | 'version'> | null;
   audit: ForgeOperationAudit;
+  credentialSource?: string;
 }
 
 /**
@@ -398,20 +396,6 @@ function discoveryError(request: ForgeRequest, error: unknown): ForgeResponse {
   });
 }
 
-function selectedCredential(
-  discovery: PluginDiscovery,
-  plugin: DiscoveredPlugin,
-  host: string,
-  env: NodeJS.ProcessEnv
-): { token?: string; missing?: string } {
-  const override = discovery.hostConfig.get(host)?.token_env;
-  const configured = discovery.pluginTokenEnv.get(plugin.metadata.name);
-  const names = override ? [override] : configured ? [configured] : plugin.metadata.token_env;
-  if (names.length === 0) return {};
-  for (const name of names) if (env[name]) return { token: env[name] };
-  return { missing: names.join(' or ') };
-}
-
 export async function dispatchForge(
   input: ForgeRequest,
   options: {
@@ -430,6 +414,7 @@ export async function dispatchForge(
   const request = forgeRequestSchema.parse(input);
   let pluginIdentity: ForgeDispatchResult['plugin'] = null;
   let response: ForgeResponse;
+  let credentialSource: string | undefined;
 
   const host =
     request.op === 'resolve'
@@ -501,22 +486,40 @@ export async function dispatchForge(
         });
       } else {
         const env = options.env ?? process.env;
-        const credential = selectedCredential(
-          discovery,
-          plugin,
-          selectedHost,
-          options.credentialEnv ?? env
-        );
-        if (credential.missing && request.op !== 'resolve') {
+        const override =
+          discovery.hostConfig.get(selectedHost)?.token_env ??
+          discovery.pluginTokenEnv.get(plugin.metadata.name);
+        const github =
+          plugin.metadata.forge === 'github' &&
+          !override &&
+          plugin.metadata.token_env.length > 0 &&
+          plugin.metadata.token_env.every(name => GH_DOTCOM_TOKEN_KEYS.some(key => key === name));
+        const names = override
+          ? [override]
+          : github
+            ? GH_DOTCOM_TOKEN_KEYS
+            : plugin.metadata.token_env;
+        const credential =
+          request.op === 'resolve'
+            ? { kind: 'none' as const }
+            : await selectCredential(
+                names,
+                github,
+                selectedHost,
+                options.credentialEnv ?? env,
+                env
+              );
+        if (credential.kind === 'failed' || credential.kind === 'missing') {
           response = errorResponse(request, {
-            kind: 'no_credential',
-            message: `credential environment ${credential.missing} is not set`,
+            kind: credential.kind === 'failed' ? 'process_failed' : 'no_credential',
+            message: credential.message,
           });
         } else {
+          credentialSource = credential.kind === 'selected' ? credential.source : undefined;
           const outcome = await runPluginProcess(plugin, ['op', request.op], {
             env,
             stdin: JSON.stringify(request),
-            token: credential.token,
+            token: credential.kind === 'selected' ? credential.token : undefined,
             timeoutMs: options.timeoutMs,
             maxOutputBytes: options.maxOutputBytes,
             signal: options.signal,
@@ -580,7 +583,10 @@ export async function dispatchForge(
       }
     }
   }
-  return finish(request, pluginIdentity, response, started);
+  return {
+    ...finish(request, pluginIdentity, response, started),
+    ...(credentialSource ? { credentialSource } : {}),
+  };
 }
 
 function finish(

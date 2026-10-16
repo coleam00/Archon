@@ -301,16 +301,15 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     et === 'workflow_failed' ||
     et === 'workflow_resumed'
   ) {
-    // `workflow_resumed` is written only when a resume CLEARED a prior error
-    // (#2348), and carries that error in `data.error` — the same key
-    // `workflow_failed` uses, so the shared `detail` fallback below surfaces it.
     const label =
       et === 'workflow_started'
         ? 'Workflow started'
         : et === 'workflow_completed'
           ? 'Workflow completed'
           : et === 'workflow_resumed'
-            ? 'Workflow resumed (prior error cleared)'
+            ? readString(data, 'error')
+              ? 'Workflow resumed (prior error cleared)'
+              : 'Workflow resumed'
             : 'Workflow failed';
     const detail =
       readString(data, 'name') ||

@@ -154,6 +154,7 @@ host on the same database.
 | `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
+| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed with stored error evidence | `cursor`, `project`, `runId`, `status: "running"` |
 | `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
 | `ready` | The snapshot is complete | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
@@ -169,7 +170,7 @@ host on the same database.
 - **Delivery is at least once.** Replacing the open item by run ID is idempotent; do not
   dedupe all kinds by occurrence or revision, since usage-limit waits have no occurrence
   and their reset time can change at revision 1. Use `(runId, occurrence, revision)` only
-  for answerable pauses. Dedupe `terminal` on `(runId, cursor)`. `owner_lost` is a live
+  for answerable pauses. Dedupe `terminal` and `resumed` on `(runId, cursor)`. `owner_lost` is a live
   observation: it is not replayed, and the next connection reports it again if the owner
   is still gone.
 - **Resume where you stopped.** Persist the `cursor` of the last line you handled and
@@ -178,12 +179,19 @@ host on the same database.
   the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
   succeeds, so no line for well over 30 seconds means the stream is not reading. If the
   cursor is rejected, rerun without `--after`.
-- **`--label` filters `attention` and `resolved`.** `terminal` and `owner_lost` arrive for
+- **`--label` filters `attention` and `resolved`.** `terminal`, `resumed`, and `owner_lost` arrive for
   every run in scope. A label write that leaves an open item outside the filter sends
   `unmatched`, even for an item the stream never sent.
-- **What a line reports is the row when the stream read it.** The stream reads about once
+- **Queue items report the row when the stream read it.** The stream reads about once
   a second, and PostgreSQL wakes it on each commit. A pause opened and answered between
-  two reads may never appear as an item; the run's `terminal` line still does.
+  two reads may never appear as an item. `terminal` and `resumed` report committed
+  transitions in feed order, even if the run has since moved on. A failed run that resumes
+  emits `resumed` with `status: "running"`; the human output prints
+  `Run <id> resumed (running).` Reconnecting with `--after` the failure's cursor replays
+  that resume, so a stream consumer can clear the stale failure. A `resumed` line reports
+  a transition to running, not a guaranteed prior terminal state: resuming a paused or
+  stale-running run also emits it when a nonempty stored error is cleared. Ordinary
+  paused-run resumes without that error do not emit `resumed`.
 - **Owner liveness follows `workflow wait`.** A running run is watched until it pauses or
   ends, including while it reports stalled tool calls. Only a run whose recorded owner is
   on this host and user can be reported `owner_lost`; a run owned on another host is never

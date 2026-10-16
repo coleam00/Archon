@@ -72,7 +72,7 @@ Never route from labels or issue type alone. A bug can need planning; a feature 
 
 ## Labels
 
-The workflow derives the pack's own labels from your declared fields, exactly one state label and one type label per item, and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (use `archon forge repo.labels.list` with the qualified repository when `ARCHON_SDLC_FORGE=forge`, otherwise `gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
+The workflow derives the pack's own labels from your declared fields, exactly one state label and one type label per item, and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (use `archon forge repo.labels.list` with the qualified repository, through the argv in `$ARCHON_CLI_COMMAND`, or `gh label list` when the run selected `ARCHON_SDLC_FORGE=gh`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
 
 When the target is a tracker issue, declare `item` as its qualified repository (`repo: {host, path}`) and number so the workflow can address it; the workflow verifies that identity against the tracker before it writes. Otherwise declare `item: {repo: {host: "", path: ""}, number: 0}`.
 

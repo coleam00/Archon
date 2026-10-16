@@ -5,10 +5,20 @@ written when the draft opened; the base merge and correction rounds since then
 may have falsified claims in it, and a validation may have passed red it has to
 disclose. Your product is an accurate description, nothing else.
 
-The pull request: $INPUTS.pr. Its URL names the repository (`<owner>/<repo>`) and
-the number every command below uses.
+The pull request: $INPUTS.pr. Its URL names the repository (host and
+`<owner>/<repo>`) and the number every command below uses. Read and write it
+through the source this run selected, `$INPUTS.source`:
 
-1. Read the live description (`gh pr view <number> --repo <owner>/<repo> --json body,baseRefName`):
+- **`forge`:** the Archon CLI, whose argv is the JSON string array in
+  `$ARCHON_CLI_COMMAND`, run as `<argv...> forge <op> --json …`, with `<ref>` =
+  `{"repo":{"host":…,"path":…},"number":…}`. Read with `pr.view` and
+  `--data '{"selector":{"kind":"number","ref":<ref>}}'`; write with `pr.edit-body`
+  and `--data-file`, so the description never reaches a command line. A failed
+  operation is the answer: report it, and never repeat it through `gh`.
+- **`gh`:** the GitHub CLI, every command naming `--repo <host>/<owner>/<repo>`.
+
+1. Read the live description and base (`pr.view`, or
+   `gh pr view <number> --repo <host>/<owner>/<repo> --json body,baseRefName`):
    a person may have edited it since, and their edits stay. Then read the full
    final diff: fetch the base from the remote whose URL is the pull request's
    repository (`git remote -v`; it need not be named `origin`) and diff
@@ -32,9 +42,11 @@ the number every command below uses.
    the operator runs. Keep at most one "Left open" section, current, and
    remove it on an empty list. Change no other reference, and add none when the
    description links no issue.
-5. When something changed, write the complete description to
-   `$ARTIFACTS_DIR/pr-body-final.md` and apply it with
-   `gh pr edit <number> --repo <owner>/<repo> --body-file "$ARTIFACTS_DIR/pr-body-final.md"`.
+5. When something changed, apply the complete description. On `forge`, write
+   the request `{"ref":<ref>,"body":<description>}` to
+   `$ARTIFACTS_DIR/pr-body-final.json` and pass it with `--data-file`. On `gh`,
+   write the description to `$ARTIFACTS_DIR/pr-body-final.md` and apply it with
+   `gh pr edit <number> --repo <host>/<owner>/<repo> --body-file "$ARTIFACTS_DIR/pr-body-final.md"`.
    When nothing changed, edit nothing.
 
 Never modify files in the checkout, commit, push, change the pull request's draft
