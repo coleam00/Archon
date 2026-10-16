@@ -15,7 +15,10 @@ and leaves everything else to a person.
 - The issue the question concerns: its desired outcome, invariants and acceptance,
   which a person accepted when the work was admitted, and its dated "Current scope"
   sections, which override what they rule on. A choice the issue already makes is
-  settled, even when what it changes is itself risky.
+  settled, even when what it changes is itself risky, as long as it does not conflict
+  with a rule in the steering documents. The issue's requested outcome does not
+  override such a rule: where they conflict, the rule decides when it picks one of the
+  declared choices, and the question escalates when it does not.
 
 ## Answer
 

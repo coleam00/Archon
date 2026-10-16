@@ -10,7 +10,10 @@ risk classes named.
   desired outcome, invariants and acceptance, which a maintainer accepted when the
   work was admitted, and its dated "Current scope" sections, which override what they
   rule on. A choice the issue already makes is settled, even when what it changes is
-  itself risky.
+  itself risky, as long as it does not conflict with a rule in those documents. The
+  issue's requested outcome does not override such a rule (for example, a bug that was
+  never reproduced gets no speculative fix): where they conflict, the rule decides when
+  it picks one of the declared choices, and the question escalates when it does not.
 - **Answer** with one of the question's declared choices when one of those settles it,
   it is not risky, and confidence is not low. The ruling cites the passage it rests on.
 - **Risky, so a maintainer decides when no source settles it:** a new or changed
