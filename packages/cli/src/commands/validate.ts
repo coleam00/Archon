@@ -5,7 +5,10 @@
  */
 
 import { providerRegistry } from '@archon/providers';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  workflowLoadErrorName,
+} from '@archon/workflows/workflow-discovery';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -102,7 +105,7 @@ export async function validateWorkflowsCommand(
   for (const loadError of loadErrors) {
     results.push(
       makeWorkflowResult(
-        loadError.workflowName ?? loadError.filename.replace(/\.ya?ml$/, ''),
+        workflowLoadErrorName(loadError),
         [{ level: 'error', field: loadError.errorType, message: loadError.error }],
         loadError.filename
       )

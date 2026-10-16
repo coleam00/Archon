@@ -30,7 +30,10 @@ import {
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  workflowLoadErrorName,
+} from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type {
   WorkflowWithSource,
@@ -218,9 +221,7 @@ function findWorkflowLoadError(
   loadErrors: readonly WorkflowLoadError[],
   workflowName: string
 ): WorkflowLoadError | undefined {
-  return loadErrors.find(
-    error => (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) === workflowName
-  );
+  return loadErrors.find(error => workflowLoadErrorName(error) === workflowName);
 }
 
 async function createResumeRequest(

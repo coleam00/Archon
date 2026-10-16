@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { discoverWorkflows, liveSourceRoots } from './workflow-discovery';
+import { discoverWorkflows, liveSourceRoots, workflowLoadErrorName } from './workflow-discovery';
 import * as sourceIntegrity from './workflow-source';
 import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
@@ -13,6 +13,25 @@ import { isLoopGroupNode, isLoopNode } from './schemas';
 import type { DagNode } from './schemas';
 
 const tempDirectories: string[] = [];
+
+test('load-error lookup preserves installed paths and prefers parsed workflow names', () => {
+  for (const [filename, workflowName, expected] of [
+    ['release.yaml', undefined, 'release'],
+    ['release.yml', undefined, 'release'],
+    ['acme/kit/folder/release.yaml', undefined, 'acme/kit/folder/release'],
+    ['acme/kit/folder/release.yaml', 'acme/kit:deploy', 'acme/kit:deploy'],
+    ['different.yaml', 'deploy', 'deploy'],
+  ] as const) {
+    expect(
+      workflowLoadErrorName({
+        filename,
+        workflowName,
+        error: 'invalid workflow',
+        errorType: 'validation_error',
+      })
+    ).toBe(expected);
+  }
+});
 
 test('discovery reports an inaccessible global workflow scope but tolerates a missing one', async () => {
   const root = await mkdtemp(join(tmpdir(), 'archon-global-workflow-read-'));

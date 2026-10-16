@@ -88,6 +88,11 @@ import {
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
+/** Pre-parse pack errors retain their full path so they cannot alias a bare target. */
+export function workflowLoadErrorName(error: WorkflowLoadError): string {
+  return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

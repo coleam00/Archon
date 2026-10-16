@@ -48,12 +48,16 @@ import {
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'node:fs/promises';
-import { basename, join as joinPath, resolve as resolvePath } from 'path';
+import { join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
-import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  resolveWorkflowCommandContents,
+  workflowLoadErrorName,
+} from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
   capturedSourceReadGuard,
@@ -8177,12 +8181,7 @@ export async function resolveFanOutChildDefinition(
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
       const relevantError =
-        errors.find(error => {
-          const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
-          return error.workflowName !== undefined
-            ? error.workflowName === targetName
-            : filename === targetName;
-        }) ??
+        errors.find(error => workflowLoadErrorName(error) === targetName) ??
         errors.find(
           error =>
             error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)

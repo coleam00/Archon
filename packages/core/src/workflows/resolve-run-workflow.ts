@@ -11,7 +11,10 @@ import {
   type WorkflowCommandSurface,
 } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  workflowLoadErrorName,
+} from '@archon/workflows/workflow-discovery';
 import { toError } from '../utils/error';
 
 const log = createLogger('resolve-run-workflow');
@@ -20,9 +23,7 @@ function findWorkflowLoadError(
   loadErrors: readonly WorkflowLoadError[],
   workflowName: string
 ): WorkflowLoadError | undefined {
-  return loadErrors.find(
-    error => (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) === workflowName
-  );
+  return loadErrors.find(error => workflowLoadErrorName(error) === workflowName);
 }
 
 export async function resolveRunWorkflow(

@@ -418,7 +418,9 @@ mock.module('@archon/core/operations/workflow-adoption', () => ({
 const mockDiscoverWorkflowsWithConfig = mock<typeof WorkflowDiscovery.discoverWorkflowsWithConfig>(
   () => Promise.resolve({ workflows: [], errors: [] })
 );
+const realWorkflowDiscovery = await import('@archon/workflows/workflow-discovery');
 mock.module('@archon/workflows/workflow-discovery', () => ({
+  ...realWorkflowDiscovery,
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
 mock.module('@archon/workflows/fixture-runner', () => ({

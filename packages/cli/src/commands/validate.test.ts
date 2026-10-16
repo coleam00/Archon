@@ -9,7 +9,9 @@ const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>
   Promise.resolve({ workflows: [], errors: [] })
 );
 
+const realWorkflowDiscovery = await import('@archon/workflows/workflow-discovery');
 mock.module('@archon/workflows/workflow-discovery', () => ({
+  ...realWorkflowDiscovery,
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
 

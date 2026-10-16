@@ -42173,6 +42173,61 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
   });
 
+  it('does not attribute a malformed installed-pack filename to an unrelated fan-out target', async () => {
+    const pluginsDir = join(testDir, 'plugins');
+    const tree = join(pluginsDir, 'packs/acme/kit', 'a'.repeat(40));
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'kit',
+      description: 'test',
+      entrypoints: { block: 'folder/release.yaml' },
+    };
+    await mkdir(join(tree, 'folder'), { recursive: true });
+    await mkdir(join(pluginsDir, 'installed/acme/kit'), { recursive: true });
+    await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+    await writeFile(join(tree, 'folder/release.yaml'), 'nodes: [');
+    await writeFile(
+      join(pluginsDir, 'installed/acme/kit/receipt.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'acme/kit',
+        manifest,
+        commit: 'a'.repeat(40),
+        installedAt: new Date().toISOString(),
+      })
+    );
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowSourceRoots: {
+          ...sourceIntegrity.liveSourceRoots(testDir),
+          installed: { kind: 'receipts', pluginsDir },
+        },
+        workflowRun: makeWorkflowRun('unrelated-pack-error'),
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'release',
+              fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+      })
+    );
+    const failure = eventsOf(store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'fan'
+    );
+    expect(failure?.data.error).toContain("no workflow named 'release' was found");
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+  });
+
   it('refuses runtime composed fan-out resolution after the capture changes', async () => {
     await writeBlock(
       'name: compose-blk\ndescription: original block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo original"'

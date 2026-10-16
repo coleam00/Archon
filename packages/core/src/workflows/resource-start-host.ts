@@ -50,7 +50,10 @@ import {
   WORKFLOW_SOURCE_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  workflowLoadErrorName,
+} from '@archon/workflows/workflow-discovery';
 import {
   resolveDeclaredInputs,
   WorkflowInputContractError,
@@ -119,9 +122,7 @@ async function prepareBinding(
     );
     if (!workflow) {
       const loadError = discovered.errors.find(
-        error =>
-          (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) ===
-          intent.launch.workflowName
+        error => workflowLoadErrorName(error) === intent.launch.workflowName
       );
       throw new Error(
         loadError

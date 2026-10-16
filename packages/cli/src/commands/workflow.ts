@@ -128,7 +128,10 @@ import {
   startRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError,
 } from '@archon/core/services/run-live-owner';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  workflowLoadErrorName,
+} from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   disposeWorkflowSource,
@@ -2005,9 +2008,7 @@ async function runWorkflowWithOwnedSource(
 
   if (!workflow) {
     // Check if the requested workflow had a load error
-    const loadError = errors.find(
-      e => (e.workflowName ?? e.filename.replace(/\.ya?ml$/, '')) === workflowName
-    );
+    const loadError = errors.find(e => workflowLoadErrorName(e) === workflowName);
     if (loadError) {
       throw new Error(
         `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
