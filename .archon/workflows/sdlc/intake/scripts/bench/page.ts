@@ -2,8 +2,7 @@
  * The evaluation page for one batch: every row's versions side by side, each with
  * its verdict and route, the five typed fields, any close proposal or maintainer
  * recommendation with its links, cost and time, and the triage report. The operator
- * marks each version right, wrong or partly right, with a note. Where a mark overrides
- * the scorer's expected answer, the page says so beside the verdict.
+ * marks each version right, wrong or partly right, with a note.
  *
  * A small local server renders the page from the output directory on every request
  * and appends each mark to the directory's marks file, so marks tally across batches
@@ -56,7 +55,11 @@ function verdictCell(line: Line, row: Row, outDir: string, mark: MarkValue | und
       const checked = closeCheck(row, line);
       if (checked === 'false') parts.push('<div class="warn">Counts as a false close unless you mark it right.</div>');
       if (checked === 'pending' && mark !== 'right' && mark !== 'wrong') {
-        parts.push(`<div>A merged pull request on the base references this issue: ${(line.merged_on_base ?? []).map(link).join(', ')}. Mark whether it fixes the issue: the close bar stays pending until you mark it right or wrong.</div>`);
+        if (line.merged_on_base === undefined) {
+          parts.push('<div class="warn">Merged-base evidence was not collected. Rerun this live row to collect it, or judge the close yourself: the close bar stays pending until you mark it right or wrong.</div>');
+        } else {
+          parts.push(`<div>A merged pull request on the base references this issue: ${line.merged_on_base.map(link).join(', ')}. Mark whether it fixes the issue: the close bar stays pending until you mark it right or wrong.</div>`);
+        }
       }
     }
     if (verdict.blocked_reason != null) parts.push(`<div><b>Maintainer recommendation:</b> ${escape(verdict.blocked_reason)}</div>`);

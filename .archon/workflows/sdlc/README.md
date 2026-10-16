@@ -400,14 +400,17 @@ are the operator's and stay outside the pack and the repository.
   the pinned creation text, so lookups need no rewriting. Each live line records
   merged pull requests on the base that reference the original issue, for scoring.
   If that evidence is incomplete, the row does not run and its line says why;
-  reference histories exceeding the first 100 events are refused.
+  reference histories exceeding the first 100 events and shallow source checkouts
+  are refused. Unshallow the source checkout before rerunning. Older live lines
+  without collected evidence keep close proposals pending until rerun or marked
+  right or wrong.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
   operator marks each run right, wrong or partly right, and marks land in
   `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
-  expected answer for false closes and dispositions, not for `type`, and the page says
-  so beside each verdict it applies to.
+  expected answer for false closes and dispositions, not for `type`. The score uses
+  these marks; the page shows the selected mark and any note.
 - **Score.** `score` prints one column per version from each version's latest line
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by

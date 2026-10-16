@@ -95,11 +95,13 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
  * proposes no close, or the row was closed when the set was pinned (the duplicate,
  * fixed and not-planned bars reward that close), or the operator dispositioned it
  * closed. `pending` when a merged pull request on the batch base references the
- * issue, awaiting the operator's judgment of whether it fixes it;
+ * issue, awaiting the operator's judgment of whether it fixes it, or when a historical
+ * live line has no collected evidence;
  * otherwise `false`.
  */
 export function closeCheck(row: Row, line: Line): 'false' | 'pending' | null {
   if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group] || row.known.disposition?.contract === 'NO_ACTION') return null;
+  if (line.mode === 'live' && line.merged_on_base === undefined) return 'pending';
   return (line.merged_on_base ?? []).length > 0 ? 'pending' : 'false';
 }
 
@@ -158,7 +160,7 @@ export interface VersionScore {
   readonly outside: { readonly rows: number; readonly ran_agent: number };
   readonly bars: Readonly<Record<(typeof BARS)[number]['group'], MarkedBar>>;
   readonly false_closes: readonly string[];
-  /** Reference-only closes still awaiting a right or wrong operator mark. */
+  /** Closes with referenced PRs or uncollected evidence, awaiting a right or wrong operator mark. */
   readonly pending_closes: readonly string[];
   /** Judged lines on rows that were open, where a close can be false. */
   readonly open_rows: number;

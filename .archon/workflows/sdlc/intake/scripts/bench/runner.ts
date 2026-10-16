@@ -402,6 +402,9 @@ const MERGED_REFERENCES_QUERY = [
 /** Merged pull requests on the batch base that reference the original issue; the operator judges whether they fix it. */
 export function readMergedOnBase(repo: Repo, number: number, repoRoot: string, base: string): readonly string[] {
   const where = issueKey(repo, number);
+  const history = git('-C', repoRoot, 'rev-parse', '--is-shallow-repository');
+  if (history.code !== 0) throw new Error(`${where}: cannot check source history: ${history.stderr}`);
+  if (history.stdout !== 'false') throw new Error(`${where}: source history is shallow; run git fetch --unshallow in the source checkout before rerunning`);
   const slash = repo.path.indexOf('/');
   const result = Bun.spawnSync(
     [
@@ -447,7 +450,7 @@ export function readMergedOnBase(repo: Repo, number: number, repoRoot: string, b
       throw new Error(`${where} answered without a reference merge commit`);
     }
     const oid = commit.oid;
-    // A merge commit this clone lacks (a fork's or another repository's) cannot be in the base, which resolves here.
+    // With complete history, a merge commit absent here cannot be an ancestor of this base.
     if (git('-C', repoRoot, 'cat-file', '-e', `${oid}^{commit}`).code !== 0) continue;
     // 1 is "not an ancestor"; anything else leaves the answer unknown.
     const ancestry = git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base);
