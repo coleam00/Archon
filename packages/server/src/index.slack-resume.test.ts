@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
+import { rootLogger, setLogSink } from '@archon/paths/logger';
 import {
   clearPlatformPolicies,
   retainsWorkspace,
@@ -559,8 +560,15 @@ describe('Slack workflow resume composition', () => {
     },
     { GH_TOKEN: 'gh-only-identity', GITHUB_TOKEN: undefined, expected: undefined },
   ])('server PAT API auth uses the shared token order after activation: %j', async env => {
+    // Route the stub logger through a real Pino logger so the check reads the
+    // serialized lines, including `err` fields after the error serializer.
+    const lines: string[] = [];
+    setLogSink(line => lines.push(line));
+    const realLog = rootLogger.child({ module: 'server' }, { level: 'trace' });
     const logSpies = (['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const).map(level =>
-      spyOn(logger, level)
+      spyOn(logger, level).mockImplementation((...args: unknown[]) => {
+        (realLog[level] as (...logArgs: unknown[]) => void)(...args);
+      })
     );
     for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
       if (env[key] === undefined) delete process.env[key];
@@ -579,13 +587,13 @@ describe('Slack workflow resume composition', () => {
       } else {
         expect(mockGitHubAuth).not.toHaveBeenCalled();
       }
-      for (const log of logSpies) {
-        for (const token of [env.GH_TOKEN, env.GITHUB_TOKEN]) {
-          if (token) expect(JSON.stringify(log.mock.calls)).not.toContain(token);
-        }
+      expect(lines.length).toBeGreaterThan(0);
+      for (const token of [env.GH_TOKEN, env.GITHUB_TOKEN]) {
+        if (token) expect(lines.join('')).not.toContain(token);
       }
     } finally {
       for (const log of logSpies) log.mockRestore();
+      setLogSink(undefined);
       serveSpy.mockRestore();
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
