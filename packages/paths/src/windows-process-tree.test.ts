@@ -250,9 +250,7 @@ it.each(['listing command', 'listing shape', 'ancestry', 'survivors'] as const)(
         stderr: '',
       };
     });
-    const kill = spyOn(process, 'kill').mockImplementation(() => {
-      throw new Error('survivor kill denied');
-    });
+    const kill = spyOn(process, 'kill').mockReturnValue(true);
     const evidence = {
       'listing command': 'process listing denied',
       'listing shape': 'Windows process listing had an unexpected shape',
@@ -269,7 +267,7 @@ it.each(['listing command', 'listing shape', 'ancestry', 'survivors'] as const)(
       expect(error.message).toContain(evidence);
       expect(error.cause).toBeInstanceOf(Error);
       if (failure === 'listing command') expect(error.cause).toBe(listingError);
-      expect(kill).toHaveBeenCalled();
+      expect(kill).not.toHaveBeenCalled();
     } finally {
       commands.mockRestore();
       kill.mockRestore();
@@ -311,6 +309,38 @@ it('does not kill an initially ambiguous tree after root ownership is lost', asy
     ).rejects.toThrow('root ownership lost');
     expect(commands).toHaveBeenCalledTimes(1);
   } finally {
+    commands.mockRestore();
+  }
+});
+
+it('never signals survivors from a Windows process listing after taskkill', async () => {
+  let listings = 0;
+  const commands = spyOn(windowsProcessCommands, 'execFile').mockImplementation(async command => {
+    if (command === 'taskkill') return { stdout: 'SUCCESS', stderr: '' };
+    listings++;
+    return {
+      stdout: JSON.stringify({
+        takenAt: String(listings * 100),
+        rows:
+          listings === 1
+            ? [
+                { pid: 10, parentPid: 1, created: '10' },
+                { pid: 11, parentPid: 10, created: '20' },
+              ]
+            : [{ pid: 11, parentPid: 10, created: '20' }],
+      }),
+      stderr: '',
+    };
+  });
+  const kill = spyOn(process, 'kill').mockReturnValue(true);
+  try {
+    await expect(terminateWindowsProcessTree(10, () => {})).rejects.toThrow(
+      'processes 11 are still running'
+    );
+    expect(kill).not.toHaveBeenCalled();
+    expect(commands.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+  } finally {
+    kill.mockRestore();
     commands.mockRestore();
   }
 });

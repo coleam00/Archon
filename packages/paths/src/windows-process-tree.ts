@@ -23,7 +23,7 @@ export const windowsProcessCommands = {
 const COMMAND_TIMEOUT_MS = 30_000;
 
 /**
- * How many listings the stop takes after `taskkill`, killing what each one still shows,
+ * How many listings the stop takes after `taskkill` to confirm the tree exited,
  * before it reports that it could not confirm the tree exited. A bound on attempts, not on
  * time: running out never counts as proof that anything died.
  */
@@ -229,22 +229,12 @@ export async function terminateWindowsProcessTree(
       );
     }
 
+    // A listing does not pin a survivor's identity through PID reuse. Another
+    // PID-only kill could terminate a process outside the owned tree.
     let survivors: number[] = [];
     for (let round = 0; round < MAX_CONFIRM_ROUNDS; round++) {
       survivors = tree.observe(await listWindowsProcesses());
       if (survivors.length === 0) return;
-      // Every kill is followed by a listing, so the last round only lists.
-      if (round === MAX_CONFIRM_ROUNDS - 1) break;
-      for (const survivor of survivors) {
-        try {
-          process.kill(survivor);
-        } catch (error) {
-          // Gone already is what the next listing checks for; anything else is evidence.
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-            killFailures.push(error instanceof Error ? error.message : String(error));
-          }
-        }
-      }
     }
     throw new Error(
       `Could not confirm process tree ${String(pid)} exited: ` +

@@ -132,6 +132,12 @@ async function terminateDetachedProcessTree(
   }
   if (await waitUntilGone(() => processGroupExists(pid), TERMINATION_GRACE_MS)) return;
 
+  if (!ownsLiveLease() || !processExists(pid)) {
+    throw new Error(
+      `Detached workflow owner ${String(pid)} lost live ownership before escalation; process group cleanup is unproved`
+    );
+  }
+
   try {
     process.kill(-pid, 'SIGKILL');
   } catch (error) {

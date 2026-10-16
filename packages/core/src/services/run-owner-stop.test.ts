@@ -5,6 +5,7 @@ import {
   windowsProcessCommands,
 } from '@archon/paths/windows-process-tree';
 import { startRunLiveOwner } from './run-live-owner';
+import * as liveOwner from './run-live-owner';
 import { DetachedRunOwnerUnavailableError, requestDetachedRunStop } from './run-owner-stop';
 
 async function rejectionFrom(run: () => Promise<unknown>): Promise<unknown> {
@@ -123,3 +124,47 @@ describe('detached run control', () => {
     expect(error).toBeInstanceOf(DetachedRunOwnerUnavailableError);
   });
 });
+
+it
+  .skipIf(process.platform === 'win32')
+  .each(['lease lost', 'leader exited', 'owned leader'] as const)(
+  'checks owner identity before escalation: %s',
+  async state => {
+    const pid = 424242;
+    let terminated = false;
+    let killed = false;
+    let now = Date.now();
+    const clock = spyOn(Date, 'now').mockImplementation(() => now);
+    const lease = spyOn(liveOwner, 'requestRunLiveOwnerStop').mockResolvedValue({
+      pid,
+      commit: async () => {},
+      release: () => {},
+      isLive: () => !terminated || state !== 'lease lost',
+    });
+    const signal = spyOn(process, 'kill').mockImplementation((target, value) => {
+      if (target === -pid && value === 'SIGTERM') terminated = true;
+      else if (target === -pid && value === 'SIGKILL') killed = true;
+      else if (target === -pid && value === 0) {
+        if (killed) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+        now += 6000;
+      } else if (target === pid && value === 0) {
+        if (state === 'leader exited') throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      } else throw new Error('Unexpected process signal');
+      return true;
+    });
+    try {
+      const target = await requestDetachedRunStop('escalation');
+      if (state === 'owned leader') {
+        await target.stop();
+        expect(killed).toBe(true);
+      } else {
+        await expect(target.stop()).rejects.toThrow('before escalation');
+        expect(killed).toBe(false);
+      }
+    } finally {
+      signal.mockRestore();
+      lease.mockRestore();
+      clock.mockRestore();
+    }
+  }
+);
