@@ -604,55 +604,15 @@ describe('IsolationResolver', () => {
   });
 
   describe.each(['create', 'canonical'] as const)('unclassified failures at the %s gate', gate => {
-    test.each(['direct', 'context', 'isolation'] as const)(
-      'unclassified Git failures block with full evidence through %s wrappers',
-      async wrapper => {
-        const failure = new GitFailure(
-          'unclassified',
-          'git worktree add failed',
-          Object.assign(new Error('git exited'), {
-            code: 128,
-            stderr: 'permission denied\nsecond line: timeout cannot adopt',
-          })
-        );
-        const error =
-          wrapper === 'direct'
-            ? failure
-            : wrapper === 'context'
-              ? new Error(`Worktree creation failed: ${failure.message}`, { cause: failure })
-              : new IsolationFailure('unclassified', failure.message, failure);
-        if (gate === 'canonical') getCanonicalSpy.mockRejectedValueOnce(error);
-        const resolver = createResolver({
-          provider: {
-            ...makeMockProvider(),
-            create: async () => {
-              throw error;
-            },
-          },
-        });
-        const result = await resolver.resolve({
-          existingEnvId: null,
-          codebase: defaultCodebase,
-          platformType: 'web',
-          hints: { workflowType: 'issue', workflowId: '4271' },
-        });
-        expect(result.status).toBe('blocked');
-        if (result.status !== 'blocked') throw new Error('expected blocked isolation');
-        expect(result.reason).toBe('creation_failed');
-        expect(result.userMessage).toContain(error.message);
-        expect(result.userMessage).toContain('git worktree add');
-        expect(result.userMessage).toContain('exit code 128');
-        expect(result.userMessage).toContain(
-          'permission denied\nsecond line: timeout cannot adopt'
-        );
-        expect(result.userMessage).not.toContain('Timed out');
-      }
-    );
-
     test.each(['timeout', 'permission denied', 'cannot adopt'])(
-      'unclassified Docker failures and programming errors with %s crash with original evidence',
+      'unclassified git and Docker failures with %s crash with original evidence',
       async text => {
         for (const failure of [
+          new GitFailure(
+            'unclassified',
+            `git fetch failed: ${text}`,
+            Object.assign(new Error(text), { code: 128, stderr: text })
+          ),
           new IsolationFailure('unclassified', `docker failed: ${text}`),
           new TypeError(text),
         ]) {
