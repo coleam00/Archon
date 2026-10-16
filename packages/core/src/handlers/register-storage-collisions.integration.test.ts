@@ -548,7 +548,10 @@ describe('project storage collisions', () => {
       repository_url: 'https://github.com/acme/api',
     });
     const legacy = await gitCheckout(join(root, 'legacy'), 'git@github.com:acme/api.git');
-    await createCodebase({ name: 'Legacy', default_cwd: legacy });
+    await db.query('INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ($1, $2)', [
+      'Legacy',
+      legacy,
+    ]);
     await createCodebase({ name: 'Unavailable', default_cwd: join(root, 'missing') });
     const error = await findCodebaseByRepoUrl('https://github.com/acme/api').catch(
       (error: unknown) => error
@@ -596,6 +599,39 @@ describe('project storage collisions', () => {
         })
       ).rejects.toThrow(path);
       expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test.each([
+    ['sql', 'persisted'],
+    ['file', 'persisted'],
+    ['sql', 'legacy'],
+    ['file', 'legacy'],
+  ] as const)(
+    'direct %s URL-less registration refuses a %s remote owner',
+    async (backend, owner) => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const first = await store.createCodebase({
+        name: 'Original API',
+        default_cwd: await gitCheckout(join(root, 'first'), 'https://gitlab.example/acme/api'),
+        repository_url: owner === 'persisted' ? 'https://gitlab.example/acme/api' : undefined,
+      });
+      const second = await gitCheckout(join(root, 'second'), 'git@gitlab.example:acme/api.git');
+      const error = await store
+        .createCodebase({ name: 'Another API', default_cwd: second })
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ProjectRegistrationError);
+      expect(error instanceof Error && error.message).toContain(first.name);
+      expect(error instanceof Error && error.message).toContain(first.default_cwd);
+      expect(error instanceof Error && error.message).toContain('worktrees');
+      expect((await store.listCodebases()).map(row => row.id)).toEqual([first.id]);
+      expect((await store.findCodebaseByRepoUrl('https://gitlab.example/acme/api'))?.id).toBe(
+        first.id
+      );
     }
   );
 

@@ -78,38 +78,43 @@ export async function assertCheckoutRemote(path: string, remoteUrl: string): Pro
   }
 }
 
+async function readableRemoteIdentity(project: ProjectIdentity): Promise<string | null> {
+  if (project.kind === 'folder') return null;
+  try {
+    // Older chat registrations omitted repository_url even for remote-backed repos.
+    const url = project.repository_url || (await effectiveRegistrationUrl(project.default_cwd));
+    return url ? await remoteIdentity(url, project.default_cwd) : null;
+  } catch (error) {
+    // An unreadable checkout has unknown ownership; it must not veto other projects.
+    const unavailable = new ProjectRegistrationError(
+      `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
+        'Restore access to that checkout or repair it with /update-project. ' +
+        `Remote error: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+    createLogger('registration.remote').warn(
+      { err: unavailable },
+      'registration.lookup_legacy_unavailable'
+    );
+    return null;
+  }
+}
+
 export async function findRegisteredRemote<T extends ProjectIdentity>(
   registered: readonly T[],
   remoteUrl: string,
   cwd = process.cwd()
 ): Promise<T | null> {
-  const identity = await remoteIdentity(remoteUrl, cwd);
+  return findRemoteIdentityOwner(registered, await remoteIdentity(remoteUrl, cwd));
+}
+
+async function findRemoteIdentityOwner<T extends ProjectIdentity>(
+  registered: readonly T[],
+  identity: string
+): Promise<T | null> {
   const matches: T[] = [];
   for (const project of registered) {
-    if (project.kind === 'folder') continue;
-    try {
-      // Older chat registrations omitted repository_url even for remote-backed repos.
-      const registeredUrl =
-        project.repository_url || (await effectiveRegistrationUrl(project.default_cwd));
-      if (
-        registeredUrl &&
-        (await remoteIdentity(registeredUrl, project.default_cwd)) === identity
-      ) {
-        matches.push(project);
-      }
-    } catch (error) {
-      // An unreadable checkout has unknown ownership; it must not veto other projects.
-      const unavailable = new ProjectRegistrationError(
-        `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
-          'Restore access to that checkout or repair it with /update-project. ' +
-          `Remote error: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error }
-      );
-      createLogger('registration.remote').warn(
-        { err: unavailable },
-        'registration.lookup_legacy_unavailable'
-      );
-    }
+    if ((await readableRemoteIdentity(project)) === identity) matches.push(project);
   }
   if (matches.length > 1) {
     throw new ProjectRegistrationError(
@@ -123,9 +128,14 @@ export async function assertProjectRegistrationAvailable(
   project: ProjectIdentity,
   registered: readonly ProjectIdentity[]
 ): Promise<void> {
-  const remote = project.kind !== 'folder' && project.repository_url;
-  if (remote) {
-    const existing = await findRegisteredRemote(registered, remote, project.default_cwd);
+  const identity =
+    project.kind === 'folder'
+      ? null
+      : project.repository_url
+        ? await remoteIdentity(project.repository_url, project.default_cwd)
+        : await readableRemoteIdentity(project);
+  if (identity) {
+    const existing = await findRemoteIdentityOwner(registered, identity);
     if (existing) {
       throw new ProjectRegistrationError(
         `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +
