@@ -982,7 +982,10 @@ describe('IsolationResolver', () => {
       },
     };
 
-    function releaseHarness(destroy: () => Promise<DestroyResult>): {
+    function releaseHarness(
+      destroy: () => Promise<DestroyResult>,
+      storeOverrides?: Partial<IIsolationStore>
+    ): {
       resolver: IsolationResolver;
       destroyCalls: unknown[][];
       statusUpdates: unknown[][];
@@ -1004,6 +1007,7 @@ describe('IsolationResolver', () => {
           markWorktreeDestroyed: async observed => {
             statusUpdates.push([observed.id, 'destroyed']);
           },
+          ...storeOverrides,
         }),
       });
       return { resolver, destroyCalls, statusUpdates };
@@ -1039,6 +1043,52 @@ describe('IsolationResolver', () => {
       expect(destroyCalls).toEqual([
         ['/worktrees/issue-42', { canonicalRepoPath, creationId, force: true }],
       ]);
+      expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
+    });
+
+    for (const claim of ['same-row', 'other-workflow'] as const) {
+      test(`preserves a created checkout adopted by ${claim} before unlink rollback`, async () => {
+        const adopted = makeEnvRow({
+          ...(claim === 'other-workflow' ? { id: 'env-2', workflow_id: 'other' } : {}),
+          metadata: { worktree_registration_id: 'adopted-registration' },
+        });
+        const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+          listByCodebase: async () => [adopted],
+        });
+        mockWarn.mockClear();
+        await resolver.releaseUnlinked(created);
+        expect(destroyCalls).toEqual([]);
+        expect(statusUpdates).toEqual([]);
+        expect(mockWarn).toHaveBeenCalledWith(
+          { isolationEnvId: created.env.id, worktreePath: created.env.working_path },
+          'isolation_rollback_skipped_registered'
+        );
+      });
+    }
+
+    test('keeps a created checkout when its final registration lookup fails', async () => {
+      const failure = new Error('store unavailable');
+      const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+        listByCodebase: async () => {
+          throw failure;
+        },
+      });
+      mockCleanupError.mockClear();
+      await resolver.releaseUnlinked(created);
+      expect(destroyCalls).toEqual([]);
+      expect(statusUpdates).toEqual([]);
+      expect(mockCleanupError).toHaveBeenCalledWith(
+        { err: failure, isolationEnvId: created.env.id },
+        'isolation_rollback_failed'
+      );
+    });
+
+    test('removes a created checkout still held by its original registration', async () => {
+      const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+        listByCodebase: async () => [created.env],
+      });
+      await resolver.releaseUnlinked(created);
+      expect(destroyCalls).toHaveLength(1);
       expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
     });
 

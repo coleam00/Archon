@@ -14,6 +14,7 @@ import {
   getCanonicalRepoPath,
   findWorktreeByBranch,
   toBranchName,
+  isSameWorktreePath,
   isAncestorOf,
   verifyWorktreeOwnership,
   CanonicalRepoPathUnavailableError,
@@ -32,7 +33,11 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
-import { WorktreeRegistrationChangedError, worktreeRegistrationMetadata } from './types';
+import {
+  WorktreeRegistrationChangedError,
+  sameWorktreeRegistration,
+  worktreeRegistrationMetadata,
+} from './types';
 import {
   recordWorktreeAdoption,
   registerWorktree,
@@ -612,6 +617,30 @@ export class IsolationResolver {
     const { env, method } = resolution;
     if (method.type !== 'created') return;
 
+    try {
+      const active = await this.store.listByCodebase(env.codebase_id);
+      if (
+        active.some(
+          row =>
+            isSameWorktreePath(row.working_path, env.working_path) &&
+            !sameWorktreeRegistration(row, env)
+        )
+      ) {
+        getLog().warn(
+          { isolationEnvId: env.id, worktreePath: env.working_path },
+          'isolation_rollback_skipped_registered'
+        );
+        return;
+      }
+    } catch (error) {
+      getLog().error(
+        { err: error instanceof Error ? error : new Error(String(error)), isolationEnvId: env.id },
+        'isolation_rollback_failed'
+      );
+      return;
+    }
+    // As with failed-insert rollback, adoption after this final read and before
+    // removal remains possible; no cross-provider ownership claim is held.
     const removed = await removeCreatedWorktree(this.provider, env.working_path, {
       canonicalRepoPath: method.canonicalRepoPath,
       creationId: method.creationId,

@@ -392,6 +392,37 @@ test('a worktree whose record cannot be written is removed and the insert error 
 });
 
 for (const persistence of ['sql', 'file'] as const) {
+  test(`${persistence}: unlink rollback preserves a concurrently adopted checkout and its work`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation.createIsolationStore()
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const resolver = new IsolationResolver({ store, provider: getIsolationProvider() });
+    const created = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+      hints: { workflowType: 'task', workflowId: 'unlink-adoption' },
+      platformType: 'cli',
+    });
+    if (created.status !== 'resolved' || created.method.type !== 'created') {
+      throw new Error('expected created checkout');
+    }
+    const adopted = await recordWorktreeAdoption(store, created.env, repo);
+    const work = join(adopted.working_path, 'in-progress.txt');
+    await writeFile(work, 'keep this work');
+    events.length = 0;
+    await resolver.releaseUnlinked(created);
+    expect(await store.getById(adopted.id)).toEqual(adopted);
+    expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+      toWorktreePath(adopted.working_path)
+    );
+    expect(await Bun.file(work).text()).toBe('keep this work');
+    expect(events).toContainEqual(
+      expect.objectContaining({ msg: 'isolation_rollback_skipped_registered' })
+    );
+  });
+
   for (const staleKind of [
     'missing',
     'null',
