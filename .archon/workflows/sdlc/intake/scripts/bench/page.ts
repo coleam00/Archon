@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BatchChecks, Line } from './runner.ts';
-import { MARKS, type MarkValue, judgedBy, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
+import { MARKS, type MarkValue, closeCheck, judgedBy, latestByVersion, readChecks, readMarks, recordMark } from './score.ts';
 import { type BenchSet, type Row, batchRows } from './set.ts';
 
 function escape(text: string): string {
@@ -34,13 +34,13 @@ function known(row: Row): string {
     row.known.type === undefined ? '' : `human type <b>${escape(row.known.type)}</b>`,
     row.known.disposition === undefined
       ? ''
-      : `dispositioned <b>${escape(row.known.disposition.contract)}${row.known.disposition.route === undefined ? '' : `/${escape(row.known.disposition.route)}`}</b>${row.known.disposition.note === undefined ? '' : `: ${escape(row.known.disposition.note)}`}`,
+      : `dispositioned <b>${escape(row.known.disposition.contract)}${row.known.disposition.route === undefined ? '' : `/${escape(row.known.disposition.route)}`}</b>${row.known.disposition.note === undefined ? '' : `: ${escape(row.known.disposition.note)}`} (a right or wrong mark overrides it)`,
     row.body_from === 'current' ? '<i>creation body unrecoverable; the current body stood in</i>' : '',
   ];
   return facts.filter(fact => fact !== '').join(' · ');
 }
 
-function verdictCell(line: Line, outDir: string): string {
+function verdictCell(line: Line, row: Row, outDir: string, mark: MarkValue | undefined): string {
   const parts: string[] = [`<div>judged by <b>${escape(judgedBy(line))}</b></div>`];
   if (line.path !== null) parts.push(`<div>intake path <b>${escape(line.path)}</b></div>`);
   const { verdict } = line;
@@ -52,6 +52,15 @@ function verdictCell(line: Line, outDir: string): string {
       const { closure } = verdict;
       const target = closure == null ? '' : `: ${closure.kind === 'duplicate' ? 'duplicate of' : 'delivered by'} ${link(closure.url)}`;
       parts.push(`<div><b>Proposes close</b> without a person${target}</div>`);
+      const checked = closeCheck(row, line, mark);
+      if (checked === 'false') parts.push('<div class="warn">Counts as a false close unless you mark it right.</div>');
+      if (checked === 'pending') {
+        if (line.merged_on_base === undefined) {
+          parts.push('<div class="warn">Merged-base evidence was not collected. Rerun this live row to collect it, or judge the close yourself: the close bar stays pending until you mark it right or wrong.</div>');
+        } else {
+          parts.push(`<div>A merged pull request on the base references this issue: ${line.merged_on_base.map(link).join(', ')}. Mark whether it fixes the issue: the close bar stays pending until you mark it right or wrong.</div>`);
+        }
+      }
     }
     if (verdict.blocked_reason != null) parts.push(`<div><b>Maintainer recommendation:</b> ${escape(verdict.blocked_reason)}</div>`);
     if ((verdict.blocked_by ?? []).length > 0) parts.push(`<div>waits on ${(verdict.blocked_by ?? []).map(link).join(', ')}</div>`);
@@ -123,7 +132,7 @@ export function renderPage(set: BenchSet, outDir: string, batch: number): string
       const line = lines.get(label)?.get(row.id);
       if (line === undefined) return '<td><i>not run</i></td>';
       const mark = line.run_id === null ? undefined : marks.get(line.run_id);
-      return `<td>${verdictCell(line, outDir)}${markable(line, checks) ? markForm(line, mark) : '<div class="warn">Batch run failed a hard check: nothing to mark.</div>'}</td>`;
+      return `<td>${verdictCell(line, row, outDir, mark?.mark)}${markable(line, checks) ? markForm(line, mark) : '<div class="warn">Batch run failed a hard check: nothing to mark.</div>'}</td>`;
     });
     return `<section>
 <h2>${escape(row.id)}: ${escape(row.title)}</h2>

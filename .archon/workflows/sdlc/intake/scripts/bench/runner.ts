@@ -388,6 +388,79 @@ export function postedComments(before: Snapshot, after: Snapshot): string[] {
   });
 }
 
+// --- merged references on the base ------------------------------------------------
+
+const MERGED_REFERENCES_QUERY = [
+  'query($owner: String!, $name: String!, $number: Int!) {',
+  'repository(owner: $owner, name: $name) { issue(number: $number) {',
+  'refs: timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) { pageInfo { hasNextPage } nodes {',
+  '... on CrossReferencedEvent { source { __typename ... on PullRequest { url merged mergeCommit { oid } } } }',
+  '... on ConnectedEvent { subject { __typename ... on PullRequest { url merged mergeCommit { oid } } } } } }',
+  '} } }',
+].join(' ');
+
+/** Merged pull requests on the batch base that reference the original issue; the operator judges whether they fix it. */
+export function readMergedOnBase(repo: Repo, number: number, repoRoot: string, base: string): readonly string[] {
+  const where = issueKey(repo, number);
+  const slash = repo.path.indexOf('/');
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      'graphql',
+      '--hostname',
+      repo.host,
+      '-f',
+      `query=${MERGED_REFERENCES_QUERY}`,
+      '-f',
+      `owner=${repo.path.slice(0, slash)}`,
+      '-f',
+      `name=${repo.path.slice(slash + 1)}`,
+      '-F',
+      `number=${String(number)}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) throw new Error(`reading ${where} merged references failed: ${result.stderr.toString().trim()}`);
+  const answer: unknown = JSON.parse(result.stdout.toString());
+  if (isObject(answer) && 'errors' in answer && (!Array.isArray(answer.errors) || answer.errors.length > 0)) {
+    throw new Error(`${where} GraphQL read failed: ${JSON.stringify(answer.errors)}`);
+  }
+  const data = isObject(answer) && isObject(answer.data) ? answer.data : {};
+  const issue = isObject(data.repository) && isObject(data.repository.issue) ? data.repository.issue : {};
+  const refs = issue.refs;
+  if (!isObject(refs) || !Array.isArray(refs.nodes) || !isObject(refs.pageInfo) || typeof refs.pageInfo.hasNextPage !== 'boolean') {
+    throw new Error(`${where} answered with incomplete reference history`);
+  }
+  if (refs.pageInfo.hasNextPage) throw new Error(`${where} has more than 100 cross-references; the bench reads only the first page`);
+  if (refs.nodes.length === 0) return [];
+  const history = git('-C', repoRoot, 'rev-parse', '--is-shallow-repository');
+  if (history.code !== 0) throw new Error(`${where}: cannot check source history: ${history.stderr}`);
+  if (history.stdout !== 'false') throw new Error(`${where}: source history is shallow; run git fetch --unshallow in the source checkout before rerunning`);
+  const merged = new Set<string>();
+  for (const node of refs.nodes) {
+    const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;
+    if (!isObject(pr) || typeof pr.__typename !== 'string') throw new Error(`${where} answered with an incomplete reference event`);
+    if (pr.__typename !== 'PullRequest') continue;
+    if (typeof pr.merged !== 'boolean' || typeof pr.url !== 'string') {
+      throw new Error(`${where} answered with an incomplete pull request reference`);
+    }
+    if (!pr.merged) continue;
+    const commit = pr.mergeCommit;
+    if (!isObject(commit) || typeof commit.oid !== 'string') {
+      throw new Error(`${where} answered without a reference merge commit`);
+    }
+    const oid = commit.oid;
+    // With complete history, a merge commit absent here cannot be an ancestor of this base.
+    if (git('-C', repoRoot, 'cat-file', '-e', `${oid}^{commit}`).code !== 0) continue;
+    // 1 is "not an ancestor"; anything else leaves the answer unknown.
+    const ancestry = git('-C', repoRoot, 'merge-base', '--is-ancestor', oid, base);
+    if (ancestry.code !== 0 && ancestry.code !== 1) throw new Error(`${where}: is ${pr.url} on the base? git merge-base failed: ${ancestry.stderr}`);
+    if (ancestry.code === 0) merged.add(pr.url);
+  }
+  return [...merged];
+}
+
 // --- one run, one line --------------------------------------------------------------
 
 /** Triage's judgement, as every bench path reports it. A field the path cannot see is absent. */
@@ -442,6 +515,8 @@ export interface Line {
   readonly duration_ms: number | null;
   /** Commands, fetches and searches that looked up the issue being judged. */
   readonly leak: readonly string[];
+  /** Merged pull requests on the batch base that reference the original issue; absent on older lines. */
+  readonly merged_on_base?: readonly string[];
   /** The run's triage report, copied under the output directory. */
   readonly report: string | null;
 }
@@ -588,6 +663,8 @@ export interface BatchContext {
   readonly batchRun: string;
   readonly base: string;
   readonly outDir: string;
+  readonly mergedOnBase: ReadonlyMap<number, readonly string[]>;
+  readonly unread: ReadonlyMap<number, string>;
 }
 
 function inputsFor(run: RowRun, set: BenchSet): Record<string, string> {
@@ -639,6 +716,8 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
   let detail: RunDetail | undefined;
   let decided: { path: IntakePath | null; verdict: Verdict | null } = { path: null, verdict: null };
   try {
+    const unread = context.unread.get(row.number);
+    if (unread !== undefined) throw new Error(unread);
     runId = await launch({
       workflow: WORKFLOWS[workflow],
       cwd: run.cwd,
@@ -717,6 +796,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<Line> 
     cost_usd: detail === undefined ? null : runCost(nodes),
     duration_ms: Number.isFinite(ended) ? ended : null,
     leak,
+    merged_on_base: context.mergedOnBase.get(row.number) ?? [],
     report,
   };
   appendLine(join(context.outDir, SAMPLES_FILE), line);
@@ -754,7 +834,7 @@ export type CheckName = keyof BatchChecks['checks'];
 const check = (problems: readonly string[]): Check => ({ ok: problems.length === 0, problems });
 
 export function batchChecks(
-  context: BatchContext,
+  context: Pick<BatchContext, 'batch' | 'batchRun'>,
   mode: 'eval' | 'live',
   labels: readonly string[],
   lines: readonly Line[],
@@ -823,7 +903,19 @@ export interface BatchOptions {
 export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; checks: BatchChecks }> {
   const { set, rows, outDir, live } = options;
   const stamp = new Date().toISOString().replace(/[-:.]/g, '');
-  const context: BatchContext = { set, batch: options.batch, batchRun: `${String(options.batch)}-${stamp}`, base: options.base, outDir };
+  const mergedOnBase = new Map<number, readonly string[]>();
+  const unread = new Map<number, string>();
+  if (live !== undefined) {
+    for (const row of rows) {
+      if (mergedOnBase.has(row.number) || unread.has(row.number)) continue;
+      try {
+        mergedOnBase.set(row.number, readMergedOnBase(set.repo, row.number, options.repoRoot, options.base));
+      } catch (error) {
+        unread.set(row.number, error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+  const context: BatchContext = { set, batch: options.batch, batchRun: `${String(options.batch)}-${stamp}`, base: options.base, outDir, mergedOnBase, unread };
   const runs = options.versions.map(({ resolved, checkout }) =>
     rows.map((row): RowRun => {
       const cwd = checkout(row);
