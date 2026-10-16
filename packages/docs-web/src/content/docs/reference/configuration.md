@@ -494,8 +494,10 @@ run output; use the project working directory for changes that should pass throu
 overlay diff and write-back gate.
 
 On rootful Linux daemons, artifact files are initially owned by the container's root user.
-Archon restores host ownership when suspending or destroying the container. Older resumed
-runs whose metadata predates the artifacts bind retain container-local artifact output;
+Archon attempts to restore host ownership when suspending or destroying the container.
+This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed`
+and do not stop suspension or destruction. Older resumed runs whose metadata predates the
+artifacts bind retain container-local artifact output;
 Archon logs `isolation.container_resume_without_artifacts_mount` when recreating them.
 
 ## Environment Variables
