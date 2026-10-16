@@ -650,6 +650,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   getById: mock((): Promise<null> => Promise.resolve(null)),
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
+  listActive: mock(() => Promise.resolve([])),
   // Reached only by the --resume path. mock.module() MERGES over the real
   // module, so omitting this would leave the REAL implementation in place and
   // open a live SQLite handle rather than failing loudly (#2240).
