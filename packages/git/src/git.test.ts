@@ -3455,7 +3455,7 @@ branch refs/heads/feature/auth
           'git clone failed',
           Object.assign(new Error('git exited'), {
             code: 128,
-            stderr: `fatal: credential ${token} rejected: The requested URL returned error: 403${ending}`,
+            stderr: `remote: credential ${token} rejected\nfatal: unable to access 'https://gitlab.example.test/group/project.git/': The requested URL returned error: 403${ending}`,
           })
         );
         execSpy.mockRejectedValue(failure);
@@ -3469,7 +3469,10 @@ branch refs/heads/feature/auth
 
         expect(result).toEqual({
           ok: false,
-          error: { code: 'permission_denied', path: '/tmp/target' },
+          error: {
+            code: 'permission_denied',
+            path: 'https://gitlab.example.test/group/project.git',
+          },
         });
         expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
         expect(JSON.stringify(mockLogger.error.mock.calls)).toContain(
@@ -3479,15 +3482,35 @@ branch refs/heads/feature/auth
       }
     );
 
+    // stderr captured from git 2.49.0 against a local HTTP server and a full volume.
     test.each([
-      ['401', 'permission_denied'],
-      ['404', 'not_a_repo'],
-    ] as const)('maps HTTP %s clone stderr to %s guidance', async (status, code) => {
+      [
+        'HTTP 404',
+        "Cloning into '/tmp/target'...\nremote: nope\nfatal: repository 'https://gitlab.example.test/group/project.git/' not found\n",
+        { code: 'not_a_repo', path: 'https://gitlab.example.test/group/project.git' },
+      ],
+      [
+        'HTTP 401 without credentials',
+        "Cloning into '/tmp/target'...\nfatal: could not read Username for 'https://gitlab.example.test': terminal prompts disabled\n",
+        { code: 'permission_denied', path: 'https://gitlab.example.test/group/project.git' },
+      ],
+      [
+        'HTTP 401 with rejected credentials',
+        "Cloning into '/tmp/target'...\nremote: auth\nfatal: Authentication failed for 'https://gitlab.example.test/group/project.git/'\n",
+        { code: 'permission_denied', path: 'https://gitlab.example.test/group/project.git' },
+      ],
+      [
+        'a full disk',
+        'fatal: write error: No space left on device\nfatal: fetch-pack: invalid index-pack output\n',
+        { code: 'no_space', path: '/tmp/target' },
+      ],
+    ] as const)('maps clone stderr for %s to its guidance', async (_cause, stderr, error) => {
       execSpy.mockRejectedValue(
-        Object.assign(new Error('git clone failed'), {
-          code: 128,
-          stderr: `remote: denied\nfatal: unable to access 'https://gitlab.example.test/group/project.git/': The requested URL returned error: ${status}\n`,
-        })
+        new git.GitFailure(
+          'unclassified',
+          'git clone failed',
+          Object.assign(new Error('git exited'), { code: 128, stderr })
+        )
       );
 
       const result = await git.cloneRepository(
@@ -3495,7 +3518,7 @@ branch refs/heads/feature/auth
         repo('/tmp/target')
       );
 
-      expect(result).toEqual({ ok: false, error: { code, path: '/tmp/target' } });
+      expect(result).toEqual({ ok: false, error });
     });
 
     test.each([
@@ -3503,6 +3526,10 @@ branch refs/heads/feature/auth
       ['fatal: Authentication failed: HTTP 403', 'git clone failed'],
       ['fatal: The requested URL returned error: 4030\n', 'git clone failed'],
       ['fatal: The requested URL returned error: 500\n', 'git clone failed'],
+      [
+        "fatal: unable to access 'https://example.test/no space/not found/': Could not resolve host: example.test\n",
+        'git clone failed',
+      ],
     ])('keeps other clone failures unclassified: %s', async (stderr, message) => {
       execSpy.mockRejectedValue(Object.assign(new Error(message), { code: 128, stderr }));
 
@@ -3676,6 +3703,44 @@ branch refs/heads/feature/auth
       expect(await git.syncRepository(repo('/workspace/repo'), branch('main'))).toEqual({
         ok: false,
         error: { code: 'not_a_repo', path: '/workspace/repo' },
+      });
+    });
+
+    test.each([
+      [
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+        { code: 'permission_denied', path: '/workspace/repo' },
+      ],
+      [
+        'fatal: write error: No space left on device\n',
+        { code: 'no_space', path: '/workspace/repo' },
+      ],
+    ] as const)('maps fetch stderr %j to its guidance', async (stderr, error) => {
+      execSpy.mockRejectedValue(
+        Object.assign(new Error('git fetch failed'), { code: 128, stderr })
+      );
+
+      expect(await git.syncRepository(repo('/workspace/repo'), branch('main'))).toEqual({
+        ok: false,
+        error,
+      });
+    });
+
+    test('returns branch_not_found when the remote branch is missing at reset', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('reset')) {
+          throw Object.assign(new Error('git reset failed'), {
+            code: 128,
+            stderr:
+              "fatal: ambiguous argument 'origin/nonexistent': unknown revision or path not in the working tree.\nUse '--' to separate paths from revisions, like this:\n",
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      expect(await git.syncRepository(repo('/workspace/repo'), branch('nonexistent'))).toEqual({
+        ok: false,
+        error: { code: 'branch_not_found', branch: 'nonexistent' },
       });
     });
 

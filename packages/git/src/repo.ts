@@ -479,6 +479,29 @@ export function validateCloneUrl(
   return { ok: true, url: parsed.href, httpUrl: parsed };
 }
 
+/**
+ * Git reports these causes only as stderr lines, not exit codes. Matching whole
+ * fatal lines keeps a URL, path, or branch name from changing the result. The
+ * cause only chooses the guidance a GitResult reports; it never decides retry.
+ */
+function reportedCause(error: unknown): 'missing' | 'denied' | 'no_space' | undefined {
+  const stderr =
+    error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
+      ? error.stderr
+      : '';
+  if (/^fatal: repository '.*' not found\r?$/m.test(stderr)) return 'missing';
+  if (
+    /^fatal: (?:Authentication failed for|could not read (?:Username|Password) for) '/m.test(
+      stderr
+    ) ||
+    /^fatal: Could not read from remote repository\.\r?$/m.test(stderr) ||
+    /^fatal: unable to access '.*': The requested URL returned error: 403\r?$/m.test(stderr)
+  )
+    return 'denied';
+  if (/: No space left on device\r?$/m.test(stderr)) return 'no_space';
+  return undefined;
+}
+
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
@@ -515,14 +538,11 @@ export async function cloneRepository(
       { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
       'clone_repository_failed'
     );
-    // Git exposes the HTTP status only in stderr, not its process exit code.
-    // Limit this diagnostic mapping to clone results; isolation kinds stay structured.
-    const httpStatus =
-      parsedUrl && error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
-        ? /\bThe requested URL returned error: (401|403|404)(?:\r?\n|$)/.exec(error.stderr)?.[1]
-        : undefined;
-    if (httpStatus === '404') return { ok: false, error: { code: 'not_a_repo', path: targetPath } };
-    if (httpStatus) return { ok: false, error: { code: 'permission_denied', path: targetPath } };
+    const cause = reportedCause(error);
+    if (cause === 'missing') return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
+    if (cause === 'denied')
+      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
+    if (cause === 'no_space') return { ok: false, error: { code: 'no_space', path: targetPath } };
     return { ok: false, error: { code: 'unknown', message: sanitizedMessage } };
   }
 }
@@ -550,6 +570,10 @@ export async function syncRepository(
     if (error instanceof GitFailure && error.kind === 'not_repository') {
       return { ok: false, error: { code: 'not_a_repo', path: repoPath } };
     }
+    const cause = reportedCause(error);
+    if (cause === 'denied')
+      return { ok: false, error: { code: 'permission_denied', path: repoPath } };
+    if (cause === 'no_space') return { ok: false, error: { code: 'no_space', path: repoPath } };
     return { ok: false, error: { code: 'unknown', message: `Fetch failed: ${err.message}` } };
   }
 
@@ -560,6 +584,10 @@ export async function syncRepository(
     });
   } catch (error) {
     const err = error as Error;
+    const stderr = 'stderr' in err && typeof err.stderr === 'string' ? err.stderr : '';
+    if (stderr.startsWith(`fatal: ambiguous argument '${remote}/${branch}': unknown revision`)) {
+      return { ok: false, error: { code: 'branch_not_found', branch } };
+    }
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_reset_failed');
     return { ok: false, error: { code: 'unknown', message: `Reset failed: ${err.message}` } };
   }
