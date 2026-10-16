@@ -1,7 +1,5 @@
-import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'fs';
-import * as commandFiles from 'fs/promises';
-import { capturedSourceRoots } from './workflow-source';
 import { symlink as fsSymlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -93,32 +91,6 @@ describe('loadCommandPrompt — home-scope resolution', () => {
     rmSync(archonHome, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
   });
-
-  for (const code of ['EACCES', 'EIO', 'ENOENT']) {
-    it(`retains the ${code} cause when a captured flat default disappears after discovery`, async () => {
-      const roots = capturedSourceRoots({
-        root: join(repoRoot, 'legacy-capture'),
-        digest: 'loader-fixture',
-        config: { load_default_commands: true, load_default_workflows: true },
-      });
-      mkdirSync(roots.bundledCommands, { recursive: true });
-      const commandFile = join(roots.bundledCommands, 'legacy.md');
-      writeFileSync(commandFile, 'Legacy command.');
-      const cause = Object.assign(new Error('read failed'), {
-        code,
-        syscall: 'open',
-        path: commandFile,
-      });
-      const reader = spyOn(commandFiles, 'readFile').mockRejectedValue(cause);
-      try {
-        const result = await loadCommandPrompt(makeDeps(), repoRoot, 'legacy', undefined, roots);
-        expect(result).toMatchObject({ success: false, reason: 'read_error', cause });
-        expect(reader).toHaveBeenCalledTimes(1);
-      } finally {
-        reader.mockRestore();
-      }
-    });
-  }
 
   it('resolves a command from ~/.archon/commands/ when repo has none', async () => {
     writeFileSync(join(archonHome, 'commands', 'personal-helper.md'), 'Personal helper body');

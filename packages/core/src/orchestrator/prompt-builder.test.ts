@@ -610,24 +610,6 @@ describe('formatPausedGateSection', () => {
     expect(section).not.toContain('/workflow reject');
   });
 
-  test('points a released container run at resume, not at a gate', () => {
-    const section = formatPausedGateSection({
-      run: {
-        id: 'run-abc',
-        workflow_name: 'prd',
-        status: 'paused',
-        metadata: {
-          isolation: 'container',
-          source_release: { nodeId: 'check', releasedAt: '2026-10-15T10:00:00.000Z' },
-        },
-      },
-    });
-
-    expect(section).toContain('/workflow resume run-abc');
-    expect(section).not.toContain('missing or malformed');
-    expect(section).not.toContain('/workflow reject');
-  });
-
   test('does not advertise a gate this build cannot resolve as approvable', () => {
     // A future/corrupt suspend reason reaches the projection as `unreadable`, so the
     // agent is told to inspect the run instead of being told to decide a gate

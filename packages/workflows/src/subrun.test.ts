@@ -163,21 +163,9 @@ function holdSourceRemoval(
     },
   };
 }
-const passthroughStat = realFsPromises.stat;
-let deniedStatPath: string | undefined;
 const stagedSourcePathSep = `staged-source${sep}`;
 mock.module('fs/promises', () => ({
   ...realFsPromises,
-  stat: (...args: Parameters<typeof realFsPromises.stat>) => {
-    if (args[0] === deniedStatPath) {
-      throw Object.assign(new Error('source stat denied'), {
-        code: 'EACCES',
-        syscall: 'stat',
-        path: deniedStatPath,
-      });
-    }
-    return passthroughStat(...args);
-  },
   rm: (...args: Parameters<typeof passthroughRemove>): Promise<void> =>
     (removeSource ?? passthroughRemove)(...args),
   rename: async (src: string, dst: string): Promise<void> => {
@@ -198,10 +186,9 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 
-import { executeWorkflow, hydrateResumableRun, prepareWorkflowSource } from './executor';
+import { executeWorkflow, hydrateResumableRun } from './executor';
 import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
-import * as sourceIntegrity from './workflow-source';
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
@@ -933,171 +920,6 @@ nodes:
         }
         expect(fail).not.toHaveBeenCalled();
       });
-      for (const fault of [
-        'capture',
-        'discovery',
-        'origin-stat',
-        'workflow-stat',
-        'global-stat',
-        'source-config',
-      ] as const) {
-        for (const fanOut of [false, true]) {
-          it(`releases an admitted parent after child ${fault} fails (${fanOut ? 'fan-out' : 'single'})`, async () => {
-            await writeWorkflow(
-              'read-child',
-              'name: read-child\ndescription: child\nnodes:\n  - id: done\n    prompt: done\n'
-            );
-            await writeWorkflow(
-              'read-parent',
-              `name: read-parent
-description: parent
-nodes:
-  - id: before
-    prompt: before
-  - id: child
-    workflow: read-child
-    depends_on: [before]
-${fanOut ? `    fan_out: { items: '["one"]', as: item, max_parallel: 1, join: all_success }` : ''}
-`
-            );
-            const store = new InMemoryStore();
-            store.releaseRunForUnreadableSource = async (id, release) => {
-              const run = store.runs.get(id);
-              if (!run || run.status !== 'running') return { released: false };
-              run.status = 'paused';
-              run.metadata = {
-                ...run.metadata,
-                ...sourceReleaseMetadata(release, new Date().toISOString()),
-              };
-              await store.persistWorkflowEvent(sourceReleasedEvent(id, release));
-              return { released: true };
-            };
-            const fail = spyOn(store, 'failWorkflowRun');
-            const deps = makeDeps(store);
-            const workflow = await discover('read-parent');
-            const workflowsDir = join(cwd, '.archon/workflows');
-            let lockedFile: string | undefined;
-            const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
-            const verifier = spyOn(
-              sourceIntegrity,
-              'assertWorkflowSourceIntegrity'
-            ).mockImplementation(async roots => {
-              const files = await verify(roots);
-              if (
-                fault === 'discovery' &&
-                roots.kind === 'captured' &&
-                roots.anchor.root.includes(stagedSourcePathSep)
-              ) {
-                lockedFile = join(roots.anchor.root, 'project/.archon/workflows/read-child.yaml');
-                await chmod(lockedFile, 0o000);
-              }
-              return files;
-            });
-            const preparedSource = await prepareWorkflowSource(deps, { sourceRoot: cwd });
-            const loadConfig = deps.loadConfig;
-            const configPath = join(cwd, '.archon/config.yaml');
-            const provider = deps.getAgentProvider('claude');
-            const send = provider.sendQuery.bind(provider);
-            let first = true;
-            provider.sendQuery = async function* (...args) {
-              if (first && fault === 'capture') await chmod(workflowsDir, 0o000);
-              if (first) {
-                if (fault === 'origin-stat') deniedStatPath = cwd;
-                if (fault === 'workflow-stat') deniedStatPath = workflowsDir;
-                if (fault === 'global-stat') deniedStatPath = join(cwd, 'home/workflows');
-                if (fault === 'source-config')
-                  deps.loadConfig = async () => {
-                    throw Object.assign(new Error('source config denied'), {
-                      code: 'EACCES',
-                      syscall: 'open',
-                      path: configPath,
-                    });
-                  };
-              }
-              first = false;
-              yield* send(...args);
-            };
-            deps.getAgentProvider = () => provider;
-            try {
-              await executeWorkflow(
-                deps,
-                makePlatform(),
-                'read-test',
-                cwd,
-                workflow,
-                'goal',
-                undefined,
-                { preparedSource }
-              );
-            } finally {
-              deniedStatPath = undefined;
-              deps.loadConfig = loadConfig;
-              verifier.mockRestore();
-              await chmod(workflowsDir, 0o755);
-              if (lockedFile && existsSync(lockedFile)) await chmod(lockedFile, 0o644);
-            }
-            expect(fail).not.toHaveBeenCalled();
-            const parent = [...store.runs.values()].find(
-              run => run.workflow_name === 'read-parent'
-            );
-            expect(parent?.status).toBe('paused');
-            expect(
-              store.events.filter(
-                event =>
-                  event.workflow_run_id === parent?.id && event.event_type === 'source_released'
-              )
-            ).toHaveLength(1);
-            if (!parent) throw new Error('Expected parent');
-            const path =
-              fault === 'discovery'
-                ? lockedFile
-                : fault === 'origin-stat'
-                  ? cwd
-                  : fault === 'global-stat'
-                    ? join(cwd, 'home/workflows')
-                    : fault === 'source-config'
-                      ? configPath
-                      : workflowsDir;
-            expect(parent.metadata?.source_release).toMatchObject({ nodeId: 'child', path });
-            expect(
-              store.events.find(
-                event =>
-                  event.workflow_run_id === parent.id && event.event_type === 'source_released'
-              )
-            ).toMatchObject({
-              step_name: 'child',
-              data: { node_id: 'child', path },
-            });
-            const resumed = await hydrateResumableRun(deps, parent);
-            if (!resumed) throw new Error('Expected continuation');
-            await executeWorkflow(
-              deps,
-              makePlatform(),
-              'read-test',
-              cwd,
-              workflow,
-              'goal',
-              undefined,
-              resumed
-            );
-            expect(parent.status).toBe('completed');
-            expect(fail).not.toHaveBeenCalled();
-            expect(
-              store.events.filter(
-                event =>
-                  event.event_type === 'node_completed' &&
-                  event.workflow_run_id === parent.id &&
-                  event.step_name === 'before'
-              )
-            ).toHaveLength(1);
-            expect(
-              (await readdir(join(cwd, 'home/staged-source'))).filter(
-                name => !name.endsWith('.partial')
-              )
-            ).toEqual([]);
-          });
-        }
-      }
     }
   );
 

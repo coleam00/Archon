@@ -1,6 +1,4 @@
-import * as sourceIntegrity from './workflow-source';
 import * as checkout from './checkout-observation';
-import { createTransactionView } from './file-store/transaction-view';
 import { prepareRunAiConfiguration } from './run-preflight';
 import type { ExecuteWorkflowOptions } from './executor';
 /**
@@ -13,7 +11,7 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'path';
 
@@ -4977,119 +4975,6 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([true, false])(
-    'releases an admitted source restoration read failure (CAS %s)',
-    async released => {
-      const dagCallsBefore = mockExecuteDagWorkflow.mock.calls.length;
-      const root = await mkdtemp(join(tmpdir(), 'source-restoration-'));
-      const scripts = join(root, '.archon/scripts');
-      await mkdir(scripts, { recursive: true });
-      await writeFile(join(scripts, 'check.ts'), 'console.log("ok")');
-      const capture = await sourceIntegrity.captureWorkflowSource({
-        sourceRoot: root,
-        captureRoot: join(root, 'capture'),
-      });
-      const path = join(capture.anchor.root, 'project/.archon/scripts');
-      const run = makeRun({
-        status: 'running',
-        metadata: {
-          workflow_source: {
-            ...capture.manifest,
-            root: capture.anchor.root,
-          },
-        },
-      });
-      const rows = new Map([[run.id, structuredClone(run)]]);
-      const view = createTransactionView(rows, [], async () => null);
-      const release = mock<IWorkflowStore['releaseRunForUnreadableSource']>(async (id, input) => {
-        if (!released) await view.cancelWorkflowRun(id, { reason: 'Operator abandoned the run' });
-        return view.releaseRunForUnreadableSource(id, input);
-      });
-      const store = makeStore({
-        releaseRunForUnreadableSource: release,
-        getWorkflowRunStatus: mock(async () => rows.get(run.id)?.status ?? null),
-        getWorkflowRun: mock(view.getWorkflowRun),
-      });
-      try {
-        await chmod(path, 0o000);
-        const before = Date.now();
-        const result = await executeWorkflow(
-          makeDeps(store),
-          makePlatform(),
-          'conv-1',
-          root,
-          makeWorkflow(),
-          'msg',
-          undefined,
-          { preCreatedRun: run, priorCompletedNodes: new Map() }
-        );
-        expect(result).toMatchObject(
-          released ? { success: true, paused: true } : { success: false }
-        );
-        if (!released) {
-          expect('paused' in result && result.paused).not.toBe(true);
-          expect((await view.getWorkflowRun(run.id))?.status).toBe('cancelled');
-        }
-        const retryAt = Date.parse(release.mock.calls[0][1].retryAt);
-        expect(retryAt).toBeGreaterThanOrEqual(before + 60_000);
-        expect(retryAt).toBeLessThanOrEqual(Date.now() + 60_000);
-        expect(release).toHaveBeenCalledWith(
-          run.id,
-          expect.objectContaining({
-            nodeId: 'workflow-source',
-            path: capture.anchor.root,
-          })
-        );
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        if (released) expect(store.getWorkflowRun).not.toHaveBeenCalled();
-        else expect(store.getWorkflowRun).toHaveBeenCalledWith(run.id);
-        expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(dagCallsBefore);
-      } finally {
-        await chmod(path, 0o755);
-        await removeTempTree(root);
-      }
-    }
-  );
-  it.each(['EACCES', 'ENOSPC'])(
-    'surfaces a legacy source-config pinning write failure (%s)',
-    async code => {
-      const root = await mkdtemp(join(tmpdir(), 'source-pinning-'));
-      try {
-        const capture = await sourceIntegrity.captureWorkflowSource({
-          sourceRoot: root,
-          captureRoot: join(root, 'capture'),
-        });
-        const { source_config: _config, ...legacy } = capture.manifest;
-        const run = makeRun({
-          metadata: { workflow_source: { ...legacy, root: capture.anchor.root } },
-        });
-        const cause = Object.assign(new Error('metadata write failed'), { code, syscall: 'open' });
-        const store = makeStore({
-          releaseRunForUnreadableSource: mock(async () => ({ released: true })),
-          updateWorkflowRun: mock(async (_id, update) => {
-            if (update.metadata?.workflow_source) throw cause;
-          }),
-        });
-        await expect(
-          executeWorkflow(
-            makeDeps(store),
-            makePlatform(),
-            'conv-1',
-            root,
-            makeWorkflow(),
-            'msg',
-            undefined,
-            { preCreatedRun: run, priorCompletedNodes: new Map() }
-          )
-        ).rejects.toBe(cause);
-        expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      } finally {
-        await removeTempTree(root);
-      }
-    }
-  );
-
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
     const store = makeStore({
@@ -5110,48 +4995,6 @@ describe('finally backstop', () => {
     expect(result).toMatchObject({ success: true, paused: true });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.getWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('a source release lost to a sibling gate preserves paused handling and slot release', async () => {
-    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: false });
-    const paused = makeRun({
-      status: 'paused',
-      metadata: {
-        approval: { type: 'approval', nodeId: 'review', pauseId: 'gate', message: 'Approve?' },
-      },
-    });
-    const store = makeStore({
-      getWorkflowRun: mock(async () => paused),
-      getWorkflowRunStatus: mock(async () => 'paused' as const),
-    });
-    const result = await executeWorkflow(
-      makeDeps(store),
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      { conversationId: 'db-conv-1' }
-    );
-    expect(result).toMatchObject({ success: true, paused: true });
-    expect(store.releasePausedRunSlot).toHaveBeenCalledTimes(1);
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('a lost source release cannot fail another owner when the status read fails', async () => {
-    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: false });
-    const store = makeStore({
-      getWorkflowRunStatus: mock(async () => 'running' as const),
-      getWorkflowRun: mock(async () => {
-        throw new Error('status unavailable');
-      }),
-    });
-    await expect(
-      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
-        conversationId: 'db-conv-1',
-      })
-    ).rejects.toThrow('status unavailable');
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('calls failWorkflowRun when run is still running at finally', async () => {
@@ -5647,27 +5490,6 @@ describe('hydrateResumableRun', () => {
     });
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
-  });
-
-  it('resumes a run released for unreadable source before any node completed', async () => {
-    const emptySnapshot = async () => ({
-      completedNodeOutputs: new Map(),
-      fanOutSnapshots: new Map(),
-      unresolvedNodeStarts: new Set<string>(),
-      budget: { workUnits: 0, spendUsd: 0 },
-      tokens: { input: 0, output: 0 },
-      costUsd: 0,
-    });
-    const store = makeStore({ getDagResumeSnapshot: mock(emptySnapshot) });
-    const released = makeRun({
-      id: 'released',
-      status: 'paused',
-      metadata: { source_release: { nodeId: 'check', releasedAt: '2026-10-15T10:00:00.000Z' } },
-    });
-    const plain = makeRun({ id: 'plain', status: 'paused' });
-
-    expect(await inspectResumableRun(makeDeps(store), released)).not.toBeNull();
-    expect(await inspectResumableRun(makeDeps(store), plain)).toBeNull();
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {

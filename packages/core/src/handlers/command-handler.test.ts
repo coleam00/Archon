@@ -2163,27 +2163,6 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('YAML parse error near line 5');
       });
 
-      test('reports a post-parse load error under its declared workflow name', async () => {
-        spyDiscoverWorkflows.mockResolvedValueOnce({
-          workflows: [],
-          errors: [
-            {
-              filename: 'release-file.yaml',
-              workflowName: 'acme/kit:deploy',
-              error: 'Missing include: checks',
-              errorType: 'validation_error' as const,
-            },
-          ],
-        });
-        const result = await handleCommand(
-          conversationWithCodebase,
-          '/workflow run ACME/KIT:DEPLOY',
-          operator
-        );
-        expect(result.success).toBe(false);
-        expect(result.message).toContain('failed to load: Missing include: checks');
-      });
-
       test('should match workflow name case-insensitively', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [

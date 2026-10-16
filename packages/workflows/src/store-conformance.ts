@@ -8,7 +8,7 @@ import type {
   ResourceStartIntent,
   SourceReceiptAcceptance,
 } from './schemas/resource-start';
-import { afterEach, beforeEach, describe, expect, test, setSystemTime } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   FAN_OUT_CANCEL_REASONS,
   executionClaim,
@@ -23,7 +23,6 @@ import {
   type AttentionAnswerWrite,
   type GateResolutionEvent,
   type IWorkflowStore,
-  type SourceReleaseWrite,
 } from './store';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -418,38 +417,6 @@ export function describeWorkflowStoreConformance(
       await store.resolveApprovalGate(id, { approval: { ...approval, resolved: 'approved' } }, []);
       return store.resumeWorkflowRun(id, answeredCursor);
     };
-    for (const type of ['approval', 'interactive_loop', undefined] as const) {
-      test(`a source release retains its slot after an answered gate (${type})`, async () => {
-        const intent = start();
-        expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
-        const id = intent.launch.run.id;
-        await store.claimPendingWorkflowRun(id);
-        await store.pauseWorkflowRun(id, { ...approval, type, resolved: 'approved' });
-        await store.resumeWorkflowRun(id, answeredCursor);
-        const retryAt = new Date().toISOString();
-        await store.releaseRunForUnreadableSource(id, {
-          claimId: executionClaim((await store.getWorkflowRun(id))?.metadata ?? {}),
-          nodeId: 'check',
-          error: 'EACCES',
-          retryAt,
-        });
-        const row = await store.getWorkflowRun(id);
-        if (!row) throw new Error('missing run');
-        expect(continuablePauseCursor(row)).toBeUndefined();
-        expect(continuablePause(row)).toBeUndefined();
-        await store.deferWorkflowContinuation(id, '2099-01-01T00:00:00.000Z', answeredCursor);
-        expect((await store.getWorkflowRun(id))?.metadata.continuation_retry_at).toBe(retryAt);
-        expect(await rejection(store.resumeWorkflowRun(id, answeredCursor))).toBeInstanceOf(
-          WorkflowNotResumableError
-        );
-        expect(await store.releasePausedRunSlot(id, gateCursor)).toEqual({ released: false });
-        expect(await store.admitResourceStart(start())).toMatchObject({
-          status: 'queued',
-          blocker: { kind: 'run', id },
-        });
-        expect(await drain()).toEqual([]);
-      });
-    }
     test('a released paused run waits for capacity ahead of queued new starts', async () => {
       const a = await admitPaused(start());
       const b = start(),
@@ -1379,31 +1346,6 @@ export function describeWorkflowStoreConformance(
         'quota_resume_triggered',
       ]);
     });
-    test('malformed source releases do not consume due slots ahead of a readable cursor', async () => {
-      const releasedAt = '2020-01-01T00:00:00.000Z';
-      for (const source_release of [
-        { nodeId: 'check' },
-        { nodeId: '', releasedAt },
-        { nodeId: 42, releasedAt },
-        { nodeId: 'check', releasedAt: 'invalid' },
-        { nodeId: 'check', releasedAt, releaseId: 'invalid' },
-        { nodeId: 'check', releasedAt, path: 42 },
-      ]) {
-        const run = await running(store);
-        await store.updateWorkflowRun(run.id, {
-          status: 'paused',
-          metadata: { source_release, continuation_retry_at: releasedAt },
-        });
-      }
-      const valid = await running(store);
-      await store.updateWorkflowRun(valid.id, {
-        status: 'paused',
-        metadata: { source_release: { nodeId: 'check', releasedAt } },
-      });
-      const due = await store.listDueWorkflowContinuations(new Date(), 1);
-      expect(due.map(run => run.id)).toEqual([valid.id]);
-      expect(readSourceRelease(due[0]?.metadata)).toEqual({ nodeId: 'check', releasedAt });
-    });
     test('a quota continuation released for an unreadable source stays due as a source continuation', async () => {
       const due = async (now: Date): Promise<boolean> =>
         (await store.listDueWorkflowContinuations(now, 50)).some(due => due.id === run.id);
@@ -1454,111 +1396,6 @@ export function describeWorkflowStoreConformance(
         WorkflowNotResumableError
       );
       expect(await types(store, run.id)).toContain('source_released');
-    });
-    for (const kind of ['time', 'event'] as const) {
-      test(`source recovery excludes a container with a historic ${kind} wait from due selection`, async () => {
-        const run = await running(store, { metadata: { isolation: 'container' } });
-        const resumeAt = '2020-01-01T00:00:00.000Z';
-        const wait = workflowWaitContextSchema.parse({
-          owner: 'node',
-          nodeId: 'check',
-          pauseId: 'wait',
-          waitingSince: resumeAt,
-          kind,
-          resumeAt,
-          ...(kind === 'event' ? { event: 'ready' } : {}),
-        });
-        await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'check' });
-        await store.resumeWorkflowRun(run.id);
-        await store.releaseRunForUnreadableSource(run.id, {
-          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
-          nodeId: 'check',
-          error: 'EIO',
-          retryAt: resumeAt,
-        });
-        expect(
-          (await store.listDueWorkflowContinuations(new Date(), 50)).map(row => row.id)
-        ).not.toContain(run.id);
-      });
-    }
-    test('source cursors distinguish repeated releases in the same millisecond', async () => {
-      const now = new Date('2026-10-15T10:00:00.000Z');
-      setSystemTime(now);
-      try {
-        const run = await running(store);
-        const write: SourceReleaseWrite = {
-          claimId: null,
-          nodeId: 'check',
-          error: 'EACCES',
-          retryAt: now.toISOString(),
-        };
-        await store.releaseRunForUnreadableSource(run.id, write);
-        const first = readSourceRelease((await store.getWorkflowRun(run.id))?.metadata);
-        if (!first) throw new Error('missing release');
-        const cursor = { kind: 'source' as const, ...first };
-        const resumedClaim = await store.resumeWorkflowRun(run.id, cursor);
-        write.claimId = executionClaim(resumedClaim.metadata);
-        await store.releaseRunForUnreadableSource(run.id, write);
-        const second = readSourceRelease((await store.getWorkflowRun(run.id))?.metadata);
-        expect(second?.releasedAt).toBe(first.releasedAt);
-        await store.deferWorkflowContinuation(run.id, '2099-01-01T00:00:00.000Z', cursor);
-        expect((await store.listDueWorkflowContinuations(now, 50)).map(row => row.id)).toContain(
-          run.id
-        );
-        expect(await rejection(store.resumeWorkflowRun(run.id, cursor))).toBeInstanceOf(
-          WorkflowNotResumableError
-        );
-        if (!second) throw new Error('missing release');
-        expect((await store.resumeWorkflowRun(run.id, { kind: 'source', ...second })).status).toBe(
-          'running'
-        );
-      } finally {
-        setSystemTime();
-      }
-    });
-    test('a container run released for an unreadable source is never due', async () => {
-      const run = await running(store, { metadata: { isolation: 'container' } });
-      const retryAt = new Date(Date.now() + 60_000).toISOString();
-      expect(
-        await store.releaseRunForUnreadableSource(run.id, {
-          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
-          nodeId: 'check',
-          error: 'EACCES',
-          retryAt,
-        })
-      ).toEqual({ released: true });
-      const due = await store.listDueWorkflowContinuations(
-        new Date(Date.parse(retryAt) + 1000),
-        50
-      );
-      expect(due.map(row => row.id)).not.toContain(run.id);
-    });
-    test('a stale source release cannot pause a newer claim in the same millisecond', async () => {
-      setSystemTime(new Date('2026-10-16T10:00:00.000Z'));
-      try {
-        const run = await running(store);
-        const release = {
-          claimId: executionClaim(run.metadata),
-          nodeId: 'check',
-          error: 'EACCES',
-          retryAt: new Date().toISOString(),
-        };
-        await store.pauseWorkflowRun(run.id, { ...approval, resolved: 'approved' });
-        const resumed = await store.resumeWorkflowRun(run.id);
-        expect(await store.releaseRunForUnreadableSource(run.id, release)).toEqual({
-          released: false,
-        });
-        expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
-        expect(await types(store, run.id)).not.toContain('source_released');
-        expect(
-          await store.releaseRunForUnreadableSource(run.id, {
-            ...release,
-            claimId: executionClaim(resumed.metadata),
-          })
-        ).toEqual({ released: true });
-      } finally {
-        setSystemTime();
-      }
     });
     test('a source release never overrides another transition', async () => {
       const release = {

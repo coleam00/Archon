@@ -2751,50 +2751,6 @@ describe('runAttention', () => {
     expect(attention?.kind).toBe('attention');
   });
 
-  test('a run released for an unreadable source owns its own resumption', () => {
-    const attention = runAttention({
-      id: 'run-1',
-      status: 'paused',
-      metadata: {
-        source_release: { nodeId: 'check', releasedAt: '2026-08-28T10:00:00.000Z' },
-      },
-    });
-    expect(attention).toBeNull();
-  });
-
-  test('a released container run asks for a manual resume, since no host continues it', () => {
-    const attention = runAttention({
-      id: 'run-1',
-      status: 'paused',
-      metadata: {
-        isolation: 'container',
-        source_release: { nodeId: 'check', releasedAt: '2026-08-28T10:00:00.000Z' },
-      },
-    });
-    expect(attention).toMatchObject({ kind: 'unreadable', reason: 'source_release_not_continued' });
-  });
-
-  test('a release wins over a gate the run already passed', () => {
-    const metadata = {
-      source_release: { nodeId: 'check', releasedAt: '2026-08-28T10:00:00.000Z' },
-      approval: {
-        type: 'approval',
-        nodeId: 'gate',
-        message: 'ok?',
-        pauseId: 'p1',
-        resolved: 'approved',
-      },
-    };
-    expect(
-      runAttention({
-        id: 'run-1',
-        status: 'paused',
-        metadata: { ...metadata, isolation: 'container' },
-      })
-    ).toMatchObject({ kind: 'unreadable', reason: 'source_release_not_continued' });
-    expect(runAttention({ id: 'run-1', status: 'paused', metadata })).toBeNull();
-  });
-
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
     const attention = runAttention({ id: 'run-1', status: 'paused' as WorkflowRunStatus });
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });

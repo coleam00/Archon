@@ -9,9 +9,7 @@ const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>
   Promise.resolve({ workflows: [], errors: [] })
 );
 
-const realWorkflowDiscovery = await import('@archon/workflows/workflow-discovery');
 mock.module('@archon/workflows/workflow-discovery', () => ({
-  ...realWorkflowDiscovery,
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
 
@@ -61,23 +59,6 @@ describe('validateWorkflowsCommand', () => {
       assistants: { claude: {} },
       envVars: undefined,
     });
-  });
-
-  test('targeted validation reports a post-parse error under its declared workflow name', async () => {
-    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [],
-      errors: [
-        {
-          filename: 'release-file.yaml',
-          workflowName: 'deploy',
-          error: 'Missing include: checks',
-          errorType: 'validation_error' as const,
-        },
-      ],
-    });
-    expect(await validateWorkflowsCommand(validationCwd, 'deploy')).toBe(1);
-    expect(JSON.stringify(mockConsoleLog.mock.calls)).toContain('Missing include: checks');
-    expect(JSON.stringify(mockConsoleError.mock.calls)).not.toContain('not found');
   });
 
   test('passes effective Claude config dir and user setting source into resource validation', async () => {

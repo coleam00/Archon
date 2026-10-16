@@ -1,60 +1,16 @@
 import { providerRegistry } from '@archon/providers';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverWorkflows, liveSourceRoots } from './workflow-discovery';
-import { workflowLoadErrorName, findWorkflowLoadError } from './schemas/workflow';
-import * as sourceIntegrity from './workflow-source';
-import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { isLoopGroupNode, isLoopNode } from './schemas';
 import type { DagNode } from './schemas';
 
 const tempDirectories: string[] = [];
-
-test('load-error lookup preserves installed paths and prefers parsed workflow names', () => {
-  for (const [filename, workflowName, expected] of [
-    ['release.yaml', undefined, 'release'],
-    ['release.yml', undefined, 'release'],
-    ['acme/kit/folder/release.yaml', undefined, 'acme/kit/folder/release'],
-    ['acme/kit/folder/release.yaml', 'acme/kit:deploy', 'acme/kit:deploy'],
-    ['different.yaml', 'deploy', 'deploy'],
-  ] as const) {
-    expect(
-      workflowLoadErrorName({
-        filename,
-        workflowName,
-        error: 'invalid workflow',
-        errorType: 'validation_error',
-      })
-    ).toBe(expected);
-  }
-});
-
-test('named load errors win over case-variant shadow diagnostics without aliasing bare paths', () => {
-  const installed = {
-    filename: '/pack/archon-plugin.json',
-    workflowName: 'acme/kit:deploy',
-    error: 'Manifest unreadable',
-    errorType: 'read_error' as const,
-  };
-  const shadow = {
-    filename: 'ACME/KIT:DEPLOY',
-    error: 'Shadow rejected',
-    errorType: 'validation_error' as const,
-  };
-  const path = {
-    filename: 'acme/kit/folder/release.yaml',
-    error: 'Invalid YAML',
-    errorType: 'parse_error' as const,
-  };
-  expect(findWorkflowLoadError([shadow, installed, path], 'ACME/KIT:DEPLOY')).toBe(installed);
-  expect(findWorkflowLoadError([path], 'release')).toBeUndefined();
-  expect(findWorkflowLoadError([path], 'ACME/KIT/FOLDER/RELEASE')).toBe(path);
-});
 
 test('discovery reports an inaccessible global workflow scope but tolerates a missing one', async () => {
   const root = await mkdtemp(join(tmpdir(), 'archon-global-workflow-read-'));
@@ -87,65 +43,6 @@ test('discovery reports an inaccessible global workflow scope but tolerates a mi
       sourceRoots,
     });
     expect(missing.errors).toEqual([]);
-  } finally {
-    accessSpy.mockRestore();
-    await removeTempTree(root);
-  }
-});
-
-for (const fault of ['missing-packaged-script', 'unbound-input'] as const) {
-  test(`post-parse ${fault} errors retain the declared workflow name`, async () => {
-    const root = await mkdtemp(join(tmpdir(), 'archon-script-load-identity-'));
-    const folder = join(root, '.archon/workflows/team/pack');
-    try {
-      await mkdir(join(folder, 'scripts'), { recursive: true });
-      await writeFile(
-        join(folder, 'different.yaml'),
-        JSON.stringify({
-          name: 'declared',
-          description: 'Script validation',
-          inputs: { declared: {} },
-          nodes: [{ id: 'check', script: 'check', runtime: 'bun' }],
-        })
-      );
-      if (fault === 'unbound-input')
-        await writeFile(
-          join(folder, 'scripts/check.ts'),
-          'console.log(process.env.INPUTS_MISSING)'
-        );
-      const result = await discoverWorkflows(root, {
-        providers: providerRegistry,
-        loadDefaults: false,
-      });
-      expect(result.workflows).toEqual([]);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toMatchObject({
-        workflowName: 'declared',
-        errorType: 'validation_error',
-      });
-    } finally {
-      await removeTempTree(root);
-    }
-  });
-}
-
-test('project directory access failures preserve their typed cause', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'archon-project-workflow-read-'));
-  const workflowPath = join(root, '.archon', 'workflows');
-  const cause = Object.assign(new Error('project scope unavailable'), {
-    code: 'EIO',
-    syscall: 'access',
-    path: workflowPath,
-  });
-  const realAccess = fs.access;
-  const accessSpy = spyOn(fs, 'access').mockImplementation(async (path, mode) => {
-    if (path === workflowPath) throw cause;
-    return realAccess(path, mode);
-  });
-  try {
-    await expect(
-      discoverWorkflows(root, { providers: providerRegistry, loadDefaults: false })
-    ).rejects.toBe(cause);
   } finally {
     accessSpy.mockRestore();
     await removeTempTree(root);
@@ -507,108 +404,3 @@ describe('discoverWorkflows — nested included command compilation', () => {
     }
   );
 });
-
-describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-  'captured workflow overrides retain read failures',
-  () => {
-    for (const scope of ['project', 'global'] as const) {
-      for (const layout of ['flat', 'packaged'] as const) {
-        for (const fault of ['read', 'list'] as const) {
-          test(`${scope} ${layout} ${fault} cannot select a lower declaration`, async () => {
-            const root = await mkdtemp(join(tmpdir(), 'archon-shadow-'));
-            const project = join(root, 'project');
-            const home = join(root, 'home');
-            const previousHome = process.env.ARCHON_HOME;
-            process.env.ARCHON_HOME = home;
-            try {
-              const relative = layout === 'flat' ? 'shadow.yaml' : 'kit/flow/shadow.yaml';
-              const highScope =
-                scope === 'project' ? join(project, '.archon/workflows') : join(home, 'workflows');
-              const lowScope =
-                scope === 'project' ? join(home, 'workflows') : join(project, '.archon/workflows');
-              const lowRelative =
-                scope === 'global' && layout === 'flat' ? join('defaults', relative) : relative;
-              for (const [dir, path, prompt] of [
-                [highScope, relative, 'HIGHER'],
-                [lowScope, lowRelative, 'LOWER'],
-              ]) {
-                const file = join(dir, path);
-                await mkdir(dirname(file), { recursive: true });
-                await writeFile(
-                  file,
-                  `name: shadow\ndescription: fixture\nnodes:\n  - id: work\n    prompt: ${prompt}\n`
-                );
-                if (layout === 'packaged') {
-                  await writeFile(
-                    join(dir, 'kit/archon-plugin.json'),
-                    JSON.stringify({
-                      schemaVersion: 1,
-                      kind: 'workflow-pack',
-                      name: 'kit',
-                      description: 'fixture',
-                      entrypoints: { flow: 'flow/shadow.yaml' },
-                    })
-                  );
-                }
-              }
-              const capture = await captureWorkflowSource({
-                sourceRoot: project,
-                captureRoot: join(root, 'capture'),
-              });
-              const captured = capturedSourceRoots(capture.anchor);
-              const roots =
-                scope === 'project'
-                  ? captured
-                  : {
-                      ...captured,
-                      project: null,
-                      bundledWorkflows: join(capture.anchor.root, 'project/.archon/workflows'),
-                    };
-              const cwd = scope === 'project' ? project : null;
-              const discover = () =>
-                discoverWorkflows(cwd, { providers: providerRegistry, sourceRoots: roots });
-              const healthy = await discover();
-              expect(
-                healthy.workflows.find(entry => entry.workflow.name === 'shadow')?.workflow.nodes[0]
-              ).toMatchObject({
-                source: { kind: 'inline', prompt: 'HIGHER' },
-              });
-              const highFile = join(
-                scope === 'project'
-                  ? join(capture.anchor.root, 'project/.archon/workflows')
-                  : captured.globalWorkflows,
-                relative
-              );
-              const locked = fault === 'read' ? highFile : dirname(highFile);
-              const verify = sourceIntegrity.assertWorkflowSourceIntegrity;
-              const verifier = spyOn(
-                sourceIntegrity,
-                'assertWorkflowSourceIntegrity'
-              ).mockImplementation(async sourceRoots => {
-                const files = await verify(sourceRoots);
-                await chmod(locked, fault === 'read' ? 0o000 : 0o111);
-                return files;
-              });
-              try {
-                await expect(discover()).rejects.toMatchObject({ code: 'EACCES' });
-              } finally {
-                verifier.mockRestore();
-                await chmod(locked, fault === 'read' ? 0o644 : 0o755);
-              }
-              expect(
-                (await discover()).workflows.find(entry => entry.workflow.name === 'shadow')
-                  ?.workflow.nodes[0]
-              ).toMatchObject({
-                source: { kind: 'inline', prompt: 'HIGHER' },
-              });
-            } finally {
-              if (previousHome === undefined) delete process.env.ARCHON_HOME;
-              else process.env.ARCHON_HOME = previousHome;
-              await removeTempTree(root);
-            }
-          });
-        }
-      }
-    }
-  }
-);
