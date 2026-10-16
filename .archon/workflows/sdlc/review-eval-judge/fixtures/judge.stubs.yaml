@@ -1,0 +1,13 @@
+# One judgement: the code lens states the planted defect, which the review kept as R1.
+read: "Lenses that left output: code, simplify."
+judge:
+  defects:
+    - id: D1
+      caught_by: [code]
+      finding: R1
+      evidence: "The code lens names the wrong count at a.txt:2."
+  shape_unmatched: 0
+fixture:
+  inputs: { item: /tmp/review-eval/items/run-1 }
+  expect: completed
+  reached: [read, judge]
