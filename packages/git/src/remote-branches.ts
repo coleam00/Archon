@@ -8,7 +8,7 @@ export type RemoteBranchTarget =
   | { kind: 'url'; url: string; credentials?: CloneCredentials };
 export type RemoteBranches =
   | { status: 'available'; defaultBranch: BranchName | null; branches: BranchName[] }
-  | { status: 'unavailable'; evidence: string };
+  | { status: 'unavailable'; evidence: string; failure?: Error };
 
 export class ConfiguredBaseBranchNotFoundError extends Error {
   constructor(branch: string, remote: string) {
@@ -100,6 +100,10 @@ export async function inspectRemoteBranches(target: RemoteBranchTarget): Promise
   } catch (error) {
     const err = error as Error & { code?: string | number; killed?: boolean };
     if (typeof err.code !== 'number' && !err.killed) throw error;
-    return { status: 'unavailable', evidence: sanitizeGitError(error, credentials) };
+    return {
+      status: 'unavailable',
+      evidence: sanitizeGitError(error, credentials),
+      ...(target.kind === 'local' && error instanceof Error ? { failure: error } : {}),
+    };
   }
 }

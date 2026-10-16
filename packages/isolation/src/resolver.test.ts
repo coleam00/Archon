@@ -1,3 +1,5 @@
+import { IsolationFailure } from './errors';
+import { GitFailure } from '@archon/git';
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
@@ -603,12 +605,47 @@ describe('IsolationResolver', () => {
     );
   });
 
+  describe.each(['create', 'canonical'] as const)('unclassified failures at the %s gate', gate => {
+    test.each(['timeout', 'permission denied', 'cannot adopt'])(
+      'unclassified git and Docker failures with %s crash with original evidence',
+      async text => {
+        for (const failure of [
+          new GitFailure(
+            'unclassified',
+            `git fetch failed: ${text}`,
+            Object.assign(new Error(text), { code: 128, stderr: text })
+          ),
+          new IsolationFailure('unclassified', `docker failed: ${text}`),
+          new TypeError(text),
+        ]) {
+          if (gate === 'canonical') getCanonicalSpy.mockRejectedValueOnce(failure);
+          const resolver = createResolver({
+            provider: {
+              ...makeMockProvider(),
+              create: async () => {
+                throw failure;
+              },
+            },
+          });
+          await expect(
+            resolver.resolve({
+              existingEnvId: null,
+              codebase: defaultCodebase,
+              platformType: 'web',
+              hints: { workflowType: 'issue', workflowId: '4271' },
+            })
+          ).rejects.toBe(failure);
+        }
+      }
+    );
+  });
+
   test('creation error — returns blocked with creation_failed', async () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
         create: async () => {
-          throw new Error('permission denied');
+          throw new IsolationFailure('permission_denied', 'permission denied');
         },
       },
     });
@@ -805,7 +842,7 @@ describe('IsolationResolver', () => {
       provider: {
         ...makeMockProvider(),
         create: async () => {
-          throw new Error('permission denied');
+          throw new IsolationFailure('permission_denied', 'permission denied');
         },
       },
     });

@@ -1132,13 +1132,13 @@ export async function resumeWorkflowRun(
       );
 
       const rowCount = result.rowCount;
-      if (rowCount > 0 && clearedError !== null) {
+      if (rowCount > 0 && (prior?.status === 'failed' || clearedError !== null)) {
         // Same `{ error }` payload shape workflow_failed uses, so every consumer
         // that already reads an error off a workflow_* event keeps working.
         await insertWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_resumed',
-          data: { error: clearedError },
+          data: clearedError === null ? {} : { error: clearedError },
         });
       }
       if (rowCount > 0 && prior?.status === 'paused') {
@@ -1246,6 +1246,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
            AND ${eventReason} IN (${reasonPlaceholders(2)})`,
         [id, ...FAN_OUT_CANCEL_REASONS]
       );
+      await insertWorkflowEvent(query, { workflow_run_id: id, event_type: 'workflow_resumed' });
       const recovered = await query<WorkflowRunRow>(
         'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         [id]

@@ -70,6 +70,7 @@ export { recordWorktreeAdoption, registerWorktree } from './store';
 export {
   ExistingBranchDivergedError,
   IsolationBlockedError,
+  IsolationFailure,
   MissingProjectDirectoryError,
   WorktreeLeftoverError,
   WorktreeUncommittedChangesError,
@@ -102,3 +103,5 @@ export type { CopyFileEntry } from './worktree-copy';
 export { validateWorktreePostCreate } from './post-create-config';
 export type { WorktreeSetupExecutor, WorktreeSetupInput } from './types';
 export { WorktreePostCreateError } from './errors';
+
+export type { IsolationFailureKind } from './errors';

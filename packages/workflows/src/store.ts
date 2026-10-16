@@ -288,11 +288,10 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
-  // #2348 — written by the resume CAS ONLY when it clears a non-empty
-  // `metadata.error`, carrying that error in `data.error`. It is the audit
-  // record for a legacy failure that resume would otherwise erase (older CLI
-  // SIGTERM handlers could record a failure in metadata and nowhere else), NOT
-  // a general "a resume happened" marker: its absence never means the run wasn't resumed.
+  // Written for failed-run resume, engine-cancelled fan-out recovery, and resume of
+  // paused or stale-running runs with a nonempty metadata.error. Optional data.error
+  // preserves cleared legacy failure evidence (#2348); the event does not imply a
+  // prior terminal state, and ordinary paused-run resumes use workflow_unpaused.
   'workflow_resumed',
   // The resume CAS moved a paused run back to running, with or without an answer. Every
   // resume of a paused run writes it, so a pause that closes reaches the event feed.
