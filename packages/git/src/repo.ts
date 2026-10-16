@@ -489,7 +489,11 @@ function reportedCause(error: unknown): 'missing' | 'denied' | 'no_space' | unde
     error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
       ? error.stderr
       : '';
-  if (/^fatal: repository '.*' not found\r?$/m.test(stderr)) return 'missing';
+  if (
+    /^fatal: repository '.*' not found\r?$/m.test(stderr) ||
+    /^ERROR: Repository not found\.\r?$/m.test(stderr)
+  )
+    return 'missing';
   if (
     /^fatal: (?:Authentication failed for|could not read (?:Username|Password) for) '/m.test(
       stderr

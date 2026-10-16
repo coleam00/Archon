@@ -3482,7 +3482,7 @@ branch refs/heads/feature/auth
       }
     );
 
-    // stderr captured from git 2.49.0 against a local HTTP server and a full volume.
+    // stderr captured from git 2.49.0 against a local HTTP server, GitHub over SSH, and a full volume.
     test.each([
       [
         'HTTP 404',
@@ -3498,6 +3498,11 @@ branch refs/heads/feature/auth
         'HTTP 401 with rejected credentials',
         "Cloning into '/tmp/target'...\nremote: auth\nfatal: Authentication failed for 'https://gitlab.example.test/group/project.git/'\n",
         { code: 'permission_denied', path: 'https://gitlab.example.test/group/project.git' },
+      ],
+      [
+        'a missing GitHub repository over SSH',
+        "Cloning into '/tmp/target'...\nERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+        { code: 'not_a_repo', path: 'https://gitlab.example.test/group/project.git' },
       ],
       [
         'a full disk',
