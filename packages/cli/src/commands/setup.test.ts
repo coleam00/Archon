@@ -1207,7 +1207,12 @@ describe('setup provider selection', () => {
       } finally {
         for (const spy of [selection, input, confirm, detect, info, collect, platforms, doctor])
           spy.mockRestore();
-        process.env = savedEnv;
+        // Restore in place: replacing process.env leaves Bun's native env holding the
+        // temp root, which os.homedir() still reads through USERPROFILE on Windows.
+        for (const key of Object.keys(process.env)) {
+          if (!(key in savedEnv)) delete process.env[key];
+        }
+        Object.assign(process.env, savedEnv);
         await removeTempTree(root);
       }
     }
