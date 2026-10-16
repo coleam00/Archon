@@ -5675,6 +5675,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         `import { appendFileSync } from 'node:fs';
         const original = Bun.spawnSync.bind(Bun);
         const git = (args) => {
+          if (args[0] === '-C') args = args.slice(2);
           const out = (stdout) => ({ exitCode: 0, stdout: Buffer.from(stdout), stderr: Buffer.from('') });
           if (args[0] === 'rev-parse') return out('deadbeef');
           if (args[0] === 'config') return out('remote.upstream.url https://github.com/example/repo.git');
