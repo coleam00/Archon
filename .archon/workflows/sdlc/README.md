@@ -90,7 +90,7 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The released GitHub plugin v0.11.1 lacks seven required operations and refuses preflight.
+The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
 Keep `gh` as the default until a compatible release passes a real-PR check.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,

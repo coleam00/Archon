@@ -404,6 +404,7 @@ describe('forge-check with the GitHub plugin release v0.11.1 shipped', () => {
       'workitem.labels.set',
       'workitem.comment.upsert',
       'workitem.close',
+      'workitem.create',
     ])
       expect(run.stderr).toContain(operation);
     expect(run.stderr).toContain('ARCHON_SDLC_FORGE=gh');

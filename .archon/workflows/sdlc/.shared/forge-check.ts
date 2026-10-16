@@ -38,6 +38,7 @@ export const REQUIRED_FORGE_OPERATIONS = [
   'workitem.labels.set',
   'workitem.comment.upsert',
   'workitem.close',
+  'workitem.create',
 ] as const;
 
 export interface ForgeProbe {

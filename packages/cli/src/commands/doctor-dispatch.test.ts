@@ -125,7 +125,7 @@ test.each([true, false])(
   }
 );
 
-test('released v0.11.1 refuses the same seven missing operations in doctor and run preflight', async () => {
+test('released v0.11.1 refuses the same eight missing operations in doctor and run preflight', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-doctor-release-'));
   const savedEnv = { ...process.env };
   const savedCwd = process.cwd();
@@ -187,6 +187,7 @@ test('released v0.11.1 refuses the same seven missing operations in doctor and r
       'workitem.labels.set',
       'workitem.comment.upsert',
       'workitem.close',
+      'workitem.create',
     ])
       expect(result.message).toContain(op);
     expect(await doctorCommand([async () => result])).toBe(1);
