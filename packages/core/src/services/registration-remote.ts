@@ -62,15 +62,24 @@ export async function effectiveRegistrationUrl(
   return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
+/**
+ * A saved checkout belongs to a repository when any of its remotes points there.
+ * worktree.remote only selects the remote for new worktrees; a project saved
+ * under another remote's URL still owns its checkout.
+ */
 export async function assertCheckoutRemote(path: string, remoteUrl: string): Promise<void> {
   try {
-    const checkoutUrl = await effectiveRegistrationUrl(path);
-    if (
-      !checkoutUrl ||
-      (await remoteIdentity(checkoutUrl, path)) !== (await remoteIdentity(remoteUrl))
-    ) {
-      throw new Error('Checkout remote does not match the registered repository.');
+    const expected = await remoteIdentity(remoteUrl);
+    const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
+    for (const name of stdout.split(/\r?\n/).map(name => name.trim())) {
+      if (!name) continue;
+      const url = (
+        await execFileAsync('git', ['-C', path, 'remote', 'get-url', name])
+      ).stdout.trim();
+      if (url && (await remoteIdentity(resolveRegistrationUrl(url, path), path)) === expected)
+        return;
     }
+    throw new Error('No checkout remote matches the registered repository.');
   } catch (error) {
     throw new ProjectRegistrationError(
       `Cannot verify checkout ownership at ${path}. ` +

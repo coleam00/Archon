@@ -62,67 +62,71 @@ afterEach(() => {
 for (const forge of forges) {
   describe(`${forge.name} saved checkout ownership`, () => {
     for (const layout of ['worktrees', 'checkouts']) {
-      test.each(['matching', 'configured', 'foreign', 'no-remote', 'invalid'] as const)(
-        `checks a real main checkout under ${layout}: %s`,
-        async state => {
-          const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-checkout-owner-')));
-          const path = join(root, layout, 'api');
-          await mkdir(path, { recursive: true });
-          if (state === 'invalid') {
-            await mkdir(join(path, '.git'));
-          } else {
-            execFileSync('git', ['-C', path, 'init', '-q']);
-            if (state !== 'no-remote') {
-              const repo = state === 'foreign' ? 'other/repository' : 'acme/api';
-              execFileSync('git', [
-                '-C',
-                path,
-                'remote',
-                'add',
-                state === 'configured' ? 'upstream' : 'origin',
-                `git@${forge.host}:${repo}.git`,
-              ]);
-            }
-            if (state === 'configured') {
-              execFileSync('git', [
-                '-C',
-                path,
-                'remote',
-                'add',
-                'origin',
-                `https://${forge.host}/other/repository`,
-              ]);
-              await mkdir(join(path, '.archon'));
-              await writeFile(
-                join(path, '.archon', 'config.yaml'),
-                'worktree:\n  remote: upstream\n'
-              );
-            }
+      test.each([
+        'matching',
+        'configured',
+        'unselected',
+        'foreign',
+        'no-remote',
+        'invalid',
+      ] as const)(`checks a real main checkout under ${layout}: %s`, async state => {
+        const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-checkout-owner-')));
+        const path = join(root, layout, 'api');
+        await mkdir(path, { recursive: true });
+        if (state === 'invalid') {
+          await mkdir(join(path, '.git'));
+        } else {
+          execFileSync('git', ['-C', path, 'init', '-q']);
+          if (state !== 'no-remote') {
+            const repo = state === 'foreign' ? 'other/repository' : 'acme/api';
+            execFileSync('git', [
+              '-C',
+              path,
+              'remote',
+              'add',
+              state === 'configured' ? 'upstream' : 'origin',
+              `git@${forge.host}:${repo}.git`,
+            ]);
           }
-          const existing = codebaseRowSchema.parse({
-            id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
-            name: 'local-api',
-            default_cwd: path,
-            repository_url: `https://${forge.host}/acme/api`,
-            kind: 'repo',
-            commands: {},
-            default_branch: null,
-            ai_assistant_type: null,
-            created_at: new Date(),
-            updated_at: new Date(),
-          });
-          findCodebase.mockResolvedValue(existing);
-          if (state === 'matching' || state === 'configured') {
-            const result = await forge.route();
-            expect(result.repoPath).toBe(path);
-            expect(result.codebase).toBe(existing);
-          } else {
-            await expect(forge.route()).rejects.toThrow('/update-project');
+          if (state === 'configured' || state === 'unselected') {
+            execFileSync('git', [
+              '-C',
+              path,
+              'remote',
+              'add',
+              state === 'configured' ? 'origin' : 'upstream',
+              `https://${forge.host}/other/repository`,
+            ]);
+            await mkdir(join(path, '.archon'));
+            await writeFile(
+              join(path, '.archon', 'config.yaml'),
+              'worktree:\n  remote: upstream\n'
+            );
           }
-          expect(existing.default_cwd).toBe(path);
-          expect(updateCodebase).not.toHaveBeenCalled();
         }
-      );
+        const existing = codebaseRowSchema.parse({
+          id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+          name: 'local-api',
+          default_cwd: path,
+          repository_url: `https://${forge.host}/acme/api`,
+          kind: 'repo',
+          commands: {},
+          default_branch: null,
+          ai_assistant_type: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        findCodebase.mockResolvedValue(existing);
+        if (state === 'matching' || state === 'configured' || state === 'unselected') {
+          const result = await forge.route();
+          expect(result.repoPath).toBe(path);
+          expect(result.codebase).toBe(existing);
+        } else {
+          await expect(forge.route()).rejects.toThrow('/update-project');
+        }
+        expect(existing.default_cwd).toBe(path);
+        expect(updateCodebase).not.toHaveBeenCalled();
+      });
     }
   });
 }

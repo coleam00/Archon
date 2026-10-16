@@ -113,6 +113,29 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each(['url', 'path'] as const)(
+    'a saved checkout whose config selects another remote is still reused on %s reuse',
+    async entry => {
+      const root = await makeHome();
+      const path = await gitCheckout(join(root, 'api'), 'https://github.com/acme/api.git');
+      // Registered before worktree.remote selected a different remote for new worktrees.
+      const saved = await createCodebase({
+        name: 'acme/api',
+        default_cwd: path,
+        repository_url: 'https://github.com/acme/api.git',
+      });
+      execFileSync('git', ['-C', path, 'remote', 'add', 'upstream', 'https://github.com/me/api']);
+      await mkdir(join(path, '.archon'));
+      await writeFile(join(path, '.archon/config.yaml'), 'worktree:\n  remote: upstream\n');
+
+      const reused = await (entry === 'url'
+        ? cloneRepository(codebases, 'https://github.com/acme/api')
+        : registerRepository(path));
+
+      expect(reused).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
+    }
+  );
+
   test.each(['checkout', 'file', 'link'] as const)(
     'local registration refuses a source path occupied by a foreign %s before inserting',
     async occupant => {
