@@ -62,7 +62,7 @@ export async function resolveRegisteredWorktree(
       `Cannot adopt: worktree path '${lane.environment.working_path}' does not match isolation environment ${env.id} at '${env.working_path}'.`
     );
   }
-  if (!sameWorktreeRegistration(env, lane.environment)) {
+  if (env.status !== 'active' || !sameWorktreeRegistration(env, lane.environment)) {
     throw new WorkflowAdoptionError(
       `Worktree ${env.id} changed during adoption; inspect it and retry`
     );

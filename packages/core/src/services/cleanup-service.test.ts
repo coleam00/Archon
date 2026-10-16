@@ -226,7 +226,9 @@ mock.module('@archon/isolation', () => ({
 const mockListAllActiveWithCodebase = mock<typeof IsolationEnvironmentDb.listAllActiveWithCodebase>(
   () => Promise.resolve([])
 );
-const mockUpdateStatus = mock<typeof IsolationEnvironmentDb.updateStatus>(() => Promise.resolve());
+const mockMarkWorktreeDestroyed = mock<typeof IsolationEnvironmentDb.markWorktreeDestroyed>(() =>
+  Promise.resolve()
+);
 const mockGetLiveRunOwningEnv = mock<typeof IsolationEnvironmentDb.getLiveRunOwningEnv>(() =>
   Promise.resolve(null)
 );
@@ -245,7 +247,8 @@ const mockListActiveContainerEnvironments = mock<
 >(() => Promise.resolve([]));
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  updateStatus: mockUpdateStatus,
+  updateStatus: mock(() => Promise.resolve()),
+  markWorktreeDestroyed: mockMarkWorktreeDestroyed,
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
@@ -320,10 +323,12 @@ describe('reclaimContainerEnv', () => {
     const store: IIsolationStore = {
       getById: async () => null,
       findActiveByWorkflow: async () => null,
+      listActive: async () => [],
       create: async () => {
         throw new Error('Unexpected create');
       },
       updateStatus: async () => {},
+      markWorktreeDestroyed: async () => {},
       updateMetadata: async () => undefined,
       countActiveByCodebase: async () => 0,
     };
@@ -439,7 +444,7 @@ describe('cleanup-service', () => {
     mockIsBranchMerged.mockClear();
     mockGetLastCommitDate.mockClear();
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockLoadRepoConfig.mockClear();
@@ -458,7 +463,7 @@ describe('cleanup-service', () => {
       const result = await removeEnvironment('env-1', { force: true });
       expect(result.skippedReason).toContain('not a worktree');
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
 
     test('calls destroy with canonicalRepoPath even when directory is missing', async () => {
@@ -500,7 +505,9 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
       });
       // Should mark as destroyed
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
       // Should return success result
       expect(result.worktreeRemoved).toBe(true);
       expect(result.skippedReason).toBeUndefined();
@@ -545,7 +552,7 @@ describe('cleanup-service', () => {
       );
 
       await expect(removeEnvironment(envId)).rejects.toThrow('No such file or directory');
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
 
     test('logs warnings from partial destroy and still marks as destroyed', async () => {
@@ -589,7 +596,9 @@ describe('cleanup-service', () => {
       await removeEnvironment(envId);
 
       // Should still mark as destroyed despite partial cleanup
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('passes deleteRemoteBranch to provider.destroy when specified', async () => {
@@ -630,7 +639,9 @@ describe('cleanup-service', () => {
         deleteRemoteBranch: true,
         remote: 'origin',
       });
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('passes configured worktree.remote to provider.destroy for remote branch deletion', async () => {
@@ -738,7 +749,9 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
         deleteRemoteBranch: undefined,
       });
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('returns skippedReason when worktree has uncommitted changes without force', async () => {
@@ -777,7 +790,7 @@ describe('cleanup-service', () => {
 
       // Should NOT call destroy or mark as destroyed
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       // Should return skipped result
       expect(result.worktreeRemoved).toBe(false);
       expect(result.branchDeleted).toBe(false);
@@ -793,7 +806,7 @@ describe('cleanup-service', () => {
 
       await expect(removeEnvironment('env-1')).rejects.toBe(failure);
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
 
     test('skippedReason is a closed vocabulary callers can branch on', () => {
@@ -819,7 +832,7 @@ describe('cleanup-service', () => {
         });
         const result = await removeEnvironment('env-1');
         expect(result.skippedReason).toContain('filesystem removal incomplete');
-        expect(mockUpdateStatus).not.toHaveBeenCalled();
+        expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       }
     );
 
@@ -910,7 +923,7 @@ describe('cleanup-service', () => {
       await expect(removeEnvironment(envId)).rejects.toThrow('local modifications');
 
       // Should NOT mark as destroyed
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
   });
 });
@@ -926,7 +939,7 @@ describe('runScheduledCleanup', () => {
     mockGetLastCommitDate.mockClear();
     mockDestroy.mockClear();
     mockListAllActiveWithCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
@@ -963,7 +976,7 @@ describe('runScheduledCleanup', () => {
     expect(mockWorktreeExists).not.toHaveBeenCalled();
     expect(mockGetPrState).not.toHaveBeenCalled();
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('returns empty report when no environments exist', async () => {
@@ -1032,7 +1045,9 @@ describe('runScheduledCleanup', () => {
         branchName: 'issue-42',
         canonicalRepoPath: '/workspace/repo',
       });
-      expect(mockUpdateStatus).toHaveBeenCalledWith('env-123', 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-123' })
+      );
     }
   );
 
@@ -1191,7 +1206,7 @@ describe('runScheduledCleanup', () => {
     expect(report.errors).toEqual([{ id: 'env-1', error: 'status unavailable' }]);
     expect(report.skipped).toEqual([]);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('skips merged branches with a live owning run and a live-run reason', async () => {
@@ -1257,7 +1272,7 @@ describe('runScheduledCleanup', () => {
       reason: 'stale but run run-live is running',
     });
     expect(report.removed).toHaveLength(0);
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('skips path-missing environments owned by a live run', async () => {
@@ -1289,7 +1304,7 @@ describe('runScheduledCleanup', () => {
     });
     expect(report.removed).toHaveLength(0);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('skips environments with a retain policy', async () => {
@@ -1340,8 +1355,10 @@ describe('runScheduledCleanup', () => {
     const report = await runScheduledCleanup();
     expect(report.removed).toEqual(['age-based (stale)']);
     expect(report.errors).toEqual([]);
-    expect(mockUpdateStatus).toHaveBeenCalledTimes(1);
-    expect(mockUpdateStatus).toHaveBeenCalledWith('age-based', 'destroyed');
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledTimes(1);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'age-based' })
+    );
   });
 
   test('scheduled cleanup without configured platform policies fails and deletes nothing', async () => {
@@ -1355,7 +1372,7 @@ describe('runScheduledCleanup', () => {
     try {
       await expect(runScheduledCleanup()).rejects.toThrow('Platform policies are not configured');
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       expect(mockDeleteOldSessions).not.toHaveBeenCalled();
     } finally {
       mockListAllActiveWithCodebase.mockResolvedValue([]);
@@ -1712,7 +1729,7 @@ describe('runScheduledCleanup', () => {
       reason: 'PR is open (active review)',
     });
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   // A PR lookup that fails is reported as 'NONE' by getPrState, never 'MERGED'.
@@ -1755,7 +1772,7 @@ describe('runScheduledCleanup', () => {
     });
     expect(report.removed).toHaveLength(0);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   // An open PR is active work. Age must not decide it, and the operator needs to see why
@@ -1902,14 +1919,14 @@ describe('cleanup environment configuration', () => {
     mockGetCodebase.mockResolvedValue(makeCodebase());
     mockWorktreeExists.mockResolvedValue(true);
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
 
     try {
       const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
 
       expect(result).toEqual({ removed: [], skipped: [], releasedFailedRuns: [] });
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     } finally {
       mockGetById.mockResolvedValue(null);
       mockGetCodebase.mockResolvedValue(null);
@@ -2160,7 +2177,7 @@ describe('cleanupMergedWorktrees', () => {
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
@@ -2916,7 +2933,7 @@ describe('onConversationClosed', () => {
   beforeEach(() => {
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2951,7 +2968,7 @@ describe('onConversationClosed', () => {
     expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockContainerDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
       {
         envId: env.id,
@@ -3242,7 +3259,7 @@ describe('cleanupStaleWorktrees', () => {
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
@@ -3381,7 +3398,7 @@ describe('cleanup after a chat plugin is removed', () => {
     setPlatformPolicies(ageBasedPolicies);
     mockDestroy.mockClear();
     mockContainerDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockWorktreeExists.mockReset();
     mockIsBranchMerged.mockReset();
     mockIsBranchMerged.mockResolvedValue(true);
@@ -3403,7 +3420,7 @@ describe('cleanup after a chat plugin is removed', () => {
       expect(report.errors).toEqual([]);
       expect(mockWorktreeExists).not.toHaveBeenCalled();
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     }
   );
 
@@ -3427,7 +3444,7 @@ describe('cleanup after a chat plugin is removed', () => {
     expect(breakdown.merged).toBe(0);
     expect(breakdown.activeEnvs).toEqual([{ id: env.id, branchName: env.branch_name, reason }]);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('container reaping reports unknown platforms without destroying them', async () => {
@@ -3444,7 +3461,7 @@ describe('cleanup after a chat plugin is removed', () => {
     mockGetById.mockResolvedValueOnce(makeEnvironment({ created_by_platform: platform }));
     expect((await removeEnvironment('env-1')).skippedReason).toBe(reason);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test.each(['web', 'cli', null])(
@@ -3461,7 +3478,9 @@ describe('cleanup after a chat plugin is removed', () => {
       const report = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
       expect(report.removed).toEqual([env.branch_name]);
       expect(report.skipped).toEqual([]);
-      expect(mockUpdateStatus).toHaveBeenCalledWith(env.id, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: env.id })
+      );
     }
   );
 });
@@ -3473,7 +3492,7 @@ describe('worktree cleanup provider ownership', () => {
     mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
     mockGetPrState.mockClear();
     mockWorktreeExists.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockDestroy.mockClear();
     expect((await cleanupMergedWorktrees('cb', '/repo')).removed).toEqual([]);
     expect((await cleanupStaleWorktrees('cb', '/repo')).removed).toEqual([]);
@@ -3481,7 +3500,7 @@ describe('worktree cleanup provider ownership', () => {
     expect(mockGetPrState).not.toHaveBeenCalled();
     expect(mockWorktreeExists).not.toHaveBeenCalled();
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 });
 
@@ -3517,7 +3536,7 @@ describe('failed-run lock release', () => {
     mockGetById.mockReset();
     mockGetById.mockImplementation(id => Promise.resolve(makeEnvironment({ id })));
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
   });
 
   function releasedByTheSweep(): void {
@@ -3637,7 +3656,9 @@ describe('failed-run lock release', () => {
         { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
       ]);
       expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/repo', countRevs);
-      expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-failed', 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-stale-failed' })
+      );
     }
   );
 
@@ -3662,7 +3683,7 @@ describe('failed-run lock release', () => {
       expect(report.skipped).toEqual([{ id: 'env-stale-failed', reason }]);
       expect(report.removed).toEqual([]);
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     }
   );
 
@@ -3679,7 +3700,7 @@ describe('failed-run lock release', () => {
     });
     expect(report.removed).toEqual([]);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('the stale sweep keeps a failed run still inside the window', async () => {

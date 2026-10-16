@@ -465,7 +465,7 @@ async function handleWorktreeCommand(
         }
 
         // Update database record status
-        await isolationEnvDb.updateStatus(isolationEnvId, 'destroyed');
+        await isolationEnvDb.markWorktreeDestroyed(isolationEnv);
 
         // Clear isolation reference, set cwd to main repo
         await db.updateConversation(conversation.id, {

@@ -19,9 +19,4 @@ export class ActiveWorktreeEnvironmentsError extends Error {
   }
 }
 
-export class WorktreeRegistrationChangedError extends Error {
-  constructor(readonly environmentId: string) {
-    super(`Worktree ${environmentId} changed during cleanup; inspect it and retry deletion`);
-    this.name = 'WorktreeRegistrationChangedError';
-  }
-}
+export { WorktreeRegistrationChangedError } from '@archon/isolation/types';

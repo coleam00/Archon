@@ -1708,10 +1708,12 @@ describe('WorktreeProvider', () => {
       const store: IIsolationStore = {
         getById: async () => null,
         findActiveByWorkflow: async () => null,
+        listActive: async () => [],
         create: async () => {
           throw new Error('DB constraint violation');
         },
         updateStatus: async () => undefined,
+        markWorktreeDestroyed: async () => undefined,
         updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,
       };

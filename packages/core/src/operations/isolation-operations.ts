@@ -55,12 +55,7 @@ export { type CleanupOperationResult, type MergedCleanupResult } from '../servic
  * its lock once they settle one. The env stays visible in `isolation list` with
  * its missing path, which is the operator's signal to act.
  */
-async function reconcileGhosts(
-  envs: readonly Pick<
-    IsolationEnvironmentRow,
-    'id' | 'provider' | 'working_path' | 'created_by_platform'
-  >[]
-): Promise<number> {
+async function reconcileGhosts(envs: readonly IsolationEnvironmentRow[]): Promise<number> {
   let reconciled = 0;
   for (const env of envs) {
     if (env.provider !== 'worktree') continue;
@@ -91,7 +86,7 @@ async function reconcileGhosts(
           );
           continue;
         }
-        await isolationDb.updateStatus(env.id, 'destroyed');
+        await isolationDb.markWorktreeDestroyed(env);
         getLog().info({ envId: env.id, path: env.working_path }, 'isolation.ghost_reconciled');
         reconciled++;
       }

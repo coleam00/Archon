@@ -2,7 +2,7 @@
 import { expect, mock, test } from 'bun:test';
 import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { IIsolationProvider } from '@archon/isolation';
+import type { IIsolationProvider, IIsolationStore } from '@archon/isolation';
 import { toBranchName } from '@archon/git';
 import { HeadlessPlatform } from './headless-platform';
 
@@ -56,7 +56,20 @@ mock.module('./resolve-run-workflow', () => ({
 }));
 const { resumeWorkflowContinuation } = await import('./continuation-host');
 
-const isolationCreate = mock(async (_input: unknown) => ({ id: 'child-env' }));
+const isolationCreate = mock<IIsolationStore['create']>(async input => ({
+  ...input,
+  id: 'child-env',
+  provider: input.provider ?? 'worktree',
+  status: 'active',
+  created_at: new Date(),
+  created_by_platform: input.created_by_platform ?? null,
+  created_by_user_id: input.created_by_user_id ?? null,
+  metadata: input.metadata ?? {},
+}));
+const isolationStore = {
+  create: isolationCreate,
+  listActive: async () => [],
+} satisfies Parameters<typeof import('./registered-worktree').createRegisteredWorktree>[0];
 
 /** Resume `run` through the host and resolve one child, returning the engine's resume input. */
 async function resumeAndResolveChild(
@@ -94,7 +107,7 @@ async function resumeAndResolveChild(
             default_branch: storedBranch,
           }),
         },
-        isolation: { create: isolationCreate },
+        isolation: isolationStore,
       },
     } as unknown as import('./host-store').WorkflowHost,
     resumedRun.id,

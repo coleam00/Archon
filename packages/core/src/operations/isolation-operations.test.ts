@@ -20,11 +20,14 @@ const mockListAllActiveWithCodebase = mock<typeof IsolationDb.listAllActiveWithC
 const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>(() =>
   Promise.resolve([])
 );
-const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
+const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>(() =>
+  Promise.resolve()
+);
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
-  updateStatus: mockUpdateStatus,
+  updateStatus: mock(() => Promise.resolve()),
+  markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
 
 const MERGED_BASE_REF = toBranchName('origin/main');
@@ -100,7 +103,7 @@ describe('listEnvironments', () => {
     mockListByCodebaseWithAge.mockClear();
     mockLstat.mockReset();
     mockLstat.mockImplementation(() => Promise.resolve());
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetLiveRunBlocker.mockClear();
     mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
     mockLogger.info.mockClear();
@@ -128,7 +131,7 @@ describe('listEnvironments', () => {
     expect(result.codebases[0]?.environments[0]?.cleanupSkipReason).toContain(
       "platform 'removed-chat' is not registered"
     );
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(mockLstat).not.toHaveBeenCalled();
   });
 
@@ -140,7 +143,7 @@ describe('listEnvironments', () => {
     const result = await listEnvironments();
     expect(result.ghostsReconciled).toBe(0);
     expect(result.codebases[0]?.environments).toEqual([env]);
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(mockLstat).not.toHaveBeenCalled();
   });
 
@@ -156,7 +159,9 @@ describe('listEnvironments', () => {
 
     const result = await listEnvironments();
 
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-ghost', 'destroyed');
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'env-ghost' })
+    );
     expect(result.ghostsReconciled).toBe(1);
     expect(result.totalEnvironments).toBe(0); // re-fetch returned empty
   });
@@ -180,7 +185,7 @@ describe('listEnvironments', () => {
 
     const result = await listEnvironments();
 
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(result.ghostsReconciled).toBe(0);
     // No re-fetch, and the env stays visible so the operator can act on it.
     expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
@@ -209,7 +214,7 @@ describe('listEnvironments', () => {
 
     // Should not throw — error is swallowed per the try/catch in reconcileGhosts
     await expect(listEnvironments()).resolves.toBeDefined();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ envId: 'env-err' }),
       'isolation.ghost_reconciliation_failed'
