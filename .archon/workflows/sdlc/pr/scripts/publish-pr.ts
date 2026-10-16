@@ -18,7 +18,8 @@
  * - INPUTS_HEAD / INPUTS_BASE: the head and base branch names.
  * - INPUTS_BRANCH: the branch a new pull request opens from, as the caller resolved
  *   it; empty uses INPUTS_HEAD.
- * - INPUTS_EXISTING: the pull request this run continues, or `null`.
+ * - INPUTS_EXISTING: the pull request prepare found for this work, or `null`. It is
+ *   continued only when the caller named it or selected no branch.
  * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
  * - INPUTS_TITLE: the title.
  * - INPUTS_BODY: the certified body file.
@@ -53,7 +54,13 @@ function publish(): PrRecord {
     );
   }
 
-  if (existing !== null) {
+  // A branch the caller selected decides the pull request over one prepare found
+  // unnamed, which may sit on the checkout's other branch: only an open pull request
+  // with that head is reused below.
+  const branch = trimmed(process.env.INPUTS_BRANCH);
+  if (existing !== null && named === null && branch) {
+    note(`publish-pr: the caller selected ${branch}; pull request ${String(existing)} is reused only if it has that head.`);
+  } else if (existing !== null) {
     const view = viewPr({ repo, number: existing }, source);
     const prHeadRepo = view.pr.head_repo;
     if (view.pr.state !== 'open') {
@@ -67,7 +74,7 @@ function publish(): PrRecord {
     return viewPr({ repo, number: existing }, source).pr;
   }
 
-  const head = trimmed(process.env.INPUTS_BRANCH) || text(process.env.INPUTS_HEAD);
+  const head = branch || text(process.env.INPUTS_HEAD);
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
 
   const open = findOpenPrByHead(repo, headRepo, head, source);
