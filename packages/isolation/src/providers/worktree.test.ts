@@ -3194,11 +3194,13 @@ describe('WorktreeProvider', () => {
         const store: IIsolationStore = {
           getById: async () => null,
           findActiveByWorkflow: async () => null,
+          listActive: async () => [],
           create: async () => {
             throw new Error('must not persist a failed creation');
           },
           updateStatus: async () => undefined,
           updateMetadata: async () => undefined,
+          markWorktreeDestroyed: async () => undefined,
           countActiveByCodebase: async () => 0,
         };
         const resolver = new IsolationResolver({ store, provider });

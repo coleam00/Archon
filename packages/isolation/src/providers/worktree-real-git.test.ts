@@ -373,6 +373,7 @@ describe('WorktreeProvider against real git', () => {
           getById: async () => null,
           findActiveByWorkflow: async () => null,
           countActiveByCodebase: async () => 0,
+          listActive: async () => [],
           create: async () => {
             throw new Error('refused adoption must not create a row');
           },
@@ -381,6 +382,9 @@ describe('WorktreeProvider against real git', () => {
           },
           updateStatus: async () => {
             throw new Error('refused adoption must not change status');
+          },
+          markWorktreeDestroyed: async () => {
+            throw new Error('refused adoption must not retire a row');
           },
         },
       });
