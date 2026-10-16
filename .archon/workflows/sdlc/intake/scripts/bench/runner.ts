@@ -402,9 +402,6 @@ const MERGED_REFERENCES_QUERY = [
 /** Merged pull requests on the batch base that reference the original issue; the operator judges whether they fix it. */
 export function readMergedOnBase(repo: Repo, number: number, repoRoot: string, base: string): readonly string[] {
   const where = issueKey(repo, number);
-  const history = git('-C', repoRoot, 'rev-parse', '--is-shallow-repository');
-  if (history.code !== 0) throw new Error(`${where}: cannot check source history: ${history.stderr}`);
-  if (history.stdout !== 'false') throw new Error(`${where}: source history is shallow; run git fetch --unshallow in the source checkout before rerunning`);
   const slash = repo.path.indexOf('/');
   const result = Bun.spawnSync(
     [
@@ -436,6 +433,10 @@ export function readMergedOnBase(repo: Repo, number: number, repoRoot: string, b
     throw new Error(`${where} answered with incomplete reference history`);
   }
   if (refs.pageInfo.hasNextPage) throw new Error(`${where} has more than 100 cross-references; the bench reads only the first page`);
+  if (refs.nodes.length === 0) return [];
+  const history = git('-C', repoRoot, 'rev-parse', '--is-shallow-repository');
+  if (history.code !== 0) throw new Error(`${where}: cannot check source history: ${history.stderr}`);
+  if (history.stdout !== 'false') throw new Error(`${where}: source history is shallow; run git fetch --unshallow in the source checkout before rerunning`);
   const merged = new Set<string>();
   for (const node of refs.nodes) {
     const pr = isObject(node) ? (isObject(node.source) ? node.source : node.subject) : undefined;

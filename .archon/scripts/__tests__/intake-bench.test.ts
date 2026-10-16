@@ -37,7 +37,7 @@ import {
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
-import { MARKS_FILE, falseClose, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
+import { MARKS_FILE, closeCheck, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
   humanType,
@@ -379,6 +379,19 @@ describe('bench run', () => {
     expect(lines.find(line => line.row === '11')?.run_id).toBeNull();
     expect(argv(1)).toContain('number=102');
     expect(() => argv(2)).toThrow();
+  });
+
+  it('accepts complete empty merged-base references in a shallow source checkout', () => {
+    const { repo, cli } = bench();
+    const shallow = track(mkdtempSync(join(tmpdir(), 'intake-bench-shallow-')));
+    ok(shallow, 'clone', '-q', '--depth=1', `file://${repo}`, '.');
+    expect(ok(shallow, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    const reader = join(import.meta.dir, '../../workflows/sdlc/intake/scripts/bench/runner.ts');
+    const result = spawnSync(process.execPath, ['--preload', join(cli, 'preload.ts'), '--eval',
+      `import { readMergedOnBase } from ${JSON.stringify(reader)}; console.log(JSON.stringify(readMergedOnBase(${JSON.stringify(REPO)}, 11, process.cwd(), 'HEAD')));`,
+    ], { cwd: shallow, encoding: 'utf8' });
+    expect([result.status, result.stderr]).toEqual([0, '']);
+    expect(JSON.parse(result.stdout)).toEqual([]);
   });
 
   for (const fetchMergeObject of [false, true]) {
@@ -902,8 +915,8 @@ describe('score', () => {
   it('lets a wrong operator mark overturn an open close disposition, retaining closed rows', () => {
     const disposed = row(21, { group: 'dispositioned', known: { disposition: { contract: 'NO_ACTION' } } });
     const proposed = line('a', disposed, '2-y', { mode: 'live', workflow: 'intake' });
-    expect(([undefined, 'right', 'wrong', 'partly'] as const).map(mark => falseClose(disposed, proposed, mark))).toEqual([false, false, true, false]);
-    expect(falseClose(fixed, line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }), 'wrong')).toBe(false);
+    expect(([undefined, 'right', 'wrong', 'partly'] as const).map(mark => closeCheck(disposed, proposed, mark))).toEqual([null, null, 'false', null]);
+    expect(closeCheck(fixed, line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }), 'wrong')).toBeNull();
     const out = liveOut();
     appendLine(join(out, SAMPLES_FILE), proposed);
     appendLine(join(out, MARKS_FILE), { run_id: proposed.run_id, batch: 2, row: disposed.id, label: 'a', mark: 'wrong', note: '' });
@@ -914,6 +927,7 @@ describe('score', () => {
     const out = liveOut();
     expect(renderPage(set, out, 1)).toContain('Counts as a false close unless you mark it right.');
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: '' });
+    expect(renderPage(set, out, 1)).not.toContain('Counts as a false close unless you mark it right.');
     const blocked = row(10, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
     const ready = { verdict: { ...line('a', blocked, '2-y').verdict!, contract: 'READY' as const, route: 'plan' as const } };
     appendLine(join(out, SAMPLES_FILE), line('a', blocked, '2-y', { ...ready, mode: 'live', workflow: 'intake' }));

@@ -91,25 +91,17 @@ export function isJudged(line: Line, checks: ReadonlyMap<string, BatchChecks>): 
 }
 
 /**
- * What a close proposal on this row is before the operator's mark. Null when the line
- * proposes no close, or the row was closed when the set was pinned (the duplicate,
- * fixed and not-planned bars reward that close), or the operator dispositioned it
- * closed. `pending` when a merged pull request on the batch base references the
- * issue, awaiting the operator's judgment of whether it fixes it, or when a historical
- * live line has no collected evidence;
- * otherwise `false`.
+ * Operator marks decide close proposals on open rows, overriding dispositions and
+ * merged-base evidence. Without a decisive mark, referenced PRs or uncollected live
+ * evidence need judgment; a close disposition accepts the proposal.
  */
-export function closeCheck(row: Row, line: Line): 'false' | 'pending' | null {
-  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group] || row.known.disposition?.contract === 'NO_ACTION') return null;
+export function closeCheck(row: Row, line: Line, mark: MarkValue | undefined): 'false' | 'pending' | null {
+  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group]) return null;
+  if (mark === 'right') return null;
+  if (mark === 'wrong') return 'false';
+  if (row.known.disposition?.contract === 'NO_ACTION') return null;
   if (line.mode === 'live' && line.merged_on_base === undefined) return 'pending';
   return (line.merged_on_base ?? []).length > 0 ? 'pending' : 'false';
-}
-
-/** Operator marks override the expected answer for an open row's close proposal. */
-export function falseClose(row: Row, line: Line, mark: MarkValue | undefined): boolean {
-  if (line.verdict?.contract !== 'NO_ACTION' || !GROUP_OPEN[row.group]) return false;
-  if (mark === 'right' || mark === 'wrong') return mark === 'wrong';
-  return closeCheck(row, line) === 'false';
 }
 
 /** Whether a verdict links the canonical issue, by its close proposal or its maintainer recommendation. */
@@ -259,9 +251,9 @@ function scoreVersion(
     failed_batches: batchRuns.filter(batchRun => checks.get(batchRun)?.passed !== true),
     outside: { rows: outsideLines.length, ran_agent: outsideLines.filter(line => line.agent_nodes.length > 0).length },
     bars: Object.fromEntries(BARS.map(entry => [entry.group, bar(entry.group, entry.at_least)])) as VersionScore['bars'],
-    false_closes: openLines.filter(line => falseClose(rows.get(line.row) as Row, line, markOf(line))).map(line => line.row),
+    false_closes: openLines.filter(line => closeCheck(rows.get(line.row) as Row, line, markOf(line)) === 'false').map(line => line.row),
     pending_closes: openLines
-      .filter(line => closeCheck(rows.get(line.row) as Row, line) === 'pending' && markOf(line) !== 'wrong' && markOf(line) !== 'right')
+      .filter(line => closeCheck(rows.get(line.row) as Row, line, markOf(line)) === 'pending')
       .map(line => line.row),
     open_rows: openLines.length,
     type: { rows: typed.length, agree, matrix },

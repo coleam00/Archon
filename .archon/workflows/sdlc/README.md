@@ -397,13 +397,14 @@ are the operator's and stay outside the pack and the repository.
   there, reading each verdict from the copy's work item. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
   scratch repository may not be the set's own or another version's. Each copy holds
-  the pinned creation text, so lookups need no rewriting. Each live line records
+  the pinned text, so lookups need no rewriting. Each live line records
   merged pull requests on the base that reference the original issue, for scoring.
   If that evidence is incomplete, the row does not run and its line says why;
-  reference histories exceeding the first 100 events and shallow source checkouts
-  are refused. Unshallow the source checkout before rerunning. Older live lines
-  without collected evidence keep close proposals pending until rerun or marked
-  right or wrong.
+  reference histories exceeding the first 100 events are refused. Rows with
+  references also require a complete source history: unshallow the source checkout
+  before rerunning. Complete empty reference responses need no history check. Older
+  live lines without collected evidence keep close proposals pending until rerun or
+  marked right or wrong.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The

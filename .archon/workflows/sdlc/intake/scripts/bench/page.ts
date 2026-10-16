@@ -52,9 +52,9 @@ function verdictCell(line: Line, row: Row, outDir: string, mark: MarkValue | und
       const { closure } = verdict;
       const target = closure == null ? '' : `: ${closure.kind === 'duplicate' ? 'duplicate of' : 'delivered by'} ${link(closure.url)}`;
       parts.push(`<div><b>Proposes close</b> without a person${target}</div>`);
-      const checked = closeCheck(row, line);
+      const checked = closeCheck(row, line, mark);
       if (checked === 'false') parts.push('<div class="warn">Counts as a false close unless you mark it right.</div>');
-      if (checked === 'pending' && mark !== 'right' && mark !== 'wrong') {
+      if (checked === 'pending') {
         if (line.merged_on_base === undefined) {
           parts.push('<div class="warn">Merged-base evidence was not collected. Rerun this live row to collect it, or judge the close yourself: the close bar stays pending until you mark it right or wrong.</div>');
         } else {
