@@ -38,6 +38,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
   let getById: typeof import('./isolation-environments').getById;
   let updateMetadata: typeof import('./isolation-environments').updateMetadata;
   let getLiveRunOwningEnv: typeof import('./isolation-environments').getLiveRunOwningEnv;
+  let markWorktreeDestroyed: typeof import('./isolation-environments').markWorktreeDestroyed;
 
   beforeAll(async () => {
     const { Pool } = await import('pg');
@@ -57,7 +58,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       getDatabaseType: () => 'postgresql',
     }));
 
-    ({ create, getLiveRunOwningEnv, getById, updateMetadata } =
+    ({ create, getLiveRunOwningEnv, getById, updateMetadata, markWorktreeDestroyed } =
       await import('./isolation-environments'));
   });
 
@@ -102,6 +103,47 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
     await updateMetadata(replacement.id, { adopted: true }, replacement);
     expect((await getById(created.id))?.metadata).toEqual({ label: 'replacement', adopted: true });
   });
+
+  test('legacy worktree retirement rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
+    const created = await createEnv('pg-legacy-retire');
+    await db.query(
+      'UPDATE remote_agent_isolation_environments SET metadata = $1::jsonb WHERE id = $2',
+      [JSON.stringify({ label: 'legacy' }), created.id]
+    );
+    const observed = (await getById(created.id))!;
+    await updateMetadata(created.id, { label: 'replacement' });
+    const replacement = (await getById(created.id))!;
+    await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+    expect(await getById(created.id)).toEqual(replacement);
+    await markWorktreeDestroyed(replacement);
+    expect((await getById(created.id))?.status).toBe('destroyed');
+  });
+
+  for (const legacy of [false, true]) {
+    test(`retirement of the observed registration is idempotent (legacy: ${legacy})`, async () => {
+      const created = await createEnv(`pg-idempotent-${legacy}`);
+      if (legacy)
+        await db.query(
+          "UPDATE remote_agent_isolation_environments SET metadata = '{}'::jsonb WHERE id = $1",
+          [created.id]
+        );
+      const observed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      const destroyed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      await markWorktreeDestroyed(destroyed);
+      expect(await getById(created.id)).toEqual(destroyed);
+      await expect(updateMetadata(created.id, { adopted: true }, destroyed)).rejects.toThrow(
+        'changed during adoption'
+      );
+      if (legacy) {
+        await updateMetadata(created.id, { replaced: true });
+        const replacement = await getById(created.id);
+        await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+        expect(await getById(created.id)).toEqual(replacement);
+      }
+    });
+  }
 
   async function seedConversation(id: string, envId: string | null): Promise<void> {
     // One param per column: $1 doubles as a UUID id and a varchar platform id,

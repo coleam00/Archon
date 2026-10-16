@@ -302,7 +302,7 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
   try {
     raw = JSON.parse(await readFile(file, 'utf-8'));
   } catch (error) {
-    throw new Error(`Cannot read ${file}: ${(error as Error).message}`);
+    throw new Error(`Cannot read ${file}: ${(error as Error).message}`, { cause: error });
   }
   const parsed = workflowPackManifestSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
@@ -313,20 +313,27 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
  * Every installed workflow pack under `roots`. A pack that cannot be read is reported,
  * not thrown: one broken install must not take the rest of the catalog down with it.
  */
-export async function listInstalledPacks(
-  root: InstalledPacksRoot
-): Promise<{ packs: InstalledPack[]; errors: { path: string; message: string }[] }> {
+export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
+  packs: InstalledPack[];
+  errors: { path: string; message: string; cause?: unknown; workflowName?: string }[];
+}> {
   const packs: InstalledPack[] = [];
-  const errors: { path: string; message: string }[] = [];
+  const errors: Awaited<ReturnType<typeof listInstalledPacks>>['errors'] = [];
   if (root.kind === 'receipts') {
     let scan: Awaited<ReturnType<typeof scanReceipts>>;
     try {
       scan = await scanReceipts(root.pluginsDir);
     } catch (error) {
-      errors.push({ path: root.pluginsDir, message: (error as Error).message });
+      errors.push({ path: root.pluginsDir, message: (error as Error).message, cause: error });
       return { packs, errors };
     }
-    errors.push(...scan.broken.map(entry => ({ path: entry.file, message: entry.message })));
+    errors.push(
+      ...scan.broken.map(entry => ({
+        path: entry.file,
+        message: entry.message,
+        cause: entry.cause,
+      }))
+    );
     for (const receipt of scan.receipts) {
       if (receipt.manifest.kind !== 'workflow-pack') continue;
       const owner = receipt.id.split('/')[0];
@@ -348,7 +355,14 @@ export async function listInstalledPacks(
           },
         });
       } catch (error) {
-        errors.push({ path: dir, message: (error as Error).message });
+        for (const entry of Object.keys(receipt.manifest.entrypoints)) {
+          errors.push({
+            path: dir,
+            workflowName: installedWorkflowName({ owner, name: receipt.manifest.name }, entry),
+            message: (error as Error).message,
+            cause: error,
+          });
+        }
       }
     }
     return { packs, errors };
@@ -372,7 +386,7 @@ export async function listInstalledPacks(
       }
       packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
     } catch (error) {
-      errors.push({ path: dir, message: (error as Error).message });
+      errors.push({ path: dir, message: (error as Error).message, cause: error });
     }
   }
   return { packs, errors };
@@ -397,7 +411,12 @@ export async function packagedWorkflowDirectory(
     case 'bundled':
       return join(roots.bundledWorkflows, owner.pack, owner.workflow);
     case 'installed': {
-      const { packs } = await listInstalledPacks(roots.installed);
+      const { packs, errors } = await listInstalledPacks(roots.installed);
+      if (roots.installed.kind === 'captured') {
+        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, owner.pack);
+        const failure = errors.find(error => error.path === packPath);
+        if (failure) throw failure.cause ?? new Error(failure.message);
+      }
       const pack = packs.find(p => p.key === owner.pack);
       return pack ? join(pack.dir, owner.workflow) : null;
     }
@@ -434,6 +453,12 @@ const manifestFields = {
   source_config: workflowSourceConfigSchema,
   /** Absent until the caller has selected which workflow this run executes. */
   workflow_name: z.string().optional(),
+  /**
+   * Entrypoint names of installed packs that could not be read at capture. The packs are
+   * left out, so only workflows that name them fail; discovery still reserves the names
+   * so a same-named project or global workflow cannot stand in for them.
+   */
+  unavailable_installed_workflows: z.array(z.string()).optional(),
 };
 
 /**
@@ -498,6 +523,89 @@ function sourceReadError(path: string, error: unknown): unknown {
   }
 }
 
+/**
+ * True when `error` means this host failed to read the source, as opposed to source that
+ * was read and found wrong (a digest mismatch, a replaced capture, an unparseable
+ * manifest) or a script absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
+ * Node system error (string `code` and `syscall`) on the error or its `cause` chain.
+ * Invalid file/directory shapes are recoverable only where the inventory proves the
+ * expected file or directory belonged.
+ *
+ * A capture missing from this host (`ENOENT`) counts: captures live on the host that made
+ * them, so another host may still read it. If it never returns, the continuation host's
+ * pre-admission check refuses the run and warns after repeated refusals.
+ */
+export function isSourceReadFailure(error: unknown, verifiedFiles?: ReadonlySet<string>): boolean {
+  if (error instanceof WorkflowSourceUnavailableError) return true;
+  if (error instanceof WorkflowSourceIntegrityError) return false;
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (isSystemError(current)) {
+      if (current.code === 'EISDIR') {
+        return typeof current.path === 'string' && verifiedFiles?.has(current.path) === true;
+      }
+      if (current.code === 'ENOTDIR') {
+        const readingDirectory = current.syscall === 'scandir' || current.syscall === 'readdir';
+        return (
+          typeof current.path === 'string' &&
+          ((!readingDirectory && verifiedFiles?.has(current.path) === true) ||
+            hasVerifiedFileBelow(verifiedFiles, current.path))
+        );
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasVerifiedFileBelow(
+  verifiedFiles: ReadonlySet<string> | undefined,
+  path: string
+): boolean {
+  return (
+    verifiedFiles !== undefined && [...verifiedFiles].some(file => file.startsWith(path + sep))
+  );
+}
+
+/** Discovery may omit vanished entries without a syscall error; the verified inventory cannot. */
+export async function assertCapturedFilesPresent(
+  verifiedFiles: ReadonlySet<string> | undefined
+): Promise<void> {
+  if (!verifiedFiles) return;
+  await Promise.all(
+    [...verifiedFiles].map(async path => {
+      const info = await stat(path);
+      if (!info.isFile()) {
+        throw new WorkflowSourceUnavailableError(
+          path,
+          new Error('Verified source file is no longer a file')
+        );
+      }
+    })
+  );
+}
+
+/** Missing live paths are optional; a path containing verified captured files is not. */
+export function capturedSourceReadGuard(
+  verifiedFiles: ReadonlySet<string> | undefined
+): (path: string, error: unknown) => void {
+  return (path, error) => {
+    if (verifiedFiles?.has(path) || hasVerifiedFileBelow(verifiedFiles, path)) {
+      throw error;
+    }
+  };
+}
+
+/** A Node or Bun system call failure, such as `readdir` failing with `EACCES`. */
+export function isSystemError(
+  error: unknown
+): error is Error & { code: string; syscall: string; path?: unknown } {
+  return (
+    error instanceof Error &&
+    typeof (error as { code?: unknown }).code === 'string' &&
+    typeof (error as { syscall?: unknown }).syscall === 'string'
+  );
+}
+
 /** Where a run's executable source came from, and what was frozen. */
 export interface WorkflowSourceCapture {
   /** The authoring directory this was captured from. */
@@ -540,8 +648,9 @@ function dedupeNestedDirs(dirs: readonly string[]): string[] {
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isSystemError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return false;
+    throw error;
   }
 }
 
@@ -946,21 +1055,33 @@ export async function captureWorkflowSource(opts: {
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
   }
 
-  // Each installed pack at the one commit its receipt names (or its parent froze). A
-  // pack that cannot be listed is not in the catalog either, so no run can select it.
   const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
-  const { packs } = await listInstalledPacks(installedFrom);
+  const { packs, errors } = await listInstalledPacks(installedFrom);
   for (const pack of packs) {
     jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
   }
   let installedRecords: InstalledPluginRecord[];
+  let unavailableWorkflows: string[];
   if (installedFrom.kind === 'receipts') {
     installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
+    unavailableWorkflows = errors.flatMap(error =>
+      error.workflowName ? [error.workflowName] : []
+    );
   } else {
+    // A child copies its parent's frozen packs; one it cannot read is this host's fault.
+    if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
     const parent = await readManifest(installedFrom.captureRoot);
+    unavailableWorkflows = parent.unavailable_installed_workflows ?? [];
     const keys = new Set(packs.map(pack => pack.key));
-    installedRecords =
-      parent.version === 2 ? parent.installed_plugins.filter(record => keys.has(record.key)) : [];
+    installedRecords = parent.version === 2 ? parent.installed_plugins : [];
+    for (const record of installedRecords) {
+      if (!keys.has(record.key)) {
+        throw new WorkflowSourceUnavailableError(
+          join(installedFrom.captureRoot, INSTALLED_SCOPE_DIR, record.key),
+          new Error('Installed pack recorded by the parent capture could not be listed')
+        );
+      }
+    }
   }
 
   const staging = `${captureRoot}.partial`;
@@ -1006,6 +1127,9 @@ export async function captureWorkflowSource(opts: {
       byte_count: byteCount,
       scopes: [...scopesCaptured],
       source_config: sourceConfig,
+      ...(unavailableWorkflows.length > 0
+        ? { unavailable_installed_workflows: unavailableWorkflows }
+        : {}),
     };
     const manifest: WorkflowSourceManifest =
       installedRecords.length > 0
@@ -1062,6 +1186,12 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
+    if (isSystemError(error) && error.code === 'EISDIR') {
+      throw new WorkflowSourceIntegrityError(
+        `Workflow source manifest at ${captureRoot} is a directory`,
+        join(captureRoot, MANIFEST_FILE)
+      );
+    }
     throw sourceReadError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;
@@ -1086,10 +1216,11 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
 /**
  * Load a capture and prove its bytes are the ones that were frozen.
  *
- * Throws {@link WorkflowSourceIntegrityError} when the manifest is missing, unreadable, of
- * an unknown shape, or when the digest no longer matches. Every one of those means the
- * run's executable source cannot be established, which is a reason to stop rather than to
- * quietly execute something else. Temporary I/O errors propagate unchanged for retry.
+ * Throws {@link WorkflowSourceUnavailableError} for missing or inaccessible source,
+ * including the manifest, so an admitted run can resume on a readable host.
+ * Throws {@link WorkflowSourceIntegrityError} for a malformed manifest, an unsupported
+ * shape, or a digest or resolution-settings mismatch; these invalidate the frozen source.
+ * Other I/O errors propagate unchanged.
  */
 export async function loadWorkflowSource(
   captureRoot: string,
@@ -1104,7 +1235,7 @@ export async function loadWorkflowSource(
   expectedDigest?: string,
   /** The source resolution config the RUN recorded, when new enough to have one. */
   expectedConfig?: WorkflowSourceConfig
-): Promise<WorkflowSourceCapture> {
+): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
   const manifest = await readManifest(captureRoot);
   if (expectedDigest !== undefined && manifest.digest !== expectedDigest) {
     throw new WorkflowSourceIntegrityError(
@@ -1151,6 +1282,7 @@ export async function loadWorkflowSource(
     );
   }
   return {
+    verifiedFiles: new Set(entries.map(entry => join(captureRoot, entry.relPath))),
     origin: manifest.origin,
     manifest,
     anchor: {
@@ -1165,10 +1297,17 @@ function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unkno
   return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined));
 }
 
-/** Verify a captured root against its retained anchor immediately before a filesystem read. */
-export async function assertWorkflowSourceIntegrity(roots: WorkflowSourceRoots): Promise<void> {
+/** Returned paths are files covered by the verified digest; live roots have no inventory. */
+export async function assertWorkflowSourceIntegrity(
+  roots: WorkflowSourceRoots
+): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
-  await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config);
+  const capture = await loadWorkflowSource(
+    roots.anchor.root,
+    roots.anchor.digest,
+    roots.anchor.config
+  );
+  return capture.verifiedFiles;
 }
 
 /**

@@ -13,6 +13,8 @@ import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from '.
 import * as archonPaths from '@archon/paths';
 import {
   liveSourceRoots,
+  capturedSourceReadGuard,
+  assertCapturedFilesPresent,
   packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
@@ -298,7 +300,8 @@ export async function loadCommandPrompt(
   cwd: string,
   commandName: string,
   configuredFolder?: string,
-  sourceRoots?: WorkflowSourceRoots
+  sourceRoots?: WorkflowSourceRoots,
+  verifiedFiles?: ReadonlySet<string>
 ): Promise<LoadCommandResult> {
   const roots = sourceRoots ?? liveSourceRoots(cwd);
   const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
@@ -371,6 +374,7 @@ export async function loadCommandPrompt(
     }
 
     const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    await assertCapturedFilesPresent(verifiedFiles);
     if (workflowDir === null) {
       return {
         success: false,
@@ -405,6 +409,7 @@ export async function loadCommandPrompt(
       return {
         success: false,
         reason,
+        cause: error,
         message:
           err.code === 'ENOENT'
             ? `Packaged command not found: ${filePath}`
@@ -430,7 +435,8 @@ export async function loadCommandPrompt(
   ];
 
   for (const dir of resolvedSearchPaths) {
-    const entries = await archonPaths.findCommandFiles(dir);
+    const entries = await archonPaths.findCommandFiles(dir, capturedSourceReadGuard(verifiedFiles));
+    await assertCapturedFilesPresent(verifiedFiles);
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
 
@@ -454,6 +460,7 @@ export async function loadCommandPrompt(
         return {
           success: false,
           reason: 'permission_denied',
+          cause: error,
           message: `Permission denied reading command: ${commandName}.md`,
         };
       }
@@ -464,6 +471,7 @@ export async function loadCommandPrompt(
       return {
         success: false,
         reason: 'read_error',
+        cause: error,
         message: `Error reading command ${commandName}.md: ${err.message}`,
       };
     }
@@ -474,7 +482,11 @@ export async function loadCommandPrompt(
   // with the basename walk, so it can resume across the upgrade.
   if (loadDefaultCommands && roots.kind === 'captured') {
     const appDefaultsPath = roots.bundledCommands;
-    const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+    const entries = await archonPaths.findCommandFiles(
+      appDefaultsPath,
+      capturedSourceReadGuard(verifiedFiles)
+    );
+    await assertCapturedFilesPresent(verifiedFiles);
     const match = entries.find(e => e.commandName === commandName);
     if (match) {
       try {
@@ -496,7 +508,12 @@ export async function loadCommandPrompt(
         } else {
           getLog().debug({ commandName }, 'command_app_default_not_found');
         }
-        // Fall through to not found
+        return {
+          success: false,
+          reason: 'read_error',
+          cause: error,
+          message: `Error reading app default command ${commandName}.md: ${err.message}`,
+        };
       }
     } else {
       getLog().debug({ commandName }, 'command_app_default_not_found');

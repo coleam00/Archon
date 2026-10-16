@@ -170,12 +170,13 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
-import type {
-  WorkflowDefinition,
-  WorkflowLoadError,
-  WorkflowLoadResult,
-  WorkflowSource,
-  WorkflowWithSource,
+import {
+  findWorkflowLoadError,
+  type WorkflowDefinition,
+  type WorkflowLoadError,
+  type WorkflowLoadResult,
+  type WorkflowSource,
+  type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
@@ -2006,12 +2007,7 @@ async function runWorkflowWithOwnedSource(
 
   if (!workflow) {
     // Check if the requested workflow had a load error
-    const loadError = errors.find(
-      e =>
-        e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-        e.filename === `${workflowName}.yaml` ||
-        e.filename === `${workflowName}.yml`
-    );
+    const loadError = findWorkflowLoadError(errors, workflowName);
     if (loadError) {
       throw new Error(
         `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
@@ -5810,7 +5806,7 @@ export async function workflowRunsCommand(
     open?: boolean;
     verbose?: boolean;
   } = {}
-): Promise<void> {
+): Promise<number> {
   // Open-work inbox (#2747): terminal failed runs nothing has adopted or
   // superseded — the operator's "what ended with work on the table" query.
   // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
@@ -5819,7 +5815,7 @@ export async function workflowRunsCommand(
       const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5841,11 +5837,11 @@ export async function workflowRunsCommand(
         total: runs.length,
         scopeFallback: !opts.all && !codebase,
       });
-      return;
+      return 0;
     }
     if (runs.length === 0) {
       console.log('No open workflow runs — nothing ended with work on the table.');
-      return;
+      return 0;
     }
     console.log(`\nOpen work (${String(runs.length)}):\n`);
     for (const run of runs) {
@@ -5855,7 +5851,7 @@ export async function workflowRunsCommand(
       );
     }
     console.log('');
-    return;
+    return 0;
   }
 
   let statusFilter: WorkflowRunStatus | undefined;
@@ -5866,7 +5862,7 @@ export async function workflowRunsCommand(
       // --json never throws — emit one parseable {ok:false} line (write-command contract).
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5904,7 +5900,7 @@ export async function workflowRunsCommand(
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
     if (opts.json) {
       await writeJsonLine({ ok: false, error: err.message });
-      return;
+      return 1;
     }
     throw new Error(`Failed to list workflow runs: ${err.message}`);
   }
@@ -5918,12 +5914,12 @@ export async function workflowRunsCommand(
   if (opts.json) {
     if (!opts.verbose) {
       await writeJsonLine({ ...result, scopeFallback });
-      return;
+      return 0;
     }
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
     await writeJsonLine({ ...result, runs: await withRunDetail(host, result.runs), scopeFallback });
-    return;
+    return 0;
   }
 
   if (scopeFallback) {
@@ -5932,7 +5928,7 @@ export async function workflowRunsCommand(
 
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
-    return;
+    return 0;
   }
 
   console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
@@ -5945,6 +5941,7 @@ export async function workflowRunsCommand(
     );
   }
   console.log('');
+  return 0;
 }
 
 /**
@@ -6219,6 +6216,7 @@ export async function workflowResumeCommand(
       });
     } catch (error) {
       await printJsonWriteError(runId, 'resume', error);
+      return 1;
     }
     return 0;
   }
@@ -6280,7 +6278,7 @@ export async function workflowAbandonCommand(
   runId: string,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const { abandonWorkflow } = host.operations;
 
   // The container reclaim (M2) and the live-owner stop both live in the shared
@@ -6319,10 +6317,11 @@ export async function workflowAbandonCommand(
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'abandon', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6334,6 +6333,7 @@ export async function workflowAbandonCommand(
   for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
+  return 0;
 }
 
 function printRunTreeCancellationWarnings(
@@ -6367,7 +6367,7 @@ export async function workflowCancelCommand(
   runId: string,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const { cancelWorkflow } = host.operations;
 
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
@@ -6408,10 +6408,11 @@ export async function workflowCancelCommand(
           ? { blockedParentRunId: result.blockedParentRunId }
           : {}),
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'cancel', error);
+      return 1;
     }
-    return;
   }
 
   const { resolvedId, result } = await cancel();
@@ -6419,13 +6420,14 @@ export async function workflowCancelCommand(
     console.log(`Cancelled workflow run: ${resolvedId}`);
     console.log(`Workflow: ${result.run.workflow_name}`);
     console.log("It runs inside its parent run's process and stops at its next status check.");
-    return;
+    return 0;
   }
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
   for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
+  return 0;
 }
 
 /**

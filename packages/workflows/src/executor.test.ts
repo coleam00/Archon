@@ -11,7 +11,7 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'path';
 
@@ -278,6 +278,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     }),
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(() => {
+      throw new Error('Unexpected releaseRunForUnreadableSource');
     }),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
@@ -999,6 +1002,73 @@ describe('executeWorkflow', () => {
       });
       expect(result.success).toBe(true);
     });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a resumed container run whose source cannot be read is told to resume by hand',
+      async () => {
+        const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
+        const release = mock(async () => ({ released: true }));
+        const store = makeStore({ releaseRunForUnreadableSource: release });
+        const platform = makePlatform();
+        const preCreatedRun = makeRun({
+          id: 'crun3',
+          metadata: {
+            isolation: 'container',
+            isolation_env_id: 'env-x',
+            workflow_source: {
+              version: 1,
+              root: captureRoot,
+              origin: captureRoot,
+              captured_at: new Date().toISOString(),
+              digest: 'unread',
+              file_count: 0,
+              byte_count: 0,
+            },
+          },
+        });
+        await chmod(captureRoot, 0o000);
+        try {
+          const result = await executeWorkflow(
+            makeDeps(store),
+            platform,
+            'conv-1',
+            '/tmp/ops',
+            makeWorkflow(),
+            'msg',
+            { conversationId: 'db-conv-1' },
+            {
+              preCreatedRun,
+              priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+              execContext: { kind: 'container', containerId: 'cid' },
+              container: {
+                envId: 'env-x',
+                writeBack: 'approve',
+                backend: {
+                  suspend: mock(async () => {}),
+                  finalize: mock(async () => ({ requiresApproval: false })),
+                  applyChanges: mock(async () => ({
+                    filesApplied: 0,
+                    filesDeleted: 0,
+                    warnings: [],
+                  })),
+                  discardChanges: mock(async () => {}),
+                },
+              },
+            }
+          );
+          expect(result).toMatchObject({ success: true, paused: true });
+        } finally {
+          await chmod(captureRoot, 0o755);
+          await removeTempTree(captureRoot);
+        }
+        expect(release).toHaveBeenCalledTimes(1);
+        const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+          String(c[1])
+        );
+        expect(sent.some(text => text.includes('resume it by hand'))).toBe(true);
+        expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
+      }
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -4091,6 +4161,7 @@ describe('executeWorkflow', () => {
         USER_KEY: 'u_val',
       });
       expect(configArg?.protectedEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual([
         'db_val',
         'reserved-db-secret',
@@ -4173,6 +4244,8 @@ describe('executeWorkflow', () => {
       expect(configArg?.envVars).toMatchObject({
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
+        GH_ENTERPRISE_TOKEN: '',
+        GITHUB_ENTERPRISE_TOKEN: '',
         COPILOT_GITHUB_TOKEN: '',
         GIT_AUTHOR_NAME: 'connected-author',
         GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
@@ -4181,11 +4254,14 @@ describe('executeWorkflow', () => {
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
+        'GH_ENTERPRISE_TOKEN',
+        'GITHUB_ENTERPRISE_TOKEN',
         'COPILOT_GITHUB_TOKEN',
         'GIT_AUTHOR_NAME',
         'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
+      expect(configArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
@@ -4347,6 +4423,26 @@ describe('executeWorkflow', () => {
           expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
         });
       }
+
+      it('hides stored logins from the per-user scrub without redacting its config values', async () => {
+        const environment = await resolveWorkflowGithubEnvironment(
+          githubDeps({ token: undefined }),
+          'codebase-1',
+          'u-1',
+          {}
+        );
+        expect(environment.envVars?.GH_CONFIG_DIR).toContain('archon-gh-scrubbed-');
+        expect(environment.envVars?.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        // Only secrets are protected: protecting the scrub's config values would redact
+        // them, and every `credential.helper` mention, from node output.
+        expect(environment.protectedEnvKeys).toEqual([
+          'GH_TOKEN',
+          'GITHUB_TOKEN',
+          'GH_ENTERPRISE_TOKEN',
+          'GITHUB_ENTERPRISE_TOKEN',
+          'COPILOT_GITHUB_TOKEN',
+        ]);
+      });
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {
@@ -4972,6 +5068,28 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it('source release exits without checking or failing a newly resumed owner', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      getWorkflowRun: mock(async () => {
+        throw new Error('old owner must not read after release');
+      }),
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      { conversationId: 'db-conv-1' }
+    );
+    expect(result).toMatchObject({ success: true, paused: true });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('calls failWorkflowRun when run is still running at finally', async () => {
     const failSpy = mock(async () => {});
     const store = makeStore({

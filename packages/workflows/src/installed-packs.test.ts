@@ -149,6 +149,44 @@ afterEach(() => {
 });
 
 describe('installed packs in the catalog', () => {
+  test('a broken pack affects only the workflows that name it, in the run and its children', async () => {
+    await install(reviewKit());
+    await writeFile(
+      join(packTreePath(join(home, 'plugins'), ID, COMMIT_A), 'archon-plugin.json'),
+      '{bad json'
+    );
+    const folder = join(project, '.archon/workflows');
+    await writeFile(
+      join(folder, 'deploy.yaml'),
+      'name: deploy\ndescription: Deploy\nnodes:\n  - id: ship\n    bash: echo ship\n'
+    );
+    await writeFile(
+      join(folder, 'shadow.yaml'),
+      `name: ${REVIEW}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
+    );
+    const parent = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(home, 'runs', 'parent'),
+    });
+    const installedFrom = await resolveChildInstalledPacks(runWith(parent, 'deploy').metadata);
+    const child = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(home, 'runs', 'child'),
+      ...(installedFrom ? { installedFrom } : {}),
+    });
+    for (const capture of [parent, child]) {
+      const catalog = await discoverWorkflowsWithConfig(
+        project,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
+      );
+      expect(names(catalog.workflows)).toContain('deploy');
+      expect(names(catalog.workflows)).not.toContain(REVIEW);
+      expect(catalog.errors.some(error => error.workflowName === REVIEW)).toBe(true);
+    }
+  });
+
   test('installed MCP declarations stay checkout-only despite adjacent and home configs', async () => {
     registerBuiltinProviders();
     await install({

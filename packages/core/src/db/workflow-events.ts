@@ -373,6 +373,33 @@ export async function listAttentionNotices(
   }));
 }
 
+/**
+ * Pauses whose inline chat notice the executor could not post, as `undeliveredNoticeKey`s.
+ * Events from before the pause occurrence was recorded carry none and are not reported.
+ */
+export async function listUndeliveredPauseNotices(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const result = await query<WorkflowEventRow>(
+    `SELECT * FROM remote_agent_workflow_events
+    WHERE event_type = 'pause_notice_undelivered' AND workflow_run_id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})`,
+    [...runIds]
+  );
+  const keys = new Set<string>();
+  for (const row of result.rows) {
+    const { occurrence } = parseEventRow(row).data;
+    if (typeof occurrence === 'string')
+      keys.add(undeliveredNoticeKey(row.workflow_run_id, occurrence));
+  }
+  return keys;
+}
+
+export function undeliveredNoticeKey(runId: string, occurrence: string): string {
+  return `${runId}:${occurrence}`;
+}
+
 export async function hasAnyAttentionNotice(
   destination: string,
   query: IDatabase['query'] = pool.query

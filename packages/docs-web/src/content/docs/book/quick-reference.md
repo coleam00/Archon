@@ -51,7 +51,7 @@ registered, including merged worktrees. Use `archon isolation list` to inspect t
 | Command | Description |
 |---------|-------------|
 | `archon complete <branch>` | Remove worktree, local branch, and remote branch |
-| `archon complete <branch> --force` | Skip uncommitted-changes check |
+| `archon complete <branch> --force` | Bypass completion safety checks, including uncommitted changes, live runs, open PRs, and unmerged or unpushed commits; ownership checks still apply. See [complete](/reference/cli/#complete-branch-branch2-) |
 
 ### `archon validate`
 
@@ -146,8 +146,8 @@ All nodes share these base fields:
 | `model` | No | string | Per-node model override |
 | `context` | No | `fresh` \| `shared` \| `{ resume: node-id }` | Session context — `fresh` starts a new conversation; scalar `shared` inherits the ambient prior session in a sequential layer; named [`resume`](/guides/authoring-workflows/#addressable-session-ancestry) forks one exact upstream session and is required for parallel ancestry |
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
-| `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
-| `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
+| `allowed_tools` | No | string[] | Restrict available tools to this list; see [provider support](/reference/provider-capabilities/) |
+| `denied_tools` | No | string[] | Remove specific tools from this node's context; see [provider support](/reference/provider-capabilities/) |
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 30 minutes) |
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). On `loop:` nodes, retries the failed iteration |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
@@ -274,7 +274,7 @@ Defined under `retry:` inside a node. Without a declaration, AI nodes and loop i
 
 Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` (including zero on loops) does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter, keeping the larger budget for the rest of the iteration or node attempt sequence. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
 
-> **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
+> **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable checkout or provider MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message. A host-local read failure in captured home MCP config pauses the run for continuation on a readable host; see [MCP servers](/guides/mcp-servers/).
 
 ---
 
@@ -361,7 +361,7 @@ defaults:
 | `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
 | `Command "X" not found` | Command file missing | For a packaged workflow, check its own `commands/X.md` and run `archon validate workflows <name>`; otherwise check the shared command path and run `archon validate commands X` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
-| `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
+| `Not a git repository` | Running outside a repo | Use a git repo for worktree isolation, or register a [folder project](/getting-started/concepts/#folder-projects) with `archon workflow run <name> --folder`. Folder projects run in place without managed git operations |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Pass `--base` for this run, set `worktree.baseBranch` in `.archon/config.yaml`, or repair the selected remote's symbolic HEAD |
 | Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |

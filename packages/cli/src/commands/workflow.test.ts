@@ -599,7 +599,9 @@ class MockCanonicalRepoPathUnavailableError extends Error {
   }
 }
 
+const mockGetCurrentBranchStrict = mock(async (): Promise<string | null> => 'feature/adopted');
 mock.module('@archon/git', () => ({
+  getCurrentBranchStrict: mockGetCurrentBranchStrict,
   verifyWorktreeOwnership: mock(async () => {}),
   findRepoRoot: mock(() => Promise.resolve(null)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
@@ -648,6 +650,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   getById: mock((): Promise<null> => Promise.resolve(null)),
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
+  listActive: mock(() => Promise.resolve([])),
   // Reached only by the --resume path. mock.module() MERGES over the real
   // module, so omitting this would leave the REAL implementation in place and
   // open a live SQLite handle rather than failing loudly (#2240).
@@ -4195,7 +4198,12 @@ describe('workflowRunCommand', () => {
       expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
       expect(isolationDb.updateMetadata).toHaveBeenCalledWith(
         'env-1',
-        { adopted: true },
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
         expect.objectContaining({ id: 'env-1' })
       );
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -8382,11 +8390,12 @@ describe('workflowRunsCommand', () => {
   });
 
   it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {
-    await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+    const exitCode = await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
       status: 'bogus',
       json: true,
     });
 
+    expect(exitCode).toBe(1);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       ok: boolean;
       error: string;
@@ -8481,8 +8490,9 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    await workflowAbandonCommand(createTestWorkflowHost(), 'missing', true);
+    const exitCode = await workflowAbandonCommand(createTestWorkflowHost(), 'missing', true);
 
+    expect(exitCode).toBe(1);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       ok: boolean;
       error: string;
@@ -8568,8 +8578,9 @@ describe('write command --json output', () => {
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
-    await workflowResumeCommand(createTestWorkflowHost(), 'run-rs', true);
+    const exitCode = await workflowResumeCommand(createTestWorkflowHost(), 'run-rs', true);
 
+    expect(exitCode).toBe(0);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
     expect(parsed).toMatchObject({
       ok: true,
@@ -8579,6 +8590,19 @@ describe('write command --json output', () => {
       status: 'failed',
     });
     expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('resume --json exits nonzero with {ok:false} on a not-found run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const exitCode = await workflowResumeCommand(createTestWorkflowHost(), 'missing', true);
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      action: 'resume',
+    });
   });
 });
 
@@ -11498,8 +11522,9 @@ describe('workflowCancelCommand', () => {
       new Error('No live detached owner; run unchanged')
     );
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+    const exitCode = await workflowCancelCommand(createTestWorkflowHost(), runId, true);
 
+    expect(exitCode).toBe(1);
     expect(mockDetachedTargetStop).not.toHaveBeenCalled();
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
@@ -11519,7 +11544,9 @@ describe('workflowCancelCommand', () => {
     });
     mockDetachedTargetStop.mockRejectedValue(new Error('process still exists'));
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+    const exitCode = await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+
+    expect(exitCode).toBe(1);
 
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
@@ -14297,23 +14324,24 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
-  it.each(['missing', 'mismatched', 'replaced'] as const)(
+  it.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
       setupAdoptMocks();
       const isolationDb = await import('@archon/core/db/isolation-environments');
       const getById = isolationDb.getById as ReturnType<typeof mock>;
       getById.mockReset();
+      if (reason === 'switched' || reason === 'detached') {
+        mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
+      }
       getById.mockResolvedValueOnce(
         reason === 'missing'
           ? null
           : reason === 'replaced'
             ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
             : {
-                id: 'env-9',
-                provider: 'worktree',
-                working_path: '/foreign/worktree',
-                metadata: {},
+                ...adoptedEnvironment(),
+                working_path: reason === 'mismatched' ? '/foreign/worktree' : '/wt/adopted',
               }
       );
       (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
@@ -14328,7 +14356,9 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           ? 'Isolation environment env-9 not found'
           : reason === 'replaced'
             ? 'changed during adoption'
-            : 'does not match'
+            : reason === 'switched' || reason === 'detached'
+              ? 'expected branch'
+              : 'does not match'
       );
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
@@ -14358,7 +14388,16 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect((executed[4] as { description: string }).description).toBe('Branch vintage');
     expect(executed[3]).toBe('/wt/adopted');
     expect((isolationDb.updateMetadata as ReturnType<typeof mock>).mock.calls).toEqual([
-      ['env-9', { adopted: true }, expect.objectContaining({ id: 'env-9' })],
+      [
+        'env-9',
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
+        expect.objectContaining({ id: 'env-9' }),
+      ],
     ]);
   });
 

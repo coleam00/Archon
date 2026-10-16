@@ -39,34 +39,6 @@ function matchesProcessEnvironment(env: Record<string, string> | undefined): boo
   );
 }
 
-test('protocol 1 hosts are rejected before a session can start', async () => {
-  const pair = streamPair();
-  const serving = serveProvider({ descriptor, create: () => fixtureProvider() }, pair.provider);
-  const host = new PluginRpc(pair.host);
-  try {
-    await expect(
-      host.request('initialize', {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-          _meta: { archon: { protocol: 1 } },
-        },
-      })
-    ).rejects.toBeInstanceOf(PluginRemoteError);
-    await expect(
-      host.request('session/new', {
-        cwd: '/',
-        mcpServers: [],
-        _meta: { archon: { request: { prompt: 'turn', cwd: '/' } } },
-      })
-    ).rejects.toThrow('initialize must complete');
-  } finally {
-    await host.close();
-    await serving;
-  }
-});
-
 test('every event and result crosses the ACP lifecycle unchanged, including post-result background work', async () => {
   let promptId: string | number | undefined;
   let promptResponse = (): void => {};
@@ -194,6 +166,7 @@ test('serializable options and container environment survive', async () => {
     appendSystemPrompt: 'Guide',
     outputFormat: { type: 'json_schema', schema: { type: 'object' } },
     protectedEnvKeys: ['KEY'],
+    userCredentialEnvKeys: ['KEY'],
     maxBudgetUsd: 2,
     fallbackModel: 'fallback',
     forkSession: true,

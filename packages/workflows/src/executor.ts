@@ -1,6 +1,6 @@
 import { requireProvider } from '@archon/provider-contract';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
-import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
+import { isContainerRun, type OwnedWorktree, type WorkflowRunOrigin } from './schemas/workflow-run';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import {
   prepareRunAiConfiguration,
@@ -23,6 +23,7 @@ import { delimiter, dirname, join } from 'path';
 import {
   MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   attentionAnswerLines,
+  sourceReleaseNotice,
   spellWorkflowCommand,
 } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -55,6 +56,7 @@ import {
   pendingWorkflowWaitDeadline,
   runAttention,
   isScheduledWorkflowResume,
+  readSourceRelease,
   isWaitNode,
   isIncludeDirective,
   runMayPersistSessions,
@@ -77,6 +79,9 @@ import {
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
+  isSourceReadFailure,
+  isSystemError,
   captureWorkflowSource,
   capturedSourceRoots,
   recordSelectedWorkflow,
@@ -86,6 +91,7 @@ import {
   type InstalledPacksRoot,
   workflowSourceConfigFrom,
   type WorkflowSourceManifest,
+  type WorkflowSourceCapture,
   type WorkflowSourceAnchor,
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
@@ -93,6 +99,8 @@ import {
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import {
+  CONTINUATION_RETRY_MS,
+  executionClaim,
   continuablePauseCursor,
   deadlineWaitCursor,
   type PersistedNodeOutput,
@@ -133,7 +141,7 @@ export type {
   ChildIsolationResult,
 } from './child-isolation';
 import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
-import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { GITHUB_TOKEN_KEYS, resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
   hasRunModelOverrides,
   RUN_MODEL_BINDINGS_METADATA_KEY,
@@ -259,7 +267,10 @@ export async function resolveWorkflowGithubEnvironment(
   const bot: Record<string, string> = installation
     ? { GH_TOKEN: installation.token, GITHUB_TOKEN: installation.token }
     : {};
-  const user = await resolveUserGithubEnvForWorkflow(deps, userId);
+  const { env: user, protectedKeys: userProtectedKeys } = await resolveUserGithubEnvForWorkflow(
+    deps,
+    userId
+  );
   // Only the App token is refreshed; a per-user token or scrub replaces it.
   const ghShim =
     installation && user.GH_TOKEN === undefined
@@ -272,7 +283,7 @@ export async function resolveWorkflowGithubEnvironment(
       ...new Set([
         ...(environment.protectedEnvKeys ?? []),
         ...Object.keys(bot),
-        ...Object.keys(user),
+        ...userProtectedKeys,
       ]),
     ],
   };
@@ -338,9 +349,9 @@ function resolveGithubCliShimEnv(
 async function resolveUserGithubEnvForWorkflow(
   deps: WorkflowGithubDeps,
   userId: string | undefined
-): Promise<Record<string, string>> {
+): Promise<{ env: Record<string, string>; protectedKeys: string[] }> {
   const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
-  if (!perUserEnabled) return {};
+  if (!perUserEnabled) return { env: {}, protectedKeys: [] };
   let userToken: string | undefined;
   if (userId && deps.getUserGithubToken) {
     try {
@@ -350,14 +361,18 @@ async function resolveUserGithubEnvForWorkflow(
     }
   }
   const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config; they are not
+  // secrets. Protecting them would redact their values from every node's output.
+  const protectedKeys = Object.keys(env).filter(key => GITHUB_TOKEN_KEYS.includes(key));
   if (userId && deps.getUserGithubAuthor) {
     const author = await deps.getUserGithubAuthor(userId);
     if (author) {
       env.GIT_AUTHOR_NAME = author.name;
       env.GIT_AUTHOR_EMAIL = author.email;
+      protectedKeys.push('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL');
     }
   }
-  return env;
+  return { env, protectedKeys };
 }
 
 /**
@@ -1115,10 +1130,12 @@ export async function prepareWorkflowSource(
   try {
     sourceConfig = workflowSourceConfigFrom(await deps.loadConfig(opts.sourceRoot));
   } catch (error) {
+    if (isSourceReadFailure(error)) throw error;
     // A malformed config would otherwise silently narrow what gets frozen.
     throw new Error(
       `Cannot capture workflow source from ${opts.sourceRoot}: its configuration could not ` +
-        `be read (${(error as Error).message}).`
+        `be read (${(error as Error).message}).`,
+      { cause: error }
     );
   }
   await sweepStaleStagedSources();
@@ -1162,6 +1179,9 @@ export async function inspectResumableRun(
   const hasReRunGateState = reRunsOwnNodeOnResume(approvalContext, candidate.metadata);
   const hasWaitState = isWorkflowWaitContext(candidate.metadata?.wait);
   const hasScheduledResume = isScheduledWorkflowResume(candidate.metadata?.scheduled_resume);
+  // Released before its first node could read source (#4209): nothing completed yet.
+  const hasSourceRelease =
+    candidate.status === 'paused' && readSourceRelease(candidate.metadata) !== undefined;
   // A valid composed instance start is always preceded by its durable fan-out plan.
   // Do not treat an arbitrary unresolved node_started row as resumable: ordinary nodes
   // have no ambiguity guard and replaying one could duplicate its side effects.
@@ -1178,6 +1198,7 @@ export async function inspectResumableRun(
     !hasReRunGateState &&
     !hasWaitState &&
     !hasScheduledResume &&
+    !hasSourceRelease &&
     !hasFanOutRecoveryState
   ) {
     getLog().info(
@@ -1283,6 +1304,19 @@ async function gatherDescendantRunIds(deps: WorkflowDeps, rootId: string): Promi
 }
 
 /**
+ * A child launch reads its parent's source before the child runs. The parent releases
+ * itself only for this typed error; anything else escaping the launch is the child's
+ * fault, and the parent's `workflow:` node fails with it.
+ */
+function parentSourceUnreadable(root: string, error: unknown): unknown {
+  if (error instanceof WorkflowSourceUnavailableError || !isSourceReadFailure(error)) return error;
+  return new WorkflowSourceUnavailableError(
+    isSystemError(error) && typeof error.path === 'string' ? error.path : root,
+    error
+  );
+}
+
+/**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
  * run-record creation, path-lock, artifacts, credential/model resolution, resume,
@@ -1333,8 +1367,14 @@ async function runChildWorkflow(
   // discovering from the capture rather than from the live directory is what stops the
   // child executing one moment's YAML against another moment's scripts.
   // Installed packs are the exception: the child takes them from the parent's capture.
-  const parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
-  const installedFrom = await resolveChildInstalledPacks(parentRun.metadata);
+  let parentSourceRoot: string | undefined;
+  let installedFrom: InstalledPacksRoot | undefined;
+  try {
+    parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
+    installedFrom = await resolveChildInstalledPacks(parentRun.metadata);
+  } catch (err) {
+    throw parentSourceUnreadable(cwd, err);
+  }
   // Refusals and recursive execution share one owner until adoption or disposal.
   return withCapturedSource(async owner => {
     let childSource: PreparedWorkflowSource | undefined;
@@ -1345,6 +1385,7 @@ async function runChildWorkflow(
       });
       owner.hold(childSource);
     } catch (err) {
+      if (isSourceReadFailure(err)) throw parentSourceUnreadable(parentSourceRoot ?? cwd, err);
       return failOutcome(
         `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
@@ -1376,7 +1417,7 @@ async function runChildWorkflow(
       );
       if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
     } catch (err) {
-      // resolveWorkflowName throws only on ambiguity.
+      if (isSourceReadFailure(err)) throw parentSourceUnreadable(childSource.anchor.root, err);
       return failOutcome(
         `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
@@ -2996,35 +3037,75 @@ export async function executeWorkflow(
     const recordedSource = recordedSourceState.record;
     // Verifies the digest against the one the RUN recorded — not merely that the
     // directory exists, and not merely that the capture agrees with itself.
+    let loaded: WorkflowSourceCapture;
     try {
-      const loaded = await resolveRunSourceCapture(workflowRun.metadata);
-      if (!loaded) throw new Error('workflow source record disappeared during resolution');
-      workflowSourceRoots = capturedSourceRoots(loaded.anchor);
-      getLog().debug(
-        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-        'workflow.source_restored'
-      );
-      if (recordedSource.source_config === undefined) {
-        // A run from before the row carried `source_config`. The manifest sits outside
-        // the digest, so nothing can prove these settings are the ones the run started
-        // with; what pinning them now buys is closing the window. From here on they are
-        // held beside the digest, and a later edit to the manifest is refused like any
-        // other drift instead of being re-read on every resume for the life of the run.
-        const pinned = { ...recordedSource, source_config: loaded.anchor.config };
-        workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
-        await deps.store.updateWorkflowRun(workflowRun.id, {
-          metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
-        });
-        getLog().warn(
-          { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-          'workflow.source_config_pinned_from_manifest'
-        );
-      }
+      const capture = await resolveRunSourceCapture(workflowRun.metadata);
+      if (!capture) throw new Error('workflow source record disappeared during resolution');
+      loaded = capture;
     } catch (error) {
+      if (isSourceReadFailure(error)) {
+        const path =
+          error instanceof WorkflowSourceUnavailableError ? error.path : recordedSource.root;
+        getLog().warn(
+          { workflowRunId: workflowRun.id, path, err: error },
+          'workflow.source_restore_unreadable'
+        );
+        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+          claimId: executionClaim(workflowRun.metadata),
+          nodeId: 'workflow-source',
+          path,
+          error: error instanceof Error ? error.message : String(error),
+          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+        });
+        if (released) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            sourceReleaseNotice(platform, workflowRun.id, {
+              path,
+              container: isContainerRun(workflowRun),
+            })
+          );
+          return { success: true, paused: true, workflowRunId: workflowRun.id };
+        }
+        const current = await deps.store.getWorkflowRun(workflowRun.id);
+        if (current?.status === 'paused') {
+          return { success: true, paused: true, workflowRunId: workflowRun.id };
+        }
+        if (current?.status === 'completed') {
+          return { success: true, workflowRunId: workflowRun.id };
+        }
+        return {
+          success: false,
+          workflowRunId: workflowRun.id,
+          error: 'Workflow status changed before source release',
+        };
+      }
       return await failRunOnSource(
         `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
           `(${(error as Error).message}). The run cannot be resumed against different source; ` +
           'start a fresh run to execute the current workflow.'
+      );
+    }
+    workflowSourceRoots = capturedSourceRoots(loaded.anchor);
+    getLog().debug(
+      { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+      'workflow.source_restored'
+    );
+    if (recordedSource.source_config === undefined) {
+      // A run from before the row carried `source_config`. The manifest sits outside
+      // the digest, so nothing can prove these settings are the ones the run started
+      // with; what pinning them now buys is closing the window. From here on they are
+      // held beside the digest, and a later edit to the manifest is refused like any
+      // other drift instead of being re-read on every resume for the life of the run.
+      const pinned = { ...recordedSource, source_config: loaded.anchor.config };
+      workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
+      await deps.store.updateWorkflowRun(workflowRun.id, {
+        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
+      });
+      getLog().warn(
+        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+        'workflow.source_config_pinned_from_manifest'
       );
     }
   } else if (isResume) {
@@ -3128,6 +3209,7 @@ export async function executeWorkflow(
   // The finally-block backstop reads it: a second write over a channel that just
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
+  let sourceExecutionStopped = false;
   try {
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
@@ -3156,6 +3238,7 @@ export async function executeWorkflow(
       prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
+    config.userCredentialEnvKeys = Object.keys(userProviderEnv);
     for (const key of Object.keys(userProviderEnv)) {
       protectedEnvKeys.add(key);
     }
@@ -3418,7 +3501,7 @@ export async function executeWorkflow(
     // The adopted-dir scope (#2747) encloses only the DAG: a child sub-run spawned
     // from a node re-enters
     // `executeWorkflow` and scopes its own (absent) adoption.
-    const dagSummary = await runWithAdoptedRunDir(adoptedRunDir, () =>
+    const dagResult = await runWithAdoptedRunDir(adoptedRunDir, () =>
       executeDagWorkflow({
         deps,
         platform,
@@ -3463,6 +3546,13 @@ export async function executeWorkflow(
         workflowSourceRoots,
       })
     );
+
+    if (typeof dagResult === 'object') {
+      // After release another executor may own even a running row; the backstop has no authority.
+      sourceExecutionStopped = true;
+      if (dagResult.released) return { success: true, paused: true, workflowRunId: workflowRun.id };
+    }
+    const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
     const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
@@ -3547,6 +3637,7 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
+    if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
       throw error;
@@ -3628,7 +3719,7 @@ export async function executeWorkflow(
     // calling failWorkflowRun (e.g. a generator cleanup that exits without
     // throwing). Only fires when the process stays alive long enough to run
     // this finally — see #1561 for the originating zombie-state incident.
-    if (workflowRun && !terminalStatusWriteFailed) {
+    if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
       const runId = workflowRun.id;
       const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
       if (backstopStatus === 'running') {

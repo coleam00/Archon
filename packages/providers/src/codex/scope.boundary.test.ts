@@ -56,6 +56,7 @@ interface ModelRequest {
   accountId: string | null;
 }
 let modelRequests: ModelRequest[] = [];
+let modelReply: (() => Response) | undefined;
 /** The request an unscoped turn sends: the control a scoped request is compared against. */
 let unscopedRequest: string;
 
@@ -186,6 +187,7 @@ beforeAll(async () => {
           authorization: request.headers.get('authorization'),
           accountId: request.headers.get('chatgpt-account-id'),
         });
+        if (modelReply) return modelReply();
       }
       return Response.json(
         { error: { message: 'stub model', type: 'invalid_request_error' } },
@@ -234,6 +236,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   modelRequests = [];
+  modelReply = undefined;
   await rm(hookLog, { force: true });
 });
 
@@ -338,7 +341,142 @@ async function writeMcp(file: string, servers: Record<string, string>): Promise<
 /** What a node naming only `alpha@fixture` sees: alpha's skill and hook, the user's hook. */
 const ALPHA_ONLY: Seen = { tools: [], skills: ['alpha'], hooks: ['alpha', 'user'], guidance: true };
 
+/** An unsigned ChatGPT access token: Codex reads its claims and never verifies it. */
+function chatgptAccessToken(accountId: string): string {
+  const part = (value: object): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const claims = {
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    email: 'boundary@example.com',
+    'https://api.openai.com/auth': { chatgpt_account_id: accountId, chatgpt_plan_type: 'plus' },
+  };
+  return `${part({ alg: 'none' })}.${part(claims)}.sig`;
+}
+
+const MANAGED_TOKEN = chatgptAccessToken('acct-boundary');
+const MANAGED_ENV = {
+  [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: MANAGED_TOKEN,
+  [CODEX_CREDENTIAL_ENV.chatgptAccountId]: 'acct-boundary',
+};
+
+interface AuthPath {
+  name: string;
+  env: Record<string, string>;
+  authorization: string | null;
+  accountId: string | null;
+}
+const AUTH_PATHS: AuthPath[] = [
+  { name: 'ambient login', env: {}, authorization: null, accountId: null },
+  {
+    name: 'Archon-supplied API key',
+    env: { [CODEX_CREDENTIAL_ENV.apiKey]: 'sk-boundary-key' },
+    authorization: 'Bearer sk-boundary-key',
+    accountId: null,
+  },
+  {
+    name: 'Archon-managed ChatGPT subscription',
+    env: MANAGED_ENV,
+    authorization: `Bearer ${MANAGED_TOKEN}`,
+    accountId: 'acct-boundary',
+  },
+];
+
 describe('Codex capability scope on the real binary', () => {
+  test.each(AUTH_PATHS)(
+    '$name: chat tools round-trip and survive resume with native guidance',
+    async ({ env, authorization, accountId }) => {
+      const before = await userFileHashes();
+      const prompt = 'Fix the "login" bug and add tests';
+      let responses = 0;
+      modelReply = () => {
+        const index = responses++;
+        const item =
+          index % 2 === 0
+            ? {
+                type: 'function_call',
+                id: `fc_${String(index)}`,
+                call_id: `call_${String(index)}`,
+                name: 'invoke_workflow',
+                arguments: JSON.stringify({ prompt }),
+              }
+            : {
+                type: 'message',
+                id: `msg_${String(index)}`,
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Queued.', annotations: [] }],
+              };
+        const events = [
+          { type: 'response.output_item.done', output_index: 0, item },
+          {
+            type: 'response.completed',
+            response: {
+              id: `resp_${String(index)}`,
+              status: 'completed',
+              output: [item],
+              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+            },
+          },
+        ];
+        return new Response(
+          events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+          { headers: { 'content-type': 'text/event-stream' } }
+        );
+      };
+      const calls: Record<string, unknown>[] = [];
+      const nativeTools = [
+        {
+          name: 'invoke_workflow',
+          description: 'Launch the workflow',
+          inputSchema: {
+            properties: { prompt: { kind: 'string' as const } },
+            required: ['prompt'],
+          },
+          handler: async (input: Record<string, unknown>) => {
+            calls.push(input);
+            return `queued-${String(calls.length)}`;
+          },
+        },
+      ];
+      const chunks = await runRequest({ nativeTools, env });
+      const first = resultOf(chunks);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          name: 'invoke_workflow',
+          rawInput: { prompt },
+        })
+      );
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call_update',
+          status: 'completed',
+          output: 'queued-1',
+        })
+      );
+      expect(first.isError).not.toBe(true);
+      expect(first.sessionId).toBeDefined();
+      expect(calls).toEqual([{ prompt }]);
+      expect(modelRequests[0].body).toContain('invoke_workflow');
+      expect(modelRequests[0].body).toContain('USER-GUIDANCE-MARKER');
+      expect(modelRequests[0].body).toContain('PROJECT-GUIDANCE-MARKER');
+      expect(modelRequests[0].body).toContain('AMBIENT-CATALOGUE-MARKER');
+      expect(modelRequests[1].body).toContain('queued-1');
+      const resumed = resultOf(await runRequest({ nativeTools, env }, first.sessionId));
+      expect(resumed.isError).not.toBe(true);
+      expect(resumed.sessionId).toBe(first.sessionId);
+      expect(calls).toEqual([{ prompt }, { prompt }]);
+      expect(modelRequests[3].body).toContain('queued-2');
+      for (const request of modelRequests) {
+        expect(request).toMatchObject({ authorization, accountId });
+      }
+      const threadId = first.sessionId?.split(':')[0];
+      if (!threadId) throw new Error('thread missing');
+      expect(await rolloutOf(threadId)).toStartWith(home);
+      expect(await Bun.file(join(home, 'auth.json')).exists()).toBe(false);
+      expect(await userFileHashes()).toEqual(before);
+    },
+    testTimeout(20_000)
+  );
+
   test(
     'a title keeps native guidance and hooks but has no ambient capabilities and a read-only rollout',
     async () => {
@@ -507,23 +645,6 @@ describe('Codex capability scope on the real binary', () => {
   );
 });
 
-/** An unsigned ChatGPT access token: Codex reads its claims and never verifies it. */
-function chatgptAccessToken(accountId: string): string {
-  const part = (value: object): string => Buffer.from(JSON.stringify(value)).toString('base64url');
-  const claims = {
-    exp: Math.floor(Date.now() / 1000) + 3600,
-    email: 'boundary@example.com',
-    'https://api.openai.com/auth': { chatgpt_account_id: accountId, chatgpt_plan_type: 'plus' },
-  };
-  return `${part({ alg: 'none' })}.${part(claims)}.sig`;
-}
-
-const MANAGED_TOKEN = chatgptAccessToken('acct-boundary');
-const MANAGED_ENV = {
-  [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: MANAGED_TOKEN,
-  [CODEX_CREDENTIAL_ENV.chatgptAccountId]: 'acct-boundary',
-};
-
 async function sha256(path: string): Promise<string> {
   return new Bun.CryptoHasher('sha256').update(await readFile(path)).digest('hex');
 }
@@ -547,27 +668,7 @@ async function runAuthedNode(
 }
 
 describe('Codex auth paths keep the user’s own home on the real binary', () => {
-  interface AuthPath {
-    name: string;
-    env: Record<string, string>;
-    authorization: string | null;
-    accountId: string | null;
-  }
-  test.each<AuthPath>([
-    { name: 'ambient login', env: {}, authorization: null, accountId: null },
-    {
-      name: 'Archon-supplied API key',
-      env: { [CODEX_CREDENTIAL_ENV.apiKey]: 'sk-boundary-key' },
-      authorization: 'Bearer sk-boundary-key',
-      accountId: null,
-    },
-    {
-      name: 'Archon-managed ChatGPT subscription',
-      env: MANAGED_ENV,
-      authorization: `Bearer ${MANAGED_TOKEN}`,
-      accountId: 'acct-boundary',
-    },
-  ])(
+  test.each(AUTH_PATHS)(
     '$name authenticates with the user’s config and guidance and writes nothing to their home',
     async ({ env, authorization, accountId }) => {
       const before = await userFileHashes();

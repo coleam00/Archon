@@ -14,6 +14,7 @@ import {
   getCanonicalRepoPath,
   findWorktreeByBranch,
   toBranchName,
+  isSameWorktreePath,
   isAncestorOf,
   verifyWorktreeOwnership,
   CanonicalRepoPathUnavailableError,
@@ -32,8 +33,17 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
-import { worktreeRegistrationMetadata } from './types';
-import { recordWorktreeAdoption, type IIsolationStore } from './store';
+import {
+  WorktreeRegistrationChangedError,
+  sameWorktreeRegistration,
+  worktreeRegistrationMetadata,
+} from './types';
+import {
+  recordWorktreeAdoption,
+  registerWorktree,
+  removeCreatedWorktree,
+  type IIsolationStore,
+} from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
 
@@ -295,8 +305,8 @@ export class IsolationResolver {
       };
     }
 
-    if (env) {
-      await this.markDestroyedBestEffort(env.id);
+    if (env?.status === 'active') {
+      await this.markDestroyedBestEffort(env);
     }
 
     return null;
@@ -359,7 +369,7 @@ export class IsolationResolver {
       return { env: adopted, warnings };
     }
 
-    await this.markDestroyedBestEffort(existing.id);
+    await this.markDestroyedBestEffort(existing);
     return null;
   }
 
@@ -400,7 +410,7 @@ export class IsolationResolver {
         };
       }
 
-      await this.markDestroyedBestEffort(linkedEnv.id);
+      await this.markDestroyedBestEffort(linkedEnv);
     }
     return null;
   }
@@ -466,16 +476,17 @@ export class IsolationResolver {
   }
 
   /**
-   * Best-effort mark a stale environment as destroyed.
-   * Logs errors but never throws - stale cleanup should not block resolution.
+   * Best-effort retire the observed registration of a worktree whose path is gone.
+   * Registration conflicts must stop resolution before it clears or replaces live state.
    */
-  private async markDestroyedBestEffort(envId: string): Promise<void> {
+  private async markDestroyedBestEffort(env: IsolationEnvironmentRow): Promise<void> {
     try {
-      await this.store.updateStatus(envId, 'destroyed');
+      await this.store.markWorktreeDestroyed(env);
     } catch (cleanupError) {
+      if (cleanupError instanceof WorktreeRegistrationChangedError) throw cleanupError;
       const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       getLog().error(
-        { err, errorType: err.constructor.name, isolationEnvId: envId },
+        { err, errorType: err.constructor.name, isolationEnvId: env.id },
         'isolation_cleanup_failed'
       );
     }
@@ -525,6 +536,7 @@ export class IsolationResolver {
       };
     }
 
+    const registrationsBeforeCreation = await this.store.listActive();
     let isolatedEnv: Awaited<ReturnType<typeof this.provider.create>>;
     try {
       isolatedEnv = await this.provider.create(isolationRequest, setupExecutor);
@@ -557,46 +569,22 @@ export class IsolationResolver {
       };
     }
 
-    // provider.create() succeeded — worktree exists on disk.
-    // If store.create() fails, clean up a worktree created by this call.
-    let env: IsolationEnvironmentRow;
-    try {
-      env = await this.store.create({
+    const env = await registerWorktree(
+      { store: this.store, provider: this.provider, registrationsBeforeCreation },
+      isolatedEnv,
+      canonicalPath,
+      {
         codebase_id: codebase.id,
         workflow_type: workflowType,
         workflow_id: workflowId,
-        working_path: isolatedEnv.workingPath,
-        branch_name: isolatedEnv.branchName,
         created_by_platform: platformType,
         created_by_user_id: userId,
         metadata: {
-          ...worktreeRegistrationMetadata(isolatedEnv.metadata),
           related_issues: hints?.linkedIssues ?? [],
           related_prs: hints?.linkedPRs ?? [],
         },
-      });
-    } catch (storeError) {
-      const err = storeError instanceof Error ? storeError : new Error(String(storeError));
-      getLog().error(
-        {
-          err,
-          errorType: err.constructor.name,
-          worktreePath: isolatedEnv.workingPath,
-          codebaseId: codebase.id,
-        },
-        'isolation_store_create_failed'
-      );
-
-      if (!isolatedEnv.metadata.adopted) {
-        await this.removeCreatedWorktree(isolatedEnv.workingPath, {
-          canonicalRepoPath: canonicalPath,
-          creationId: isolatedEnv.metadata.creationId,
-          ...(isolatedEnv.metadata.branchCreated ? { branchName: isolatedEnv.branchName } : {}),
-        });
       }
-
-      throw err; // Re-throw original store error — this is an unexpected failure
-    }
+    );
 
     return {
       status: 'resolved',
@@ -629,51 +617,43 @@ export class IsolationResolver {
     const { env, method } = resolution;
     if (method.type !== 'created') return;
 
-    const removed = await this.removeCreatedWorktree(env.working_path, {
+    try {
+      const active = await this.store.listActive();
+      if (
+        active.some(
+          row =>
+            isSameWorktreePath(row.working_path, env.working_path) &&
+            !sameWorktreeRegistration(row, env)
+        )
+      ) {
+        getLog().warn(
+          { isolationEnvId: env.id, worktreePath: env.working_path },
+          'isolation_rollback_skipped_registered'
+        );
+        return;
+      }
+    } catch (error) {
+      getLog().error(
+        { err: error instanceof Error ? error : new Error(String(error)), isolationEnvId: env.id },
+        'isolation_rollback_failed'
+      );
+      return;
+    }
+    // As with failed-insert rollback, adoption after this final read and before
+    // removal remains possible; no cross-provider ownership claim is held.
+    const removed = await removeCreatedWorktree(this.provider, env.working_path, {
       canonicalRepoPath: method.canonicalRepoPath,
       creationId: method.creationId,
       ...(method.branchCreated ? { branchName: toBranchName(env.branch_name) } : {}),
     });
     if (!removed) return;
     try {
-      await this.store.updateStatus(env.id, 'destroyed');
+      await this.store.markWorktreeDestroyed(env);
     } catch (error) {
       getLog().error(
         { err: error instanceof Error ? error : new Error(String(error)), isolationEnvId: env.id },
         'isolation_rollback_failed'
       );
-    }
-  }
-
-  /**
-   * Remove a worktree this resolver created and verify it is gone.
-   * Logs and returns false on any failure instead of throwing.
-   *
-   * The creation id proves only that this resolution created the checkout, not
-   * the branch: a same-repo PR or a reused branch name checks out a local branch
-   * that may already exist and hold unpushed work. Callers pass `branchName` only
-   * when the provider reports `branchCreated`.
-   */
-  private async removeCreatedWorktree(
-    worktreePath: string,
-    proof: { canonicalRepoPath: RepoPath; creationId: string; branchName?: BranchName }
-  ): Promise<boolean> {
-    try {
-      const result = await this.provider.destroy(worktreePath, { ...proof, force: true });
-      if (!result.worktreeRemoved || !result.directoryClean) {
-        throw new Error(
-          `Worktree cleanup incomplete at ${worktreePath}: ${result.warnings.join('; ')}`
-        );
-      }
-      getLog().info({ worktreePath }, 'isolation_orphan_cleanup_completed');
-      return true;
-    } catch (cleanupError) {
-      const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
-      getLog().error(
-        { err, errorType: err.constructor.name, worktreePath },
-        'isolation_orphan_cleanup_failed'
-      );
-      return false;
     }
   }
 }

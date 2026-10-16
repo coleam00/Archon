@@ -54,6 +54,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
   return {
     getById: async () => null,
     findActiveByWorkflow: async () => null,
+    listActive: async () => [],
     create: async env =>
       makeEnvRow({
         codebase_id: env.codebase_id,
@@ -63,6 +64,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         branch_name: env.branch_name,
       }),
     updateStatus: async () => undefined,
+    markWorktreeDestroyed: async () => undefined,
     updateMetadata: async () => undefined,
     countActiveByCodebase: async () => 0,
     ...overrides,
@@ -697,12 +699,12 @@ describe('IsolationResolver', () => {
     const env = makeEnvRow();
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         getById: async () => env,
-        updateStatus: async (_id, status) => {
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -713,7 +715,7 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([env]);
   });
 
   test('findReusable marks stale DB record as destroyed when worktree gone', async () => {
@@ -721,15 +723,13 @@ describe('IsolationResolver', () => {
     // worktreeExists returns false — worktree is gone
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedId: string | null = null;
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '42' ? env : null,
-        updateStatus: async (id, status) => {
-          updatedId = id;
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -742,8 +742,7 @@ describe('IsolationResolver', () => {
     });
 
     // Should have cleaned up the stale record and then created a new environment
-    expect(updatedId as string | null).toBe('env-1');
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([env]);
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
       expect(result.method.type).toBe('created');
@@ -761,15 +760,13 @@ describe('IsolationResolver', () => {
     // worktreeExists returns false — worktree is gone
     worktreeExistsSpy.mockResolvedValue(false);
 
-    let updatedId: string | null = null;
-    let updatedStatus: string | null = null;
+    const retired: IsolationEnvironmentRow[] = [];
     const resolver = createResolver({
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '10' ? linkedEnv : null,
-        updateStatus: async (id, status) => {
-          updatedId = id;
-          updatedStatus = status;
+        markWorktreeDestroyed: async observed => {
+          retired.push(observed);
         },
       }),
     });
@@ -781,8 +778,7 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
-    expect(updatedId as string | null).toBe('env-linked');
-    expect(updatedStatus as string | null).toBe('destroyed');
+    expect(retired).toEqual([linkedEnv]);
     // Should proceed to create new since linked env was stale
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
@@ -798,7 +794,7 @@ describe('IsolationResolver', () => {
       store: makeMockStore({
         findActiveByWorkflow: async (_cid, wt, wid) =>
           wt === 'issue' && wid === '42' ? env : null,
-        updateStatus: async () => {
+        markWorktreeDestroyed: async () => {
           throw new Error('DB connection lost');
         },
       }),
@@ -915,6 +911,34 @@ describe('IsolationResolver', () => {
     });
   }
 
+  test('a failed final registration recheck preserves the checkout and original insert error', async () => {
+    let attempted = false;
+    const insertError = new Error('insert failed');
+    const destroy = mock(makeMockProvider().destroy);
+    const resolver = createResolver({
+      provider: { ...makeMockProvider(), destroy },
+      store: makeMockStore({
+        create: async () => {
+          attempted = true;
+          throw insertError;
+        },
+        listActive: async () => {
+          if (attempted) throw new Error('lookup failed');
+          return [];
+        },
+      }),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: { workflowType: 'issue', workflowId: '602' },
+        platformType: 'web',
+      })
+    ).rejects.toBe(insertError);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
   test('incomplete rollback reports the leftover without masking the store failure', async () => {
     mockCleanupError.mockClear();
     mockCleanupInfo.mockClear();
@@ -995,7 +1019,10 @@ describe('IsolationResolver', () => {
       },
     };
 
-    function releaseHarness(destroy: () => Promise<DestroyResult>): {
+    function releaseHarness(
+      destroy: () => Promise<DestroyResult>,
+      storeOverrides?: Partial<IIsolationStore>
+    ): {
       resolver: IsolationResolver;
       destroyCalls: unknown[][];
       statusUpdates: unknown[][];
@@ -1014,6 +1041,10 @@ describe('IsolationResolver', () => {
           updateStatus: async (...args) => {
             statusUpdates.push(args);
           },
+          markWorktreeDestroyed: async observed => {
+            statusUpdates.push([observed.id, 'destroyed']);
+          },
+          ...storeOverrides,
         }),
       });
       return { resolver, destroyCalls, statusUpdates };
@@ -1049,6 +1080,52 @@ describe('IsolationResolver', () => {
       expect(destroyCalls).toEqual([
         ['/worktrees/issue-42', { canonicalRepoPath, creationId, force: true }],
       ]);
+      expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
+    });
+
+    for (const claim of ['same-row', 'other-workflow'] as const) {
+      test(`preserves a created checkout adopted by ${claim} before unlink rollback`, async () => {
+        const adopted = makeEnvRow({
+          ...(claim === 'other-workflow' ? { id: 'env-2', workflow_id: 'other' } : {}),
+          metadata: { worktree_registration_id: 'adopted-registration' },
+        });
+        const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+          listActive: async () => [adopted],
+        });
+        mockWarn.mockClear();
+        await resolver.releaseUnlinked(created);
+        expect(destroyCalls).toEqual([]);
+        expect(statusUpdates).toEqual([]);
+        expect(mockWarn).toHaveBeenCalledWith(
+          { isolationEnvId: created.env.id, worktreePath: created.env.working_path },
+          'isolation_rollback_skipped_registered'
+        );
+      });
+    }
+
+    test('keeps a created checkout when its final registration lookup fails', async () => {
+      const failure = new Error('store unavailable');
+      const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+        listActive: async () => {
+          throw failure;
+        },
+      });
+      mockCleanupError.mockClear();
+      await resolver.releaseUnlinked(created);
+      expect(destroyCalls).toEqual([]);
+      expect(statusUpdates).toEqual([]);
+      expect(mockCleanupError).toHaveBeenCalledWith(
+        { err: failure, isolationEnvId: created.env.id },
+        'isolation_rollback_failed'
+      );
+    });
+
+    test('removes a created checkout still held by its original registration', async () => {
+      const { resolver, destroyCalls, statusUpdates } = releaseHarness(async () => removed, {
+        listActive: async () => [created.env],
+      });
+      await resolver.releaseUnlinked(created);
+      expect(destroyCalls).toHaveLength(1);
       expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
     });
 

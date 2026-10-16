@@ -497,7 +497,7 @@ export async function removeEnvironment(
         skippedReason: 'filesystem removal incomplete; environment remains active',
       };
     }
-    await isolationEnvDb.updateStatus(envId, 'destroyed');
+    await isolationEnvDb.markWorktreeDestroyed(env);
 
     getLog().info({ envId, workingPath: env.working_path }, 'env_removed');
 
@@ -1340,7 +1340,7 @@ async function reclaimOwnedWorktree(
   if (!(await pathExists())) {
     if (await isWorktreeRegistered(repo, path))
       return refuse('checkout is absent but still registered with Git');
-    if (env.status !== 'destroyed') await store.updateStatus(env.id, 'destroyed');
+    if (env.status !== 'destroyed') await store.markWorktreeDestroyed(env);
     return { warnings: [] };
   }
   if (env.status === 'destroyed')
@@ -1355,7 +1355,7 @@ async function reclaimOwnedWorktree(
         // reused it after this point fails claimPendingWorkflowRun instead of
         // starting in a checkout that is about to disappear.
         beforeRemove: async () => {
-          await store.updateStatus(env.id, 'destroyed');
+          await store.markWorktreeDestroyed(env);
           marked = true;
           const user = await readers.getLiveRunOwningEnv(env.id);
           if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
@@ -1366,7 +1366,21 @@ async function reclaimOwnedWorktree(
       return refuse('filesystem removal incomplete');
     return { released: { path, branch: env.branch_name }, warnings: result.warnings };
   } catch (err) {
-    if (marked && (await pathExists())) await store.updateStatus(env.id, 'active');
+    if (marked) {
+      try {
+        if (await pathExists()) await store.updateStatus(env.id, 'active', env);
+      } catch (recoveryError) {
+        getLog().error(
+          { err: recoveryError, isolationEnvId: env.id },
+          'worktree_reclaim_recovery_failed'
+        );
+        throw new AggregateError(
+          [err, recoveryError],
+          `${err instanceof Error ? err.message : String(err)}; registration recovery failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+          { cause: err }
+        );
+      }
+    }
     throw err;
   }
 }

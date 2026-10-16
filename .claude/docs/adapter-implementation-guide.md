@@ -1,8 +1,9 @@
 # Adapter Implementation Guide
 
-> **Purpose**: Complete reference for understanding and building platform adapters in Archon.
-> **When to use**: Building a new adapter, debugging adapter behavior, understanding cross-platform message flow.
-> **Size**: ~400 lines — use a scout sub-agent to check relevance before loading.
+> **Purpose**: Reference for maintaining existing bundled platform adapters.
+> **When to use**: Debugging bundled adapter behavior and understanding cross-platform message flow.
+
+New chat platforms ship as plugins in contributor-owned repositories using `ChatPlugin` from `@archon/chat-contract`. Follow the [chat plugin publishing guide](../../packages/docs-web/src/content/docs/guides/publishing-plugins.md#chat-plugins) and the [chat contract](../../packages/chat-contract/README.md). New forges use the [forge plugin publishing guide](../../packages/docs-web/src/content/docs/guides/publishing-plugins.md#tags-and-executable-release-assets). Do not add a bundled adapter or register a new platform in the server.
 
 ---
 
@@ -234,16 +235,3 @@ GitHub is different — self-contained, handles its own lock acquisition interna
 Web is always enabled (not conditional on env vars).
 
 ---
-
-## Building a New Adapter: Checklist
-
-1. Create `packages/adapters/src/{category}/{platform}/adapter.ts`
-2. Create `packages/adapters/src/{category}/{platform}/auth.ts` with `parseAllowedXxx()` + `isXxxAuthorized()`
-3. Implement `IPlatformAdapter` — all 6 required methods
-4. Use the lazy logger pattern (never module-scope init)
-5. Parse auth whitelist in constructor from env var
-6. Check auth in message handler before calling `onMessage` callback
-7. Use `splitIntoParagraphChunks()` from `../../utils/message-splitting`
-8. Register in `packages/server/src/index.ts` following the env-check → instantiate → onMessage → start pattern
-9. Add the platform type string to any switch/if chains that check `getPlatformType()`
-10. Export from `packages/adapters/src/index.ts`

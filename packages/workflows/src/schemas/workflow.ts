@@ -389,6 +389,7 @@ export type LoadCommandResult =
       success: false;
       reason: 'invalid_name' | 'empty_file' | 'not_found' | 'permission_denied' | 'read_error';
       message: string;
+      cause?: unknown;
     };
 
 // ---------------------------------------------------------------------------
@@ -460,10 +461,37 @@ export interface WorkflowWithSource {
 /**
  * Error encountered while loading a workflow file
  */
-export interface WorkflowLoadError {
-  readonly filename: string;
-  readonly error: string;
-  readonly errorType: 'read_error' | 'parse_error' | 'validation_error';
+export const workflowLoadErrorSchema = z.object({
+  filename: z.string(),
+  workflowName: z.string().optional(),
+  error: z.string(),
+  errorType: z.enum(['read_error', 'parse_error', 'validation_error']),
+});
+
+export type WorkflowLoadError = Readonly<z.infer<typeof workflowLoadErrorSchema>> & {
+  readonly cause?: unknown;
+};
+
+/** Errors without a known workflow name keep their full path to avoid aliasing a bare target. */
+export function workflowLoadErrorName(error: WorkflowLoadError): string {
+  return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
+}
+
+export function findWorkflowLoadError(
+  errors: readonly WorkflowLoadError[],
+  name: string
+): WorkflowLoadError | undefined {
+  return (
+    errors.find(error => error.workflowName === name) ??
+    errors.find(error => error.workflowName?.toLowerCase() === name.toLowerCase()) ??
+    errors.find(error => workflowLoadErrorName(error) === name) ??
+    errors.find(error => workflowLoadErrorName(error).toLowerCase() === name.toLowerCase())
+  );
+}
+
+/** Errors after parsing retain the authored identity even when the filename differs. */
+export interface ParsedWorkflowLoadError extends WorkflowLoadError {
+  readonly workflowName: string;
 }
 
 /**

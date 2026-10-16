@@ -5,6 +5,7 @@ import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import { randomUUID } from 'node:crypto';
+import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -46,16 +47,23 @@ import {
   recordNodeState,
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { basename, join as joinPath, resolve as resolvePath } from 'path';
+import { readFile } from 'node:fs/promises';
+import { join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
+import { findWorkflowLoadError } from './schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
+  capturedSourceReadGuard,
+  assertCapturedFilesPresent,
+  isSourceReadFailure,
+  isSystemError,
   liveSourceRoots,
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { resolveWorkflowName } from './router';
@@ -65,7 +73,7 @@ import type {
   WorkflowDeps,
   WorkflowCommandSurface,
 } from './deps';
-import { attentionAnswerLines, spellWorkflowCommand } from './deps';
+import { attentionAnswerLines, sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -84,6 +92,7 @@ import {
   attentionForm,
   attentionOccurrence,
   attentionOptions,
+  gateOccurrence,
   type WorkflowAttentionWaitContext,
 } from './schemas/workflow-run';
 import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
@@ -164,6 +173,8 @@ import {
 } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
+  CONTINUATION_RETRY_MS,
+  executionClaim,
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
@@ -219,7 +230,7 @@ import {
   type JsonValue,
   type TemplateToken,
 } from './output-ref';
-import { resolveMcpPath, missingMcpConfigMessage } from './mcp-path';
+import { resolveMcpPath, missingMcpConfigMessage, type McpPathResolution } from './mcp-path';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
 import { validateArtifactPointers } from './artifact-pointer';
@@ -231,6 +242,7 @@ import {
   readComposedMeta,
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
+  isIncludeCommandReadError,
 } from './compiled-command';
 import {
   assistantModelDefaults,
@@ -675,6 +687,7 @@ function parseMcpServerNames(raw: string, fullPath: string): string[] | undefine
 
 /** What a node's `mcp:` declaration hands its provider for one attempt. */
 export type NodeMcpResolution =
+  | Extract<McpPathResolution, { kind: 'read_error' }>
   | { kind: 'none' }
   /** The provider loads `path`; `servers` are the names the file declares, if readable. */
   | { kind: 'load'; path: string; servers: Set<string> }
@@ -683,21 +696,27 @@ export type NodeMcpResolution =
   | { kind: 'unavailable'; fullPath: string; record: McpUnavailable; diagnostic?: string };
 
 /**
- * Decide whether a node's MCP servers reach its provider. A required declaration
- * always does: a missing file or an incapable provider fails the node exactly as it
- * did before optional declarations existed. An optional one is withheld when the
- * provider cannot load MCP servers, or when its config file does not exist.
+ * Decide whether a node's MCP servers reach its provider. Missing required files and
+ * readable invalid JSON still reach the provider for diagnosis; I/O errors retain their
+ * cause for the executor. An optional declaration is withheld when the provider cannot
+ * load MCP servers, or when its config file does not exist.
  */
 export async function resolveNodeMcp(
   mcp: NodeMcp | undefined,
   capabilities: ProviderCapabilities,
   cwd: string,
-  homeYamlDirectory?: string
+  homeYamlDirectory?: string,
+  verifiedFiles?: ReadonlySet<string>
 ): Promise<NodeMcpResolution> {
   const declaration = mcpDeclaration(mcp);
   if (declaration === undefined) return { kind: 'none' };
   const { path, optional } = declaration;
-  const selected = await resolveMcpPath(path, cwd, homeYamlDirectory);
+  const selected = await resolveMcpPath(
+    path,
+    cwd,
+    homeYamlDirectory,
+    capturedSourceReadGuard(verifiedFiles)
+  );
   const fullPath = selected.kind === 'missing' ? selected.attemptedPaths[0] : selected.path;
   const servers =
     selected.kind === 'found' ? parseMcpServerNames(selected.content, fullPath) : undefined;
@@ -708,6 +727,7 @@ export async function resolveNodeMcp(
       record: { path, reason: 'provider_unsupported', ...(servers ? { servers } : {}) },
     };
   }
+  if (selected.kind === 'read_error') return selected;
   if (selected.kind === 'missing') {
     const diagnostic = missingMcpConfigMessage(path, selected.attemptedPaths);
     if (optional) {
@@ -1101,25 +1121,27 @@ function retryableFailureClass(
 
 /**
  * Run one governed attempt under the run budget: admit and reserve a work unit, write
- * its durable record, run the attempt, then charge its spend. The reservation precedes
- * the first await so parallel siblings cannot share the last unit; the record precedes
- * the attempt so a crash over-counts rather than under-counts.
+ * its durable record, run the attempt, then charge its spend. The executor reserves
+ * after source preparation and before recording its attempt. Admission is synchronous
+ * so parallel siblings cannot share the last unit.
  */
 async function runBudgetedAttempt(
   ctx: RunLayersContext,
   node: AgentNode | ExecNode,
-  attempt: () => Promise<NodeExecutionResult>
+  attempt: (reserve: () => Promise<void>) => Promise<NodeExecutionResult>
 ): Promise<NodeExecutionResult> {
   const ledger = ctx.runBudget;
-  if (ledger === undefined) return attempt();
+  if (ledger === undefined) return attempt(async () => undefined);
   const path = ctx.stepNamePrefix + node.id;
-  const refusal = admitRunBudgetAttempt(ledger, path);
-  if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
-  await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  const reserve = async (): Promise<void> => {
+    const refusal = admitRunBudgetAttempt(ledger, path);
+    if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
+    await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
+  };
   const executionBefore = ctx.currentExecution;
   let result: NodeExecutionResult;
   try {
-    result = await attempt();
+    result = await attempt(reserve);
   } catch (error) {
     // An agent attempt that started and then threw never reported its cost. One that
     // threw before starting made no provider call.
@@ -1683,6 +1705,20 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Substitute an attention wait's message: node outputs, enclosing loop scopes and
+ * `$INPUTS`, and no other workflow variable. The dry run renders the same field through
+ * this function so its preview cannot drift from what the operator receives.
+ */
+export function substituteWaitMessage(
+  text: string,
+  sources: TemplateSources,
+  inputs: Record<string, JsonValue> | undefined
+): string {
+  const { before, after } = nodeTemplateReferences(text, sources);
+  return substituteTemplate(text, [...before, inputRefToken(inputs), ...after]);
+}
+
+/**
  * Collect the static ids of every node in a loop_group body, recursing into nested
  * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
  * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
@@ -1990,6 +2026,7 @@ async function resolveNodeProviderAndModel(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
+  baseOptions.userCredentialEnvKeys = config.userCredentialEnvKeys;
   if (config.protectedEnvKeys && config.protectedEnvKeys.length > 0) {
     baseOptions.protectedEnvKeys = config.protectedEnvKeys;
   }
@@ -2314,6 +2351,7 @@ function aiNodeEnvironment(
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
+  reserveBudget: () => Promise<void>,
   provider: string,
   nodeOptions: SendQueryOptions | undefined,
   resumeSessionId: string | undefined,
@@ -2339,7 +2377,6 @@ async function executeNodeInternal(
     logDir,
     baseBranch,
     docsDir,
-    configuredCommandFolder,
     issueContext,
     workflowSourceRoots,
   } = ctx;
@@ -2364,11 +2401,37 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
-  const capabilities = requireProvider(deps.providers, provider).capabilities;
-  const aiClient = deps.getAgentProvider(provider);
+  const commandPrompt =
+    commandName === undefined ? undefined : await loadNodeCommandPrompt(ctx, commandName, stepName);
   const homeMcpDirectory = readHomeMcpDirectory(node);
-  if (homeMcpDirectory !== undefined) await assertWorkflowSourceIntegrity(workflowSourceRoots);
-  const nodeMcp = await resolveNodeMcp(node.mcp, capabilities, cwd, homeMcpDirectory);
+  const verifiedMcpFiles =
+    homeMcpDirectory !== undefined
+      ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
+      : undefined;
+  const capabilities = requireProvider(deps.providers, provider).capabilities;
+  const nodeMcp = await resolveNodeMcp(
+    node.mcp,
+    capabilities,
+    cwd,
+    homeMcpDirectory,
+    verifiedMcpFiles
+  );
+  if (nodeMcp.kind === 'read_error') {
+    const sourceRoot =
+      workflowSourceRoots.kind === 'captured'
+        ? workflowSourceRoots.anchor.root
+        : workflowSourceRoots.globalWorkflows;
+    if (
+      homeMcpDirectory !== undefined &&
+      isInsideAny(nodeMcp.path, [sourceRoot]) &&
+      isSourceReadFailure(nodeMcp.error, verifiedMcpFiles)
+    ) {
+      throw new RunSourceUnreadableError(stepName, nodeMcp.error);
+    }
+    throw nodeMcp.error;
+  }
+  await reserveBudget();
+  const aiClient = deps.getAgentProvider(provider);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2470,14 +2533,8 @@ async function executeNodeInternal(
   // Load prompt
   let rawPrompt: string;
   if (commandName !== undefined) {
-    await assertWorkflowSourceIntegrity(workflowSourceRoots);
-    const promptResult = await loadCommandPrompt(
-      deps,
-      cwd,
-      commandName,
-      configuredCommandFolder,
-      workflowSourceRoots
-    );
+    const promptResult = commandPrompt;
+    if (promptResult === undefined) throw new Error(`Missing prepared command for '${stepName}'`);
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
@@ -3315,6 +3372,85 @@ function unsettledTurnError(
   return `${cause}${tasks} Its work may be incomplete.`;
 }
 
+/**
+ * This host could not read the run's frozen source for a node (`isSourceReadFailure`).
+ * Not a node outcome: it leaves the layer join like a budget refusal, and
+ * `executeDagWorkflow` releases the run to be continued by a host that can read it.
+ */
+class RunSourceUnreadableError extends Error {
+  readonly path?: string;
+  constructor(
+    /** The node's persisted step name. */
+    readonly nodeId: string,
+    cause: unknown
+  ) {
+    const path =
+      cause instanceof WorkflowSourceUnavailableError
+        ? cause.path
+        : isSystemError(cause) && typeof cause.path === 'string'
+          ? cause.path
+          : undefined;
+    super(
+      `This host could not read the run's source for node '${nodeId}': ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = 'RunSourceUnreadableError';
+    this.path = path;
+  }
+}
+
+/** Verify the run's frozen source before a node reads it; a read failure releases the run. */
+async function assertNodeSourceReadable(
+  roots: WorkflowSourceRoots,
+  stepName: string
+): Promise<ReadonlySet<string> | undefined> {
+  try {
+    return await assertWorkflowSourceIntegrity(roots);
+  } catch (error) {
+    if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
+    throw error;
+  }
+}
+
+async function loadNodeCommandPrompt(
+  ctx: RunLayersContext,
+  command: string,
+  stepName: string
+): Promise<Awaited<ReturnType<typeof loadCommandPrompt>>> {
+  const verifiedFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
+  try {
+    const result = await loadCommandPrompt(
+      ctx.deps,
+      ctx.cwd,
+      command,
+      ctx.configuredCommandFolder,
+      ctx.workflowSourceRoots,
+      verifiedFiles
+    );
+    if (!result.success && isSourceReadFailure(result.cause, verifiedFiles)) {
+      // Packaged commands resolve by path, so ENOENT can also mean an authored command
+      // never existed. Only a file in the verified capture was lost on this host.
+      if (
+        result.reason === 'not_found' &&
+        !(
+          isSystemError(result.cause) &&
+          typeof result.cause.path === 'string' &&
+          verifiedFiles?.has(result.cause.path)
+        )
+      )
+        return result;
+      throw result.cause;
+    }
+    return result;
+  } catch (error) {
+    if (isSourceReadFailure(error, verifiedFiles))
+      throw new RunSourceUnreadableError(stepName, error);
+    throw error;
+  }
+}
+
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
 class NodeFailure extends Error {
   constructor(
@@ -3734,6 +3870,7 @@ async function warnOnLiteralUserVars(
 async function executeScriptNode(
   ctx: RunLayersContext,
   node: ExecNode,
+  reserveBudget: () => Promise<void>,
   envVars?: Record<string, string>,
   protectedEnvKeys?: readonly string[],
   protectedCredentialValues?: readonly string[],
@@ -3766,15 +3903,6 @@ async function executeScriptNode(
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
-  const execution: NodeExecutionRecord = {
-    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
-    diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
-  };
-
-  getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
-
-  await recordNodeState({ store: deps.store, logDir }, execution);
-
   // Resolve before deciding whether this is inline or filesystem-backed: substitutions
   // can turn the authored field into either form. A named source is checked outside the
   // deterministic retry classifier, so an integrity failure cannot consume retries.
@@ -3800,9 +3928,37 @@ async function executeScriptNode(
       references: nodeTemplateReferences(node.script, ctx, 'script'),
     }
   );
-  if (!isInlineScript(finalScript)) {
-    await assertWorkflowSourceIntegrity(workflowSourceRoots);
-  }
+  const verifiedScriptFiles = !isInlineScript(finalScript)
+    ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
+    : undefined;
+  const namedScripts = isInlineScript(finalScript)
+    ? undefined
+    : await discoverScriptsForCwd(
+        cwd,
+        workflowSourceRoots,
+        new Set([finalScript]),
+        capturedSourceReadGuard(verifiedScriptFiles)
+      )
+        .then(async scripts => {
+          await assertCapturedFilesPresent(verifiedScriptFiles);
+          const selected = scripts.get(finalScript);
+          if (selected) await readFile(selected.path);
+          return scripts;
+        })
+        .catch(error => {
+          if (isSourceReadFailure(error, verifiedScriptFiles))
+            throw new RunSourceUnreadableError(stepName, error);
+          return error instanceof Error ? error : new Error(String(error));
+        });
+  await reserveBudget();
+  const execution: NodeExecutionRecord = {
+    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
+    diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
+  };
+
+  getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
+
+  await recordNodeState({ store: deps.store, logDir }, execution);
 
   // One-release migration warn for any literal user-controlled var ref that no
   // longer substitutes now that delivery moved to env vars (#2115).
@@ -3859,14 +4015,8 @@ async function executeScriptNode(
   } else {
     // Named script — look up across repo and home scopes.
     // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
-    // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
-    // isn't mis-attributed by the outer catch's "permission denied (check cwd
-    // permissions)" branch — that branch is for execFileAsync EACCES.
-    let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
-    try {
-      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots, new Set([finalScript]));
-    } catch (discoveryErr) {
-      const err = discoveryErr as Error;
+    if (namedScripts instanceof Error) {
+      const err = namedScripts;
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
       getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
       await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
@@ -3880,7 +4030,7 @@ async function executeScriptNode(
         )
       );
     }
-    const scriptDef = scripts.get(finalScript);
+    const scriptDef = namedScripts?.get(finalScript);
 
     if (!scriptDef) {
       const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
@@ -3905,6 +4055,19 @@ async function executeScriptNode(
     } else {
       cmd = 'bun';
       args = ['--no-env-file', 'run', scriptDef.path];
+    }
+  }
+
+  // After dispatch, a rejection may follow user side effects; source recovery must not
+  // replace that outcome. Recheck while execution is still known not to have started.
+  const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
+  if (selected) {
+    try {
+      await Promise.all([...(verifiedScriptFiles ?? [selected.path])].map(path => readFile(path)));
+    } catch (error) {
+      if (isSourceReadFailure(error, verifiedScriptFiles))
+        throw new RunSourceUnreadableError(stepName, error);
+      throw error;
     }
   }
 
@@ -3942,6 +4105,7 @@ async function executeScriptNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
+    if (error instanceof RunSourceUnreadableError) throw error;
     const err = error as RawSubprocessRejection;
     // See executeBashNode: a contract failure (#2453) stays outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
@@ -4290,8 +4454,13 @@ async function executeLoopGroupNode(
       stepNamePrefix
     );
   } catch (error) {
-    // Durable-write rejection belongs to run recovery, not a failed node outcome.
-    if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+    // Durable-write rejection and an unreadable source belong to run recovery, not a
+    // failed node outcome.
+    if (
+      error instanceof TerminalStatusWriteError ||
+      error instanceof NodeEventWriteError ||
+      error instanceof RunSourceUnreadableError
+    )
       throw error;
     const err = error instanceof Error ? error : new Error(String(error));
     getLog().error({ err, nodeId: node.id }, 'loop_group_node.execution_failed');
@@ -5309,6 +5478,7 @@ async function executeLoopGroupBody(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -5432,9 +5602,7 @@ async function executeLoopNode(
     docsDir,
     config,
     issueContext,
-    configuredCommandFolder,
     execContext,
-    workflowSourceRoots,
   } = ctx;
   const loop = node.loop;
   const retryConfig = getEffectiveNodeRetryConfig(node);
@@ -5661,14 +5829,7 @@ async function executeLoopNode(
       );
       return failLoopNode(errorMsg, { failureKind: 'config', data: { command: loop.command } });
     } else {
-      await assertWorkflowSourceIntegrity(workflowSourceRoots);
-      const promptResult = await loadCommandPrompt(
-        deps,
-        cwd,
-        loop.command,
-        configuredCommandFolder,
-        workflowSourceRoots
-      );
+      const promptResult = await loadNodeCommandPrompt(ctx, loop.command, stepName);
       if (!promptResult.success) {
         getLog().error(
           { nodeId: node.id, command: loop.command, error: promptResult.message },
@@ -6875,6 +7036,7 @@ async function executeLoopNode(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6916,7 +7078,8 @@ async function executeLoopNode(
  * queue is where it is answered, so a notice the platform cannot deliver leaves the run
  * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
  * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
- * can see that nobody was told.
+ * can see that nobody was told. It names the pause `occurrence` so the push router can
+ * treat that pause as unannounced and notify the owner itself.
  */
 async function sendPauseNotice(
   deps: WorkflowDeps,
@@ -6924,6 +7087,7 @@ async function sendPauseNotice(
   conversationId: string,
   workflowRunId: string,
   nodeId: string,
+  occurrence: string,
   stepName: string,
   notice: string
 ): Promise<void> {
@@ -6939,7 +7103,7 @@ async function sendPauseNotice(
       workflow_run_id: workflowRunId,
       event_type: 'pause_notice_undelivered',
       step_name: stepName,
-      data: { nodeId, platform: platform.getPlatformType() },
+      data: { nodeId, occurrence, platform: platform.getPlatformType() },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -7088,14 +7252,8 @@ async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string => {
-    const { before, after } = nodeTemplateReferences(text, ctx);
-    return substituteTemplate(text, [
-      ...before,
-      inputRefToken(resolveRunInputs(workflowRun)),
-      ...after,
-    ]);
-  };
+  const resolveEventText = (text: string): string =>
+    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;
@@ -7205,6 +7363,7 @@ async function executeWaitNode(
         conversationId,
         workflowRun.id,
         node.id,
+        attentionOccurrence(context),
         stepNamePrefix + node.id,
         attentionNotification(platform, workflowRun.id, context)
       );
@@ -7459,10 +7618,11 @@ async function executeApprovalNode(
       execContext
     );
 
-    const output = await runBudgetedAttempt(ctx, syntheticNode, () =>
+    const output = await runBudgetedAttempt(ctx, syntheticNode, reserve =>
       executeNodeInternal(
         ctx,
         syntheticNode,
+        reserve,
         provider,
         nodeOptions,
         undefined, // fresh session
@@ -7551,6 +7711,7 @@ async function executeApprovalNode(
     conversationId,
     workflowRun.id,
     node.id,
+    gateOccurrence(paused),
     stepName,
     approvalMsg
   );
@@ -7887,6 +8048,11 @@ async function executeWorkflowNode(
   } catch (err) {
     if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
 
+    // Only a read of the parent's source releases the parent; a child's fault stays the
+    // child's, so the launch types those reads (see runChildWorkflow).
+    if (err instanceof WorkflowSourceUnavailableError)
+      throw new RunSourceUnreadableError(executionNodeId, err);
+
     return failResult(
       `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
       'child_failed'
@@ -7990,8 +8156,12 @@ export async function resolveFanOutChildDefinition(
     }
   | { unresolved: string }
 > {
+  const sourceRoots = source ?? liveSourceRoots(cwd);
+  let verifiedFiles: ReadonlySet<string> | undefined;
   try {
-    const sourceRoots = source ?? liveSourceRoots(cwd);
+    // Verified first, so a capture this host cannot read throws a typed error rather
+    // than surfacing as a discovery error string.
+    verifiedFiles = await assertWorkflowSourceIntegrity(sourceRoots);
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
@@ -8005,19 +8175,38 @@ export async function resolveFanOutChildDefinition(
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
-      const relevantError = errors.find(error => {
-        const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
-        return filename === targetName || error.error.includes(`'${targetName}'`);
-      });
+      const relevantError =
+        findWorkflowLoadError(errors, targetName) ??
+        errors.find(
+          error =>
+            error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)
+        );
+      if (relevantError !== undefined && isSourceReadFailure(relevantError.cause, verifiedFiles)) {
+        throw relevantError.cause;
+      }
       return {
         unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
       };
     }
-    await assertWorkflowSourceIntegrity(sourceRoots);
-    const commandContents = await resolveWorkflowCommandContents(sourceRoots, definitions);
+    const commandContents = await resolveWorkflowCommandContents(
+      sourceRoots,
+      [definition],
+      verifiedFiles
+    );
+    for (const content of commandContents.values()) {
+      if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {
+        throw content.cause;
+      }
+    }
     return { definition, definitions, commandContents };
   } catch (err) {
-    if (err instanceof WorkflowSourceIntegrityError) throw err;
+    if (err instanceof WorkflowSourceIntegrityError || isSourceReadFailure(err)) throw err;
+    if (isSourceReadFailure(err, verifiedFiles)) {
+      throw new WorkflowSourceUnavailableError(
+        sourceRoots.kind === 'captured' ? sourceRoots.anchor.root : cwd,
+        err
+      );
+    }
     return { unresolved: (err as Error).message };
   }
 }
@@ -8474,6 +8663,8 @@ async function executeFanOutWorkflowNode(
       ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
       ...(resumeChild ? { resumeChild } : {}),
     }).catch((error: unknown) => {
+      if (error instanceof WorkflowSourceUnavailableError)
+        throw new RunSourceUnreadableError(stepName, error);
       if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
       throw error;
     });
@@ -8847,12 +9038,14 @@ async function executeComposeFanOutNode(
 
   // Preflight BEFORE any instance spend: the target must still resolve (it may have been
   // renamed or deleted since load), and its complete closure must remain suspension-free.
-  const resolved = await resolveFanOutChildDefinition(
-    deps,
-    cwd,
-    node.include,
-    ctx.workflowSourceRoots
-  );
+  let resolved: Awaited<ReturnType<typeof resolveFanOutChildDefinition>>;
+  try {
+    resolved = await resolveFanOutChildDefinition(deps, cwd, node.include, ctx.workflowSourceRoots);
+  } catch (error) {
+    if (isSourceReadFailure(error))
+      throw new RunSourceUnreadableError(ctx.stepNamePrefix + node.id, error);
+    throw error;
+  }
   if ('unresolved' in resolved) {
     const msg =
       `composed fan-out node '${node.id}': cannot resolve the composed block '${node.include}' — ` +
@@ -9111,7 +9304,73 @@ async function executeComposeFanOutNode(
         // loop's substitution pass, so its command bodies don't either.
         loopBodyScopes: [],
       };
-      await runLayers(instanceCtx);
+      try {
+        await runLayers(instanceCtx);
+      } catch (error) {
+        // Without a terminal record the resumed fan-out would find this instance started
+        // and never finished, and refuse to replay it.
+        if (error instanceof RunSourceUnreadableError) {
+          let releasedRecord = finishNodeExecution(
+            instanceExecution,
+            { status: 'failed', error: error.message, failureKind: 'child_failed' },
+            { output: { text: '' } }
+          );
+          try {
+            const rows = await deps.store.listWorkflowEvents(parentRun.id);
+            let start = rows.length - 1;
+            while (
+              start >= 0 &&
+              !(
+                rows[start].step_name === instanceScopeName &&
+                rows[start].event_type === 'node_started'
+              )
+            ) {
+              start--;
+            }
+            const usage = await foldDagResumeSnapshot(
+              rows
+                .slice(start + 1)
+                .filter(row => row.step_name?.startsWith(instanceStepNamePrefix)),
+              parentRun.id
+            );
+            releasedRecord = finishNodeExecution(
+              instanceExecution,
+              { status: 'failed', error: error.message, failureKind: 'child_failed' },
+              {
+                costUsd: usage.costUsd,
+                tokens: usage.tokens,
+                tokensUnknown: usage.tokensUnknown,
+                output: { text: '' },
+                diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
+              }
+            );
+            await deps.store.persistWorkflowEvent(serializeNodeStateRecord(releasedRecord));
+          } catch (closureError) {
+            if (
+              closureError instanceof NodeEventWriteError ||
+              closureError instanceof TerminalStatusWriteError
+            )
+              throw closureError;
+            // The terminal owns the scope's spend. If accounting cannot be read, recovery
+            // must retain the open start rather than close it with incomplete usage.
+            throw new NodeEventWriteError(serializeNodeStateRecord(releasedRecord), closureError);
+          }
+          try {
+            await deriveInstanceSinks(releasedRecord);
+          } catch (cleanupError) {
+            if (
+              cleanupError instanceof NodeEventWriteError ||
+              cleanupError instanceof TerminalStatusWriteError
+            )
+              throw cleanupError;
+            getLog().error(
+              { err: cleanupError, parentRunId: parentRun.id, instance: instanceScopeName },
+              'workflow.compose_fan_out_release_sinks_failed'
+            );
+          }
+        }
+        throw error;
+      }
       // Every instance exit carries the work it already paid for.
       const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
         ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
@@ -9632,6 +9891,7 @@ function settledValuesOrThrow<T>(
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
     failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
+    failures.find(result => result.reason instanceof RunSourceUnreadableError) ??
     failures[0];
   if (selected === undefined) return values;
   for (const failure of failures) {
@@ -10042,8 +10302,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.deps.store,
                     ctx.stepNamePrefix + node.id,
                     () =>
-                      runBudgetedAttempt(ctx, node, () =>
-                        executeBashNode(
+                      runBudgetedAttempt(ctx, node, async reserve => {
+                        await reserve();
+                        return executeBashNode(
                           ctx,
                           node,
                           ctx.config.envVars,
@@ -10052,8 +10313,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                           ctx.stepNamePrefix,
                           iteration,
                           ctx.bodyLoopUserInput ?? ''
-                        )
-                      ),
+                        );
+                      }),
                     iteration
                   );
                   return {
@@ -10086,10 +10347,11 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.deps.store,
                   ctx.stepNamePrefix + node.id,
                   () =>
-                    runBudgetedAttempt(ctx, node, () =>
+                    runBudgetedAttempt(ctx, node, reserve =>
                       executeScriptNode(
                         ctx,
                         node,
+                        reserve,
                         ctx.config.envVars,
                         ctx.config.protectedEnvKeys,
                         ctx.config.protectedCredentialValues,
@@ -10525,7 +10787,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
               () =>
-                runBudgetedAttempt(ctx, node, async () => {
+                runBudgetedAttempt(ctx, node, async reserve => {
                   // Fresh per attempt: an attempt after a transient failure observes
                   // artifacts published in the interval, and never reuses the
                   // listing handed to AI-configuration substitution above.
@@ -10536,6 +10798,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   return executeNodeInternal(
                     ctx,
                     node,
+                    reserve,
                     provider,
                     nodeOptions,
                     resumeSessionId,
@@ -10686,6 +10949,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 }
               )
             );
+            // The attempt is recorded so it does not read as running; the run itself is
+            // released once the layer settles.
+            if (error instanceof RunSourceUnreadableError) throw error;
             await safeSendMessage(
               ctx.platform,
               ctx.conversationId,
@@ -11429,7 +11695,7 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  await pauseGateRespectingExternalTransition(
+  const paused = await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
@@ -11452,7 +11718,18 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    WRITEBACK_GATE_NODE_ID,
+    gateOccurrence(paused),
+    'container',
+    message
+  );
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */
@@ -11495,7 +11772,7 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
  */
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
-): Promise<string | undefined> {
+): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
   const {
     deps,
     platform,
@@ -12017,7 +12294,45 @@ export async function executeDagWorkflow(
     return;
   }
 
+  /**
+   * Pause the run instead of failing it: this host could not read its source (#4209).
+   * The release compares status and execution claim, so an operator's abandon or a
+   * sibling gate that already moved the row wins. It runs after the layer settled, so
+   * nothing of this run still executes here when another host may claim it.
+   */
+  const releaseRunForUnreadableSource = async (
+    error: RunSourceUnreadableError
+  ): Promise<boolean> => {
+    getLog().warn(
+      { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
+      'dag.run_released_source_unreadable'
+    );
+    const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+      claimId: executionClaim(workflowRun.metadata),
+      nodeId: error.nodeId,
+      ...(error.path !== undefined ? { path: error.path } : {}),
+      error: error.message,
+      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+    });
+    if (!released) {
+      getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
+      return false;
+    }
+    await safeSendMessage(
+      platform,
+      conversationId,
+      sourceReleaseNotice(platform, workflowRun.id, {
+        path: error.path,
+        nodeId: error.nodeId,
+        container: execContext.kind === 'container',
+      }),
+      { workflowId: workflowRun.id, nodeName: error.nodeId }
+    );
+    return true;
+  };
+
   await persistAuthoredOutcome();
+  let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
   } catch (error) {
@@ -12026,10 +12341,11 @@ export async function executeDagWorkflow(
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight. A run-budget refusal also escapes the join; it
-    // fails the run here instead of propagating.
-    if (error instanceof RunBudgetRefusedError) {
-      // The refused node's thunk threw, so spend its attempts already made never reached
-      // the in-memory totals. The durable rows hold all of it.
+    // fails the run here instead of propagating. An unreadable source escapes it too; the
+    // run is released below after persisting the settled usage and outcome.
+    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
+      // The thunk that threw never reported its spend, nor did its settled siblings, so
+      // the in-memory totals miss it. The durable rows hold all of it.
       try {
         const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
         // The fold sums to 0 when nothing reported cost; keep a run with no AI usage absent.
@@ -12041,24 +12357,28 @@ export async function executeDagWorkflow(
       } catch (readError) {
         getLog().error(
           { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.run_budget_usage_refresh_failed'
+          'dag.unwind_usage_refresh_failed'
         );
       }
     }
-    await persistRunUsage();
-    try {
-      await persistAuthoredOutcome();
-    } catch (outcomeError) {
-      getLog().error(
-        { err: outcomeError as Error, workflowRunId: workflowRun.id },
-        'dag.authored_outcome_persist_failed_during_unwind'
-      );
+    if (error instanceof RunSourceUnreadableError) {
+      sourceUnreadable = error;
+    } else {
+      await persistRunUsage();
+      try {
+        await persistAuthoredOutcome();
+      } catch (outcomeError) {
+        getLog().error(
+          { err: outcomeError as Error, workflowRunId: workflowRun.id },
+          'dag.authored_outcome_persist_failed_during_unwind'
+        );
+      }
+      if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
+        await failRunForBudget(runBudget, error.refusal);
+        return;
+      }
+      throw error;
     }
-    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
-      await failRunForBudget(runBudget, error.refusal);
-      return;
-    }
-    throw error;
   } finally {
     await runCtx.toolAttention.refresh();
   }
@@ -12068,6 +12388,8 @@ export async function executeDagWorkflow(
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
+  const sourceReleased =
+    sourceUnreadable !== undefined && (await releaseRunForUnreadableSource(sourceUnreadable));
   // Pull the mutated accumulators back into local scope for the terminal tally below.
   const totalCostUsd = runCtx.totalCostUsd;
   const totalTokens = runCtx.totalTokens;
@@ -12080,19 +12402,31 @@ export async function executeDagWorkflow(
   // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
   // suspended. Only 'paused' triggers this.
   if (execContext.kind === 'container' && containerCtx) {
-    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (pausedStatus === 'paused') {
-      await suspendContainerForPause(
-        deps,
-        platform,
-        conversationId,
-        containerCtx,
-        execContext,
-        workflowRun.id
+    try {
+      const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+      if (pausedStatus === 'paused') {
+        await suspendContainerForPause(
+          deps,
+          platform,
+          conversationId,
+          containerCtx,
+          execContext,
+          workflowRun.id
+        );
+        return sourceUnreadable !== undefined
+          ? { kind: 'source_release', released: sourceReleased }
+          : undefined;
+      }
+    } catch (error) {
+      if (sourceUnreadable === undefined) throw error;
+      getLog().error(
+        { err: error, workflowRunId: workflowRun.id },
+        'dag.source_release_container_cleanup_failed'
       );
-      return;
     }
   }
+
+  if (sourceUnreadable !== undefined) return { kind: 'source_release', released: sourceReleased };
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

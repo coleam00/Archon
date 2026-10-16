@@ -5,6 +5,7 @@ import {
   attentionConversationPlatforms,
   insertWorkflowEvent,
   listAttentionNotices,
+  listUndeliveredPauseNotices,
   persistWorkflowEvent,
 } from '@archon/core/db/workflow-events';
 import {
@@ -41,6 +42,10 @@ export async function recordActivationBaseline(
     runs.map(run => run.id),
     query
   );
+  const undeliveredNotices = await listUndeliveredPauseNotices(
+    runs.map(run => run.id),
+    query
+  );
   const { baselines } = selectAttentionNotices({
     runs,
     terminalRuns: [],
@@ -49,6 +54,7 @@ export async function recordActivationBaseline(
     initialized: new Set(),
     conversationPlatforms,
     inlinePlatforms,
+    undeliveredNotices,
   });
   for (const baseline of baselines)
     await insertWorkflowEvent(query, {
@@ -97,9 +103,10 @@ export class AttentionRouter {
       listNotifiedTerminalRuns(),
     ]);
     const runIds = [...runs, ...terminalRuns].map(run => run.id);
-    const [ledger, conversationPlatforms] = await Promise.all([
+    const [ledger, conversationPlatforms, undeliveredNotices] = await Promise.all([
       listAttentionNotices(runIds),
       attentionConversationPlatforms(runs.map(run => run.id)),
+      listUndeliveredPauseNotices(runs.map(run => run.id)),
     ]);
     // A destination registers only after its durable activation baseline has committed.
     const { pushes } = selectAttentionNotices({
@@ -110,6 +117,7 @@ export class AttentionRouter {
       initialized: new Set(active.map(d => d.id)),
       conversationPlatforms,
       inlinePlatforms: this.inlinePlatforms,
+      undeliveredNotices,
     });
     for (const notice of pushes) {
       const destination = active.find(d => d.id === notice.destination);

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { toBranchName, toRepoPath } from '@archon/git';
+import { listWorktrees, toBranchName, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   configureIsolation,
   getIsolationProvider,
@@ -26,6 +26,8 @@ mock.module('../db/connection', () => ({
 }));
 const isolation = await import('../db/isolation-environments');
 const { createRegisteredWorktree } = await import('./registered-worktree');
+const { resolveRegisteredWorktree, adoptRegisteredWorktree } =
+  await import('../operations/workflow-adoption');
 const { createCodebaseChildResolver } = await import('./child-isolation-resolver');
 const originalEnv = {
   ARCHON_HOME: process.env.ARCHON_HOME,
@@ -360,6 +362,462 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
     label: 'legacy',
     '1': 'step result',
     adopted: true,
+    worktree_registration_id: expect.any(String),
   });
   expectAdoptionWarning(observed.branch_name, observed.working_path, 'legacy-merge');
 });
+
+test('a worktree whose record cannot be written is removed and the insert error rethrown', async () => {
+  const insertError = new Error('database is locked');
+  const failing = {
+    listActive: isolation.listActive,
+    create: async (): Promise<never> => Promise.reject(insertError),
+  };
+  const input = {
+    request: {
+      workflowType: 'task' as const,
+      identifier: 'unrecorded',
+      codebaseId,
+      codebaseName: 'test/repo',
+      canonicalRepoPath: toRepoPath(repo),
+    },
+    createdByPlatform: 'cli',
+  };
+
+  await expect(createRegisteredWorktree(failing, input)).rejects.toBe(insertError);
+
+  expect(git('worktree', 'list', '--porcelain')).not.toContain('unrecorded');
+  expect(git('branch', '--list')).not.toContain('unrecorded');
+  expect(await isolation.countActiveByCodebase(codebaseId)).toBe(0);
+});
+
+for (const persistence of ['sql', 'file'] as const) {
+  for (const owner of ['same-codebase', 'other-codebase'] as const) {
+    test(`${persistence}: unlink rollback preserves a ${owner} adoption and its work`, async () => {
+      const store =
+        persistence === 'sql'
+          ? isolation.createIsolationStore()
+          : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store')))
+              .records.isolation;
+      const resolver = new IsolationResolver({ store, provider: getIsolationProvider() });
+      const created = await resolver.resolve({
+        existingEnvId: null,
+        codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+        hints: { workflowType: 'task', workflowId: 'unlink-adoption' },
+        platformType: 'cli',
+      });
+      if (created.status !== 'resolved' || created.method.type !== 'created') {
+        throw new Error('expected created checkout');
+      }
+      let adopted =
+        owner === 'same-codebase'
+          ? await recordWorktreeAdoption(store, created.env, repo)
+          : created.env;
+      if (owner === 'other-codebase') {
+        const otherCodebaseId = randomUUID();
+        await db.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+          [otherCodebaseId, 'duplicate/repo', repo]
+        );
+        adopted = await store.create({
+          ...created.env,
+          codebase_id: otherCodebaseId,
+          branch_name: toBranchName(created.env.branch_name),
+          created_by_platform: 'cli',
+          created_by_user_id: undefined,
+        });
+      }
+      const work = join(adopted.working_path, 'in-progress.txt');
+      await writeFile(work, 'keep this work');
+      events.length = 0;
+      await resolver.releaseUnlinked(created);
+      expect(await store.getById(adopted.id)).toEqual(adopted);
+      expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+        toWorktreePath(adopted.working_path)
+      );
+      expect(await Bun.file(work).text()).toBe('keep this work');
+      expect(events).toContainEqual(
+        expect.objectContaining({ msg: 'isolation_rollback_skipped_registered' })
+      );
+    });
+  }
+
+  for (const staleKind of [
+    'missing',
+    'null',
+    'old-proof',
+    'other-missing',
+    'other-null',
+    'other-old-proof',
+    'cross-codebase-missing',
+    'cross-codebase-null',
+    'cross-codebase-old-proof',
+    'different',
+  ] as const) {
+    test(`${persistence}: an older ${staleKind} workflow row does not retain a newly created unregistered checkout`, async () => {
+      const store =
+        persistence === 'sql'
+          ? isolation
+          : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store')))
+              .records.isolation;
+      const staleCodebaseId = staleKind.startsWith('cross-codebase-') ? randomUUID() : codebaseId;
+      if (staleCodebaseId !== codebaseId) {
+        await db.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+          [staleCodebaseId, 'duplicate/repo', repo]
+        );
+      }
+      const stale = await store.create({
+        codebase_id: staleCodebaseId,
+        workflow_type: 'task',
+        workflow_id: staleKind.startsWith('other-') ? 'other' : 'restart',
+        working_path:
+          staleKind !== 'different'
+            ? join(repo, '.worktrees', 'archon', 'task-restart-new')
+            : join(root, 'missing-checkout'),
+        branch_name: toBranchName('old-branch'),
+        metadata: staleKind.endsWith('missing')
+          ? {}
+          : { worktree_creation_id: staleKind.endsWith('old-proof') ? 'old-creation' : null },
+      });
+      const failure = new Error('registration rejected');
+      await expect(
+        createRegisteredWorktree(
+          {
+            listActive: store.listActive,
+            create: async () => {
+              throw failure;
+            },
+          },
+          {
+            request: {
+              workflowType: 'task',
+              identifier: 'restart-new',
+              codebaseId,
+              codebaseName: 'test/repo',
+              canonicalRepoPath: toRepoPath(repo),
+            },
+            workflowId: 'restart',
+            createdByPlatform: 'cli',
+          }
+        )
+      ).rejects.toBe(failure);
+      expect(git('worktree', 'list', '--porcelain')).not.toContain('restart-new');
+      expect(git('branch', '--list')).not.toContain('restart-new');
+      expect(await store.getById(stale.id)).toEqual(stale);
+    });
+  }
+
+  test(`${persistence}: an older row from another codebase does not retain a resolver-created unregistered checkout`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation.createIsolationStore()
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const staleCodebaseId = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [staleCodebaseId, 'duplicate/repo', repo]
+    );
+    const stale = await store.create({
+      codebase_id: staleCodebaseId,
+      workflow_type: 'task',
+      workflow_id: 'restart',
+      working_path: join(repo, '.worktrees', 'archon', 'task-restart'),
+      branch_name: toBranchName('old-branch'),
+      metadata: {},
+    });
+    const failure = new Error('registration rejected');
+    const resolver = new IsolationResolver({
+      store: {
+        ...store,
+        create: async () => {
+          throw failure;
+        },
+      },
+      provider: getIsolationProvider(),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+        hints: { workflowType: 'task', workflowId: 'restart' },
+        platformType: 'cli',
+      })
+    ).rejects.toBe(failure);
+    expect(git('worktree', 'list', '--porcelain')).not.toContain('task-restart');
+    expect(git('branch', '--list')).not.toContain('task-restart');
+    expect(await store.getById(stale.id)).toEqual(stale);
+  });
+
+  for (const adopter of [
+    'same-workflow',
+    'other-workflow',
+    'other-codebase',
+    'replaced-stale',
+  ] as const) {
+    test(`${persistence}: rollback preserves a concurrent ${adopter} adoption before the final lookup`, async () => {
+      const store =
+        persistence === 'sql'
+          ? isolation
+          : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store')))
+              .records.isolation;
+      if (adopter === 'replaced-stale') {
+        await store.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'concurrent',
+          working_path: join(repo, '.worktrees', 'archon', 'task-concurrent'),
+          branch_name: toBranchName('archon/task-concurrent'),
+          metadata: { worktree_creation_id: 'old-creation' },
+        });
+      }
+      const failure = new Error('registration rejected');
+      let adopted: Awaited<ReturnType<typeof store.create>> | undefined;
+      await expect(
+        createRegisteredWorktree(
+          {
+            listActive: store.listActive,
+            create: async pending => {
+              const reused = await getIsolationProvider().create({
+                workflowType: 'task',
+                identifier: 'concurrent',
+                codebaseId,
+                codebaseName: 'test/repo',
+                canonicalRepoPath: toRepoPath(repo),
+              });
+              expect(reused.metadata.provenance).toBe('adopted');
+              const otherCodebaseId = randomUUID();
+              if (adopter === 'other-codebase') {
+                await db.query(
+                  'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+                  [otherCodebaseId, 'duplicate/repo', repo]
+                );
+              }
+              adopted = await store.create({
+                ...pending,
+                codebase_id: adopter === 'other-codebase' ? otherCodebaseId : pending.codebase_id,
+                workflow_id: adopter === 'other-workflow' ? 'other' : pending.workflow_id,
+                metadata: { adopted: true, worktree_creation_id: null },
+              });
+              await writeFile(join(adopted.working_path, 'in-progress.txt'), 'keep this work');
+              throw failure;
+            },
+          },
+          {
+            request: {
+              workflowType: 'task',
+              identifier: 'concurrent',
+              codebaseId,
+              codebaseName: 'test/repo',
+              canonicalRepoPath: toRepoPath(repo),
+            },
+            createdByPlatform: 'cli',
+          }
+        )
+      ).rejects.toBe(failure);
+      if (!adopted) throw new Error('expected concurrent adoption');
+      expect(await store.getById(adopted.id)).toEqual(adopted);
+      expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+        toWorktreePath(adopted.working_path)
+      );
+      expect(await Bun.file(join(adopted.working_path, 'in-progress.txt')).text()).toBe(
+        'keep this work'
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          msg: 'isolation_store_rollback_skipped_registered',
+          worktreePath: adopted.working_path,
+        })
+      );
+    });
+  }
+
+  test(`${persistence}: rollback preserves a resolver adoption of the stale row`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const stale = await store.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'resolver-race',
+      working_path: join(repo, '.worktrees', 'archon', 'task-resolver-race'),
+      branch_name: toBranchName('archon/task-resolver-race'),
+      metadata: { worktree_creation_id: 'old-creation', adopted: true },
+    });
+    const failure = new Error('registration rejected');
+    await expect(
+      createRegisteredWorktree(
+        {
+          ...store,
+          create: async () => {
+            const resolver = new IsolationResolver({ store, provider: getIsolationProvider() });
+            const result = await resolver.resolve({
+              existingEnvId: stale.id,
+              platformType: 'cli',
+              codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+              hints: { workflowType: 'task', workflowId: 'resolver-race' },
+            });
+            expect(result.status).toBe('resolved');
+            await writeFile(join(stale.working_path, 'in-progress.txt'), 'keep this work');
+            throw failure;
+          },
+        },
+        {
+          request: {
+            workflowType: 'task',
+            identifier: 'resolver-race',
+            codebaseId,
+            codebaseName: 'test/repo',
+            canonicalRepoPath: toRepoPath(repo),
+          },
+          createdByPlatform: 'cli',
+        }
+      )
+    ).rejects.toBe(failure);
+    expect(await Bun.file(join(stale.working_path, 'in-progress.txt')).text()).toBe(
+      'keep this work'
+    );
+  });
+
+  test(`${persistence}: a recovered adoption retains the checkout after a failed create`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const failure = new Error('create finalization failed');
+    let registered: Awaited<ReturnType<typeof store.create>> | undefined;
+    await expect(
+      createRegisteredWorktree(
+        {
+          listActive: store.listActive,
+          create: async input => {
+            registered = await store.create({
+              ...input,
+              metadata: { adopted: true, worktree_creation_id: null },
+            });
+            throw failure;
+          },
+        },
+        {
+          request: {
+            workflowType: 'task',
+            identifier: 'recovered-adoption',
+            codebaseId,
+            codebaseName: 'test/repo',
+            canonicalRepoPath: toRepoPath(repo),
+          },
+          createdByPlatform: 'cli',
+        }
+      )
+    ).rejects.toBe(failure);
+    if (!registered) throw new Error('expected registration');
+    expect(await store.getById(registered.id)).toEqual(registered);
+    expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+      toWorktreePath(registered.working_path)
+    );
+  });
+}
+
+test('a reused worktree stays when its re-registration cannot be written', async () => {
+  const input = {
+    request: {
+      workflowType: 'task' as const,
+      identifier: 'kept',
+      codebaseId,
+      codebaseName: 'test/repo',
+      canonicalRepoPath: toRepoPath(repo),
+    },
+    createdByPlatform: 'cli',
+  };
+  const first = await createRegisteredWorktree(isolation, input);
+  const insertError = new Error('database is locked');
+
+  await expect(
+    createRegisteredWorktree(
+      {
+        listActive: isolation.listActive,
+        create: async () => Promise.reject(insertError),
+      },
+      input
+    )
+  ).rejects.toBe(insertError);
+
+  expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+    toWorktreePath(first.env.workingPath)
+  );
+  expect((await isolation.getById(first.envId))?.status).toBe('active');
+});
+
+for (const handoff of ['resolve', 'adopt'] as const) {
+  for (const branch of ['unchanged', 'switched', 'detached'] as const) {
+    test(`${handoff} handoff validates a ${branch} branch after selection`, async () => {
+      const path = join(root, 'handoff');
+      git('worktree', 'add', '-qb', 'selected', path);
+      const environment = await isolation.create({
+        codebase_id: codebaseId,
+        workflow_type: 'task',
+        workflow_id: 'handoff',
+        working_path: path,
+        branch_name: toBranchName('selected'),
+      });
+      const lane = { kind: 'reuse-worktree' as const, environment };
+      await resolveRegisteredWorktree(isolation, lane);
+      if (branch === 'switched') git('-C', path, 'checkout', '-qb', 'other');
+      if (branch === 'detached') git('-C', path, 'checkout', '-q', '--detach');
+      events.length = 0;
+      const result =
+        handoff === 'resolve'
+          ? resolveRegisteredWorktree(isolation, lane)
+          : adoptRegisteredWorktree(isolation, lane, repo);
+      if (branch === 'unchanged') {
+        expect((await result).branch_name).toBe('selected');
+        expect((await isolation.getById(environment.id))?.metadata.adopted).toBe(
+          handoff === 'adopt' ? true : undefined
+        );
+      } else {
+        await expect(result).rejects.toThrow('branch');
+        expect(await isolation.getById(environment.id)).toEqual(environment);
+        expect(events.filter(event => event.msg === 'worktree_adopted')).toHaveLength(0);
+      }
+    });
+  }
+}
+
+for (const caller of ['direct', 'resolver'] as const) {
+  test(`${caller}: initial registration read failure leaves Git unchanged`, async () => {
+    const worktrees = git('worktree', 'list', '--porcelain');
+    const branches = git('branch', '--list');
+    const failure = new Error('initial registration read failed');
+    const store = {
+      ...isolation.createIsolationStore(),
+      listActive: async () => {
+        throw failure;
+      },
+    };
+    const result =
+      caller === 'direct'
+        ? createRegisteredWorktree(store, {
+            request: {
+              workflowType: 'task',
+              identifier: 'initial-read',
+              codebaseId,
+              codebaseName: 'test/repo',
+              canonicalRepoPath: toRepoPath(repo),
+            },
+            createdByPlatform: 'cli',
+          })
+        : new IsolationResolver({ store, provider: getIsolationProvider() }).resolve({
+            existingEnvId: null,
+            codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+            hints: { workflowType: 'task', workflowId: 'initial-read' },
+            platformType: 'cli',
+          });
+    await expect(result).rejects.toBe(failure);
+    expect(git('worktree', 'list', '--porcelain')).toBe(worktrees);
+    expect(git('branch', '--list')).toBe(branches);
+  });
+}

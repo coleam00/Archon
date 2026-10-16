@@ -43,6 +43,28 @@ A request's `systemPrompt` uses the provider's native system-instruction behavio
 `appendSystemPrompt` adds instructions to that prompt; a provider that cannot extend
 its prompt uses them as its system prompt, and a `systemPrompt` takes precedence.
 
+## Streaming event mapping
+
+Each runtime reports its own event types, and the provider maps them to the contract's chunks. The maintained providers own the full mapping, including interrupted tool calls, subtasks, hooks, MCP status and tool-output limits.
+
+**Claude Code SDK** ([`packages/providers/src/claude/provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/claude/provider.ts)):
+
+Assistant text becomes `agent_message_chunk`; tool use becomes `tool_call`. The provider reports the turn's `result` separately from completion of background work. It tracks visible tasks and live background tasks from the SDK's lifecycle events. An idle notification ends the turn only after a result has been observed and both task sets are empty. A running notification resets the result condition for the next turn.
+
+If the stream closes while observed work remains, or before reaching idle after background work was observed, it ends without `settled`. Once those settlement conditions hold, a stream that closes without a result produces a failure result (`stream_ended_without_result`), then `settled`. An early idle notification alone produces neither completion nor failure.
+
+**Codex app-server** ([`packages/providers/src/codex/provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/codex/provider.ts)): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
+
+`streamTurn` maps parent-thread messages and foreground tools to provider events. The parent's `turn/completed` notification produces its successful `result`, but background work can still be live. Failure results wait until observed background work drains because the executor stops reading on failure; failure classification uses the typed `codexErrorInfo`.
+
+Subagents and unified-exec processes report separate `subtask` lifecycles. The provider tracks starts for the parent thread and turn, registers subagent threads, and tracks further subagents and processes on those recognized descendant threads. Child replies do not replace the parent result.
+
+While any observed task remains live, the provider keeps accepting background starts, including root subagents and unified-exec processes first observed after parent completion. Nested work is also drained, even after its direct parent task ends. Notification arrival order does not establish when the work began.
+
+Once the parent has completed and the observed task set is empty, the provider stops reading notifications and shuts down the app-server. This can happen immediately at parent completion if no background work was observed. Starts beyond that observation boundary are not guaranteed to be consumed; the boundary does not establish that Codex cannot report another start later.
+
+`sendQuery` emits `settled` only after a clean app-server shutdown and without lost observation. A late start observed while draining can therefore extend the wait. If the connection closes before observed work drains, the turn does not settle: before a result, the provider reports a failure result; after a result, it logs the connection failure and ends without `settled`.
+
 ## Serve it over stdio
 
 Wrap the implementation with the contract's plugin entrypoint:

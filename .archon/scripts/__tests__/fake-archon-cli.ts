@@ -9,8 +9,8 @@
  * Its state is a directory, because one test runs the bench more than once: `count`
  * numbers launches across processes, each launch's arguments land in `argv-<n>.json`,
  * `launch.txt`, when present, is every launch's answer in place of a numbered run id,
- * `wait.json` is every `workflow wait` answer, and `detail.json`, when present, is every
- * `workflow get` answer; without it `get` returns only the run's id and status.
+ * `wait.json` is every `workflow wait` answer, and `get` answers with `detail-<run-id>.json`,
+ * else `detail.json`, else only the run's id and status.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,8 +28,8 @@ function answer(dir: string, args: readonly string[]): string {
     case 'wait':
       return readFileSync(join(dir, 'wait.json'), 'utf8');
     case 'get': {
-      const detail = join(dir, 'detail.json');
-      return existsSync(detail) ? readFileSync(detail, 'utf8') : JSON.stringify({ id: args[2], status: 'completed' });
+      const detail = [join(dir, `detail-${args[2]}.json`), join(dir, 'detail.json')].find(file => existsSync(file));
+      return detail === undefined ? JSON.stringify({ id: args[2], status: 'completed' }) : readFileSync(detail, 'utf8');
     }
     default:
       throw new Error(`fake archon: unexpected command ${args.join(' ')}`);

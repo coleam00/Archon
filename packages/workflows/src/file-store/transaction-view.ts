@@ -1,7 +1,10 @@
 import {
   CAPACITY_WAIT_METADATA_KEY,
+  SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
+  isContainerRun,
   readCapacityWait,
+  readSourceRelease,
   toolCallAttentionArraySchema,
 } from '../schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
@@ -20,10 +23,13 @@ import {
   attentionLabeledEvent,
   waitContinuedEvent,
   workflowUnpausedEvent,
+  sourceReleaseMetadata,
+  executionClaim,
+  EXECUTION_CLAIM_METADATA_KEY,
+  sourceReleasedEvent,
 } from '../store';
 import {
   answeredPauseContinuation,
-  isApprovalContext,
   isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
@@ -131,12 +137,18 @@ export function createTransactionView(
     expected: Parameters<IWorkflowStore['resolveApprovalGate']>[3]
   ): boolean => {
     if (!run) return false;
-    const gate = run.metadata.approval;
-    if (run.status !== 'paused' || !isApprovalContext(gate) || gate.resolved != null) return false;
+    // Same rule as the SQL `unresolvedGateClause`: a paused run is open unless its recorded
+    // gate is resolved, so a run with no readable gate can still be rejected. Only an
+    // `expected` gate needs a gate to compare against.
+    if (run.status !== 'paused') return false;
+    const gate: unknown = run.metadata.approval;
+    const record: Record<string, unknown> =
+      typeof gate === 'object' && gate !== null ? Object.fromEntries(Object.entries(gate)) : {};
+    if (record.resolved != null) return false;
     if (expected === undefined) return true;
     return (
-      gate.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
-      (gate.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
+      record.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
+      (record.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
     );
   };
   interface TerminalChange {
@@ -221,6 +233,8 @@ export function createTransactionView(
             const wait = pendingWorkflowWaitDeadline(run);
             if (wait) return workflowWaitDue(wait, now.getTime());
             if (answeredPauseContinuation(run)) return true;
+            if (run.status === 'paused' && readSourceRelease(run.metadata) && !isContainerRun(run))
+              return true;
             const scheduled = run.metadata.scheduled_resume;
             return (
               run.status === 'failed' &&
@@ -420,9 +434,11 @@ export function createTransactionView(
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       delete run.metadata.continuation_retry_at;
       Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
+      Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
       run.status = 'running';
       run.completed_at = null;
       run.started_at = new Date();
+      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
       return structuredClone(run);
     },
@@ -708,6 +724,7 @@ export function createTransactionView(
       run.status = 'running';
       run.completed_at = null;
       run.started_at = new Date();
+      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
       delete run.metadata.cancelled_reason;
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
@@ -721,6 +738,16 @@ export function createTransactionView(
           events.splice(index, 1);
       }
       return structuredClone(run);
+    },
+    releaseRunForUnreadableSource: async (id, release) => {
+      const run = row(id);
+      if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)
+        return { released: false };
+      run.status = 'paused';
+      run.last_activity_at = new Date();
+      Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
+      record(sourceReleasedEvent(id, release));
+      return { released: true };
     },
     pauseWorkflowRunForWait: async (id, wait, pause) => {
       const run = row(id);

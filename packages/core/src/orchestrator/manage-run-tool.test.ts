@@ -2,7 +2,7 @@
 import type { RunActor } from '../operations/run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { pausedAttentionWait, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ApprovalOperationResult,
   RejectionOperationResult,
@@ -90,7 +90,11 @@ const mockRespond = mock<
 >(() => Promise.resolve(approvalResult('approval_gate')));
 
 // The shared cancel is proven in workflow-operations; this proves the tool routes to it.
-import { CancelRefusedError, ChildRunRedirectError } from '../operations/workflow-operations';
+import {
+  attentionAnswerFor,
+  CancelRefusedError,
+  ChildRunRedirectError,
+} from '../operations/workflow-operations';
 const mockCancel = mock((_id: string) =>
   Promise.resolve({
     kind: 'stopped' as const,
@@ -105,7 +109,13 @@ const mockLabel = mock<WorkflowOperations['labelAttentionWait']>(runId =>
   Promise.resolve({ runId, occurrence: 'ask-1', revision: 2, labels: { class: 'ci-other' } })
 );
 
+// Runs the real answer validation, so the test sees what the operation would record.
+const mockAnswer = mock<WorkflowOperations['answerWorkflow']>(async () => {
+  throw new Error('answerWorkflow not configured');
+});
+
 const operations = {
+  answerWorkflow: mockAnswer,
   listWorkflowRuns: mockListDashboardRuns,
   findWorkflowRunsByIdPrefix: mockFindByPrefix,
   abandonWorkflow: mockAbandon,
@@ -117,6 +127,7 @@ const operations = {
   labelAttentionWait: mockLabel,
 } satisfies Pick<
   WorkflowOperations,
+  | 'answerWorkflow'
   | 'labelAttentionWait'
   | 'abandonWorkflow'
   | 'cancelWorkflow'
@@ -210,6 +221,7 @@ beforeEach(() => {
     mockRespond,
     mockResume,
     mockLabel,
+    mockAnswer,
   ]) {
     m.mockReset();
   }
@@ -387,6 +399,108 @@ describe('manage_run — reads', () => {
     expect(out).toContain('revision: 3');
     expect(out).toContain('action=respond, decision=<one of the options>');
     expect(out).not.toContain('workflow resume');
+  });
+
+  describe('respond at a multi_select attention wait', () => {
+    const multiSelectRun = (): WorkflowRun =>
+      makeRun({
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'ask',
+            kind: 'attention',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            message: 'Which checks?',
+            pauseId: 'pause-1',
+            form: 'multi_select',
+            options: [{ id: 'lint' }, { id: 'tests' }, { id: 'build' }],
+          },
+        },
+      });
+    // The real answer validation, so a passing test shows what the operation would record.
+    const recordAnswer: WorkflowOperations['answerWorkflow'] = async (_id, request) => {
+      const run = multiSelectRun();
+      const wait = pausedAttentionWait(run);
+      if (wait === undefined) throw new Error('fixture is not an attention wait');
+      const answer = attentionAnswerFor(run, wait, request);
+      return { ...approvalResult('attention'), type: 'attention', answer };
+    };
+
+    test('get tells the agent how to choose several options', async () => {
+      mockFindByPrefix.mockResolvedValue([multiSelectRun()]);
+      const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+      const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+      expect(out).toContain('options: lint, tests, build');
+      expect(out).toContain('decisions=<JSON array');
+      expect(out).not.toContain('--choose');
+    });
+
+    test('records every chosen option id with the text', async () => {
+      mockFindByPrefix.mockResolvedValue([multiSelectRun()]);
+      mockAnswer.mockImplementation(recordAnswer);
+      const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+      const out = await tool.handler({
+        action: 'respond',
+        runId: 'r1abcdef',
+        decisions: '["lint","tests"]',
+        message: 'skip build',
+        confirm: true,
+        occurrence: 'pause-1',
+      });
+      expect(out).toContain("Responded 'lint', 'tests'");
+      expect(mockAnswer).toHaveBeenCalledWith(
+        'r1abcdef-1234',
+        { choose: ['lint', 'tests'], text: 'skip build' },
+        operator,
+        { via: 'manage_run', expectedGate: expect.anything() }
+      );
+      const recorded = await mockAnswer.mock.results[0]?.value;
+      expect(recorded).toMatchObject({
+        answer: { decisions: ['lint', 'tests'], text: 'skip build' },
+      });
+    });
+
+    test('refuses an undeclared option with the valid list', async () => {
+      mockFindByPrefix.mockResolvedValue([multiSelectRun()]);
+      mockAnswer.mockImplementation(recordAnswer);
+      const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+      const out = await tool.handler({
+        action: 'respond',
+        runId: 'r1abcdef',
+        decisions: '["lint","deploy"]',
+        confirm: true,
+      });
+      expect(out).toContain("does not declare option 'deploy'");
+      expect(out).toContain('Declared options: lint, tests, build');
+    });
+
+    test.each(['not json', '{"a":1}', '[]', '[1]'])('refuses malformed decisions %s', async raw => {
+      mockFindByPrefix.mockResolvedValue([multiSelectRun()]);
+      const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+      const out = await tool.handler({
+        action: 'respond',
+        runId: 'r1abcdef',
+        decisions: raw,
+        confirm: true,
+      });
+      expect(out).toContain('decisions must be a JSON array of option ids');
+      expect(mockAnswer).not.toHaveBeenCalled();
+    });
+
+    test('refuses decision and decisions together', async () => {
+      mockFindByPrefix.mockResolvedValue([multiSelectRun()]);
+      const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+      const out = await tool.handler({
+        action: 'respond',
+        runId: 'r1abcdef',
+        decision: 'lint',
+        decisions: '["tests"]',
+        confirm: true,
+      });
+      expect(out).toContain('either decision or decisions');
+      expect(mockAnswer).not.toHaveBeenCalled();
+    });
   });
 
   test('get preserves the prior detail shape when outcome is undeclared', async () => {
@@ -1052,7 +1166,7 @@ describe('manage_run — gate continuation', () => {
     expect(out).toContain('Approved');
     expect(out).toContain('decision is recorded');
     expect(out).toContain('database unavailable');
-    expect(out).toContain('/workflow status r1abcdef-1234');
+    expect(out).toContain('/workflow get r1abcdef-1234');
     expect(out).toContain('/workflow resume r1abcdef-1234');
   });
 
@@ -1204,8 +1318,10 @@ describe('manage_run authorization refusal', () => {
           isolation: {
             getById: async () => null,
             findActiveByWorkflow: unexpected,
+            listActive: unexpected,
             create: unexpected,
             updateStatus: unexpected,
+            markWorktreeDestroyed: unexpected,
             updateMetadata: unexpected,
             countActiveByCodebase: unexpected,
           },

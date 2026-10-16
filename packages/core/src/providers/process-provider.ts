@@ -18,6 +18,7 @@ import {
 import {
   connectProvider,
   PluginProtocolError,
+  PluginProtocolMismatchError,
   PluginRemoteError,
   type ConnectedProvider,
   type ProviderPluginDescriptor,
@@ -188,8 +189,11 @@ function startProcess(
     },
     async failure(error: unknown): Promise<Error> {
       // EOF does not imply process exit: a provider can close stdout and stay alive.
+      // A protocol mismatch closed the host's side, so the plugin ends like on EOF; waiting
+      // for it keeps the exit from racing termination.
       if (
         (error instanceof PluginProtocolError && error.reason === 'closed') ||
+        error instanceof PluginProtocolMismatchError ||
         child.exitCode !== null ||
         child.signalCode !== null ||
         spawnError
@@ -199,6 +203,8 @@ function startProcess(
         await closed;
       }
       if (spawnError) return spawnError;
+      // Carries only validated protocol values; the exit report would lose both versions.
+      if (error instanceof PluginProtocolMismatchError) return error;
       if (exited)
         return new ProviderPluginExitedError(
           descriptor.id,

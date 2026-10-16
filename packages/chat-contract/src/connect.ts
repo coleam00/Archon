@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod';
 import { PluginRpc, PluginRemoteError, type PluginIO } from '@archon/provider-contract/plugin';
-import { chatPluginDescriptorSchema, type ChatPluginDescriptor } from './descriptor';
+import {
+  CHAT_PLUGIN_PROTOCOL,
+  chatPluginDescriptorSchema,
+  type ChatPluginDescriptor,
+} from './descriptor';
 import { chatRunEventSchema, type ChatRunEvent } from './run-events';
 import {
   chatAttentionNoticeRequestSchema,
@@ -45,8 +50,20 @@ export interface ConnectedChat {
   close(): Promise<void>;
 }
 
+// Reads only what a plugin on any protocol advertises, so a mismatch names both versions
+// instead of failing the full descriptor parse.
+const advertisedProtocolSchema = chatPluginDescriptorSchema
+  .pick({ id: true })
+  .extend({ protocol: z.string().regex(/^archon-chat\/[1-9]\d*$/) });
+
 async function initialize(rpc: PluginRpc): Promise<ChatPluginDescriptor> {
-  return rpc.parse(chatPluginDescriptorSchema, await rpc.request('initialize', {}));
+  const raw = await rpc.request('initialize', {});
+  const advertised = advertisedProtocolSchema.safeParse(raw);
+  if (advertised.success && advertised.data.protocol !== CHAT_PLUGIN_PROTOCOL) {
+    rpc.plugin = advertised.data.id;
+    throw rpc.mismatch(CHAT_PLUGIN_PROTOCOL, advertised.data.protocol);
+  }
+  return rpc.parse(chatPluginDescriptorSchema, raw);
 }
 
 export async function inspectChat(io: PluginIO): Promise<ChatPluginDescriptor> {

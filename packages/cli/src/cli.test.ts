@@ -5,7 +5,7 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
+import { RUN_GITHUB_IDENTITY_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -80,10 +80,11 @@ describe('forge user trust boundary', () => {
     }
   });
 
-  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
-  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
-  // process: a CLI subprocess per scenario is too slow on Windows runners.
-  for (const key of GITHUB_TOKEN_KEYS) {
+  // The engine expresses a run's GitHub identity by setting the key (a token, '' to
+  // scrub, or a stored-login redirect). An absent key is no opinion, so Archon's env
+  // files supply it. Exercised in process: a CLI subprocess per scenario is too slow on
+  // Windows runners.
+  for (const key of RUN_GITHUB_IDENTITY_KEYS) {
     it(`${key}: a run's credential state wins over Archon env files`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
       const home = join(root, 'home');
@@ -788,6 +789,23 @@ describe('workflow status arguments', () => {
     );
     expect(result.stderr).toContain('archon workflow get <run-id>');
     expect(result.stdout).toBe('');
+  });
+});
+
+describe('workflow get arguments', () => {
+  it('accepts a run id, the form recovery hints name', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-cli-get-'));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, 'cli.ts'), 'workflow', 'get', 'definitely-not-a-run'],
+        { encoding: 'utf8', env: { ...process.env, ARCHON_HOME: archonHome } }
+      );
+
+      expect(result.stderr).not.toContain('Usage: archon workflow get');
+    } finally {
+      await removeTempTree(archonHome);
+    }
   });
 });
 
@@ -2407,7 +2425,10 @@ describe('setup provider selection dispatch', () => {
   for (const entry of cases) {
     it(`forwards ${entry.name} through setup validation without prompting`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-setup-dispatch-'));
+      const cwd = join(root, 'repo');
+      mkdirSync(cwd);
       const preload = join(root, 'preload.ts');
+      writeFileSync(join(root, '.env'), 'GITHUB_TOKEN=file-token\n');
       writeFileSync(
         preload,
         `
@@ -2423,10 +2444,10 @@ mock.module(setupPath, () => ({
       const selected = await selectSetupProviders(options.providers,
         async ids => { installs.push(...ids); },
         async () => { prompts++; return ['claude']; });
-      console.log(JSON.stringify({ providers: options.providers, selected, installs, prompts }));
+      console.log(JSON.stringify({ providers: options.providers, selected, installs, prompts, inheritedToken: options.inheritedEnv?.GITHUB_TOKEN, effectiveToken: process.env.GITHUB_TOKEN }));
       return 0;
     } catch (error) {
-      console.log(JSON.stringify({ error: error.message, installs, prompts }));
+      console.log(JSON.stringify({ error: error.message, installs, prompts, inheritedToken: options.inheritedEnv?.GITHUB_TOKEN, effectiveToken: process.env.GITHUB_TOKEN }));
       return 1;
     }
   },
@@ -2436,9 +2457,9 @@ mock.module(setupPath, () => ({
       try {
         const result = spawnSync(
           process.execPath,
-          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'setup', ...entry.args, '--cwd', root],
+          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'setup', ...entry.args, '--cwd', cwd],
           {
-            cwd: root,
+            cwd,
             encoding: 'utf8',
             timeout: testTimeout(10_000),
             env: {
@@ -2451,6 +2472,8 @@ mock.module(setupPath, () => ({
               PI_CODING_AGENT_DIR: join(root, 'pi'),
               ARCHON_TELEMETRY_DISABLED: '1',
               ARCHON_PROVIDERS: entry.env,
+              GITHUB_TOKEN: 'shell-token',
+              WORKFLOW_ID: '',
             },
           }
         );
@@ -2463,7 +2486,11 @@ mock.module(setupPath, () => ({
           .find(line => line.startsWith('{'));
         expect(line).toBeDefined();
         const dispatched: unknown = JSON.parse(line!);
-        expect(dispatched).toMatchObject({ prompts: 0 });
+        expect(dispatched).toMatchObject({
+          prompts: 0,
+          inheritedToken: 'shell-token',
+          effectiveToken: 'file-token',
+        });
         if (entry.selected === null) {
           expect(dispatched).toMatchObject({
             installs: [],

@@ -21,6 +21,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import type { CleanupOperationResult } from '../services/cleanup-service';
 import {
   MissingProjectDirectoryError,
+  WorktreeRegistrationChangedError,
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
@@ -350,7 +351,7 @@ const mockIsolationEnvDbCreate = mock<typeof IsolationEnvironmentDb.create>(() =
 const mockIsolationEnvDbGet = mock<typeof IsolationEnvironmentDb.getById>(() =>
   Promise.resolve(null)
 );
-const mockIsolationEnvDbUpdate = mock<typeof IsolationEnvironmentDb.updateStatus>(() =>
+const mockMarkWorktreeDestroyed = mock<typeof IsolationEnvironmentDb.markWorktreeDestroyed>(() =>
   Promise.resolve()
 );
 
@@ -361,7 +362,8 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationEnvDbCreate,
   getById: mockIsolationEnvDbGet,
   getByWorkingPath: mock(() => Promise.resolve(null)),
-  updateStatus: mockIsolationEnvDbUpdate,
+  updateStatus: mock(() => Promise.resolve()),
+  markWorktreeDestroyed: mockMarkWorktreeDestroyed,
   markDestroyed: mock(() => Promise.resolve()),
   getActiveByCodebase: mock(() => Promise.resolve([])),
   getActiveEnvironments: mock(() => Promise.resolve([])),
@@ -526,7 +528,7 @@ function clearAllMocks(): void {
   // Isolation-environments db mocks
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
-  mockIsolationEnvDbUpdate.mockClear();
+  mockMarkWorktreeDestroyed.mockClear();
   mockGetLiveRunBlocker.mockReset();
   mockGetLiveRunBlocker.mockResolvedValue(null);
   // Cleanup service mocks
@@ -1718,7 +1720,7 @@ describe('CommandHandler', () => {
           expect(result.message).toBe(
             'Worktree has uncommitted changes.\n\nCommit your work first, or use `/worktree remove --force` to discard.'
           );
-          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
           expect(mockDeactivateSession).not.toHaveBeenCalled();
         });
@@ -1738,7 +1740,7 @@ describe('CommandHandler', () => {
             'Failed to remove worktree: worktree metadata could not be modified'
           );
           expect(result.message).not.toContain('--force');
-          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
           expect(mockDeactivateSession).not.toHaveBeenCalled();
         });
@@ -1763,7 +1765,7 @@ describe('CommandHandler', () => {
           expect(result.success).toBe(false);
           expect(result.message).toContain('archon isolation cleanup 0');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
-          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
@@ -1788,7 +1790,45 @@ describe('CommandHandler', () => {
             creationId: 'checkout-proof',
           });
           expect(result.message).toMatch(/worktrees[\\\/]feat-x/);
+          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(featXEnv);
           expect(mockUpdateConversation).toHaveBeenCalled();
+        });
+
+        test('detaches the conversation when its worktree registration was already destroyed', async () => {
+          const destroyed = { ...featXEnv, status: 'destroyed' as const };
+          mockIsolationEnvDbGet.mockResolvedValue(destroyed);
+          mockGetActiveSession.mockResolvedValue(null);
+          const conversation = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: destroyed.id,
+          });
+          const result = await handleCommand(conversation, '/worktree remove', operator);
+          expect(result.success).toBe(true);
+          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(destroyed);
+          expect(mockUpdateConversation).toHaveBeenCalledWith(conversation.id, {
+            isolation_env_id: null,
+            cwd: '/workspace/my-repo',
+          });
+        });
+
+        test('keeps the conversation on a registration recreated during removal', async () => {
+          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+          mockGetActiveSession.mockResolvedValue(null);
+          mockMarkWorktreeDestroyed.mockRejectedValueOnce(
+            new WorktreeRegistrationChangedError(featXEnv.id)
+          );
+
+          const result = await handleCommand(
+            makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
+            '/worktree remove',
+            operator
+          );
+
+          expect(result).toEqual({
+            success: false,
+            message: expect.stringContaining('changed during cleanup'),
+          });
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
         test('should deactivate session with worktree-removed reason', async () => {
@@ -1832,7 +1872,7 @@ describe('CommandHandler', () => {
             expect(result.message).toContain(
               mode === 'refusal' ? 'ownership changed' : 'Retained directory'
             );
-            expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+            expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
             expect(mockUpdateConversation).not.toHaveBeenCalled();
             expect(mockDeactivateSession).not.toHaveBeenCalled();
           }
@@ -1857,7 +1897,7 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Worktree kept: run run-live is paused.');
           expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
-          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
@@ -1884,7 +1924,7 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Worktree kept: run run-live is paused.');
           expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
-          expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
       });
@@ -2430,6 +2470,68 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('No active workflow to cancel.');
+      });
+    });
+
+    describe('/workflow get', () => {
+      test('shows the one run named by the id, whatever its status', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-failed',
+            workflow_name: 'implement',
+            status: 'failed',
+            metadata: { error: 'node exploded' },
+          })
+        );
+
+        const result = await handleCommand(baseConversation, '/workflow get run-failed', operator);
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('implement');
+        expect(result.message).toContain('run-failed');
+        expect(result.message).toContain('failed');
+        expect(result.message).toContain('node exploded');
+      });
+
+      test('shows the gate and its answer commands for a paused run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-approval',
+            status: 'paused',
+            metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+          })
+        );
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow get run-approval',
+          operator
+        );
+
+        expect(result.message).toContain('/workflow approve run-approval');
+        expect(result.message).toContain('/workflow reject run-approval');
+      });
+
+      test('does not show a run that belongs to another project', async () => {
+        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({ id: 'run-other', codebase_id: 'other-project' })
+        );
+        const conversation = makeConversation({ ...baseConversation, codebase_id: 'codebase-123' });
+
+        const result = await handleCommand(conversation, '/workflow get run-other', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
+      });
+
+      test('reports a missing run', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+        const result = await handleCommand(baseConversation, '/workflow get nope', operator);
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Workflow run not found');
       });
     });
 

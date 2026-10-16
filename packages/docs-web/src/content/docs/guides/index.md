@@ -28,7 +28,9 @@ How-to guides for building and running AI coding workflows with Archon.
 - [Proactive Workflows](/guides/proactive-workflows/) — Let a cheap agent decide whether an event matters, then keep a person on the loop before the run acts
 - [The Attention Queue](/guides/attention-queue/) — List, read, label and answer paused runs as JSON, and route classes of questions to your own handlers
 
-## Node Features (Claude only)
+## Node Features
+
+Support varies by provider. See the [provider capability matrix](/reference/provider-capabilities/) for each feature.
 
 - [Per-Node Hooks](/guides/hooks/) — Attach Claude SDK hooks for tool control, context injection, and input modification
 - [Per-Node MCP Servers](/guides/mcp-servers/) — Connect external tools (GitHub, Postgres, etc.) to individual nodes
@@ -43,6 +45,8 @@ Archon ships the `sdlc` workflow pack, which covers the software development lif
 | `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
 | `archon-triage` | Check an issue against the current code and decide what it needs next |
 | `archon-intake` | Triage new issues from listed maintainers automatically; label outside issues for a maintainer. Started by trigger bindings |
+| `archon-build-queue` | Work triaged issues to reviewed PRs, asking a person only what the issue and policy don't answer. Started by a trigger binding |
+| `archon-discoveries` | Drain what finished runs discovered outside their scope into issues, evidence comments, recorded drops or questions for a maintainer |
 | `archon-investigate` | Prove the root cause of a bug or open question |
 | `archon-plan` | Turn decided intent into an implementable plan |
 | `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |

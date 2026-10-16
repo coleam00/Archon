@@ -523,7 +523,7 @@ export class SlackAdapter implements IPlatformAdapter {
     if (!raw) {
       const help =
         kind === 'archon-workflow'
-          ? 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.'
+          ? 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.'
           : 'Usage: `/archon <message>` — talk to Archon in this channel.';
       await respond({ response_type: 'ephemeral', text: help });
       return;

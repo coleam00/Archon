@@ -34,6 +34,7 @@ test('discovery reports an inaccessible global workflow scope but tolerates a mi
       filename: globalWorkflows,
       error: 'global workflow scope unavailable',
       errorType: 'read_error',
+      cause: expect.objectContaining({ code: 'EACCES' }),
     });
     code = 'ENOENT';
     const missing = await discoverWorkflows(null, {
