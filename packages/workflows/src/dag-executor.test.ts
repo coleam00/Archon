@@ -22105,6 +22105,7 @@ describe('executeDagWorkflow -- script nodes', () => {
             await chmod(helper, 0o644);
           }
           expectReleased(deps.store, 'entry');
+          expect(deps.store.releaseRunForUnreadableSource.mock.calls[0]?.[1].path).toBe(helper);
           deps.store.persistWorkflowEvent.mockImplementation(persist);
           deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
           await executeDagWorkflow({ ...options, deps });

@@ -2636,7 +2636,7 @@ export function describeWorkflowStoreConformance(
       for (const reason of FAN_OUT_CANCEL_REASONS) {
         const recovered = await running(store);
         const release = {
-          claimId: executionClaim((await store.getWorkflowRun(recovered.id))?.metadata),
+          claimId: executionClaim((await store.getWorkflowRun(recovered.id))?.metadata ?? {}),
           nodeId: 'check',
           error: 'EACCES',
           retryAt: new Date().toISOString(),

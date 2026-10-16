@@ -4058,14 +4058,14 @@ async function executeScriptNode(
       },
     }).catch(async (error: unknown) => {
       if (isSubprocessTimeout(error as RawSubprocessRejection)) throw error;
-      // Runtimes reopen the entry and its imports. Verify the frozen capture again;
+      // Runtimes reopen the entry and its imports. Read the verified inventory again;
       // stderr cannot distinguish unreadable source from an ordinary script failure.
       const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
       if (selected) {
         try {
-          await assertCapturedFilesPresent(verifiedScriptFiles);
-          await assertWorkflowSourceIntegrity(workflowSourceRoots);
-          await readFile(selected.path);
+          await Promise.all(
+            [...(verifiedScriptFiles ?? [selected.path])].map(path => readFile(path))
+          );
         } catch (sourceError) {
           getLog().warn(
             {
