@@ -8,7 +8,7 @@
 import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -55,6 +55,7 @@ import { resolveWorkflow } from './graph-plan';
 import type { ExecNode, WorkflowDefinition, WorkflowRun } from './schemas';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
+import * as subprocess from './subprocess';
 
 // --- Helpers ---
 
@@ -417,6 +418,8 @@ function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
 }
 
 describe('script node deps field — command construction', () => {
+  let ownedGroupSpy: { mockRestore(): void } | undefined;
+
   beforeEach(async () => {
     testDir = join(
       tmpdir(),
@@ -426,9 +429,17 @@ describe('script node deps field — command construction', () => {
     mockExecFileAsync.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
+    // On Windows a script node runs through the owned process group so its deadline can end
+    // the whole tree; route that path into the same mock.
+    if (process.platform === 'win32')
+      ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+        (cmd, args, options) => mockExecFileAsync(cmd, args, options)
+      );
   });
 
   afterEach(async () => {
+    ownedGroupSpy?.mockRestore();
+    ownedGroupSpy = undefined;
     try {
       await rm(testDir, { recursive: true, force: true });
     } catch {
