@@ -27,8 +27,10 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
+import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
@@ -249,26 +251,33 @@ export function initializeWorkflowGitHubAppAuth(
  */
 // Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
 // the isolation provider and repo config.
+async function loadCompletedRunWorktree(): Promise<{
+  cleanup: typeof import('../services/cleanup-service');
+  store: IIsolationStore;
+  readers: WorktreeOwnershipReaders;
+}> {
+  const [cleanup, isolationDb] = await Promise.all([
+    import('../services/cleanup-service'),
+    import('../db/isolation-environments'),
+  ]);
+  return {
+    cleanup,
+    store: isolationDb.createIsolationStore(),
+    readers: {
+      getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+    },
+  };
+}
+
 const sqlCompletedRunWorktree: NonNullable<WorkflowDeps['completedRunWorktree']> = {
   assess: async run => {
-    const [cleanup, isolationDb] = await Promise.all([
-      import('../services/cleanup-service'),
-      import('../db/isolation-environments'),
-    ]);
-    return cleanup.assessCompletedRunWorktree(run, isolationDb.createIsolationStore(), {
-      getCodebase: codebaseDb.getCodebase,
-      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
-    });
+    const { cleanup, store, readers } = await loadCompletedRunWorktree();
+    return cleanup.assessCompletedRunWorktree(run, store, readers);
   },
   release: async run => {
-    const [cleanup, isolationDb] = await Promise.all([
-      import('../services/cleanup-service'),
-      import('../db/isolation-environments'),
-    ]);
-    await cleanup.releaseCompletedRunWorktree(run, isolationDb.createIsolationStore(), {
-      getCodebase: codebaseDb.getCodebase,
-      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
-    });
+    const { cleanup, store, readers } = await loadCompletedRunWorktree();
+    await cleanup.releaseCompletedRunWorktree(run, store, readers);
   },
 };
 
