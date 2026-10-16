@@ -20,6 +20,12 @@ inputs:
   pull_request:
     default: ""
     description: The number of an open pull request to continue, as the caller resolved it; empty or `null` when it names none.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it. When an
+      open pull request already has that head, the push updates it instead of
+      opening another. Empty opens it from the checkout's branch.
 
 returns: publish
 
@@ -89,6 +95,7 @@ nodes:
       body: "$ARTIFACTS_DIR/pr-body.md"
       draft: "$INPUTS.draft"
       pull_request: "$INPUTS.pull_request"
+      branch: "$INPUTS.branch"
     output_type: pull-request
     output_format:
       type: object

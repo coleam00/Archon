@@ -23,6 +23,12 @@ inputs:
       The number of an open pull request this delivery continues instead of opening
       one, as a caller resolved it. Empty or `null` when the caller names none; the
       run can still continue one it was launched onto.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it. When an
+      open pull request already has that head, the push updates it instead of
+      opening another. Empty opens it from the checkout's branch.
   work:
     default: ""
     description: >-
@@ -108,6 +114,11 @@ nodes:
               rebase, and resolve every conflict it names. Record every disposition — fixed, declined with its
               reason or evidence, or unrelated — in implementation.md.
 
+              The open pull request this delivery continues, as its caller
+              resolved it (empty or `null` when it named none):
+              $INPUTS.pull_request. When it names one, the work is to finish that
+              pull request.
+
               Accepted work order:
               $INPUTS.work
 
@@ -119,6 +130,7 @@ nodes:
           with:
             draft: "true"
             pull_request: "$INPUTS.pull_request"
+            branch: "$INPUTS.branch"
 
         - id: review
           include: archon-review
@@ -300,8 +312,7 @@ nodes:
         reason:
           type: string
           enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap, failed]
-        # The pull request, ready or not; '' when no round opened one, or when a node
-        # failure kept the report from learning it.
+        # The pull request, ready or not; '' when no round opened one.
         pr_url: { type: string }
         # The last round's CI re-run: none, or how the one re-run of failed jobs ended.
         ci_rerun: { type: string, enum: [none, green, red] }

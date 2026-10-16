@@ -15,9 +15,11 @@ import {
   type BuildAttention,
   type BuildRecord,
   type BuildRound,
+  buildBranch,
   buildWaits,
   countedRounds,
   GIVE_UP_DECISIONS,
+  itemPullRequest,
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { CONFIDENCES, checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
@@ -30,7 +32,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -116,6 +118,18 @@ describe('the build record', () => {
     for (const stage of ['new', 'needs_maintainer', 'needs_contract', 'blocked', 'close'] as const) {
       expect(buildWaits(triaged({ stage }))).toBe(false);
     }
+  });
+
+  test("a first round's branch names the issue, cut to a readable slug, and the run", () => {
+    expect(buildBranch(7, 'Fix: the Build queue -- reuses its own PR, a branch on every later round!', 'abcdef123456')).toBe(
+      'build/7-fix-the-build-queue-reuses-its-own-pr-a-abcdef12'
+    );
+    expect(buildBranch(7, '!!!', 'abcdef123456')).toBe('build/7-abcdef12');
+  });
+
+  test("an item's recorded pull request URL from another repository is refused, not guessed around", () => {
+    const foreign = { ...round('r1', AT), pr_url: 'https://ghe.example.com/someone/else/pull/42' };
+    expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
   test('the rounds since a re-triage or a maintainer answer count toward the give-up decision', () => {
@@ -235,7 +249,7 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: { state?: 'OPEN' | 'CLOSED' | 'MERGED'; headRefOid?: string }; writeLost?: boolean } = {}
+  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
@@ -325,6 +339,32 @@ describe('the build queue scripts', () => {
     const answered = { at: '2026-10-16T03:30:00.000Z', run_id: 'r2', decision: 'answered: continue', reason: 'Relax it', links: [], answer: { choice: 'relax', text: '', at: '2026-10-16T03:30:00.000Z' } };
     seed(at, triaged({ claim: null }, record({ rounds, decisions: [answered] })));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: false });
+  }, 60_000);
+
+  test("facts puts an item with an open pull request on that pull request's branch, and names a first round's branch after the issue", () => {
+    const at = install();
+    // A failed round after the pull request's round opened none; the item's PR is still 42.
+    const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
+    seed(at, triaged({}, record({ rounds })));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
+    seed(at, triaged({ claim: null }));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
+  }, 60_000);
+
+  test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
+    const at = install();
+    seed(at, triaged({}, record({ rounds: [round('r1', AT)] })));
+    const closed = ok(run(at, 'facts', {}, { pr: { state: 'CLOSED' } }));
+    expect(closed).toMatchObject({ pull_request: { number: 42, state: 'closed' }, continues: null, branch: 'build/7-an-issue-run-1' });
+    seed(at, triaged({ claim: null }, record({ rounds: [round('r1', AT)] })));
+    const fork = ok(run(at, 'facts', {}, { pr: { headRepositoryOwner: { login: 'someone-else' } } }));
+    expect(fork).toMatchObject({
+      pull_request: { number: 42, state: 'open', head_repo: { path: 'someone-else/repo' } },
+      continues: null,
+      branch: 'build/7-an-issue-run-1',
+    });
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {
