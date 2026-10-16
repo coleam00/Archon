@@ -856,6 +856,24 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+      const adapter = createSelfFilterAdapter();
+      const existing = {
+        id: 'bare-project',
+        name: 'local-api',
+        default_cwd: '/repos/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      };
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+      mockUpdateCodebase.mockClear();
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe('/repos/worktrees/old');
+      expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    });
+
     test('stale suffixed checkout repair keeps its allocated project identity', async () => {
       const adapter = createSelfFilterAdapter();
       mockFindCodebaseByRepoUrl.mockResolvedValueOnce({

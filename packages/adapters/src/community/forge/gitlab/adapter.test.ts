@@ -28,7 +28,7 @@ function makeFetchMock(response: Response): FetchMock {
   );
 }
 
-const { resolveRepoProjectIdentity } = await import('@archon/paths/archon-paths');
+const { parseOwnerRepo } = await import('@archon/paths/archon-paths');
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -46,7 +46,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
-  resolveRepoProjectIdentity,
+  parseOwnerRepo,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -239,6 +239,24 @@ describe('GitLabAdapter', () => {
       { gitlabUrl: 'https://gitlab.example.com' },
       'gitlab.adapter_initialized'
     );
+  });
+
+  test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'bare-project',
+      name: 'local-api',
+      default_cwd: '/repos/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
+    // @ts-expect-error - exercise the private registration boundary
+    await expect(adapter.getOrCreateCodebaseForRepo('testuser/testrepo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/repos/worktrees/old');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
   });
 
   test('stale suffixed checkout repair keeps its allocated project identity', async () => {

@@ -27,7 +27,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
-  resolveRepoProjectIdentity,
+  parseOwnerRepo,
 } from '@archon/paths';
 import {
   isWorktreePath,
@@ -928,8 +928,13 @@ export class GitHubAdapter implements IPlatformAdapter {
       // Either it's an actual worktree, or it looks like one (contains /worktrees/ in path)
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
       if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
-        const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
-        if (!identity) throw new Error(`Cannot resolve checkout for project "${existing.name}"`);
+        const identity = parseOwnerRepo(existing.name);
+        if (!identity) {
+          throw new Error(
+            `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd}. ` +
+              'Restore its original checkout or use /update-project to set its path explicitly.'
+          );
+        }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
         getLog().info(
           { codebaseName: existing.name, canonicalPath },
