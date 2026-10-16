@@ -264,6 +264,19 @@ test('all four preflight source validators conform to the pack source selector',
   }
 });
 
+test('every node of the four preflighted flows runs after the forge check', () => {
+  for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
+    const file = `archon-${folder}.yaml`;
+    const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
+    if (!parsed.workflow) throw new Error(`invalid workflow ${file}`);
+    const dependsOn = new Map(parsed.workflow.nodes.map(node => [node.id, node.depends_on ?? []]));
+    const afterForge = (id: string): boolean =>
+      (dependsOn.get(id) ?? []).some(dep => dep === 'forge' || afterForge(dep));
+    const early = [...dependsOn.keys()].filter(id => id !== 'forge' && !afterForge(id));
+    expect({ file, early }).toEqual({ file, early: [] });
+  }
+});
+
 test('operator guidance describes the gh default and forge host login source', () => {
   const root = join(import.meta.dir, '../../..');
   const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split('## [')[1] ?? '';
