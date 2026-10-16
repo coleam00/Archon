@@ -15,7 +15,7 @@ import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { issueBodyAt, viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { isObject } from '../../.shared/typed.ts';
-import { claimNext, parseMode, parseOrder, readWorkItem, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, parseMode, parseOrder, readWorkItem, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -80,7 +80,7 @@ function emitItem(
     path,
     item: subject,
     url,
-    record: doc,
+    record: doc === null ? null : withPlainReports(doc),
     brief: doc?.facts.build?.brief ?? '',
     rounds,
     recorded,
