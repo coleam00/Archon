@@ -31,8 +31,8 @@ inputs:
   scope:
     default: ""
     description: >-
-      What to review — a PR number/URL, a branch, or empty for the working diff
-      against the merge-base.
+      What to review — a PR number/URL or a branch. Empty selects the current
+      branch's open PR first, otherwise the working diff against the merge-base.
   prior_report:
     default: ""
     description: >-

@@ -179,9 +179,16 @@ Reviews a change through specialist lenses and produces one evidence-based verdi
 archon workflow run archon-review --input scope=87 --branch fix/login-redirect
 ```
 
-Replace `fix/login-redirect` with the PR's head branch. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command.
+Replace `fix/login-redirect` with the PR's head branch for a same-repository PR. For a fork PR, fetch its head into the launch repository first, then start a fresh review branch at that commit:
 
-**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Leave `scope` empty to review the current branch's PR or the working diff.
+```bash
+git fetch <fork-clone-url> <PR-head-ref>
+archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-branch> --from <PR-head-SHA>
+```
+
+Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
+
+**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff.
 
 ---
 
