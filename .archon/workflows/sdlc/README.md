@@ -647,6 +647,47 @@ To seed decisions an operator already made, put one record per key with
 JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
 parse refuses every pass, naming the document.
 
+## Worktree cleanup
+
+[`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
+`archon isolation cleanup --merged` across every project registered on the install. It
+removes each worktree whose pull request merged, with the branch Archon created and its
+remote branch. A worktree with uncommitted changes, a run that can still claim it, or a
+commit its pull request did not carry stays and is reported. With `include_closed: "true"`
+it also removes worktrees whose pull request was closed without merging. It runs in place
+and creates no worktree of its own.
+
+A worktree that never opened a pull request is not its concern. A completed run removes
+its own worktree when the checkout is clean, every commit is on a remote, and the branch
+was never published; otherwise the run's terminal record says why it stayed.
+
+A server already runs a merged sweep on its cleanup schedule, so this binding is for
+installs that run only the CLI. The pack installs no binding. A native schedule starts a
+pass every few hours:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-host-worktree-cleanup",
+  "binding": {
+    "bindingId": "worktree-cleanup",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "worktree-cleanup:build-host-1",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-worktree-cleanup",
+      "inputs": { "include_closed": "false" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
+}
+```
+
 ## Composition validation
 
 [archon-validate](validate/README.md) accepts an explicit composition request to run
