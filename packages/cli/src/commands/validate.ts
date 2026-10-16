@@ -102,7 +102,7 @@ export async function validateWorkflowsCommand(
   for (const loadError of loadErrors) {
     results.push(
       makeWorkflowResult(
-        loadError.filename.replace(/\.ya?ml$/, ''),
+        loadError.workflowName ?? loadError.filename.replace(/\.ya?ml$/, ''),
         [{ level: 'error', field: loadError.errorType, message: loadError.error }],
         loadError.filename
       )

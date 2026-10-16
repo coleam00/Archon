@@ -2006,10 +2006,7 @@ async function runWorkflowWithOwnedSource(
   if (!workflow) {
     // Check if the requested workflow had a load error
     const loadError = errors.find(
-      e =>
-        e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-        e.filename === `${workflowName}.yaml` ||
-        e.filename === `${workflowName}.yml`
+      e => (e.workflowName ?? e.filename.replace(/\.ya?ml$/, '')) === workflowName
     );
     if (loadError) {
       throw new Error(

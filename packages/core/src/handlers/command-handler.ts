@@ -218,8 +218,9 @@ function findWorkflowLoadError(
   loadErrors: readonly WorkflowLoadError[],
   workflowName: string
 ): WorkflowLoadError | undefined {
-  // Stripping the .yaml/.yml extension already covers the exact-filename cases.
-  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
+  return loadErrors.find(
+    error => (error.workflowName ?? error.filename.replace(/\.ya?ml$/, '')) === workflowName
+  );
 }
 
 async function createResumeRequest(

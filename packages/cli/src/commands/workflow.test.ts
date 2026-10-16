@@ -3148,6 +3148,24 @@ describe('workflowRunCommand', () => {
     expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
   });
 
+  it('reports a post-parse load error under its declared workflow name', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [
+        {
+          filename: 'release-file.yaml',
+          workflowName: 'deploy',
+          error: 'Missing include: checks',
+          errorType: 'validation_error' as const,
+        },
+      ],
+    });
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'deploy', 'hello')
+    ).rejects.toThrow("Workflow 'deploy' failed to load: Missing include: checks");
+  });
+
   it('should throw error when workflow not found', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
