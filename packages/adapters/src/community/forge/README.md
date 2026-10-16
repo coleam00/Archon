@@ -1,86 +1,33 @@
 # Community Forge Adapters
 
-Forge adapters connect Archon to code hosting platforms (GitHub, GitLab, etc.) via webhooks.
+This directory holds the bundled Gitea and GitLab adapters for existing installs.
+They receive focused compatibility, correctness and security fixes; new forges ship
+as plugins in contributor-owned repositories
+([`direction.md §community-plugins`](../../../../../.archon/direction.md#community-plugins)).
 
-## Interface
+## Adding a forge
 
-Implement `IPlatformAdapter` from `@archon/core`:
+A new forge attaches through the `@archon/forge` contract without a new bundled
+adapter or a platform-specific registration in the server:
 
-```typescript
-import type { IPlatformAdapter } from '@archon/core';
+- [`@archon/forge`](../../../../forge/src/index.ts) owns normalized forge operations.
+- [Publish a plugin: tags and executable release assets](../../../../docs-web/src/content/docs/guides/publishing-plugins.md#tags-and-executable-release-assets)
+  covers the forge manifest, release assets and installation.
 
-export class MyForgeAdapter implements IPlatformAdapter {
-  readonly capabilities = {
-    messagePersistence: 'core',
-    defaultWorkflowDispatch: 'foreground',
-  } as const;
+## Maintaining bundled adapters
 
-  async handleWebhook(payload: string, signature: string): Promise<void> {
-    // 1. Verify webhook signature
-    // 2. Parse event (issue comment, PR review, etc.)
-    // 3. Check authorization
-    // 4. Route to handleMessage or command handler
-  }
+Existing bundled adapters implement `IPlatformAdapter` from `@archon/core` and
+receive webhooks through the server's
+[`webhook routes`](../../../../server/src/routes/webhooks.ts).
+The [GitHub adapter](../../forge/github/adapter.ts) is the maintained bundled reference.
 
-  async sendMessage(conversationId: string, text: string): Promise<void> {
-    // Post comment on issue/PR
-  }
-
-  async start(): Promise<void> {
-    // Initialize API client
-  }
-
-  stop(): void {
-    // Cleanup
-  }
-
-  // ... implement remaining IPlatformAdapter methods
-}
-```
-
-## Key Differences from Chat Adapters
-
-- **Webhook-driven**: Events arrive via HTTP POST, not polling
-- **Heavier lifecycle**: Forge adapters manage repos, codebases, and isolation environments
-- **Conversation ID**: Typically `owner/repo#number` format
-- **Auth**: Webhook signature verification + user allowlist
-
-## Directory Structure
-
-```
-community/forge/
-└── your-adapter/
-    ├── adapter.ts      # Main adapter class
-    ├── auth.ts         # Webhook signature + user auth
-    ├── types.ts        # Webhook event types
-    ├── index.ts        # Barrel export
-    └── adapter.test.ts
-```
-
-## Registration
-
-Register in `packages/server/src/index.ts` with a webhook route:
-
-```typescript
-import { MyForgeAdapter } from '@archon/adapters/community/forge/my-forge';
-
-// In main():
-const myForge = new MyForgeAdapter(token, secret, lockManager);
-await myForge.start();
-
-// Add webhook endpoint
-app.post('/webhooks/my-forge', async (c) => {
-  const signature = c.req.header('x-signature');
-  if (!signature) return c.json({ error: 'Missing signature' }, 400);
-  const payload = await c.req.text();
-  myForge.handleWebhook(payload, signature).catch(/* error handler */);
-  return c.text('OK', 200);
-});
-```
-
-Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds all fresh runs, including workflows that can pause. Pauses wait in the attention queue until answered. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
-
-Hosts set platform policies as described in the [chat adapter guide](../chat/README.md#registration).
+Runtime behavior is independent of the platform identifier. `messagePersistence: 'adapter'`
+means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'`
+backgrounds all fresh runs, including workflows that can pause. Pauses wait in the
+attention queue until answered. Optional `sendStructuredEvent` delivers rich events;
+`prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+Hosts own platform policies in
+[`platform-policies.ts`](../../platform-policies.ts).
 
 ## Testing
 
@@ -88,13 +35,10 @@ Hosts set platform policies as described in the [chat adapter guide](../chat/REA
 
 Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it. Your test file **must** run in its own `bun test` invocation to avoid polluting other tests.
 
-After adding your test file, update `packages/adapters/package.json` to add a separate batch:
-
-```json
-"test": "... existing batches ... && bun test src/community/forge/your-adapter/adapter.test.ts"
-```
-
-Never add your test to an existing batch that mocks the same modules differently (e.g., `@archon/paths`, `@archon/git`).
+When adding a test for a bundled adapter that mocks modules, put it in its own
+`testGroups` entry in [`packages/adapters/package.json`](../../../package.json).
+The package test runner starts each group in a separate process. Do not combine tests
+that mock the same modules differently (such as `@archon/paths` or `@archon/git`).
 
 ### Lazy logger pattern
 

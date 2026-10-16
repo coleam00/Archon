@@ -34,11 +34,18 @@ export function collectCredentialValues(
     .sort((a, b) => b.length - a.length);
 }
 
-/** `input` with every credential value replaced by `[REDACTED]`. */
+/**
+ * A GitHub App installation token. The App-mode `gh` shim mints these inside the child
+ * process, after the exact values above were collected, so they are matched by GitHub's
+ * documented `ghs_` token prefix instead.
+ */
+const GITHUB_INSTALLATION_TOKEN = /\bghs_[A-Za-z0-9]{20,}/g;
+
+/** `input` with every credential value, and any GitHub App installation token, replaced by `[REDACTED]`. */
 export function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
   let result = input;
   for (const value of credentialValues) {
     result = result.replaceAll(value, '[REDACTED]');
   }
-  return result;
+  return result.replace(GITHUB_INSTALLATION_TOKEN, '[REDACTED]');
 }

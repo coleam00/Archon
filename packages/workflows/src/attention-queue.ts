@@ -26,6 +26,7 @@ import {
   attentionLabels,
   attentionRevision,
   pausedAttentionWait,
+  pausedUsageLimitWait,
   queuedRunAttention,
   runAttentionUnreadableReasonSchema,
   SUBRUN_METADATA_KEYS,
@@ -84,8 +85,10 @@ const itemBase = {
 /**
  * One queue item. `kind` is the run-attention kind it was built from: `attention` is a
  * `wait: attention` pause, answered with `answer`; `awaiting_response` is a gate,
- * answered with `approve`, `reject` or `respond`; `unreadable` is a paused run nothing
- * can describe, which someone has to look at and resume or abandon.
+ * answered with `approve`, `reject` or `respond`; `usage_limit` is a run waiting for a
+ * provider usage limit to reset at `resetAt`, which continues by itself and needs no
+ * answer; `unreadable` is a paused run nothing can describe, which someone has to look at
+ * and resume or abandon.
  */
 export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -103,6 +106,12 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     node: z.string(),
     occurrence: z.string(),
     message: z.string(),
+  }),
+  z.object({
+    kind: z.literal('usage_limit'),
+    ...itemBase,
+    node: z.string(),
+    resetAt: z.string().datetime(),
   }),
   z.object({
     kind: z.literal('unreadable'),
@@ -184,7 +193,7 @@ export function toAttentionQueueItem(
     fanOut: fanOutPosition(run),
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
-    pausedAt: wait?.waitingSince ?? null,
+    pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
     context: {
       artifactsDir: root === null ? null : getRunArtifactsDirForRoot(root, run.id),
       transcript: root === null ? null : getRunLogPathForRoot(root, run.id),
@@ -211,6 +220,8 @@ export function toAttentionQueueItem(
         occurrence: attention.occurrence,
         message: attention.message,
       };
+    case 'usage_limit':
+      return { kind: 'usage_limit', ...base, node: attention.nodeId, resetAt: attention.resumeAt };
     case 'unreadable':
       return { kind: 'unreadable', ...base, reason: attention.reason, detail: attention.detail };
   }
@@ -311,7 +322,7 @@ export async function listAttentionQueue(
 }
 
 /**
- * The item a run stands for, or null when it needs no one now. A parent blocked on
+ * The item a run stands for, or null when it has no queue item. A parent blocked on
  * sub-runs resolves to the first of them that is an item, by the walk `workflow wait`
  * uses. Undefined when the run does not exist.
  */
@@ -396,7 +407,10 @@ export function parseAttentionLabelPairs(pairs: readonly string[]): AttentionLab
   for (const pair of pairs) {
     const separator = pair.indexOf('=');
     const key = attentionLabelKeySchema.safeParse(separator < 0 ? '' : pair.slice(0, separator));
-    if (!key.success) throw new Error(`Expected a label as key=value, got '${pair}'`);
+    if (!key.success) {
+      const reason = key.error.issues[0]?.message ?? 'invalid key';
+      throw new Error(`Expected a label as key=value, got '${pair}' (${reason})`);
+    }
     if (Object.hasOwn(labels, key.data)) throw new Error(`Label '${key.data}' is given twice`);
     labels[key.data] = pair.slice(separator + 1);
   }

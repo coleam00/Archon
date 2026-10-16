@@ -11,7 +11,7 @@ sidebar:
 
 [Folder projects](/getting-started/concepts/#folder-projects) — directories with or without git, where Archon applies no git machinery — run **in place** at the live root by default: every write lands immediately. That is honest but ungoverned, and unsafe for unattended automation against real client data. **Container isolation** runs the whole workflow inside a Docker container over a **read-only mount of the project root plus a writable overlay upper layer**, so nothing touches the live folder until you approve it.
 
-This is folder-project-only. Repo projects use [git worktrees](/reference/architecture/) and are unaffected.
+This is folder-project-only. Repo projects use [git worktrees](/book/isolation/) and are unaffected.
 
 ## How it works
 

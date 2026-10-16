@@ -594,7 +594,7 @@ describe('formatPausedGateSection', () => {
     for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection(pausedRun(approval));
       expect(section).toContain('missing or malformed');
-      expect(section).toContain('/workflow status run-abc');
+      expect(section).toContain('/workflow get run-abc');
       expect(section).toContain('/workflow reject run-abc <reason>');
       expect(section).not.toContain('/workflow approve');
     }
@@ -605,7 +605,7 @@ describe('formatPausedGateSection', () => {
       pausedRun({ nodeId: 'review', message: 'Choose', decisionsAuthored: true })
     );
     expect(section).toContain('missing or malformed');
-    expect(section).toContain('/workflow status run-abc');
+    expect(section).toContain('/workflow get run-abc');
     expect(section).not.toContain('/workflow approve');
     expect(section).not.toContain('/workflow reject');
   });

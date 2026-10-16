@@ -6,6 +6,7 @@ import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type {
   AgentSessionEvent,
   CreateAgentSessionOptions,
@@ -316,6 +317,8 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   ModelRuntime: {
     create: mockModelRuntimeCreate,
   },
+  // The provider asks whether a delivered per-run auth file covers the turn's provider.
+  readStoredCredential: (providerId: string) => fileCreds[providerId],
   ModelRegistry: mockModelRegistryConstruct,
   SessionManager: {
     create: mockSessionCreate,
@@ -1089,6 +1092,55 @@ describe('PiProvider', () => {
 
     expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: perRunAuthPath });
   });
+
+  test('a delivered auth file outranks competing host and request API keys', async () => {
+    fileCreds.anthropic = { type: 'oauth' };
+    process.env.ANTHROPIC_API_KEY = 'host-key';
+    resetScript(scriptedAgentEnd());
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+        env: { ARCHON_PI_AUTH_PATH: '/run/user/auth.json', ANTHROPIC_API_KEY: 'project-key' },
+        protectedEnvKeys: ['ARCHON_PI_AUTH_PATH'],
+        userCredentialEnvKeys: ['ARCHON_PI_AUTH_PATH'],
+      })
+    );
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: '/run/user/auth.json' });
+    expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
+  });
+
+  for (const protectedKey of ['ARCHON_PI_AUTH_PATH', 'ANTHROPIC_API_KEY']) {
+    test(`protected native ${protectedKey} keeps native configuration precedence`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'pi-native-protected-'));
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dir;
+      try {
+        writeFileSync(
+          join(dir, 'models.json'),
+          JSON.stringify({
+            providers: {
+              anthropic: { headers: { Authorization: 'Bearer native-config' } },
+            },
+          })
+        );
+        fileCreds.anthropic = { type: 'oauth' };
+        resetScript(scriptedAgentEnd());
+        await consume(
+          new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            model: 'anthropic/claude-haiku-4-5',
+            env: { ARCHON_PI_AUTH_PATH: '/run/native/auth.json', ANTHROPIC_API_KEY: 'native-key' },
+            protectedEnvKeys: [protectedKey],
+          })
+        );
+        expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'native-key');
+        expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: '/run/native/auth.json' });
+      } finally {
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        await removeTempTree(dir);
+      }
+    });
+  }
 
   test('ModelRuntime.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
     // A shell-level ARCHON_PI_AUTH_PATH still applies when no per-call value is

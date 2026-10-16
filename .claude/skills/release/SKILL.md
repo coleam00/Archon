@@ -533,7 +533,7 @@ cat > homebrew/archon.rb << EOF
 # For development, see: https://github.com/coleam00/Archon
 
 class Archon < Formula
-  desc "Remote agentic coding platform - control AI assistants from anywhere"
+  desc "Governed agentic automation engine"
   homepage "https://github.com/coleam00/Archon"
   version "x.y.z"
   license "MIT"

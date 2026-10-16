@@ -243,7 +243,7 @@ async function admitFromServer(
                   destination.resultConversationId,
                   `⚠️ Run \`${resumableRun.id.slice(0, 8)}\` of **${resumableRun.workflow_name}** finished, but its ` +
                     'final status could not be saved. The run may still show as running — check it ' +
-                    `with \`${spellWorkflowCommand(platform, `status ${resumableRun.id}`)}\` before starting another.`
+                    `with \`${spellWorkflowCommand(platform, `get ${resumableRun.id}`)}\` before starting another.`
                 )
                 .catch((sendError: unknown) => {
                   log.warn(

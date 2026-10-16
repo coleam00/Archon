@@ -350,8 +350,10 @@ archon isolation cleanup 14        # custom staleness threshold
 archon isolation cleanup --merged            # remove merged branches (deletes remote too)
 archon isolation cleanup --merged --include-closed  # also remove closed/abandoned PR branches
 archon complete <branch>           # complete branch lifecycle (worktree + branches)
-archon complete <branch> --force   # skip uncommitted-changes check
+archon complete <branch> --force   # bypass safety checks, including live runs and open PRs
 ```
+
+`complete --force` also bypasses uncommitted-change and unmerged/unpushed-commit checks. Ownership checks still apply. See [completion safety checks](/reference/cli/#complete-branch-branch2-).
 
 ### Available Workflows
 

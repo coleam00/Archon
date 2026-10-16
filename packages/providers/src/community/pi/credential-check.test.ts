@@ -154,6 +154,37 @@ describe('Pi native credentials', () => {
       source: 'native',
     });
   });
+  test('keeps the native login for a provider the per-run auth file does not cover (#4273)', async () => {
+    // A connected OpenAI key was delivered for another node; this node runs on the
+    // user's own `pi /login` for Anthropic.
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
+    );
+    const authPath = join(root, 'delivered-auth.json');
+    writeFileSync(authPath, JSON.stringify({ openai: { type: 'api_key', key: 'delivered-key' } }));
+    expect(await check(undefined, { ARCHON_PI_AUTH_PATH: authPath })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+    // Preflight checks without the per-run path; it reaches the same answer.
+    expect(await check()).toEqual({ state: 'usable', source: 'native' });
+  });
+  test('a delivered credential wins over the native login for the provider it covers', async () => {
+    // The native grant is expired with a dead refresh token: reading it would fail.
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'oauth', access: 'native', refresh: 'dead-refresh', expires: 1 },
+      })
+    );
+    const authPath = join(root, 'delivered-auth.json');
+    writeFileSync(authPath, JSON.stringify({ anthropic: { type: 'api_key', key: secret } }));
+    expect(await check(undefined, { ARCHON_PI_AUTH_PATH: authPath })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+  });
   test('substitutes a custom provider key from the request env the way a turn does', async () => {
     writeFileSync(
       join(root, 'models.json'),

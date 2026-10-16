@@ -8,7 +8,7 @@ import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
-import { statusLabel } from '../lib/run-status';
+import { runStatusLabel } from '../lib/run-status';
 
 interface PendingInputBannerProps {
   /** Paused runs awaiting user input, already filtered to non-dismissed. */
@@ -77,7 +77,7 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
             className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-warning"
           />
           <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-warning">
-            {statusLabel.paused}
+            {runStatusLabel(run)}
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
           <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
@@ -107,6 +107,15 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
               {run.attention.message}
             </p>
             <AttentionAnswerPanel run={run} attention={run.attention} />
+            <RunActionBar run={run} />
+          </>
+        ) : run.attention?.kind === 'usage_limit' ? (
+          <>
+            <p className="mt-3 text-sm text-text-primary">
+              Node <span className="font-mono">{run.attention.nodeId}</span> hit a provider usage
+              limit. The run continues by itself at{' '}
+              {new Date(run.attention.resumeAt).toLocaleString()}.
+            </p>
             <RunActionBar run={run} />
           </>
         ) : run.attention?.kind === 'unreadable' ? (

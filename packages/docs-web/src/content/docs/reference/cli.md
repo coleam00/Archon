@@ -57,7 +57,7 @@ Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non
 ## Quick Start
 
 ```bash
-# List available workflows (requires a git repo, a registered folder project, or --folder on first use)
+# List available workflows (requires a git repo or an already registered folder project)
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
@@ -80,7 +80,7 @@ Start workflows from deployment bindings and inspect durable resource admission.
 
 | Command | Behavior |
 | --- | --- |
-| `trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]` | Record a receipt and drain its retained binding host. A delivery key deduplicates event inputs within the source. |
+| `trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]` | Record a receipt and drain its retained binding host. A delivery key deduplicates event inputs within the source. When a binding fails launch preparation, the command exits nonzero and prints the refusal (with `--json`, in `error`); the stored receipt keeps only the failed stage, for example `launch_preparation_failed`. |
 | `trigger drain --host <host-id>` | Prepare persisted starts and admit eligible queued work. |
 | `trigger list [--limit <1-1000>]` | List recent safe receipt summaries (default 50). |
 | `trigger inspect <receipt-or-request-id>` | Show source identity, current disposition, blockers, and recovery guidance. |
@@ -437,7 +437,7 @@ The stub file must contain one YAML mapping. Each value is either a string or an
 
 A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives — before any trace output. With `--exec-code`, bash and script nodes also receive the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers: run-level inputs, an included block's own inputs, and a script node's `with:` bindings.
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
 The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the fixture supplies that structured result. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
@@ -604,7 +604,8 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
-  `wait: attention` waiting for its answer), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
+  usage limit; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
@@ -893,6 +894,8 @@ the host the run recorded and says when it is not this one.
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.
+- `usage_limit` — node `nodeId` hit a provider usage limit. Nothing needs an answer: the
+  run continues by itself at `resumeAt`. Cancel or abandon it to stop it instead.
 - `unreadable` — the run is parked but cannot describe itself (corrupt gate metadata, a
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
 
@@ -926,8 +929,9 @@ inspect the run normally with `workflow get <run-id>`.
 ### `workflow attention`
 
 List, count, stream or read the [attention queue](/guides/attention-queue/): every paused
-run that needs someone, as typed items an answerer can act on without parsing prose.
-Read-only.
+run that needs an answer or inspection, plus observable provider usage-limit waits.
+Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
+continues automatically after reset, and `unreadable` needs inspection. Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project
@@ -953,7 +957,7 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
-`item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
+`item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
@@ -1083,6 +1087,10 @@ who owns the run:
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
 ```
+
+When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
+`workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
+gate on the exit status.
 
 Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
 and a database transition cannot prove that host work stopped. After verifying that the
@@ -1517,14 +1525,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks; ownership checks still apply |
 
 Without `--force`, completion refuses an environment a workflow run can still claim, the
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
@@ -1541,8 +1549,11 @@ git fetch --prune origin # replace origin with the configured remote when needed
 archon complete feature-auth
 ```
 
-Completion verifies its patches are already on the configured or detected remote default branch
-before removing it. Accepts multiple branch names in one call.
+Without `--force`, completion checks for unique and unpushed commits before deletion. If the
+branch's remote-tracking ref is missing, it verifies that any unique commits are patch-equivalent
+to the configured base branch or detected remote default branch. With `--force`, these checks
+are skipped, so deletion can discard the only reachable copy of commits. Accepts multiple
+branch names in one call.
 
 ### `serve`
 

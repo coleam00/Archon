@@ -1,5 +1,6 @@
 import { requestJson } from '../lib/http';
 import type { components } from '@/lib/api.generated';
+import { TIER_ORDER, type TierName } from '../lib/tiers';
 
 /**
  * Installation-wide settings skills: assistant config + system health/version.
@@ -80,25 +81,21 @@ export function buildAssistantUpdate(form: AssistantConfigForm): UpdateAssistant
 }
 
 // ---------------------------------------------------------------------------
-// Model tiers. Types inlined (mirroring server/.../config.schemas.ts) until a
-// regen lands TiersConfig / UpdateTiersBody / SafeConfig.tiers in
-// @/lib/api.generated — same convention as skills/github.ts. Migrate to
-// `components['schemas']['TiersConfig']` etc. once the spec is regenerated.
+// Model tiers.
 // ---------------------------------------------------------------------------
 
 export type TierEntry = components['schemas']['TierEntry'];
+export type TiersMap = components['schemas']['TiersConfig'];
+export { TIER_ORDER, type TierName };
 
-export interface TiersMap {
-  small?: TierEntry;
-  medium?: TierEntry;
-  large?: TierEntry;
-}
-
-/** `SafeConfig` + the tier fields not yet in the generated spec. */
-export type SafeConfigTiers = SafeConfig & { tiers?: TiersMap; tierDefaults?: TiersMap };
-
+/**
+ * Tier update body. The generated `UpdateTiersBody` drops the `null` that unsets
+ * a tier, so this maps over its keys and adds it back.
+ */
 export interface UpdateTiersBody {
-  tiers: { small?: TierEntry | null; medium?: TierEntry | null; large?: TierEntry | null };
+  tiers: {
+    [K in keyof components['schemas']['UpdateTiersBody']['tiers']]?: TierEntry | null;
+  };
 }
 
 export function updateTiers(body: UpdateTiersBody): Promise<ConfigResponse> {
@@ -107,9 +104,6 @@ export function updateTiers(body: UpdateTiersBody): Promise<ConfigResponse> {
     body: JSON.stringify(body),
   });
 }
-
-export type TierName = 'small' | 'medium' | 'large';
-export const TIER_ORDER: readonly TierName[] = ['small', 'medium', 'large'];
 
 export interface TierRowForm {
   provider: string; // '' = unset (falls back to the built-in default)
@@ -168,13 +162,7 @@ export function updateAliases(body: UpdateAliasesBody): Promise<ConfigResponse> 
  * with config). Reads 401 when no web identity resolves — panels use that to
  * hide the "Just me" scope.
  */
-export interface UserAiPrefs {
-  tiers?: TiersMap;
-  aliases?: Record<string, TierEntry>;
-  defaultProvider?: string;
-  /** Per-user default CHAT model (#1998) — only meaningful with defaultProvider. */
-  defaultModel?: string;
-}
+export type UserAiPrefs = components['schemas']['UserAiPrefs'];
 
 export function getUserAiPrefs(): Promise<UserAiPrefs> {
   return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs');

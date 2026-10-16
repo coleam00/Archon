@@ -1569,6 +1569,41 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('an executed code node is held to its output_format like a real run', async () => {
+    const okSchema = {
+      type: 'object',
+      properties: { ok: { type: 'boolean' } },
+      required: ['ok'],
+    } as const;
+    const run = (stdout: string) =>
+      dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'exec-contract',
+          nodes: [
+            { id: 'code', bash: `printf '%s' '${stdout}'`, output_format: okSchema },
+            { id: 'next', depends_on: ['code'], bash: 'echo "$code_ok"' },
+          ],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        execCode: true,
+        stubs: { next: 'done' },
+      });
+
+    const bad = await run('{"ok":"yes"}');
+    expect(bad.outcome).toBe('failed');
+    expect(bad.trace[0]).toMatchObject({ state: 'failed' });
+    expect(bad.trace[0]?.reason).toContain("Bash node 'code'");
+    expect(bad.trace[0]?.reason).toContain('did not satisfy its declared output_format');
+
+    const notJson = await run('nope');
+    expect(notJson.trace[0]?.reason).toContain('must be a single JSON document');
+
+    const good = await run('{"ok":true}');
+    expect(good.outcome).toBe('completed');
+    expect(good.trace[0]).toMatchObject({ state: 'completed', reason: 'executed locally' });
+  });
+
   // #2617 + #2619: exec'd nodes get a pre-created ARTIFACTS_DIR/STATE_DIR under
   // <ARCHON_HOME>/temp — never inside the simulated repo — removed when the run ends.
   test('exec-code writes land in an ephemeral ARCHON_HOME temp dir, not the repo', async () => {
@@ -1771,6 +1806,27 @@ describe('dryRunWorkflow', () => {
       state: 'paused',
       resolvedText: 'Rerun e2e-smoke (fail), then resume this run.',
     });
+  });
+
+  test('gate messages, cancel reasons and wait messages keep $ARGUMENTS literal, as a real run renders them', async () => {
+    const preview = async (node: Record<string, unknown>): Promise<string | undefined> => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'literal-arguments',
+          nodes: [{ id: 'step', ...node } as never],
+        }),
+        userMessage: 'secret user text',
+        cwd: process.cwd(),
+        pauseAtGates: true,
+      });
+      return result.trace.find(entry => entry.nodeId === 'step')?.resolvedText;
+    };
+
+    expect(await preview({ approval: { message: 'Approve $ARGUMENTS?' } })).toBe(
+      'Approve $ARGUMENTS?'
+    );
+    expect(await preview({ cancel: 'Stopped for $ARGUMENTS' })).toBe('Stopped for $ARGUMENTS');
+    expect(await preview({ wait: { attention: 'Look at $ARGUMENTS' } })).toBe('Look at $ARGUMENTS');
   });
 
   test('a stub answers an attention wait and routes on its decision', async () => {

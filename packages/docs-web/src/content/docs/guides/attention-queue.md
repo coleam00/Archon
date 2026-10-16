@@ -9,11 +9,13 @@ sidebar:
   order: 5
 ---
 
-Every paused run that needs someone is an item in the attention queue. A person at a
-terminal, an agent wired to the queue through a skill, or a workflow you write can list
-the items, follow them as a stream, read one, and answer it, all as JSON. Archon routes nothing: every answerer
-sees every item, the answer names the pause it is for, and a second answer to the same
-pause is refused.
+The attention queue exposes paused runs that need an answer or inspection, and provider
+usage-limit waits that continue automatically after the limit resets. A person, an agent,
+or a workflow can list the items, follow them as a stream, and read one, all as JSON.
+Branch on `kind` before acting: only `attention` and `awaiting_response` accept answers;
+`usage_limit` needs no answer, and `unreadable` needs inspection. A single-run read returns
+null when there is no queue item. Archon routes nothing: every answerer sees every item,
+and a second answer to the same pause is refused.
 
 ## The contract
 
@@ -66,16 +68,20 @@ they cannot disagree about what a run needs.
 }
 ```
 
-- **`kind`** says how to answer. `attention` is a `wait: attention` pause: answer it in
+- **`kind`** says which action applies. `attention` is a `wait: attention` pause: answer it in
   its `form` with `answer`, or the `respond`/`approve`/`reject` shorthand. `awaiting_response`
-  is an approval gate: answer it with `approve`, `reject` or `respond`. `unreadable` is a
+  is an approval gate: answer it with `approve`, `reject` or `respond`. `usage_limit` is a
+  run waiting for a provider usage limit to reset: `node` hit the limit and `resetAt` is
+  when the provider said it reopens. It needs no answer and continues by itself after
+  `resetAt`; abandon it to stop it. It has no `occurrence`. `unreadable` is a
   paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
   sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
   `detail` say why, and the action is to look at it and resume or abandon it.
-- **`occurrence`** identifies the pause. Pass it back with `--occurrence`; an answer or
+- **`occurrence`** identifies an answerable pause (`attention` or `awaiting_response`).
+  Pass it back with `--occurrence`; an answer or
   label write for a pause the run has left is refused, naming the current occurrence.
-- **`revision`** starts at 1 and grows by one with every label write, so a consumer can
-  tell an updated item from a repeat.
+- **`revision`** starts at 1 and grows by one with every label write on an attention
+  wait. It stays 1 for other kinds, so it does not identify every item change.
 - **`project`** is the project the run belongs to, never a label. `key` is the project
   storage key that [state documents](/reference/cli/#state) scope by, so
   `archon state --project <item.project.key>` reaches the same project. `codebaseId` is
@@ -140,8 +146,8 @@ host on the same database.
 
 | `type` | When | Fields |
 |---|---|---|
-| `attention` | An item opened, or a label write changed it | `cursor`, `snapshot`, `project`, `item` (a queue item, as above) |
-| `resolved` | An item this stream sent no longer needs an answer | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
+| `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `item` (a queue item, as above) |
+| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
 | `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
@@ -149,14 +155,19 @@ host on the same database.
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
 | `error` | The store cannot read the stream's cursor: `--after` named one this install did not issue, or the store no longer reads the stream's own position. The last line; the command exits 4 | `error: "cursor_invalid"` |
 
-- **Keep an open set keyed by `(runId, occurrence)`.** `attention` adds or updates the
-  item unless you already hold that item at the same or a higher `revision`; `resolved`
-  removes it. `reason` is `answered`, or `withdrawn` when the item closed without an answer:
-  the run was resumed, ended, deleted, or paused somewhere new. `answeredAt` is null when the
-  run had moved past the answer before the stream read it.
-- **Delivery is at least once.** Dedupe `attention` on `(runId, occurrence, revision)` and
-  `terminal` on `(runId, cursor)`. `owner_lost` is a live observation: it is not replayed,
-  and the next connection reports it again if the owner is still gone.
+- **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's
+  item, including when its kind or usage-limit `resetAt` changes while `revision` stays
+  1. `resolved` removes the run's item. Its `occurrence` identifies an answerable pause;
+  it is null for `usage_limit` and `unreadable`. `reason` is `answered`, or `withdrawn`
+  when the run resumed, ended, was deleted, or moved to a different pause. A usage-limit
+  wait that resumes is withdrawn, with null occurrence. `answeredAt` is null when the
+  row had moved past the answer before the stream read it.
+- **Delivery is at least once.** Replacing the open item by run ID is idempotent; do not
+  dedupe all kinds by occurrence or revision, since usage-limit waits have no occurrence
+  and their reset time can change at revision 1. Use `(runId, occurrence, revision)` only
+  for answerable pauses. Dedupe `terminal` on `(runId, cursor)`. `owner_lost` is a live
+  observation: it is not replayed, and the next connection reports it again if the owner
+  is still gone.
 - **Resume where you stopped.** Persist the `cursor` of the last line you handled and
   restart with `--after <cursor>`. The new stream sends the snapshot and `ready`, then
   replays every change after that cursor. `bookmark` lines keep the cursor moving while
@@ -256,7 +267,7 @@ example puts a cheap classifier in front of the queue:
 
 1. **Watch.** A scheduled workflow polls `archon workflow attention --json --all`, or a
    long-running process reads `archon workflow attention --watch --json --all`, and keeps
-   the items whose `labels` have no `class` yet.
+   the `kind: attention` items whose `labels` have no `class` yet.
 2. **Classify.** For each item it reads the message, labels, project, form, options and
    `pausedAt`, and asks a small model for a typed choice: a class, an urgency, and whether
    an agent can answer it, with a confidence.

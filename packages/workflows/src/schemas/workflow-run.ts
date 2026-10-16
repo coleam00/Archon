@@ -84,6 +84,17 @@ const workflowWaitEventFields = {
   payload: z.unknown().optional(),
 } as const;
 /**
+ * A run whose failed nodes all hit a provider usage limit with a reported reset waits until
+ * the latest of those resets (`usageLimitWait` in the DAG executor). The resume claim
+ * clears it, and the nodes run again; a repeat limit pauses on a new wait.
+ */
+const workflowWaitQuotaFields = {
+  pauseId: z.string().min(1),
+  kind: z.literal('quota'),
+  waitingSince: z.string().datetime(),
+  resumeAt: z.string().datetime(),
+} as const;
+/**
  * The answer an attention wait received, as the next node reads it. Its shape is the
  * wait's form's output contract (`ATTENTION_OUTPUT_FORMATS`).
  */
@@ -152,12 +163,14 @@ export const workflowWaitContextSchema = z.union([
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitTimeFields }),
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitEventFields }),
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitAttentionFields }),
+  z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitQuotaFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitTimeFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitEventFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitAttentionFields }),
 ]);
 export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
 export type WorkflowAttentionWaitContext = Extract<WorkflowWaitContext, { kind: 'attention' }>;
+export type WorkflowUsageLimitWaitContext = Extract<WorkflowWaitContext, { kind: 'quota' }>;
 
 export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitContext {
   return workflowWaitContextSchema.safeParse(value).success;
@@ -174,6 +187,15 @@ export function pausedAttentionWait(
   if (run.status !== 'paused') return undefined;
   const wait = run.metadata.wait;
   return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
+}
+
+/** The usage-limit wait a paused run sits at, if it sits at one. */
+export function pausedUsageLimitWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowUsageLimitWaitContext | undefined {
+  if (run.status !== 'paused') return undefined;
+  const wait = run.metadata.wait;
+  return isWorkflowWaitContext(wait) && wait.kind === 'quota' ? wait : undefined;
 }
 
 /** The form and literal options an attention wait declares, paused or authored. */
@@ -1218,6 +1240,12 @@ const nonTerminalRunAttentionSchemas = [
     options: z.array(attentionOptionSchema),
   }),
   z.object({
+    kind: z.literal('usage_limit'),
+    runId: z.string(),
+    nodeId: z.string(),
+    resumeAt: z.string().datetime(),
+  }),
+  z.object({
     kind: z.literal('blocked_on_child'),
     runId: z.string(),
     childRunId: z.string(),
@@ -1258,6 +1286,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  *
  * `runAttention` returns null for ordinary progress without an advisory, including
  * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
+ * `usage_limit` is a run waiting for a provider usage limit to reset: it needs no answer and
+ * continues by itself at `resumeAt`, but an operator may still cancel or abandon it.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
@@ -1342,6 +1372,9 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
   if (run.status !== 'paused') return null;
 
   const wait = run.metadata?.wait;
+  if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
+    return { kind: 'usage_limit', runId: run.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  }
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     // Answered: like a resolved gate, it waits on the machine, not on an answer.
     if (wait.answer !== undefined) return null;
@@ -1438,13 +1471,14 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 /** The run-attention of a run the attention queue lists. */
 export type QueuedRunAttention = Extract<
   RunAttention,
-  { kind: 'attention' | 'awaiting_response' | 'unreadable' }
+  { kind: 'attention' | 'awaiting_response' | 'usage_limit' | 'unreadable' }
 >;
 
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
- * pause someone must answer, or a paused run nothing can read, which needs someone to
- * look. The queue's list and single read both build items by this one rule.
+ * pause someone must answer, a paused run waiting for a provider usage limit to reset,
+ * which an operator may want to see or cancel, or a paused run nothing can read, which
+ * needs someone to look. The queue's list and single read both build items by this one rule.
  */
 export function queuedRunAttention(
   run: RunAttentionInput,
@@ -1454,6 +1488,7 @@ export function queuedRunAttention(
   switch (attention.kind) {
     case 'attention':
     case 'awaiting_response':
+    case 'usage_limit':
     case 'unreadable':
       return attention;
     default:

@@ -1055,11 +1055,48 @@ describe('cloneRepository', () => {
       expect(result).toBeUndefined();
     });
 
-    test('resolves GH_TOKEN for bare host/path form without protocol', () => {
+    test('resolves GH_TOKEN for a bare host/path once validateCloneUrl normalizes it', () => {
       process.env.GH_TOKEN = 'ghp_bare';
-      const result = resolveForgeAuth('github.com/owner/repo');
+      const validated = gitUtils.validateCloneUrl('github.com/owner/repo');
+      if (!validated.ok) throw new Error(validated.error);
+      const result = resolveForgeAuth(validated.url);
       expect(result).toEqual({ username: 'x-access-token', password: 'ghp_bare' });
       delete process.env.GH_TOKEN;
+    });
+
+    test.each([
+      ['GH_TOKEN', 'http://github.com/owner/repo'],
+      ['GH_TOKEN', 'ssh://git@github.com/owner/repo'],
+      ['GITLAB_TOKEN', 'http://gitlab.com/owner/repo'],
+    ])('does not send %s to a known forge over a non-HTTPS URL: %s', (envVar, url) => {
+      process.env[envVar] = 'tok-shouldnotleak';
+      mockLogger.warn.mockClear();
+      const result = resolveForgeAuth(url);
+      delete process.env[envVar];
+      expect(result).toBeUndefined();
+      // The withheld token is visible in logs, without the token itself.
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedScheme: 'https:' }),
+        'clone.forge_token_withheld_insecure_scheme'
+      );
+      expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('tok-shouldnotleak');
+    });
+
+    test('sends a self-hosted token only over the configured scheme', () => {
+      process.env.GITLAB_TOKEN = 'glpat-scheme';
+      process.env.GITLAB_URL = 'https://code.mycompany.com';
+      expect(resolveForgeAuth('http://code.mycompany.com/team/project')).toBeUndefined();
+
+      // An explicitly configured http:// forge keeps working over http://.
+      process.env.GITLAB_URL = 'http://code.mycompany.com';
+      expect(resolveForgeAuth('http://code.mycompany.com/team/project')).toEqual({
+        username: 'oauth2',
+        password: 'glpat-scheme',
+      });
+      expect(resolveForgeAuth('https://code.mycompany.com/team/project')).toBeUndefined();
+
+      delete process.env.GITLAB_URL;
+      delete process.env.GITLAB_TOKEN;
     });
 
     test('does not match forge name in URL path (security)', () => {

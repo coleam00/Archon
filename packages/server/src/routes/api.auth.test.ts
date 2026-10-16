@@ -85,7 +85,7 @@ mock.module('@archon/core', () => ({
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {},
-  generateAndSetTitle: mock(async () => {}),
+  generateTitleForUser: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   isPerUserGitHubEnabled: () => false,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
@@ -523,6 +523,25 @@ describe('per-request auth helpers', () => {
     expect(await requireWebUser(c)).toEqual(expected);
     expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'proxy-user', 'proxy-user');
     expect(await resolveAuthContext(await request({ 'X-Trusted-User': '   ' }))).toBeUndefined();
+  });
+
+  test('every identity reader ignores the default header once a custom one is configured', async () => {
+    process.env.ARCHON_WEB_AUTH_HEADER = 'X-Trusted-User';
+    expect(await resolveRunActor(await request({ 'X-Trusted-User': 'proxy-user' }))).toEqual({
+      kind: 'user',
+      userId: 'user-from-proxy-user',
+    });
+    mockFindOrCreateUser.mockClear();
+
+    const defaultOnly = await request({ 'X-Archon-User': 'forged-user' });
+    expect(await resolveAuthContext(defaultOnly)).toBeUndefined();
+    // With web auth off, an install with no supplied identity acts as the operator;
+    // the default header must not count as a supplied identity.
+    expect(await resolveRunActor(defaultOnly)).toEqual({ kind: 'operator' });
+    const strict = await requireWebUser(defaultOnly);
+    if (!('error' in strict)) throw new Error('Expected authentication refusal');
+    expect(strict.error.status).toBe(401);
+    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
   });
 
   test('missing Better Auth session falls back to the trusted proxy for all three helpers', async () => {
