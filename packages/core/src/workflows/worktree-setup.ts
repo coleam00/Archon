@@ -162,8 +162,9 @@ export function createRunWorktreeSetupExecutor(
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
-    const { resolveProjectPaths, resolveWorkflowGithubEnvironment } =
-      await import('@archon/workflows/executor');
+    const { resolveProjectPaths, resolveWorkflowGithubEnvironment } = await import(
+      '@archon/workflows/executor'
+    );
     const effectiveEnvironment = await resolveWorkflowGithubEnvironment(
       deps,
       input.codebaseId,

@@ -328,8 +328,9 @@ nodes:
     }
   );
   try {
-    const { workflowRunCommand, workflowWaitCommand, workflowApproveCommand } =
-      await import('./workflow');
+    const { workflowRunCommand, workflowWaitCommand, workflowApproveCommand } = await import(
+      './workflow'
+    );
     const { workflowContinuationCommand } = await import('./workflow-continuations');
     await workflowRunCommand(host, project, 'portable-wait', 'Wait for ready', {
       folder: true,

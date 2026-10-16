@@ -41,9 +41,9 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   message: 'unused',
 }));
 const mockHydrateResumableRun = mock<
-  (typeof import('@archon/workflows/executor'))['hydrateResumableRun']
+  typeof import('@archon/workflows/executor')['hydrateResumableRun']
 >(async () => null);
-const mockExecuteWorkflow = mock<(typeof import('@archon/workflows/executor'))['executeWorkflow']>(
+const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({
     success: true,
     workflowRunId: 'run-1',
@@ -55,7 +55,7 @@ const mockCloseRunLiveOwner = mock(async () => {
   runLiveOwnerCalls.push('close');
 });
 const mockStartRunLiveOwner = mock<
-  (typeof import('@archon/core/services/run-live-owner'))['startRunLiveOwner']
+  typeof import('@archon/core/services/run-live-owner')['startRunLiveOwner']
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return { close: mockCloseRunLiveOwner, isStopRequested: () => false };

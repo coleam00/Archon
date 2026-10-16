@@ -172,9 +172,8 @@ interface IsolatedEnvironmentBase {
   warnings?: string[];
 }
 
-export interface WorktreeEnvironment<
-  Metadata extends WorktreeMetadata = WorktreeMetadata,
-> extends IsolatedEnvironmentBase {
+export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = WorktreeMetadata>
+  extends IsolatedEnvironmentBase {
   provider: 'worktree';
   branchName: BranchName;
   metadata: Metadata;

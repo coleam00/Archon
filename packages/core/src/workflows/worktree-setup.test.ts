@@ -17,8 +17,9 @@ mock.module('../config/config-loader', () => ({
 mock.module('../db/env-vars', () => ({
   getCodebaseEnvVars: async () => ({ PROJECT_VALUE: 'project', PRECEDENCE: 'project' }),
 }));
-const { createRunWorktreeSetupExecutor, executeStandaloneWorktreeSetup } =
-  await import('./worktree-setup');
+const { createRunWorktreeSetupExecutor, executeStandaloneWorktreeSetup } = await import(
+  './worktree-setup'
+);
 const trackTempRoot = trackTempRoots();
 const oldHome = process.env.ARCHON_HOME;
 const oldBash = process.env.ARCHON_BASH_PATH;

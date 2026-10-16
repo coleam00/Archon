@@ -547,8 +547,8 @@ async function createPiModelRuntime(
   );
   const authoritativeCredential = Boolean(
     (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) ||
-    (authEnv.deliveredEnvKeys.includes(PI_PROVIDER_ENV_VARS[provider] ?? '') &&
-      authEnv.credentialEnv[PI_PROVIDER_ENV_VARS[provider] ?? ''])
+      (authEnv.deliveredEnvKeys.includes(PI_PROVIDER_ENV_VARS[provider] ?? '') &&
+        authEnv.credentialEnv[PI_PROVIDER_ENV_VARS[provider] ?? ''])
   );
   const requestRuntime = await createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),

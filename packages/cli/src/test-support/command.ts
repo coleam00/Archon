@@ -52,8 +52,9 @@ export async function captureWorkflowCommand(
   return captureCommand({ ARCHON_HOME: archonHome }, async () => {
     const { setPlatformPolicies } = await import('@archon/core/platforms/registry');
     const { defaultPlatformPolicies } = await import('@archon/adapters/platform-policies');
-    const { registerHostProviders } =
-      await import('@archon/core/providers/register-host-providers');
+    const { registerHostProviders } = await import(
+      '@archon/core/providers/register-host-providers'
+    );
     const { clearRegistry } = await import('@archon/providers');
     const { registerGitHubAppAuthProvider } = await import('@archon/core/workflows/store-adapter');
     const { createCliWorkflowHost } = await import('../utils/workflow-host');

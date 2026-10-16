@@ -49,8 +49,9 @@ mock.module('./run-live-owner', () => ({
 }));
 
 const { runOwnerLossWatch, waitForRunAttention } = await import('./run-attention-watch');
-const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } =
-  await import('./run-stop-bounds');
+const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } = await import(
+  './run-stop-bounds'
+);
 
 // ---------------------------------------------------------------------------
 // Fixtures

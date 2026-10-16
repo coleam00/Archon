@@ -36,7 +36,9 @@ interface RealPiSdk {
       refreshOnCreate?: boolean;
     }): Promise<{ getModel?: unknown }>;
   };
-  ModelRegistry: new (runtime: object) => {
+  ModelRegistry: new (
+    runtime: object
+  ) => {
     find(provider: string, modelId: string): { provider: string; id: string } | undefined;
   };
 }

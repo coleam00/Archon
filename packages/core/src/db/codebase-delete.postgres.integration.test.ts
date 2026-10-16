@@ -83,8 +83,9 @@ for (const provider of ['container', 'worktree'] as const) {
             ).rows
           ).toHaveLength(1);
           if (provider === 'worktree') {
-            const { listByCodebase, create, markWorktreeDestroyed } =
-              await import('./isolation-environments');
+            const { listByCodebase, create, markWorktreeDestroyed } = await import(
+              './isolation-environments'
+            );
             const original = (await listByCodebase(project.id))[0];
             if (!original) throw new Error('Expected registered worktree');
             const replacement = await create({

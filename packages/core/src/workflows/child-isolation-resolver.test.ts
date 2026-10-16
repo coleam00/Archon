@@ -56,8 +56,9 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationDbCreate,
 }));
 
-const { buildChildIdentifier, createCodebaseChildResolver } =
-  await import('./child-isolation-resolver');
+const { buildChildIdentifier, createCodebaseChildResolver } = await import(
+  './child-isolation-resolver'
+);
 
 const setupDeps = {
   store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} },

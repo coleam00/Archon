@@ -73,10 +73,9 @@ describe('workflow continuation provider registration', () => {
     let run: { id: string; status: string } | null;
     try {
       run = database
-        .query<
-          { id: string; status: string },
-          []
-        >("SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = 'provider-scoped' ORDER BY started_at DESC LIMIT 1")
+        .query<{ id: string; status: string }, []>(
+          "SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = 'provider-scoped' ORDER BY started_at DESC LIMIT 1"
+        )
         .get();
     } finally {
       database.close();

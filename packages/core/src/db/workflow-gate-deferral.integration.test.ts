@@ -558,8 +558,7 @@ describe('per-run gate deferral — real SQLite', () => {
       "UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1",
       [run.id]
     );
-    await getDatabase()
-      .query(`CREATE TRIGGER reject_suspension BEFORE INSERT ON remote_agent_workflow_events
+    await getDatabase().query(`CREATE TRIGGER reject_suspension BEFORE INSERT ON remote_agent_workflow_events
       WHEN NEW.event_type = 'node_suspended' BEGIN SELECT RAISE(ABORT, 'suspension storage unavailable'); END`);
     await expect(
       pauseWorkflowRun(run.id, { nodeId: 'review', message: 'Review' }, undefined, {

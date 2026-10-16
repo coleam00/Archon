@@ -21,8 +21,9 @@ mock.module('@archon/paths', () => ({
   })),
 }));
 
-const { TerminalStatusWriteError, requireTerminalStatusWrite } =
-  await import('./terminal-status-write');
+const { TerminalStatusWriteError, requireTerminalStatusWrite } = await import(
+  './terminal-status-write'
+);
 
 describe('requireTerminalStatusWrite', () => {
   beforeEach(() => {

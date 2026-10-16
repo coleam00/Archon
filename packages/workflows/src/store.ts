@@ -707,8 +707,7 @@ export interface IWorkflowEventFeed {
 }
 
 export interface IWorkflowStore
-  extends
-    IRunTreeStore,
+  extends IRunTreeStore,
     IWorkflowRunNodeSessionStore,
     IResourceStartStore,
     IStateDocumentStore,

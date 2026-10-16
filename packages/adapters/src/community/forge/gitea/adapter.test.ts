@@ -84,7 +84,7 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 
 // Mock @archon/git to avoid real git operations in tests
-const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));

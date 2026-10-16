@@ -563,13 +563,15 @@ recommendedWorkflows: "archon-plan"
 
   describe('loadConfig', () => {
     test('tolerates retired YAML keys without merging or exposing them', async () => {
-      mockFsReadFile.mockResolvedValueOnce(`
+      mockFsReadFile
+        .mockResolvedValueOnce(`
 paths:
   workspaces: /unused/workspaces
   worktrees: /unused/worktrees
 concurrency:
   maxConversations: 7
-`).mockResolvedValueOnce(`
+`)
+        .mockResolvedValueOnce(`
 defaults:
   copyDefaults: false
   loadDefaultCommands: false
@@ -604,13 +606,15 @@ defaults:
     });
 
     test('merges global and repo workflow policy per field, without deprecated quota keys', async () => {
-      mockFsReadFile.mockResolvedValueOnce(`
+      mockFsReadFile
+        .mockResolvedValueOnce(`
 workflows:
   toolCallAttentionMs: 60000
   autoResumeOnQuotaReset: true
   quotaFallbackDelayMs: 3600000
   quotaMaxAttempts: 2
-`).mockResolvedValueOnce(`
+`)
+        .mockResolvedValueOnce(`
 workflows:
   toolCallAttentionMs: 0
   quotaMaxAttempts: 3

@@ -76,10 +76,9 @@ function latestRun(archonHome: string): RunRow {
   const database = new Database(join(archonHome, 'archon.db'), { readonly: true });
   try {
     const row = database
-      .query<
-        RunRow,
-        []
-      >("SELECT id, status, working_path, json_extract(metadata, '$.ai_configuration.assistant') AS assistant FROM remote_agent_workflow_runs ORDER BY rowid DESC LIMIT 1")
+      .query<RunRow, []>(
+        "SELECT id, status, working_path, json_extract(metadata, '$.ai_configuration.assistant') AS assistant FROM remote_agent_workflow_runs ORDER BY rowid DESC LIMIT 1"
+      )
       .get();
     if (row === null) throw new Error('no run row was recorded');
     return row;
