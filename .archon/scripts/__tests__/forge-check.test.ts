@@ -35,11 +35,18 @@ function refusal(kind: string, message: string): string {
 function check(
   options: ScriptOptions & {
     mirror?: boolean;
+    remoteUrl?: string;
     capabilities?: readonly string[];
     entry?: string;
   } = {}
 ) {
-  const { mirror, entry = 'deliver', capabilities = REQUIRED_FORGE_OPERATIONS, ...rest } = options;
+  const {
+    mirror,
+    remoteUrl,
+    entry = 'deliver',
+    capabilities = REQUIRED_FORGE_OPERATIONS,
+    ...rest
+  } = options;
   if (rest.forge?.kind === 'fake' && rest.forge.response) {
     const reads =
       typeof rest.forge.response === 'string' ? [rest.forge.response] : rest.forge.response;
@@ -48,7 +55,10 @@ function check(
       response: reads.flatMap(read => [forgeOperation('metadata', { capabilities }), read]),
     };
   }
-  const cwd = gitCheckout({}, trackTempRoot);
+  const cwd = rest.cwd ?? gitCheckout({}, trackTempRoot);
+  if (remoteUrl) {
+    expect(spawnSync('git', ['remote', 'set-url', 'upstream', remoteUrl], { cwd }).status).toBe(0);
+  }
   if (mirror === true) {
     spawnSync('git', ['remote', 'add', 'mirror', 'https://mirror.example.com/example/repo.git'], {
       cwd,
@@ -209,6 +219,52 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.forge).toHaveLength(4);
     expect(run.stderr).toContain('forge source answered for ghe.example.com/example/repo');
     expect(run.stderr).toContain('mirror.example.com/example/repo: forge pr.view failed');
+  });
+
+  it('probes distinct repositories on one host when only the second answers', () => {
+    const cwd = gitCheckout({}, trackTempRoot);
+    expect(
+      spawnSync('git', ['remote', 'add', 'second', 'https://ghe.example.com/other/repo.git'], {
+        cwd,
+      }).status
+    ).toBe(0);
+    const run = check({
+      cwd,
+      forge: {
+        kind: 'fake',
+        response: [refusal('process_failed', 'first repository denied'), ANSWERED],
+      },
+    });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(run.forge).toHaveLength(4);
+    expect(
+      [run.forgeRequests[1], run.forgeRequests[3]].map(
+        request => JSON.parse(request ?? '').selector.repo
+      )
+    ).toEqual([
+      PR.repo,
+      { host: PR.repo.host, path: 'other/repo' },
+    ]);
+    expect(run.stderr).toContain('forge source answered for ghe.example.com/other/repo');
+    expect(run.stderr).toContain('ghe.example.com/example/repo: forge pr.view failed');
+  });
+
+  it.each([
+    ['git@GitHub.COM:owner/repo.git', 'github.com'],
+    ['ssh://git@GitHub.COM/owner/repo.git', 'github.com'],
+    ['git@Tenant.GHE.COM:owner/repo.git', 'tenant.ghe.com'],
+    ['ssh://git@Tenant.GHE.COM/owner/repo.git', 'tenant.ghe.com'],
+    ['git@SSH.GitHub.COM:owner/repo.git', 'github.com'],
+    ['ssh://git@SSH.GitHub.COM:443/owner/repo.git', 'github.com'],
+  ])('authenticates mixed-case SSH host %s', (remoteUrl, host) => {
+    const run = check({
+      source: 'gh',
+      remoteUrl,
+      inputs: { GH_TOKEN: 'connected-user', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '' },
+    });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(run.gh).toEqual([`auth status --active --hostname ${host}`]);
+    expect(run.stderr).toContain('source: GH_TOKEN');
   });
 
   it('checks gh authentication and inspects plugin metadata only for a refusal remedy', () => {

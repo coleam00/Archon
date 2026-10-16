@@ -36,6 +36,7 @@ export function urlRepo(url: string): Repo | undefined {
     host = scp[1];
     path = scp[2];
   }
+  host = host.toLowerCase();
   // GitHub's SSH endpoint on port 443 serves the same repositories as github.com.
   if (host === 'ssh.github.com') host = 'github.com';
   path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');

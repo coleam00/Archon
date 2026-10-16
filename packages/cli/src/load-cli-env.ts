@@ -31,9 +31,14 @@ export async function loadCliEnv(
       // Forge plugin processes run with the environment as the user scope left it, so
       // the repository's `.archon/.env` can supply a credential (passed separately) but
       // cannot change the environment an executable plugin runs in.
+      for (const [key, value] of runGithubCredentials) env[key] = value;
       forgeTrustedEnv = { ...env };
     },
   });
+  // gh's stored login is runtime identity, like HOME, and must not be redirected
+  // by repo env and then inherited as a run identity by a nested CLI invocation.
+  if (forgeTrustedEnv.GH_CONFIG_DIR === undefined) delete env.GH_CONFIG_DIR;
+  else env.GH_CONFIG_DIR = forgeTrustedEnv.GH_CONFIG_DIR;
   for (const [key, value] of runGithubCredentials) env[key] = value;
   return forgeTrustedEnv;
 }

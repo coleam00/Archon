@@ -84,7 +84,8 @@ describe('forge user trust boundary', () => {
           GH_TOKEN: token,
         };
         const trusted = await loadCliEnv(repo, { env, preserveGithubCredentials: true });
-        expect(trusted.GH_CONFIG_DIR).toBe('user-login');
+        expect(trusted.GH_CONFIG_DIR).toBe('workflow-login');
+        expect(trusted.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
         expect(env.GH_CONFIG_DIR).toBe('workflow-login');
         expect(env.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
         expect(env.GH_TOKEN).toBe(token);
@@ -94,6 +95,27 @@ describe('forge user trust boundary', () => {
       await removeTempTree(root);
     }
   });
+
+  it.each([undefined, 'user-login'])(
+    'does not pass a repo stored-login redirect to workflow children (user login: %s)',
+    async login => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-login-env-'));
+      const home = join(root, 'home');
+      const repo = join(root, 'repo');
+      mkdirSync(home);
+      mkdirSync(join(repo, '.archon'), { recursive: true });
+      if (login) writeFileSync(join(home, '.env'), `GH_CONFIG_DIR=${login}\n`);
+      writeFileSync(join(repo, '.archon/.env'), 'GH_CONFIG_DIR=repo-login\n');
+      const env: NodeJS.ProcessEnv = { ARCHON_HOME: home };
+      try {
+        const trusted = await loadCliEnv(repo, { env });
+        expect(trusted.GH_CONFIG_DIR).toBe(login);
+        expect(env.GH_CONFIG_DIR).toBe(login);
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
 
   it('refuses to start when the repo .archon/.env sets ARCHON_HOME', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-repo-home-refused-'));
@@ -146,7 +168,7 @@ describe('forge user trust boundary', () => {
           run: true,
           inherited: undefined,
           repoEnv: true,
-          gets: 'repo-test-token',
+          gets: key === 'GH_CONFIG_DIR' ? 'home-test-token' : 'repo-test-token',
         },
         {
           name: 'engine',
