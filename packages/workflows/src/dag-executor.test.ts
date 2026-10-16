@@ -12981,7 +12981,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     });
 
     describe('at max_iterations (#4290)', () => {
-      const runAtCap = async (loopUserInput: string, feedbackGiven: boolean) => {
+      const runAtCap = async (loopUserInput: string, feedbackGiven: boolean, iteration = 1) => {
         const mockDeps = createMockDeps();
         await executeDagWorkflow(
           dagOptions({
@@ -13010,7 +13010,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
                 approval: {
                   type: 'interactive_loop',
                   nodeId: 'refine',
-                  iteration: 1,
+                  iteration,
                   sessionId: 'sig-session-1',
                   message: 'gate',
                   completionSignaled: false,
@@ -13029,6 +13029,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           failed: mockDeps.store.persistWorkflowEvent.mock.calls.find(
             ([e]) => e.event_type === 'node_failed' && e.step_name === 'refine'
           )?.[0],
+          store: mockDeps.store,
         };
       };
 
@@ -13054,6 +13055,34 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         expect(mockSendQueryDag.mock.calls.length).toBe(0);
         expect(completed).toBeUndefined();
         expect(failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
+      });
+
+      it('runs exactly one iteration past max_iterations per feedback answer when it does not complete', async () => {
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Still working on it.' };
+          yield { type: 'result', sessionId: 'iter-session-2' };
+        });
+
+        const extra = await runAtCap('fix indentation', true);
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+        expect(extra.completed).toBeUndefined();
+        expect(extra.failed).toBeUndefined();
+        expect(extra.store.pauseWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          iteration: 2,
+        });
+        expect(
+          extra.store.createWorkflowEvent.mock.calls
+            .map(([e]) => e)
+            .find(e => e.event_type === 'loop_iteration_started')?.data
+        ).toMatchObject({ iteration: 2, maxIterations: 2 });
+
+        mockSendQueryDag.mockClear();
+        const approved = await runAtCap('Approved', false, 2);
+        expect(mockSendQueryDag.mock.calls.length).toBe(0);
+        expect(approved.completed).toBeUndefined();
+        expect(approved.failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
       });
     });
 
@@ -26509,9 +26538,13 @@ describe('executeDagWorkflow -- loop_group node', () => {
   });
 
   describe('legacy interactive group at max_iterations (#4290)', () => {
-    const runGroupAtCap = async (loopUserInput: string, feedbackGiven: boolean) => {
+    const runGroupAtCap = async (
+      loopUserInput: string,
+      feedbackGiven: boolean,
+      { iteration = 1, reply = 'Retried. <promise>APPROVED</promise>' } = {}
+    ) => {
       mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'Retried. <promise>APPROVED</promise>' };
+        yield { type: 'agent_message_chunk', text: reply };
         yield { type: 'result', sessionId: 'grp-session-2' };
       });
       const mockDeps = createMockDeps();
@@ -26549,7 +26582,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
               approval: {
                 type: 'interactive_loop',
                 nodeId: 'grp',
-                iteration: 1,
+                iteration,
                 message: 'Review.',
                 completionSignaled: false,
                 signaledOutput: null,
@@ -26579,6 +26612,33 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
       expect(mockSendQueryDag.mock.calls.length).toBe(0);
       expect(store.persistWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'grp',
+          data: expect.objectContaining({ failure_kind: 'max_iterations' }),
+        })
+      );
+    });
+
+    it('runs exactly one iteration past max_iterations per feedback answer when it does not complete', async () => {
+      const extra = await runGroupAtCap('retry with X', true, { reply: 'Still working on it.' });
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(extra.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(extra.pauseWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+        type: 'interactive_loop',
+        nodeId: 'grp',
+        iteration: 2,
+      });
+      expect(
+        extra.createWorkflowEvent.mock.calls
+          .map(([e]) => e)
+          .find(e => e.event_type === 'loop_iteration_started')?.data
+      ).toMatchObject({ iteration: 2, maxIterations: 2 });
+
+      mockSendQueryDag.mockClear();
+      const approved = await runGroupAtCap('Approved', false, { iteration: 2 });
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(approved.persistWorkflowEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           event_type: 'node_failed',
           step_name: 'grp',
