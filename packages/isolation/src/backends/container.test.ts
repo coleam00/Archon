@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { resolveBashPath } from '@archon/git';
 import { getArchonHome } from '@archon/paths';
 import { ContainerBackend } from './container';
 import * as containerModule from './container';
@@ -328,44 +331,82 @@ describe('ContainerBackend.prepare', () => {
     }
   );
 
-  test('falls back to native mode only on the runner FUSE mount failure exit status', async () => {
-    const store = fakeStore();
-    let runCount = 0;
-    const docker = fakeDocker(args => {
-      if (args[0] === 'run') {
-        runCount += 1;
-        return { stdout: `cid-${runCount}\n`, stderr: '' };
-      }
-      // Fuse container: ready check fails AND inspect says not running → fast fail.
-      // Native container (2nd run): ready check passes.
-      if (args[0] === 'exec' && args.includes('test')) {
-        if (runCount === 1) throw new IsolationFailure('unclassified', 'not ready');
+  test.each([
+    ['fuse', false, true],
+    ['native', false, false],
+    ['fuse', true, false],
+  ] as const)(
+    'runner %s failure (startup: %s) permits native fallback: %s',
+    async (mode, startupFailure, fallback) => {
+      const entrypoint = readFileSync(
+        new URL('../../docker/entrypoint.sh', import.meta.url),
+        'utf8'
+      );
+      const runner = spawnSync(
+        resolveBashPath(),
+        [
+          '-c',
+          `
+      rm() { :; }
+      mkdir() { return ${startupFailure ? 73 : 0}; }
+      fuse-overlayfs() { return 1; }
+      mount() { return 1; }
+      export ARCHON_WORKSPACE_PATH=/workspace ARCHON_OVERLAY_MODE=${mode}
+      ${entrypoint.replaceAll('/tmp/overlay-fuse.err', '/dev/null').replaceAll('/tmp/overlay-native.err', '/dev/null')}
+    `,
+        ],
+        { encoding: 'utf8' }
+      );
+      expect(runner.error).toBeUndefined();
+      expect(runner.signal).toBeNull();
+      expect(runner.status).not.toBeNull();
+      expect(runner.status).not.toBe(0);
+      const store = fakeStore();
+      let runCount = 0;
+      const docker = fakeDocker(args => {
+        if (args[0] === 'run') {
+          runCount += 1;
+          return { stdout: `cid-${runCount}\n`, stderr: '' };
+        }
+        // Fuse container: ready check fails AND inspect says not running → fast fail.
+        // Native container (2nd run): ready check passes.
+        if (args[0] === 'exec' && args.includes('test')) {
+          if (runCount === 1) throw new IsolationFailure('unclassified', 'not ready');
+          return { stdout: '', stderr: '' };
+        }
+        if (args[0] === 'inspect')
+          return {
+            stdout: args.includes('{{.State.ExitCode}}') ? `${runner.status}\n` : 'false\n',
+            stderr: '',
+          };
+        if (args[0] === 'rm') return { stdout: '', stderr: '' };
         return { stdout: '', stderr: '' };
+      });
+
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      if (!fallback) {
+        await expect(backend.prepare({ codebase: FOLDER })).rejects.toBeInstanceOf(
+          IsolationFailure
+        );
+        expect(runCount).toBe(1);
+        expect(docker.calls.some(args => args.includes('SYS_ADMIN'))).toBe(false);
+        return;
       }
-      if (args[0] === 'inspect')
-        return {
-          stdout: args.includes('{{.State.ExitCode}}') ? '78\n' : 'false\n',
-          stderr: '',
-        };
-      if (args[0] === 'rm') return { stdout: '', stderr: '' };
-      return { stdout: '', stderr: '' };
-    });
+      const prepared = await backend.prepare({ codebase: FOLDER });
 
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER });
-
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-2' });
-    expect(runCount).toBe(2);
-    // The failed fuse container is removed before the native attempt.
-    expect(docker.calls.find(c => c[0] === 'rm')).toBeDefined();
-    // The 2nd run (native) carries CAP_SYS_ADMIN, not the fuse device.
-    const nativeRun = docker.calls.filter(c => c[0] === 'run')[1];
-    const joined = (nativeRun ?? []).join(' ');
-    expect(joined).toContain('--cap-add SYS_ADMIN');
-    expect(joined).toContain('ARCHON_OVERLAY_MODE=native');
-    expect(joined).not.toContain('/dev/fuse');
-    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
-  });
+      expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-2' });
+      expect(runCount).toBe(2);
+      // The failed fuse container is removed before the native attempt.
+      expect(docker.calls.find(c => c[0] === 'rm')).toBeDefined();
+      // The 2nd run (native) carries CAP_SYS_ADMIN, not the fuse device.
+      const nativeRun = docker.calls.filter(c => c[0] === 'run')[1];
+      const joined = (nativeRun ?? []).join(' ');
+      expect(joined).toContain('--cap-add SYS_ADMIN');
+      expect(joined).toContain('ARCHON_OVERLAY_MODE=native');
+      expect(joined).not.toContain('/dev/fuse');
+      expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
+    }
+  );
 
   test('stores a container row with the empty-branch sentinel and container metadata', async () => {
     const store = fakeStore();
