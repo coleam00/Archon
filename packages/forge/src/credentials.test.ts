@@ -60,7 +60,11 @@ async function read(
         hosts: host === 'github.com' ? {} : { [host]: 'github' },
         scanPath: false,
       },
-      env: { PATH: path, HOME: root, GH_CONFIG_DIR: root },
+      env: {
+        PATH: path,
+        HOME: root,
+        GH_CONFIG_DIR: root,
+      },
       credentialEnv: env,
     }
   );

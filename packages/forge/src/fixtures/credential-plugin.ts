@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
@@ -24,7 +24,9 @@ if (args[0] === 'auth') {
       forge: 'github',
       hosts: ['github.com'],
       capabilities: ['pr.view', 'resolve'],
-      token_env: JSON.parse(readFileSync(join(root, 'token-env'), 'utf8')),
+      token_env: existsSync(join(root, 'token-env'))
+        ? JSON.parse(readFileSync(join(root, 'token-env'), 'utf8'))
+        : ['GITHUB_TOKEN', 'GH_TOKEN'],
     })
   );
 } else {
