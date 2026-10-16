@@ -134,9 +134,10 @@ nodes:
                 required: [what, why, recommendation, choices, if_unanswered, links]
             required: [number, action, class, head, synced, reran, reason, brief, attention]
         # The pull request this run's delta review covers, and the report it continues
-        # from; both empty when no review is due.
-        review_url: { type: string }
-        review_prior: { type: string }
+        # from; both empty when no review is due. The patterns refuse a placeholder
+        # such as a quoted empty string, which `when:` would read as a review to run.
+        review_url: { type: string, pattern: '^(https://\S+)?$' }
+        review_prior: { type: string, pattern: '^(\S+\.md)?$' }
         dev:
           type: object
           additionalProperties: false
