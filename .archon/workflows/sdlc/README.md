@@ -453,9 +453,11 @@ merger to consume. It does not install a queue or authorize a merge.
 ## CI agent eval
 
 The fast-rerun eval runs the shipped CI command through the Claude provider with
-in-memory forge responses. A rerun returns a newer attempt that is already green
-on the first read, with a changed check-unit ID. The agent must finish green,
-leave the PR ready, and write its reports within the tool-call budget.
+in-memory forge responses. A rerun returns a newer attempt that is already green,
+with a changed check-unit ID. The state read either shows it immediately or first
+returns the old failed attempt on the same revision. The agent must read through
+the stale attempt, finish green, leave the PR ready, and record the newer attempt
+in its reports within the tool-call budget.
 
 Run it explicitly with native Claude authentication (it makes paid model calls):
 
