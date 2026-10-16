@@ -10,9 +10,8 @@
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
-// Then load archon-owned env from ~/.archon/.env (user scope) and
-// <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
-// See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
+// Load Archon env before command imports. loadCliEnv preserves inherited workflow
+// identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
 import {
   captureDetachedInstallContext,
