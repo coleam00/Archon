@@ -1,4 +1,4 @@
-name: archon-deliver
+name: archon-deliver-block
 description: |
   The delivery tail, autonomous on its green path. Capped rounds of implement
   (focused checks only; CI is the full validation), draft PR, and a review at the
@@ -12,9 +12,9 @@ description: |
   a failure included. There is no in-run approval
   gate — the human gate is PR review and merge on the forge, outside the run.
 
-  Use when: decided work should become a reviewed, ready-to-merge PR —
-  "deliver this plan", "take this to a PR", "build and ship this".
-  NOT for: deciding what to build, or merging (always human).
+  The graph of archon-deliver, as a building block for a workflow that composes the
+  stage and owns what follows its ending. It never pauses for a person: run
+  archon-deliver, which adds that pause, by hand.
 
 inputs:
   pull_request:
@@ -133,7 +133,7 @@ nodes:
             branch: "$INPUTS.branch"
 
         - id: review
-          include: archon-review
+          include: archon-review-block
           depends_on: [pr]
           with:
             # The PR node's structured read-back names the pull request, so review
@@ -184,7 +184,7 @@ nodes:
         # Reshape commits after review passed, so its delta is reviewed before CI, by
         # the light review a CI fix gets: the code lens alone, on the delta.
         - id: rereview
-          include: archon-review
+          include: archon-review-block
           depends_on: [reshape]
           with:
             scope: "$pr.output"

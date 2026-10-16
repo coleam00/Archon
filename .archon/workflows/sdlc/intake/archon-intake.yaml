@@ -120,7 +120,7 @@ nodes:
   # current body, reaches this agent. Unpublished: the outcome writes the labels,
   # and closes a NO_ACTION item, after the work item.
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
     depends_on: [facts]
     when: "$facts.output.path == 'triage'"
     with:

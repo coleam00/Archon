@@ -1,0 +1,72 @@
+name: archon-plan
+description: |
+  Turn decided intent — a feature request, an investigation report, an idea —
+  into an implementable plan: the approach chosen with alternatives rejected for
+  stated reasons, the work broken into verifiable steps, and the validation that
+  proves it (archon-plan-block). Advisory: it reads and reports — the repository is
+  left exactly as it was found. When the plan stops on questions only a person can
+  answer, the run pauses as one attention item instead of leaving them in an
+  artifact. The answer plans again with the person's note, or ends the run with the
+  questions as they stand.
+
+  Use when: what to build is known but how is not yet decided — "plan this
+  feature", "turn this investigation into a plan", "how should we build this".
+  NOT for: root-causing a bug (investigate), or building the plan (implement).
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to plan — a feature description, an issue reference, or a goal. When
+      empty, the run's trigger message is the work.
+  report:
+    default: ""
+    description: >-
+      Optional path to a prior investigation report to build on — its claims are
+      verified, not trusted. Empty means no prior report.
+
+returns: result
+outcome_field: ready
+
+nodes:
+  # One pass is the plan and its attention block (see archon-attention). Each answer
+  # to the item permits one more pass.
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: 'done=$attend.output.done; test "$done" = true'
+      nodes:
+        - id: go
+          bash: "true"
+          when: "$LOOP_PREV.attend__ask.output.decision == '' || $LOOP_PREV.attend__ask.output.decision == 'rerun'"
+
+        - id: stage
+          include: archon-plan-block
+          depends_on: [go]
+          with:
+            report: "$INPUTS.report"
+            work: |-
+              $INPUTS.work
+              $LOOP_PREV.attend__settle.output.brief
+              $LOOP_PREV.attend__ask.output.text
+
+        - id: attend
+          include: archon-attention
+          depends_on: [stage]
+          trigger_rule: all_done
+          with:
+            stage: archon-plan
+            outcome: "$stage.output"
+
+  - id: result
+    depends_on: [cycle]
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_CYCLE).outcome))
+    with:
+      cycle: "$cycle.output"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+      required: [ready]

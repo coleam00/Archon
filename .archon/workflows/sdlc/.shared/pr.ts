@@ -257,21 +257,36 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   return view.pr;
 }
 
-export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
+/**
+ * Put an open pull request into draft (`draft: true`) or take it out of draft, and
+ * return the record read back from the forge. A pull request already in the wanted
+ * state is not written.
+ */
+export function setPrDraft(ref: QualifiedPr, draft: boolean, source: ForgeSource): PrRecord {
   if (source === 'forge') {
-    const value = forgeResult('pr.draft', { ref: { repo: ref.repo, number: ref.number } });
+    const value = forgeResult(draft ? 'pr.draft' : 'pr.ready', {
+      ref: { repo: ref.repo, number: ref.number },
+    });
     return parsePrRecord(value.pr);
   }
+  const wanted = draft ? 'an open draft' : 'an open pull request ready for review';
   const before = viewPr(ref, source).pr;
   if (before.state !== 'open') {
-    throw new Error(`${before.url} is ${before.state} and cannot be converted to draft`);
+    throw new Error(`${before.url} is ${before.state} and cannot become ${wanted}`);
   }
-  if (before.is_draft) return before;
-  const draft = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo), '--undo');
-  if (!draft.ok) throw new Error(`the draft conversion failed: ${draft.stderr}`);
+  if (before.is_draft === draft) return before;
+  const flip = gh(
+    'pr',
+    'ready',
+    String(ref.number),
+    '--repo',
+    ghRepo(ref.repo),
+    ...(draft ? ['--undo'] : [])
+  );
+  if (!flip.ok) throw new Error(`the conversion to ${wanted} failed: ${flip.stderr}`);
   const after = viewPr(ref, source).pr;
-  if (!after.is_draft || after.state !== 'open') {
-    throw new Error(`${after.url} does not report an open draft after conversion`);
+  if (after.is_draft !== draft || after.state !== 'open') {
+    throw new Error(`${after.url} does not report ${wanted} after conversion`);
   }
   return after;
 }

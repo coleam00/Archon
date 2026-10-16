@@ -1,0 +1,147 @@
+name: archon-attention
+description: |
+  The attention pause every public SDLC stage shares; a building block, not a
+  workflow to run. After a pass of the stage, one agent decides whether its ending
+  has a next step. When it has none, the run pauses as one select attention item: what
+  ended and why it matters, the agent's recommendation with its confidence and
+  evidence, the declared choices (`rerun` the stage, take its pull request out of
+  draft with `ready`, or `finish` with the outcome as it stands), what waiting costs,
+  and the links. The next pass acts on the answer.
+
+  A public stage (archon-deliver, archon-plan, archon-triage, archon-review,
+  archon-ship) runs its `-block` and this block, include id `attend`, as the body of
+  one loop: a gate node that runs the stage on the first pass and after a `rerun`
+  answer, read as `$LOOP_PREV.attend__ask.output.decision`; the stage, whose work
+  gets `$LOOP_PREV.attend__settle.output.brief` and the answer's text appended; and
+  this block with `trigger_rule: all_done`, so it settles a pass whose stage was
+  skipped. The loop ends on `$attend.output.done`, and `$attend.output.outcome` is the
+  stage's outcome. A workflow that composes a stage includes the `-block` instead and
+  owns what follows its ending, so it never raises a second item.
+
+inputs:
+  stage:
+    required: true
+    description: The public workflow whose pass ended, such as archon-deliver.
+  outcome:
+    required: true
+    description: >-
+      That pass's typed outcome, `$<stage include>.output`, which is empty when the
+      stage did not run.
+
+returns: settle
+
+nodes:
+  - id: answer
+    script: answer
+    runtime: bun
+    with:
+      outcome: "$INPUTS.outcome"
+      previous: "$LOOP_PREV.settle.output"
+      answer: "$LOOP_PREV.ask.output"
+    output_format:
+      type: object
+      properties:
+        judge: { type: boolean }
+        outcome: { type: object }
+        applied: { type: string }
+      required: [judge, outcome, applied]
+
+  - id: decide
+    command: decide
+    depends_on: [answer]
+    when: "$answer.output.judge == true"
+    model: medium
+    context: fresh
+    mutates_checkout: false
+    with:
+      stage: "$INPUTS.stage"
+      outcome: { from: "$answer.output.outcome" }
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [done, ask] }
+        reason: { type: string, pattern: '\S' }
+        pull_request:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            repo:
+              type: object
+              additionalProperties: false
+              properties:
+                host: { type: string, pattern: '\S' }
+                path: { type: string, pattern: '\S' }
+              required: [host, path]
+            number: { type: integer, minimum: 1 }
+          required: [repo, number]
+        attention:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            what: { type: string, pattern: '\S' }
+            why: { type: string, pattern: '\S' }
+            recommendation:
+              type: object
+              additionalProperties: false
+              properties:
+                choice: { type: string, enum: [rerun, ready, finish] }
+                why: { type: string, pattern: '\S' }
+                evidence: { type: string, pattern: '\S' }
+                confidence: { type: string, enum: [low, medium, high] }
+                would_change: { type: string, pattern: '\S' }
+              required: [choice, why, evidence, confidence, would_change]
+            choices:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  id: { type: string, enum: [rerun, ready, finish] }
+                  label: { type: string, pattern: '\S' }
+                  does: { type: string, pattern: '\S' }
+                required: [id, label, does]
+            if_unanswered: { type: string, pattern: '\S' }
+            links: { type: array, items: { type: string } }
+          required: [what, why, recommendation, choices, if_unanswered, links]
+      required: [decision, reason, pull_request, attention]
+
+  # Runs after a skipped decide too: a pass whose stage was skipped settles on the
+  # previous pass's outcome, and ends the loop.
+  - id: settle
+    script: settle
+    runtime: bun
+    depends_on: [answer, decide]
+    trigger_rule: all_done
+    with:
+      stage: "$INPUTS.stage"
+      answered: { from: "$answer.output" }
+      decision: { from: "$decide.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        done: { type: boolean }
+        outcome: { type: object }
+        message: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+            required: [id, label]
+        asked: { type: [object, 'null'] }
+        brief: { type: string }
+      required: [done, outcome, message, options, asked, brief]
+
+  - id: ask
+    depends_on: [settle]
+    when: "$settle.output.message != ''"
+    wait:
+      attention: "$settle.output.message"
+      form: select
+      options: "$settle.output.options"
+      labels:
+        stage: "$INPUTS.stage"

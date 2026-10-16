@@ -25,8 +25,8 @@ for (const staleReads of [0, 1]) {
     async () => {
       const cwd = track(mkdtempSync(join(tmpdir(), 'archon-ci-agent-')));
       const parsed = parseWorkflow(
-        readFileSync(join(pack, 'archon-deliver.yaml'), 'utf8'),
-        'archon-deliver.yaml',
+        readFileSync(join(pack, 'archon-deliver-block.yaml'), 'utf8'),
+        'archon-deliver-block.yaml',
         providerRegistry
       );
       const rounds = parsed.workflow?.nodes.find(node => node.id === 'rounds');
