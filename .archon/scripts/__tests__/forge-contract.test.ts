@@ -281,7 +281,7 @@ test('standalone new-operation projections carry typed request and result eviden
   ).toBe('landed');
 });
 
-test('all four preflight source validators conform to the pack source selector', () => {
+test('preflight and review CI-target source validators conform to the pack source selector', () => {
   for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
     const file = `archon-${folder}${folder === 'deliver' || folder === 'ship' ? '-block' : ''}.yaml`;
     const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
@@ -290,6 +290,14 @@ test('all four preflight source validators conform to the pack source selector',
     if (!first || !('output_format' in first)) throw new Error('missing preflight schema');
     expect(record(record(first.output_format?.properties)?.source)?.enum).toEqual(FORGE_SOURCES);
   }
+  const file = 'archon-review.yaml';
+  const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/review-entry/${file}`), 'utf8'), file, providerRegistry);
+  if (!parsed.workflow) throw new Error('invalid review entry workflow');
+  const cycle = parsed.workflow.nodes[0];
+  if (cycle?.kind !== 'loop_group') throw new Error('missing review cycle');
+  const target = cycle.loop_group.nodes.find(node => node.id === 'ci-target');
+  if (!target || !('output_format' in target)) throw new Error('missing CI-target schema');
+  expect(record(record(target.output_format?.properties)?.source)?.enum).toEqual(FORGE_SOURCES);
 });
 
 test('every node of the four preflighted flows runs after the forge check', () => {
