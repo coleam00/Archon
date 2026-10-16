@@ -12,8 +12,9 @@
  * head must be it. The head is checked before the scope agent's declaration, so a
  * correction that was never pushed is named as that rather than as a scope
  * mismatch. Any mismatch refuses, so a verdict about one commit can never
- * stand as the verdict on another. This node stamps that commit on the comment
- * itself rather than trusting the report's text to name it. Once published, the
+ * stand as the verdict on another. This node stamps that commit and the certified
+ * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
+ * the report's text to name them; the merge queue's gate reads both. Once published, the
  * commit is recorded beside the report as the next round's cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
@@ -40,8 +41,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-
-const MARKER = '<!-- archon-review-report -->';
+import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 function recordedPr(scope: string): QualifiedPr | undefined {
@@ -111,8 +111,8 @@ try {
   } else {
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
-      MARKER,
-      `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`,
+      REVIEW_MARKER,
+      reviewCommentBody(head, verdict.ready, report),
       source
     );
     note(`publish-review: canonical review comment at ${comment.url}`);
