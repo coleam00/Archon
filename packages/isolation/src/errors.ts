@@ -95,7 +95,9 @@ export type IsolationFailureKind =
   | 'branch_exists'
   | 'path_exists'
   | 'worktree_registered'
-  | 'setup_unfinished';
+  | 'setup_unfinished'
+  | 'docker_unreachable'
+  | 'runner_image_missing';
 
 export class IsolationFailure extends Error {
   constructor(
@@ -131,6 +133,16 @@ const FAILURE_MESSAGES = {
     '**Error:** Submodule initialization failed. Check credentials and network access to ' +
     'submodule remotes, or set `worktree.initSubmodules: false` in `.archon/config.yaml` ' +
     'to opt out if submodules are not needed for your workflows.',
+  docker_unreachable:
+    '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+    '`systemctl start docker`) and retry, or run without `--container`.',
+  // Image-agnostic on purpose: this static message can't know the configured
+  // `container.image`, so it must not hardcode the default tag.
+  runner_image_missing:
+    '**Error:** The Archon runner image is missing. Build it with ' +
+    '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
+    'or build your configured `container.image` from ' +
+    '`packages/isolation/docker/runner.Dockerfile`.',
   unclassified: undefined,
   branch_exists: undefined,
   path_exists: undefined,

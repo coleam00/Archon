@@ -87,16 +87,20 @@ export async function dockerCli(
  * any volume/container is created — so a missing daemon or image fails fast with
  * an actionable message instead of a half-created environment.
  *
- * Failures preserve Docker's evidence; a failed inspect alone does not prove an image is missing.
+ * A failed inspect alone does not prove an image is missing, so the image is
+ * reported missing only when listing it confirms absence; any other inspect
+ * failure keeps Docker's evidence unclassified.
  */
 export async function dockerPreflight(
   image: string,
   runner: DockerRunner = dockerCli
 ): Promise<void> {
+  // 1. Daemon reachable. `docker version --format {{.Server.Version}}` fails
+  //    whenever the CLI cannot get an answer from the daemon.
   try {
     await runner(['version', '--format', '{{.Server.Version}}'], { timeout: 10_000 });
   } catch (err) {
-    if (!(err instanceof IsolationFailure) || err.kind !== 'unclassified') throw err;
+    if (!(err instanceof IsolationFailure)) throw err;
     const detail = extractDockerError(err);
     // When Archon itself runs in Docker (the compose stack), the app image ships
     // no `docker` CLI and the daemon socket is deliberately NOT mounted — so
@@ -109,8 +113,8 @@ export async function dockerPreflight(
           'on the host, or see deployment/docker.md.'
         : '';
     throw new IsolationFailure(
-      'unclassified',
-      `docker version failed. Check Docker configuration and permissions.${dockerizedHint} (${detail})`,
+      'docker_unreachable',
+      `Cannot connect to the Docker daemon. Is Docker running?${dockerizedHint} (${detail})`,
       err
     );
   }
@@ -122,6 +126,17 @@ export async function dockerPreflight(
   } catch (err) {
     if (!(err instanceof IsolationFailure) || err.kind !== 'unclassified') throw err;
     const detail = extractDockerError(err);
+    const missing = await runner(['image', 'ls', '--quiet', image], { timeout: 15_000 }).then(
+      ({ stdout }) => stdout.trim() === '',
+      () => false
+    );
+    if (missing)
+      throw new IsolationFailure(
+        'runner_image_missing',
+        `No such image: '${image}'. Build the runner image first: ` +
+          `docker build -t ${image} -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker (${detail})`,
+        err
+      );
     throw new IsolationFailure(
       'unclassified',
       `Cannot inspect image '${image}'. Check Docker and the configured image, or build it: ` +

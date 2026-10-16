@@ -3085,8 +3085,8 @@ async function runWorkflowWithOwnedSource(
             }
             prepared = await backend.prepare({ codebase: folderCodebase, ...(mounts ?? {}) });
           } catch (prepErr) {
-            // Map docker/daemon/image failures to an actionable message (daemon down,
-            // runner image missing, docker-group permission — see errors.ts).
+            // Map docker/daemon/image failures to an actionable message (daemon
+            // unreachable, runner image missing — see errors.ts).
             const err = prepErr as Error;
             getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
             throw new Error(classifyIsolationError(err));

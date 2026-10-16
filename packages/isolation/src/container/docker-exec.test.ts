@@ -73,14 +73,22 @@ describe('dockerPreflight', () => {
     expect(calls[1]).toEqual(['image', 'inspect', 'archon-runner:test']);
   });
 
-  test('quotes an unclassified version failure', async () => {
+  test('an unreachable daemon keeps the start-Docker remedy and its evidence', async () => {
     const runner: DockerRunner = async () => {
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock';
       throw new IsolationFailure('unclassified', extractDockerError(err), err);
     };
-    await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
-      /docker version failed/
+    const error = await dockerPreflight('archon-runner:test', runner).catch(
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(IsolationFailure);
+    if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+    expect(error.kind).toBe('docker_unreachable');
+    expect(error.message).toContain('unix:///var/run/docker.sock');
+    expect(classifyIsolationError(error)).toBe(
+      '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+        '`systemctl start docker`) and retry, or run without `--container`.'
     );
   });
 
@@ -102,16 +110,28 @@ describe('dockerPreflight', () => {
     }
   });
 
-  test('throws an image-missing error naming the build command', async () => {
+  test('a confirmed missing image keeps the build remedy', async () => {
     const runner: DockerRunner = async args => {
       if (args[0] === 'version') return { stdout: '28.2.2', stderr: '' };
+      if (args[1] === 'ls') return { stdout: '\n', stderr: '' };
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Error: No such image: archon-runner:test';
       throw new IsolationFailure('unclassified', extractDockerError(err), err);
     };
-    const p = dockerPreflight('archon-runner:test', runner);
-    await expect(p).rejects.toThrow(/Cannot inspect image 'archon-runner:test'/);
-    await expect(p).rejects.toThrow(/docker build/);
+    const error = await dockerPreflight('archon-runner:test', runner).catch(
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(IsolationFailure);
+    if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+    expect(error.kind).toBe('runner_image_missing');
+    expect(error.message).toContain("No such image: 'archon-runner:test'");
+    expect(error.message).toContain('docker build');
+    expect(classifyIsolationError(error)).toBe(
+      '**Error:** The Archon runner image is missing. Build it with ' +
+        '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
+        'or build your configured `container.image` from ' +
+        '`packages/isolation/docker/runner.Dockerfile`.'
+    );
   });
 });
 
@@ -151,45 +171,37 @@ describe('Docker failure classification', () => {
   });
 });
 
-test('version preflight preserves typed timeout', async () => {
-  const failure = new IsolationFailure('timeout', 'version timed out');
+test.each([
+  ['timeout', new IsolationFailure('timeout', 'version timed out')],
+  [
+    'unclassified exit',
+    new IsolationFailure(
+      'unclassified',
+      'version failed',
+      Object.assign(new Error('version failed'), { code: 1, stderr: 'original stderr' })
+    ),
+  ],
+  [
+    'spawn permission',
+    new IsolationFailure(
+      'unclassified',
+      'version spawn denied',
+      Object.assign(new Error('version spawn denied'), { code: 'EACCES' })
+    ),
+  ],
+])('any version preflight failure (%s) reads as an unreachable daemon', async (_, failure) => {
   const error = await dockerPreflight('image', async () => {
     throw failure;
   }).catch((error: unknown) => error);
-  expect(error).toBe(failure);
-  expect(classifyIsolationError(failure)).toContain('Timed out');
-});
-
-test('version preflight quotes unclassified exit evidence without guessing daemon status', async () => {
-  const cause = Object.assign(new Error('version failed'), {
-    code: 1,
-    stderr: 'timeout: Cannot connect to the Docker daemon\noriginal stderr',
-  });
-  const error = await dockerPreflight('image', async () => {
-    throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
-  }).catch((error: unknown) => error);
   expect(error).toBeInstanceOf(IsolationFailure);
   if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
-  expect(error.kind).toBe('unclassified');
-  expect(error.cause).toBeInstanceOf(IsolationFailure);
-  if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
-  expect(error.cause.cause).toBe(cause);
-  expect(classifyIsolationError(error)).toContain('docker version');
-  expect(classifyIsolationError(error)).toContain('exit code 1');
-  expect(classifyIsolationError(error)).toContain(cause.stderr);
-  expect(classifyIsolationError(error)).not.toContain('Timed out creating workspace');
-});
-
-test('version preflight preserves structured permission guidance', async () => {
-  const cause = Object.assign(new Error('version spawn denied'), { code: 'EACCES' });
-  const error = await dockerPreflight('image', async () => {
-    throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
-  }).catch((error: unknown) => error);
-  if (!(error instanceof Error)) throw new Error('expected error');
-  expect(error.cause).toBeInstanceOf(IsolationFailure);
-  if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
-  expect(error.cause.cause).toBe(cause);
-  expect(classifyIsolationError(error)).toContain('Permission denied');
+  expect(error.kind).toBe('docker_unreachable');
+  expect(error.cause).toBe(failure);
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toBe(
+    '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+      '`systemctl start docker`) and retry, or run without `--container`.'
+  );
 });
 
 test('image preflight preserves typed timeout without build advice', async () => {
