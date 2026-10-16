@@ -3689,31 +3689,30 @@ export async function executeWorkflow(
     // reporting a completed process for a row that still says running. Record that it
     // failed so the finally-block backstop below does not fire a second write over a
     // write channel that just proved unreliable — that write would mask this error.
-    let failed: boolean;
+    const emitter = getWorkflowEventEmitter();
     try {
-      ({ failed } = await requireTerminalStatusWrite(
+      const { failed } = await requireTerminalStatusWrite(
         deps.store.failWorkflowRun(workflowRun.id, err.message, { exitReason: 'unhandled_error' }),
         {
           workflowRunId: workflowRun.id,
           site: 'db_record_failure_failed',
         }
-      ));
+      );
+      // A run another writer already finished keeps that writer's outcome and announcement.
+      if (failed) {
+        emitter.emit({
+          type: 'workflow_failed',
+          runId: workflowRun.id,
+          workflowName: workflow.name,
+          error: err.message,
+        });
+      }
     } catch (writeError) {
       terminalStatusWriteFailed = true;
       throw writeError;
+    } finally {
+      emitter.unregisterRun(workflowRun.id);
     }
-
-    // A run another writer already finished keeps that writer's outcome and announcement.
-    const emitter = getWorkflowEventEmitter();
-    if (failed) {
-      emitter.emit({
-        type: 'workflow_failed',
-        runId: workflowRun.id,
-        workflowName: workflow.name,
-        error: err.message,
-      });
-    }
-    emitter.unregisterRun(workflowRun.id);
 
     // Return failure result instead of re-throwing
     return { success: false, workflowRunId: workflowRun.id, error: err.message };

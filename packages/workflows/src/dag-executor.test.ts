@@ -42996,7 +42996,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
   });
 
   it.each([false, true])(
-    'withholds live failure when the failure write rejects (successful sibling: %s)',
+    'withholds live failure but unregisters the run when the failure write rejects (successful sibling: %s)',
     async successfulSibling => {
       const store = createMockStore();
       store.failWorkflowRun = mock(async () => {
@@ -43004,12 +43004,15 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       });
       const platform = createMockPlatform();
       const emitted: string[] = [];
+      const emitter = getWorkflowEventEmitter();
+      emitter.registerRun('terminal-order-run', 'conv-terminal-order');
 
       await expect(
         run(store, platform, [...(successfulSibling ? [okNode] : []), badNode], emitted)
       ).rejects.toThrow('Failed to persist terminal workflow status');
 
       expect(emitted).not.toContain('workflow_failed');
+      expect(emitter.getConversationId('terminal-order-run')).toBeUndefined();
       const sent = platform.sendMessage.mock.calls.map(c => c[1]);
       expect(
         sent.some(m => m.includes(successfulSibling ? 'completed with failures' : 'failed: node'))

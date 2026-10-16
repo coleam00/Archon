@@ -12259,20 +12259,23 @@ export async function executeDagWorkflow(
    * outer executor catch rethrows without emitting.
    */
   const failRun = async (failMsg: string, exitReason: RunExitReason, site: string) => {
-    const { failed } = await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
-      { workflowRunId: workflowRun.id, site }
-    );
     const emitter = getWorkflowEventEmitter();
-    if (failed) {
-      emitter.emit({
-        type: 'workflow_failed',
-        runId: workflowRun.id,
-        workflowName: workflow.name,
-        error: failMsg,
-      });
+    try {
+      const { failed } = await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
+        { workflowRunId: workflowRun.id, site }
+      );
+      if (failed) {
+        emitter.emit({
+          type: 'workflow_failed',
+          runId: workflowRun.id,
+          workflowName: workflow.name,
+          error: failMsg,
+        });
+      }
+    } finally {
+      emitter.unregisterRun(workflowRun.id);
     }
-    emitter.unregisterRun(workflowRun.id);
   };
 
   /**

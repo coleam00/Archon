@@ -5218,7 +5218,8 @@ describe('telemetry wiring', () => {
     );
   });
 
-  it('surfaces a failed terminal failure write', async () => {
+  it('surfaces a failed terminal failure write and still unregisters the run', async () => {
+    mockEmitter.unregisterRun.mockClear();
     mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
     const store = makeStore({
       failWorkflowRun: mock(async () => {
@@ -5231,6 +5232,8 @@ describe('telemetry wiring', () => {
         conversationId: 'db-conv-1',
       })
     ).rejects.toThrow('terminal failure write failed');
+
+    expect(mockEmitter.unregisterRun).toHaveBeenCalledTimes(1);
   });
 
   it('does not recover a rejected DAG terminal write with a second failure write', async () => {
