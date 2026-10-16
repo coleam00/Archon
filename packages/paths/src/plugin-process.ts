@@ -15,13 +15,17 @@ export function validateCommand(command: string): string | undefined {
   return undefined;
 }
 
-export async function terminateTree(pid: number): Promise<void> {
+/** End the process group led by `pid` on POSIX, or the tree rooted at `pid` on Windows. */
+export async function terminateTree(
+  pid: number,
+  posixSignal: NodeJS.Signals = 'SIGKILL'
+): Promise<void> {
   if (process.platform === 'win32') {
     await terminateWindowsTree(pid);
     return;
   }
   try {
-    process.kill(-pid, 'SIGKILL');
+    process.kill(-pid, posixSignal);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }

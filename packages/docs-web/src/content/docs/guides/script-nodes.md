@@ -120,7 +120,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
-| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout`. See [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts) for what a timeout ends |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all

@@ -155,10 +155,60 @@ posixOnly('a recorded node deadline still reports the documented SIGTERM', async
   }
 });
 
+// A wrapper runtime (`bun run`, `uv run`) starts the real work as a grandchild. The node's
+// timeout must end that grandchild too, before the timeout is reported.
+async function expectTimeoutEndsGrandchild(): Promise<void> {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-timeout-')));
+  const started = join(dir, 'started');
+  const marker = join(dir, 'marker');
+  const grandchild =
+    "require('fs').writeFileSync(process.env.STARTED, ''); " +
+    "setTimeout(() => require('fs').writeFileSync(process.env.MARKER, 'leaked'), 2500);";
+  const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
+  const error = await runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
+    cwd: dir,
+    timeout: 1500,
+    env: { STARTED: started, MARKER: marker },
+    endTreeOnTimeout: true,
+    retention: { standalone: true },
+  }).then(
+    () => undefined,
+    (e: unknown) => e as RawSubprocessRejection
+  );
+  expect(error && isSubprocessTimeout(error)).toBe(true);
+  expect(error?.signal).toBe('SIGTERM');
+  expect(existsSync(started)).toBe(true);
+  await new Promise<void>(resolve => setTimeout(resolve, 3000));
+  expect(existsSync(marker)).toBe(false);
+}
+
+test('a recorded node timeout ends the wrapper and its grandchild', async () => {
+  const trees = recordNodeProcessTrees();
+  try {
+    await expectTimeoutEndsGrandchild();
+  } finally {
+    trees.release();
+  }
+}, 15_000);
+
+test.skipIf(process.platform !== 'win32')(
+  'an unrecorded Windows node timeout ends the wrapper and its grandchild',
+  expectTimeoutEndsGrandchild,
+  15_000
+);
+
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {
   const error = Object.assign(new Error('deadline'), { timedOut: true, code: 7 });
   expect(isSubprocessTimeout(error)).toBe(true);
   expect(isSubprocessTimeout(Object.assign(new Error('exit'), { code: 7 }))).toBe(false);
+});
+
+test('a deadline whose tree survived is a failure, not a skippable timeout', () => {
+  const error = Object.assign(new Error('deadline'), {
+    timedOut: true,
+    treeSurvived: true as const,
+  });
+  expect(isSubprocessTimeout(error)).toBe(false);
 });
 
 test('owned process groups are rejected before container execution', async () => {

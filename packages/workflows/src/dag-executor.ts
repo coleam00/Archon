@@ -3587,6 +3587,7 @@ async function executeBashNode(
       {
         cwd,
         timeout,
+        endTreeOnTimeout: true,
         env: subprocessEnv,
         protectedEnvKeys,
         protectedCredentialValues,
@@ -3637,6 +3638,8 @@ async function executeBashNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
+    } else if (err.treeSurvived) {
+      errorMsg = `${label} failed: ${err.message}`;
     } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
@@ -3929,6 +3932,7 @@ async function executeScriptNode(
     const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
       cwd,
       timeout,
+      endTreeOnTimeout: true,
       env: subprocessEnv,
       protectedEnvKeys,
       protectedCredentialValues,
@@ -3975,6 +3979,8 @@ async function executeScriptNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
+    } else if (err.treeSurvived) {
+      errorMsg = `${label} failed: ${err.message}`;
     } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (execContext.kind === 'host' && err.code === 'EACCES') {

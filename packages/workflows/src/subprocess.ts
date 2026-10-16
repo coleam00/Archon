@@ -63,11 +63,17 @@ export type RawSubprocessRejection = Error & {
   killed?: boolean;
   /** The owned group deadline expired, independent of the eventual exit code. */
   timedOut?: boolean;
+  /**
+   * A node's deadline expired but its process tree could not be ended. That is a failure,
+   * never a timeout `on_timeout: skip` could pass over while the tree may still run.
+   */
+  treeSurvived?: true;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
+  if (error.treeSurvived) return false;
   return error.timedOut === true || (error.killed === true && error.code === null);
 }
 
@@ -211,6 +217,14 @@ export async function runSubprocess(
     timeout: number;
     /** Host setup only: end the group on deadline, command exit, or owner death. */
     ownProcessGroup?: true;
+    /**
+     * A host node body: its deadline ends the node's whole tree before the timeout is
+     * reported. On POSIX that needs the node's own process group, which only a recording
+     * owner gives it; an unrecorded POSIX node shares its owner's group, which
+     * `archon workflow cancel` kills to end a detached run, so its deadline still ends the
+     * root only.
+     */
+    endTreeOnTimeout?: true;
     env: NodeJS.ProcessEnv;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
@@ -252,12 +266,15 @@ export async function runSubprocess(
               timeout: options.timeout,
               env: subprocessEnv,
             })
-          : nodeProcessRecorder
+          : nodeProcessRecorder || (options.endTreeOnTimeout && process.platform === 'win32')
             ? await execOwnedProcessGroup(cmd, args, {
                 cwd: options.cwd,
                 timeout: options.timeout,
                 env: subprocessEnv,
-                recorder: nodeProcessRecorder,
+                node: {
+                  recorder: nodeProcessRecorder,
+                  endTreeOnTimeout: options.endTreeOnTimeout === true,
+                },
               })
             : await execFileAsync(cmd, args, {
                 cwd: options.cwd,
@@ -339,22 +356,24 @@ async function execOwnedProcessGroup(
     env: NodeJS.ProcessEnv;
     /**
      * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
-     * jobs outlive the command, a deadline SIGTERMs the root only, as documented for
-     * `exit_code`) and only make the tree endable through the recorder.
+     * jobs outlive the command, a deadline reports the SIGTERM documented for
+     * `exit_code`) and make the tree endable through the recorder. The deadline SIGTERMs
+     * the whole tree when `endTreeOnTimeout` is set, the root only otherwise.
      */
-    recorder?: NodeProcessRecorder;
+    node?: { recorder: NodeProcessRecorder | undefined; endTreeOnTimeout: boolean };
   }
 ): Promise<{ stdout: string; stderr: string }> {
-  const { recorder } = options;
+  const { node } = options;
+  const recorder = node?.recorder;
   if (recorder?.ended) throw new Error('The run owner is terminating; node subprocess not started');
   const posix = process.platform !== 'win32';
-  const lifeline = posix && !recorder;
+  const lifeline = posix && !node;
   const child = spawn(cmd, lifeline ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
     cwd: options.cwd,
     env: options.env,
     windowsHide: true,
     detached: posix,
-    stdio: [lifeline || recorder ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    stdio: [lifeline || node ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
   const maxBuffer = 1024 * 1024;
   let stdout = Buffer.alloc(0);
@@ -364,14 +383,14 @@ async function execOwnedProcessGroup(
   let exited = false;
   let termination: Promise<void> | undefined;
   let terminationError: Error | undefined;
-  const stop = (): void => {
+  const stop = (endTree: boolean): void => {
     // Never signal a group after its leader exited: that PID may already be reused.
     if (termination || exited || child.pid === undefined) return;
-    if (recorder) {
+    if (!endTree) {
       child.kill('SIGTERM');
       return;
     }
-    termination = terminateTree(child.pid).catch((error: unknown) => {
+    termination = terminateTree(child.pid, node ? 'SIGTERM' : 'SIGKILL').catch((error: unknown) => {
       terminationError = error instanceof Error ? error : new Error(String(error));
     });
   };
@@ -381,7 +400,7 @@ async function execOwnedProcessGroup(
       ? armNodeLifeline(rootPid, error => {
           error.message = `could not start the node's owner-death watcher: ${error.message}`;
           failure ??= error;
-          stop();
+          stop(false);
         })
       : (): void => undefined;
     recorder.roots.set(rootPid, disarm);
@@ -395,7 +414,7 @@ async function execOwnedProcessGroup(
   }
   const timer = setTimeout(() => {
     timedOut = true;
-    stop();
+    stop(!node || node.endTreeOnTimeout);
     child.stdout?.destroy();
     child.stderr?.destroy();
   }, options.timeout);
@@ -409,7 +428,7 @@ async function execOwnedProcessGroup(
         code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
       });
       clearTimeout(timer);
-      stop();
+      stop(!node);
       child.stdout?.destroy();
       child.stderr?.destroy();
     }
@@ -438,11 +457,18 @@ async function execOwnedProcessGroup(
     }
   }
   if (terminationError) {
-    failure ??= new Error('Setup process group termination failed');
+    failure ??= new Error(
+      node
+        ? `Command timed out after ${options.timeout} ms`
+        : 'Setup process group termination failed'
+    );
     failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
   }
+  // taskkill ends the root with exit code 1; a node deadline keeps the SIGTERM that
+  // child.kill reported for it, as documented for `exit_code`.
+  const exit = node && termination && !posix ? { code: null, signal: 'SIGTERM' } : closed;
   const output = { stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') };
-  if (timedOut || failure || closed.code !== 0) {
+  if (timedOut || failure || exit.code !== 0) {
     throw Object.assign(
       failure ??
         new Error(
@@ -452,9 +478,10 @@ async function execOwnedProcessGroup(
         ),
       {
         ...output,
-        ...(!failure ? { code: closed.code } : {}),
-        signal: closed.signal,
+        ...(!failure ? { code: exit.code } : {}),
+        signal: exit.signal,
         timedOut,
+        ...(node && terminationError ? { treeSurvived: true as const } : {}),
         cmd: `${cmd} ${args.join(' ')}`,
         spawnargs: args,
       }

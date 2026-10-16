@@ -258,6 +258,21 @@ nodes:
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
 | `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources a capable provider discovers (for Claude: CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Requires the provider's `settingSources` capability. Per-node only |
 
+### Bash and script node timeouts
+
+When a `bash:` or `script:` node on the host reaches its `timeout`, Archon ends the node's
+whole process tree before it reports the timeout, so the real work behind a wrapper such as
+`bun run` or `uv run` stops too. On Windows it runs `taskkill /T /F` on the node's process.
+On macOS and Linux a foreground `workflow run`, `workflow resume` or `trigger execute` starts
+the node in its own process group and sends `SIGTERM` to that group. A node under
+`archon serve` or a detached run shares its owner's process group, so on macOS and Linux its
+timeout still ends only the node's own process, and work it started in the background keeps
+running. `until_bash` checks and container nodes end only their own process.
+
+If the tree cannot be ended, the node fails with the termination error instead of timing out.
+It does not take `on_timeout: skip`, and dependents follow their `trigger_rule` as for any
+failed node.
+
 ### Addressable session ancestry
 
 Dependency edges determine execution and `$node.output` carries data. When a later command or prompt must continue one particular AI conversation instead of the latest ambient session, name that completed upstream node:
