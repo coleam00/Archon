@@ -1301,6 +1301,21 @@ describe('cloneRepository', () => {
 
   // ── Command auto-loading ───────────────────────────────────────────────
   describe('command auto-loading', () => {
+    test.each(['EACCES', 'EIO'])(
+      'propagates command-directory access failure %s for a saved checkout',
+      async code => {
+        const existing = makeCodebase();
+        mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+        const error = Object.assign(new Error('commands unavailable'), { code });
+        spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
+          if (!String(path).endsWith('.git')) throw error;
+        });
+        await expect(cloneRepository('https://github.com/owner/repo')).rejects.toBe(error);
+        expect(mockFindCommandFiles).not.toHaveBeenCalled();
+        expect(spyFsRm).not.toHaveBeenCalled();
+      }
+    );
+
     test('preserves a registered checkout when loading its commands fails', async () => {
       spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
         if (String(path).endsWith('.git')) throw new Error('missing checkout');

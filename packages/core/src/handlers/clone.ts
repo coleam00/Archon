@@ -358,10 +358,10 @@ async function loadRepositoryCommands(
     const commandPath = join(targetPath, folder);
     try {
       await access(commandPath);
-    } catch {
-      continue; // Folder doesn't exist, try next
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+      throw error;
     }
-    // Command loading errors should NOT be swallowed
     const markdownFiles = await findCommandFiles(commandPath);
     if (markdownFiles.length > 0) {
       const commands = { ...(await codebases.getCodebaseCommands(codebase.id)) };
