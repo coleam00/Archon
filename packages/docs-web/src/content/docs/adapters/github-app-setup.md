@@ -283,7 +283,7 @@ If the external POST probe returns anything other than `404` or `403` from the p
 5. Restart Archon.
 6. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
 
-In App mode, adding a private GitHub codebase by URL and inspecting its base branch use the repository's installation token; no PAT is needed. The clone keeps a credential-free remote URL and receives the credential helper before registration completes. If the App is not installed, Archon reports installation guidance. Adding an already-registered URL refreshes the helper on that checkout without cloning it again.
+In App mode, adding a private GitHub codebase by URL and inspecting its base branch use the repository's installation token; no PAT is needed. The clone keeps a credential-free remote URL and receives the credential helper before registration completes. If the App is not installed, Archon reports installation guidance. Adding an already-registered URL refreshes the helper without cloning again when the checkout exists. A missing Archon-managed checkout is cloned again at its registered path. A missing operator-owned checkout must be restored or repaired with `/update-project`.
 
 Run `archon doctor` to validate local App configuration after migration. A passing App check confirms the ID and RSA key are valid locally; it does not confirm GitHub accepts them or that the App has repository access.
 

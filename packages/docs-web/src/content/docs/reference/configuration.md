@@ -336,7 +336,7 @@ The run records the resolved AI configuration (assistant, provider defaults, tie
 
 Some repo settings are read at launch from fixed places rather than the launch checkout:
 
-- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout when Archon creates the worktree.
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout when Archon creates the worktree. Registration also reads `worktree.remote` from the checkout being registered to select its remote, even for runs using `--no-worktree`.
 - **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the source directory when the run captures its source (`--workflow-source` on the CLI), and are recorded with that capture.
 
 To change the configuration a run uses:
@@ -419,7 +419,7 @@ worktree:
 **Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
 1. If `worktree.remote` is set: Uses the configured remote name for all operations.
 2. If omitted: Auto-detects — `origin` if it exists, otherwise the sole remote if only one is configured.
-3. If multiple remotes exist and none is named `origin`: Worktree creation **fails with an actionable error** listing the available remotes and suggesting the config fix.
+3. If multiple remotes exist and none is named `origin`: Worktree creation **fails with an actionable error** listing the available remotes and suggesting the config fix. Registration still succeeds but records no repository URL, unless one of the remotes already belongs to a registered project, which refuses it as a second clone. A project registered this way owns none of its remotes, so a later clone of one of them registers as a separate project; set `worktree.remote` before registering to avoid that.
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).

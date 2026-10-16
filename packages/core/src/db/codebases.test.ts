@@ -22,6 +22,7 @@ mock.module('./connection', () => ({
 
 import {
   createCodebase,
+  removeUnregisteredCheckout,
   getCodebase,
   updateCodebaseCommands,
   getCodebaseCommands,
@@ -97,9 +98,12 @@ describe('codebases', () => {
 
     test('absolute spelling is preserved on write and read', async () => {
       const path = resolve('project') + sep + '..' + sep + 'project' + sep;
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
       expect((await createCodebase({ name: 'project', default_cwd: path })).default_cwd).toBe(path);
-      expect(mockQuery.mock.calls[0]?.[1]).toContain(path);
+      expect(mockQuery.mock.calls.at(-1)?.[1]).toContain(path);
     });
 
     test('administrative metadata remains readable with an invalid stored path', async () => {
@@ -122,7 +126,10 @@ describe('codebases', () => {
 
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
       const result = await createCodebase({
         name: 'test-project',
@@ -152,7 +159,10 @@ describe('codebases', () => {
         repository_url: null,
         ai_assistant_type: null,
       };
-      mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
       const result = await createCodebase({
         name: 'test-project',
@@ -168,9 +178,10 @@ describe('codebases', () => {
 
     test('explicit ai_assistant_type takes priority over env var', async () => {
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }])
-      );
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }]));
 
       await createCodebase({
         name: 'test-project',
@@ -182,6 +193,32 @@ describe('codebases', () => {
       delete process.env.DEFAULT_AI_ASSISTANT;
     });
   });
+
+  test.each(['registered', 'unregistered'])(
+    'checkout cleanup shares the registration lock for a %s checkout',
+    async state => {
+      const owned = state === 'registered';
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([mockCodebase]));
+      await createCodebase({ name: mockCodebase.name, default_cwd: mockCodebase.default_cwd });
+      const registrationLock = mockQuery.mock.calls[0];
+      mockQuery.mockClear();
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult(owned ? [mockCodebase] : []));
+      const remove = mock(async () => {
+        expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+      });
+
+      await removeUnregisteredCheckout(mockCodebase.default_cwd, remove);
+
+      expect(registrationLock?.[0]).toContain('pg_advisory_xact_lock');
+      expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+      expect(remove).toHaveBeenCalledTimes(owned ? 0 : 1);
+    }
+  );
 
   describe('getCodebase', () => {
     test('returns existing codebase', async () => {
@@ -388,7 +425,9 @@ describe('codebases', () => {
     });
 
     test('returns null when not found', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]));
 
       const result = await findCodebaseByRepoUrl('https://github.com/other/repo');
 

@@ -16,7 +16,22 @@ import {
   type CreateCodebaseInput,
   type UpdateCodebaseInput,
 } from '../schemas/codebase';
-import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import {
+  createLogger,
+  captureCodebaseRegistered,
+  getProjectSourcePath,
+  isPathInside,
+  parseOwnerRepo,
+} from '@archon/paths';
+import {
+  allocateProjectName,
+  isCheckoutRegistered,
+  resolveRegistrationUrl,
+} from '../services/project-registration-identity';
+import {
+  findRemoteOwner,
+  assertProjectRegistrationAvailable,
+} from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
@@ -44,18 +59,58 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export async function createCodebase(data: CreateCodebaseInput): Promise<Codebase> {
+  return insertCodebase(data, false);
+}
+
+/** Forge registrations own managed source paths, so allocation must move that path with the name. */
+export async function createManagedCodebase(data: CreateCodebaseInput): Promise<Codebase> {
+  return insertCodebase(data, true);
+}
+
+async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Promise<Codebase> {
   assertAbsoluteDefaultCwd(data.default_cwd, data.name);
-  const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [
-      data.name,
-      data.repository_url ?? null,
-      data.default_cwd,
-      data.default_branch ?? null,
-      data.ai_assistant_type ?? null,
-      data.kind ?? 'repo',
-    ]
-  );
+  const result = await getDatabase().withTransaction(async query => {
+    // Share the rename lock: a concurrent rename must not take the new registration's name.
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
+    }
+    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
+    let project = { ...data, kind: data.kind ?? 'repo' };
+    if (managed) {
+      if (project.repository_url)
+        project.repository_url = resolveRegistrationUrl(
+          project.repository_url,
+          project.default_cwd
+        );
+      const segments = project.name.split('/');
+      if (segments.length > 2 && segments.every(segment => parseOwnerRepo(`owner/${segment}`))) {
+        project.name = `${segments[0]}/${segments.slice(1).join('-')}`;
+      }
+      const name = allocateProjectName(project, registered.rows);
+      const identity = parseOwnerRepo(name);
+      project = {
+        ...project,
+        name,
+        default_cwd: identity
+          ? getProjectSourcePath(identity.owner, identity.repo)
+          : project.default_cwd,
+      };
+    }
+    await assertProjectRegistrationAvailable(project, registered.rows);
+    return query<Codebase>(
+      'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [
+        project.name,
+        project.repository_url ?? null,
+        project.default_cwd,
+        project.default_branch ?? null,
+        project.ai_assistant_type ?? null,
+        project.kind,
+      ]
+    );
+  });
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
   }
@@ -64,6 +119,29 @@ export async function createCodebase(data: CreateCodebaseInput): Promise<Codebas
   // chat command) funnels through this INSERT — no name/path/URL is ever sent.
   captureCodebaseRegistered();
   return validateCodebase(result.rows[0]);
+}
+
+export async function removeUnregisteredCheckout(
+  path: string,
+  remove: () => Promise<void>
+): Promise<void> {
+  // SQLite may retry a transaction after COMMIT; filesystem removal must run only once.
+  let removed = false;
+  await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
+    } else {
+      // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
+      await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
+    }
+    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
+    if (!removed && !(await isCheckoutRegistered(path, registered.rows))) {
+      await remove();
+      removed = true;
+    }
+  });
 }
 
 export async function getCodebase(id: string): Promise<Codebase | null> {
@@ -117,7 +195,9 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
     [repoUrl]
   );
   const row = result.rows[0];
-  return row ? validateCodebase(row) : null;
+  if (row) return validateCodebase(row);
+  const owner = await findRemoteOwner(await listCodebaseClaims(), repoUrl);
+  return owner && validateCodebase(owner);
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {
@@ -255,12 +335,8 @@ export class CodebaseStorageIdentityChangeError extends Error {
   }
 }
 
-/**
- * Names the transaction-scoped advisory lock that serializes codebase renames
- * on PostgreSQL. Hashed like the state-document locks, so no numeric key has to
- * be kept apart from the others by hand.
- */
-const CODEBASE_RENAME_LOCK = JSON.stringify(['codebase-rename']);
+// Retain the shipped rename lock key so registrations serialize with older binaries' renames too.
+const CODEBASE_IDENTITY_LOCK = JSON.stringify(['codebase-rename']);
 
 /**
  * Change a codebase's display name.
@@ -295,7 +371,9 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
 
   const result = await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'postgresql') {
-      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [CODEBASE_RENAME_LOCK]);
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        CODEBASE_IDENTITY_LOCK,
+      ]);
     }
     return query(
       `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
@@ -310,11 +388,20 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
   return renamed;
 }
 
-export async function listCodebases(): Promise<readonly Codebase[]> {
+/**
+ * Every row as stored, including one whose stored path no longer validates.
+ * Name, storage and remote-ownership scans read these, so an unreadable project
+ * fails only lookups that resolve to it.
+ */
+export async function listCodebaseClaims(): Promise<readonly Codebase[]> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
   );
-  return result.rows.map(validateCodebase);
+  return result.rows;
+}
+
+export async function listCodebases(): Promise<readonly Codebase[]> {
+  return (await listCodebaseClaims()).map(validateCodebase);
 }
 
 export async function deleteCodebase(

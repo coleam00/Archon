@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { test, mock, expect, afterAll } from 'bun:test';
+import { test, mock, expect, beforeEach, afterAll } from 'bun:test';
 import { mkdtemp, mkdir, realpath, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -36,6 +36,12 @@ mock.module('./connection', () => ({
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
+
+beforeEach(async () => {
+  const codebases = await import('./codebases');
+  for (const { id } of await codebases.listCodebaseRegistrations())
+    await codebases.deleteCodebase(id);
+});
 
 test('SQLite rejects legacy paths and preserves registration identity on explicit repair', async () => {
   await verifyCodebasePathContract(db);

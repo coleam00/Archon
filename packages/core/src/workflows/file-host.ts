@@ -24,6 +24,11 @@ import {
 } from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
+import { isCheckoutRegistered } from '../services/project-registration-identity';
+import {
+  findRemoteOwner,
+  assertProjectRegistrationAvailable,
+} from '../services/registration-remote';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
@@ -107,6 +112,8 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       getCodebase: async id => (await readPublicCodebases()).find(row => row.id === id) ?? null,
       listCodebases: async () =>
         (await readPublicCodebases()).sort((a, b) => a.name.localeCompare(b.name)),
+      // The document is validated whole on every read, so it never holds an unreadable row.
+      listCodebaseClaims: async () => readPublicCodebases(),
       findCodebaseByDefaultCwd: async cwd =>
         (await readPublicCodebases())
           .filter(row => row.default_cwd === cwd)
@@ -119,8 +126,16 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         (await readPublicCodebases())
           .filter(row => row.name === name)
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
-      findCodebaseByRepoUrl: async url =>
-        (await readPublicCodebases()).find(row => row.repository_url === url) ?? null,
+      findCodebaseByRepoUrl: async url => {
+        const rows = await readPublicCodebases();
+        return rows.find(row => row.repository_url === url) ?? findRemoteOwner(rows, url);
+      },
+      removeUnregisteredCheckout: async (path, remove) => {
+        await commit(root, [], async () => {
+          if (!(await isCheckoutRegistered(path, await codebases()))) await remove();
+          return { result: undefined, changes: {} };
+        });
+      },
       createCodebase: async input => {
         assertAbsoluteDefaultCwd(input.default_cwd, input.name);
         const row = {
@@ -135,10 +150,14 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           created_at: new Date(),
           updated_at: new Date(),
         };
-        await commit(root, [], async () => ({
-          result: undefined,
-          changes: { documents: { 'host/codebases.json': [...(await codebases()), row] } },
-        }));
+        await commit(root, [], async () => {
+          const registered = await codebases();
+          await assertProjectRegistrationAvailable(row, registered);
+          return {
+            result: undefined,
+            changes: { documents: { 'host/codebases.json': [...registered, row] } },
+          };
+        });
         captureCodebaseRegistered();
         return codebaseRowSchema.parse(row);
       },

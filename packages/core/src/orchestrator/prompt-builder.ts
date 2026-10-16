@@ -346,7 +346,8 @@ ${rule4}
 To remove a registered project:
    /remove-project {project-name}
 
-IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
+Before cloning, choose an unoccupied source path. Prefer ${workspaces}/{owner}/{repo}/source; if occupied, choose a readable suffix such as ${workspaces}/{owner}/{repo}-2/source. Honor a user-specified location, but never overwrite an occupied checkout.
+Use the name returned by registration for subsequent workflow and project commands; registration may add a suffix. Two clones of one registered remote cannot be separate projects; use worktrees for parallel checkouts.`;
 
   if (channel === 'tools') {
     const invokeExample = {
@@ -393,8 +394,8 @@ A folder project may itself be a git repository. Git belongs to the user and age
 Without \`folder\`, git paths are repo projects and non-git paths are folder projects.
 
 When a user asks to clone a new repository:
-1. Clone the repository into ${workspaces}/:
-   git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
+1. Following the path guidance below, choose an unoccupied source path under ${workspaces}/:
+   git clone https://github.com/{owner}/{repo} "{unoccupied-source-path}"
 2. Register it by calling \`register_project\` with the project name and the path to \`source\`, e.g.
    register_project(${REGISTER_PROJECT_SCHEMA.required.map(name => `${name}: "${registerExample[name]}"`).join(', ')})
 
@@ -437,8 +438,8 @@ A folder project may itself be a git repository. Git belongs to the user and age
 Without --folder, git paths are repo projects and non-git paths are folder projects.
 
 When a user asks to clone a new repository:
-1. Clone the repository into ${workspaces}/:
-   git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
+1. Following the path guidance below, choose an unoccupied source path under ${workspaces}/:
+   git clone https://github.com/{owner}/{repo} "{unoccupied-source-path}"
 2. Register it by emitting this command on its own line:
    /register-project {project-name} {path-to-source}
 

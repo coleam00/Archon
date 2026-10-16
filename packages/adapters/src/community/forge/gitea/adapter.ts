@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
@@ -23,6 +24,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -31,7 +33,6 @@ import {
   addSafeDirectory,
   toRepoPath,
   toBranchName,
-  isWorktreePath,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -485,23 +486,23 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Ensure repository is cloned and ready.
    * Uses @archon/git functions for safe, testable git operations.
    *
-   * For new codebases: clone (directory won't exist)
-   * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
+   * Without a checkout (no source/ or an empty one): clone
+   * With content (a checkout, or a registered subdirectory of one): sync if
+   * shouldSync=true, skip if shouldSync=false
    *
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing checkout (pass true to ensure latest code)
    */
   private async ensureRepoReady(
     owner: string,
     repo: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    // Check if directory exists
-    let directoryExists = false;
+    const { name: projectName, default_cwd: repoPath } = codebase;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -512,10 +513,9 @@ export class GiteaAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -535,7 +535,9 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Parse URL to get host for authenticated clone
     const urlObj = new URL(this.baseUrl);
@@ -642,12 +644,14 @@ export class GiteaAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
-        getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
+      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
+        getLog().info(
+          { codebaseName: existing.name, canonicalPath: checkout },
+          'stale_worktree_path_fixed'
+        );
       }
 
       getLog().info(
@@ -657,15 +661,14 @@ export class GiteaAdapter implements IPlatformAdapter {
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    // Include owner in name to distinguish repos with same name from different owners
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info({ codebaseName: codebase.name, path: codebase.default_cwd }, 'codebase_created');
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   /**
@@ -844,7 +847,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     const defaultBranch = event.repository.default_branch;
 
     // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
 
     const existingConv = await db.getOrCreateConversation(
       giteaPolicy.id,

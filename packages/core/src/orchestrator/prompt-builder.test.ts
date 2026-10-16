@@ -306,8 +306,10 @@ describe('workspaces root in the prompt', () => {
     }
     for (const prompt of [...commandPrompts, ...toolPrompts]) {
       expect(prompt).toContain(`Your working directory is ${root}/`);
+      expect(prompt).toContain('choose an unoccupied source path');
+      expect(prompt).toContain('Use the name returned by registration');
       expect(prompt).toContain(
-        `git clone https://github.com/{owner}/{repo} "${root}/{owner}/{repo}/source"`
+        `git clone https://github.com/{owner}/{repo} "{unoccupied-source-path}"`
       );
     }
     for (const prompt of commandPrompts) {

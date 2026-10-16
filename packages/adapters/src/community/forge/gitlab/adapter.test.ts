@@ -3,8 +3,11 @@
  *
  * Runs in its own test batch to avoid mock.module pollution with other adapters.
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
@@ -28,6 +31,9 @@ function makeFetchMock(response: Response): FetchMock {
   );
 }
 
+const paths = await import('@archon/paths');
+const git = await import('@archon/git');
+
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -44,6 +50,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -75,7 +82,9 @@ const mockGetOrCreateConversation = mock(
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  typeof import('@archon/core/db/conversations')['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -88,15 +97,17 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   updateCodebase: mockUpdateCodebase,
@@ -119,20 +130,21 @@ mock.module('@archon/core', () => ({
   },
 }));
 
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
+  ok: true,
+  value: undefined,
+}));
+
 // Mock @archon/git
 mock.module('@archon/git', () => ({
-  cloneRepository: mock(async () => ({ ok: true })),
+  ...git,
+  cloneRepository: mockCloneRepository,
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),
   toRepoPath: mock((p: string) => p),
   toBranchName: mock((b: string) => b),
   isWorktreePath: mock(async () => false),
   execFileAsync: mock(async () => ({ stdout: '', stderr: '' })),
-}));
-
-// Mock @archon/isolation
-mock.module('@archon/isolation', () => ({
-  IsolationHints: {},
 }));
 
 // Mock global fetch to prevent real HTTP calls (gitlab.example.com hangs on CI Linux)
@@ -232,6 +244,129 @@ describe('GitLabAdapter', () => {
       { gitlabUrl: 'https://gitlab.example.com' },
       'gitlab.adapter_initialized'
     );
+  });
+
+  test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'bare-project',
+      name: 'local-api',
+      default_cwd: '/repos/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
+    // @ts-expect-error - exercise the private registration boundary
+    await expect(adapter.getOrCreateCodebaseForRepo('testuser/testrepo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/repos/worktrees/old');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+    const adapter = createAdapter();
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'testuser/testrepo-2',
+      default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    });
+    // @ts-expect-error - exercise the private registration boundary
+    const result = await adapter.getOrCreateCodebaseForRepo('testuser/testrepo');
+    expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+    expect(result.codebase.default_cwd).toBe(result.repoPath);
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(expect.objectContaining({ id: 'allocated' }), {
+      default_cwd: result.repoPath,
+    });
+  });
+
+  test('refuses legacy nested repair without changing its storage identity', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'nested',
+      name: 'group/subgroup/repo',
+      default_cwd: '/tmp/test-workspaces/group/subgroup/repo/worktrees/old',
+      repository_url: 'https://gitlab.example.com/group/subgroup/repo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
+    // @ts-expect-error - exercise the private registration boundary
+    await expect(adapter.getOrCreateCodebaseForRepo('group/subgroup/repo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/tmp/test-workspaces/group/subgroup/repo/worktrees/old');
+    expect(existing.name).toBe('group/subgroup/repo');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('webhook clones an absent saved checkout before dispatch', async () => {
+    const adapter = createAdapter();
+    const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'saved-project',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: 'https://gitlab.example.com/mygroup/myproject',
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-saved',
+      codebase_id: 'saved-project',
+      cwd: path,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockHandleMessage.mockClear();
+    mockCloneRepository.mockClear();
+    mockCloneRepository.mockImplementationOnce(async () => {
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      return { ok: true, value: undefined };
+    });
+
+    await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+    expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+    expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+      'https://gitlab.example.com/mygroup/myproject.git',
+      path,
+    ]);
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('allocated checkout path reaches preparation and conversation storage', async () => {
+    const adapter = createAdapter();
+    const path = '/tmp/test-workspaces/mygroup/myproject-2/source';
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: null,
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-allocated',
+      codebase_id: null,
+      cwd: null,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockUpdateConversation.mockResolvedValueOnce(undefined);
+    // @ts-expect-error - observe the private checkout boundary
+    const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+    try {
+      await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+      expect(prepare).toHaveBeenCalledWith(
+        'mygroup/myproject',
+        'main',
+        expect.objectContaining({ default_cwd: path }),
+        true
+      );
+      expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+        codebase_id: 'allocated',
+        cwd: path,
+      });
+    } finally {
+      prepare.mockRestore();
+    }
   });
 
   test.each(['own', 'marked'])('suppresses %s comments without logging identities', async kind => {
