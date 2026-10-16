@@ -390,7 +390,7 @@ The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
 "in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
-The predicate only saves runs; intake ignores any other label.
+The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
 ### The backlog bench
 
