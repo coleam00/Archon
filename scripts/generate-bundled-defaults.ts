@@ -79,14 +79,18 @@ async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<voi
   }
 }
 
+function renderEntries(entries: readonly (readonly [string, unknown])[], indent = '  '): string {
+  // Blank separators let edits to neighboring existing entries merge independently.
+  return entries
+    .map(([name, value]) => `${indent}${JSON.stringify(name)}: ${JSON.stringify(value)},`)
+    .join('\n\n');
+}
+
 function renderRecord(comment: string, exportName: string, files: BundledFile[]): string {
-  const entries = files
-    .map(f => `  ${JSON.stringify(f.name)}: ${JSON.stringify(f.content)},`)
-    .join('\n');
   return [
-    `// ${comment} (${files.length} total)`,
+    `// ${comment}`,
     `export const ${exportName}: Record<string, string> = {`,
-    entries,
+    renderEntries(files.map(f => [f.name, f.content])),
     '};',
   ].join('\n');
 }
@@ -98,14 +102,34 @@ function renderMapRecord<T>(
   entries: ReadonlyMap<string, T>,
   recordType = `Record<string, ${typeName}>`
 ): string {
-  const rendered = [...entries.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => `  ${JSON.stringify(name)}: ${JSON.stringify(value)},`)
-    .join('\n');
   return [
-    `// ${comment} (${entries.size} total)`,
+    `// ${comment}`,
     `export const ${exportName}: ${recordType} = {`,
-    rendered,
+    renderEntries([...entries].sort(([a], [b]) => a.localeCompare(b))),
+    '};',
+  ].join('\n');
+}
+
+function renderScriptPacks(packs: ReadonlyMap<string, BundledScriptPack>): string {
+  return [
+    '// Bundled script packs',
+    'export const BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> = {',
+    [...packs]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, pack]) =>
+        [
+          `  ${JSON.stringify(name)}: {`,
+          ...Object.entries(pack).map(([field, entries]) =>
+            [
+              `    ${JSON.stringify(field)}: {`,
+              renderEntries(Object.entries(entries), '      '),
+              '    },',
+            ].join('\n')
+          ),
+          '  },',
+        ].join('\n')
+      )
+      .join('\n\n'),
     '};',
   ].join('\n');
 }
@@ -159,12 +183,7 @@ function renderFile(
       'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>'
     ),
     '',
-    renderMapRecord(
-      'Bundled script packs',
-      'BUNDLED_SCRIPT_PACKS',
-      'BundledScriptPack',
-      scriptPacks
-    ),
+    renderScriptPacks(scriptPacks),
     '',
   ].join('\n');
 }
