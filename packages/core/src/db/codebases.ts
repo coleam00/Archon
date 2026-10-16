@@ -105,7 +105,7 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
           : project.default_cwd,
       };
     }
-    assertProjectRegistrationAvailable(project, registered.rows);
+    await assertProjectRegistrationAvailable(project, registered.rows);
     return query<Codebase>(
       'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [

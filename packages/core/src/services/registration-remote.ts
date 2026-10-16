@@ -62,7 +62,7 @@ export async function findRegisteredRemote(
   purpose: 'lookup' | 'registration' = 'lookup',
   cwd = process.cwd()
 ): Promise<Codebase | null> {
-  const identity = remoteIdentity(remoteUrl, cwd);
+  const identity = await remoteIdentity(remoteUrl, cwd);
   const matches: Codebase[] = [];
   const failures: ProjectRegistrationError[] = [];
   for (const project of registered) {
@@ -84,7 +84,7 @@ export async function findRegisteredRemote(
         continue;
       }
     }
-    if (registeredUrl && remoteIdentity(registeredUrl, project.default_cwd) === identity) {
+    if (registeredUrl && (await remoteIdentity(registeredUrl, project.default_cwd)) === identity) {
       matches.push(project);
     }
   }

@@ -146,7 +146,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         };
         await commit(root, [], async () => {
           const registered = await codebases();
-          assertProjectRegistrationAvailable(row, registered);
+          await assertProjectRegistrationAvailable(row, registered);
           return {
             result: undefined,
             changes: { documents: { 'host/codebases.json': [...registered, row] } },

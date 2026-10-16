@@ -10,7 +10,7 @@
  */
 import { describe, test, expect, mock, afterEach, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, realpath, readFile, symlink, writeFile } from 'node:fs/promises';
 import * as fsPromises from 'node:fs/promises';
 import { createFileWorkflowHost } from '../workflows/file-host';
 import { tmpdir } from 'node:os';
@@ -101,6 +101,39 @@ describe('project storage collisions', () => {
         })
       ).rejects.toThrow(firstPath);
       expect(await store.listCodebases()).toHaveLength(2);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    'refuses two clones using physical and symlink paths to one local remote (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const remote = join(root, 'upstream.git');
+      execFileSync('git', ['init', '--bare', '-q', remote]);
+      const alias = join(root, 'alias.git');
+      await symlink(remote, alias);
+      const firstPath = join(root, 'first');
+      const secondPath = join(root, 'second');
+      execFileSync('git', ['clone', '-q', remote, firstPath]);
+      execFileSync('git', ['clone', '-q', alias, secondPath]);
+      const first = await registerInStore(store, firstPath);
+      const owner = await store.getCodebase(first.codebaseId);
+      await expect(registerInStore(store, secondPath)).rejects.toThrow(
+        `Project "${owner?.name}" is already registered at ${firstPath}`
+      );
+      await expect(registerInStore(store, secondPath)).rejects.toThrow('worktrees');
+      await expect(
+        store.createCodebase({
+          name: 'bypass',
+          default_cwd: secondPath,
+          repository_url: pathToFileURL(alias).href,
+        })
+      ).rejects.toThrow(firstPath);
+      expect(await store.listCodebases()).toHaveLength(1);
     }
   );
 

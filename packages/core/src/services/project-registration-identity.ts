@@ -49,25 +49,25 @@ export async function isCheckoutRegistered(
   return false;
 }
 
-export function assertProjectRegistrationAvailable(
+export async function assertProjectRegistrationAvailable(
   project: ProjectIdentity,
   registered: readonly ProjectIdentity[]
-): void {
+): Promise<void> {
   const remote = project.kind !== 'folder' && project.repository_url;
-  const remoteOwner =
-    remote &&
-    registered.find(
-      existing =>
+  if (remote) {
+    const identity = await remoteIdentity(remote, project.default_cwd);
+    for (const existing of registered) {
+      if (
         existing.kind !== 'folder' &&
         existing.repository_url &&
-        remoteIdentity(existing.repository_url, existing.default_cwd) ===
-          remoteIdentity(remote, project.default_cwd)
-    );
-  if (remoteOwner) {
-    throw new Error(
-      `Project "${remoteOwner.name}" is already registered at ${remoteOwner.default_cwd}. ` +
-        'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
-    );
+        (await remoteIdentity(existing.repository_url, existing.default_cwd)) === identity
+      ) {
+        throw new Error(
+          `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +
+            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+        );
+      }
+    }
   }
   const root = storageRoot(project).toLowerCase();
   const conflict = registered.find(
@@ -117,9 +117,10 @@ export function resolveRegistrationUrl(url: string, cwd: string): string {
 }
 
 /** Compare transport spellings without conflating hosts, ports or case-sensitive repo paths. */
-export function remoteIdentity(url: string, cwd = process.cwd()): string {
+export async function remoteIdentity(url: string, cwd = process.cwd()): Promise<string> {
   url = resolveRegistrationUrl(url, cwd);
-  if (isAbsolute(url)) return `file:${url}`;
+  // Missing local targets retain their stored spelling; access errors must surface.
+  if (isAbsolute(url)) return `file:${(await existingPhysicalPath(url)) ?? url}`;
   const cleaned = url
     .trim()
     .replace(/\/+$/, '')
