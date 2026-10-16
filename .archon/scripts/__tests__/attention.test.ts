@@ -133,9 +133,9 @@ it('a workflow that composes a stage includes its block, so it never raises a se
       ...[node.include, node.workflow].filter(target => target !== undefined),
       ...targets(node.loop_group?.nodes ?? []),
     ]);
-  const composers = readdirSync(PACK, { recursive: true, encoding: 'utf8' }).filter(
-    path => path.endsWith('.yaml') && !path.includes('fixtures/') && !path.split('/')[0].endsWith('-entry')
-  );
+  const composers = readdirSync(PACK, { recursive: true, encoding: 'utf8' })
+    .map(path => path.replaceAll('\\', '/'))
+    .filter(path => path.endsWith('.yaml') && !path.includes('fixtures/') && !path.split('/')[0].endsWith('-entry'));
   const composed = composers.flatMap(path => targets(read(path).nodes ?? []).map(target => `${path}: ${target}`));
   expect(composed).toContain('merge-queue/archon-merge-queue.yaml: archon-review-block');
   expect(composed.filter(entry => pauses.has(entry.split(': ')[1]))).toEqual([]);
