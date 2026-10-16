@@ -689,10 +689,12 @@ cannot safely signal that group again and reports failure. A process that starts
 session or process group (`setsid`, a daemon) escapes this cleanup. On Windows, cleanup
 uses the node root to end its tree; descendants whose root already exited may be unreachable.
 
-Host `bash:` and `script:` bodies have no owner-death watcher. Abrupt owner death
-(terminal hangup, a second Ctrl-C, or `kill -9`) can leave those bodies running; stop them
-before resuming or replacing the run. A run whose stop was never recorded stays `running`.
-The legacy `until_bash` path has separate interruption behavior.
+Host `bash:` and `script:` bodies have no owner-death watcher: an independent watcher
+could signal a stored process group after its leader exits, violating the cleanup safety
+rule above. Abrupt owner death (terminal hangup, a second Ctrl-C, or `kill -9`) can leave
+those bodies running; stop them before resuming or replacing the run. A run whose stop
+was never recorded stays `running`. The legacy `until_bash` path has separate interruption
+behavior.
 
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
