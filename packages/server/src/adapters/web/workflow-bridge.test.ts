@@ -338,3 +338,22 @@ test.each([
     expect(mapped).not.toContain('MESSAGE_SENTINEL');
   }
 );
+
+test('persisted source release pauses the dashboard and remains in the poller subscription', () => {
+  expect(DASHBOARD_SOURCE_EVENT_TYPES).toContain('source_released');
+  const mapped = mapWorkflowEventRow({
+    id: 'source-event',
+    workflow_run_id: 'released-run',
+    event_type: 'source_released',
+    step_index: null,
+    step_name: 'check',
+    created_at: new Date().toISOString(),
+    data: { path: 'PRIVATE_SOURCE_PATH' },
+  });
+  expect(JSON.parse(mapped!)).toMatchObject({
+    type: 'workflow_status',
+    runId: 'released-run',
+    status: 'paused',
+  });
+  expect(mapped).not.toContain('PRIVATE_SOURCE_PATH');
+});
