@@ -13,6 +13,8 @@ import {
   inputEnvVars,
   certifyExecOutput,
   nodeTemplateReferences,
+  substituteNodeOutputRefs,
+  substituteWaitMessage,
   resolveNodeBindings,
   resolveAttentionOptions,
   substituteLoopBodyText,
@@ -1225,7 +1227,13 @@ async function simulateNode(
     if (isWaitNode(node)) {
       const condition = waitCondition(node.wait);
       const resolvedText =
-        condition.kind === 'attention' ? resolveText(condition.message, ctx, outputs) : undefined;
+        condition.kind === 'attention'
+          ? substituteWaitMessage(
+              condition.message,
+              { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
+              ctx.inputs
+            ).trim()
+          : undefined;
       // An authored stub answers an attention wait, as an answer completes it in a real
       // run. Without one the simulation stops where the run would pause.
       const answer =
@@ -1261,7 +1269,7 @@ async function simulateNode(
       return;
     }
     if (isGateNode(node)) {
-      const resolvedText = resolveText(node.message, ctx, outputs);
+      const resolvedText = substituteNodeOutputRefs(node.message, outputs, ctx.loopBodyScopes);
       if (ctx.pauseAtGates) {
         outputs.set(node.id, { state: 'pending', output: '' });
         ctx.trace.push({
@@ -1288,7 +1296,7 @@ async function simulateNode(
       return;
     }
     if (isHaltNode(node)) {
-      const resolvedText = resolveText(node.reason, ctx, outputs);
+      const resolvedText = substituteNodeOutputRefs(node.reason, outputs, ctx.loopBodyScopes);
       outputs.set(node.id, { state: 'completed', output: resolvedText });
       ctx.trace.push({
         nodeId: node.id,

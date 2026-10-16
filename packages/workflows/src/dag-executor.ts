@@ -1684,6 +1684,20 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Substitute an attention wait's message: node outputs, enclosing loop scopes and
+ * `$INPUTS`, and no other workflow variable. The dry run renders the same field through
+ * this function so its preview cannot drift from what the operator receives.
+ */
+export function substituteWaitMessage(
+  text: string,
+  sources: TemplateSources,
+  inputs: Record<string, JsonValue> | undefined
+): string {
+  const { before, after } = nodeTemplateReferences(text, sources);
+  return substituteTemplate(text, [...before, inputRefToken(inputs), ...after]);
+}
+
+/**
  * Collect the static ids of every node in a loop_group body, recursing into nested
  * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
  * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
@@ -7093,14 +7107,8 @@ async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string => {
-    const { before, after } = nodeTemplateReferences(text, ctx);
-    return substituteTemplate(text, [
-      ...before,
-      inputRefToken(resolveRunInputs(workflowRun)),
-      ...after,
-    ]);
-  };
+  const resolveEventText = (text: string): string =>
+    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;

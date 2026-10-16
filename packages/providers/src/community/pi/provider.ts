@@ -43,6 +43,7 @@ import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 import { Semaphore } from './semaphore';
+import { PI_AUTH_PATH_ENV } from './auth-path-env';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -478,6 +479,26 @@ function piNotConnectedMessage(providerId: string): string {
 }
 
 /**
+ * The auth store a Pi call for `provider` reads: Archon's per-run file when it holds a
+ * delivered credential for that provider, otherwise none (Pi's own auth.json).
+ *
+ * Pi reads exactly one store, and the per-run file holds only Archon's deliveries, so
+ * using it for every provider would hide the user's `pi /login` for the others. Core
+ * keys the file by Pi provider id (vendor ids are Pi provider ids), the same key Pi
+ * reads, so an exact lookup is the whole test.
+ */
+function deliveredAuthPathFor(
+  provider: string,
+  deliveredAuthPath: string | undefined,
+  readStoredCredential: (providerId: string, authPath: string) => unknown
+): string | undefined {
+  return deliveredAuthPath !== undefined &&
+    readStoredCredential(provider, deliveredAuthPath) !== undefined
+    ? deliveredAuthPath
+    : undefined;
+}
+
+/**
  * The ModelRuntime a Pi turn authenticates with. The login check builds the same one, so
  * both read the same auth file and models config and see the same model catalog.
  *
@@ -490,7 +511,9 @@ function piNotConnectedMessage(providerId: string): string {
  *
  * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
- * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
+ * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The file is
+ * used only for a provider it holds an entry for; any other provider reads the user's own
+ * auth.json, so the login check and the turn pick the same store. The path rides
  * the per-call env (the executor's per-user injection never writes to process.env), which
  * `piAuthEnv` layers over process.env for a shell-level override.
  *
@@ -507,9 +530,18 @@ async function createPiModelRuntime(
   authEnv: PiAuthEnv,
   signal?: AbortSignal
 ): Promise<RequestModelRuntime> {
+  // Pi reads exactly one auth store. The per-run file holds only Archon's delivered
+  // credentials, so it is used only when it holds one for this provider; otherwise Pi
+  // reads the user's own auth.json, with its own locking and refresh write-back, so a
+  // `pi /login` for this backend keeps working beside a credential delivered for another.
+  const authPath = deliveredAuthPathFor(
+    provider,
+    authEnv.credentialEnv[PI_AUTH_PATH_ENV]?.trim() || undefined,
+    piCodingAgent.readStoredCredential
+  );
   return createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
-    authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined,
+    authPath,
     PI_PROVIDER_ENV_VARS[provider]
       ? undefined
       : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }

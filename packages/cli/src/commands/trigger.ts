@@ -9,8 +9,14 @@ import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
+  ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
@@ -90,6 +96,24 @@ export async function spawnAdmitted(
   } finally {
     await log.close();
   }
+}
+
+/**
+ * The messages behind drain failures, for the operator's terminal. The store keeps only
+ * the failed stage because configuration and provider errors can carry credentials, so
+ * the text is redacted with the same policy as subprocess output before it is shown.
+ * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
+ */
+function drainFailureReasons(errors: readonly unknown[]): string {
+  const messages = (error: unknown): string[] =>
+    error instanceof AggregateError
+      ? error.errors.flatMap(messages)
+      : [error instanceof Error ? error.message : String(error)];
+  const credentials = collectCredentialValues(process.env);
+  return errors
+    .flatMap(messages)
+    .map(message => sanitizeCredentials(redactCredentialValues(message, credentials)))
+    .join('; ');
 }
 
 function drainHost(
@@ -207,9 +231,26 @@ export async function triggerCommand(
       });
       for (const hostId of new Set(hostIds)) await drainHost(host, hostId, dispatch);
     } catch (error) {
-      throw new Error(
-        `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
-        { cause: error }
+      if (!(error instanceof ResourceStartDrainError)) {
+        throw new Error(
+          `Receipt ${receipt.receiptId} is retained, but its host drain failed: ${drainFailureReasons([error])}. Inspect that receipt before recovery.`,
+          { cause: error }
+        );
+      }
+      // Other pending work on the host can fail in the same drain; only this receipt's
+      // failures are this command's failure.
+      // A failure with no receipt id could be this one, so it counts as ours.
+      const others = error.failures.filter(
+        failure => failure.receiptId !== undefined && failure.receiptId !== receipt.receiptId
+      );
+      const own = error.failures.filter(failure => !others.includes(failure));
+      if (own.length > 0)
+        throw new Error(
+          `Receipt ${receipt.receiptId} is retained, but its host drain failed: ${drainFailureReasons(own.map(failure => failure.error))}. Inspect that receipt before recovery.`,
+          { cause: error }
+        );
+      process.stderr.write(
+        `Warning: ${String(others.length)} other start(s) on this host failed and are not part of receipt ${receipt.receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
       );
     }
     await writeJsonLine(await host.deps.store.getStartReceipt(receipt.receiptId));

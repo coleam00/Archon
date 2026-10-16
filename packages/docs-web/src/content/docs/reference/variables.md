@@ -336,8 +336,8 @@ These are standard environment variables read from `process.env` at clone time. 
 | `GH_TOKEN` | GitHub personal access token for authenticated clone operations |
 | `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated clones from `gitlab.com` or the `GITLAB_URL` host |
 | `GITEA_TOKEN` | Gitea API token for authenticated clones from `gitea.com` or the `GITEA_URL` or `FORGEJO_URL` host |
-| `GITLAB_URL` | Base URL of a self-hosted GitLab (e.g. `https://gitlab.example.com`). Clones from this exact host and port use `GITLAB_TOKEN` |
-| `GITEA_URL` | Base URL of a self-hosted Gitea. Clones from this exact host and port use `GITEA_TOKEN` |
-| `FORGEJO_URL` | Base URL of a self-hosted Forgejo. Clones from this exact host and port use `GITEA_TOKEN` |
+| `GITLAB_URL` | Base URL of a self-hosted GitLab (e.g. `https://gitlab.example.com`). Clones with this exact scheme, host and port use `GITLAB_TOKEN` |
+| `GITEA_URL` | Base URL of a self-hosted Gitea. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
+| `FORGEJO_URL` | Base URL of a self-hosted Forgejo. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
 
-A forge token is sent only to the host it is configured for. A hostname that merely contains `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.
+A forge token is sent only to the host it is configured for, and only over the scheme it is configured for: HTTPS for `github.com`, `gitlab.com` and `gitea.com`, and the `*_URL`'s own scheme for a self-hosted instance. An `http://` clone of an HTTPS forge gets no token. A hostname that merely contains `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.

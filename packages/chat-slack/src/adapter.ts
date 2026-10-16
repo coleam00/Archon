@@ -227,7 +227,7 @@ export class SlackAdapter {
         text:
           kind === 'archon'
             ? 'Usage: `/archon <message>` — talk to Archon in this channel.'
-            : 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.',
+            : 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.',
       });
       return;
     }

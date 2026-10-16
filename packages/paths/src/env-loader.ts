@@ -29,6 +29,7 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
+import { applyEnvLogLevel } from './logger';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -96,6 +97,7 @@ export function loadArchonEnv(
   options: { afterUserLoad?: () => void; env?: NodeJS.ProcessEnv } = {}
 ): void {
   const env = options.env ?? process.env;
+  const logLevelBefore = process.env.LOG_LEVEL;
   const homePath = getArchonEnvPath(env);
   if (existsSync(homePath)) {
     const result = config({ path: homePath, processEnv: env, override: true, quiet: true });
@@ -142,6 +144,9 @@ export function loadArchonEnv(
       );
     }
   }
+
+  // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
+  if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
 }
 
 function envFileKeyNames(path: string): string[] {

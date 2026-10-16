@@ -149,7 +149,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
       header +
       `Run \`${runId}\` (**${workflowName}**) is paused, but its approval context is ` +
       'missing or malformed, so the gate cannot be described. Do not resolve it. ' +
-      `Tell the user to inspect it with \`${cmd(`status ${runId}`)}\` before choosing an action` +
+      `Tell the user to inspect it with \`${cmd(`get ${runId}`)}\` before choosing an action` +
       (isRejectableUnreadableGate(gate.run, attention)
         ? `; if it should not continue, they can reject it with \`${cmd(`reject ${runId} <reason>`)}\`.`
         : '.')

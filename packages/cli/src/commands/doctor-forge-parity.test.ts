@@ -35,6 +35,19 @@ const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({ type: 'pkcs1', format: 'pem' })
   .toString();
 const setups = [
+  ...(['gh', 'forge'] as const).map(source => ({
+    name: `unconnected per-user ${source}`,
+    source,
+    login: true,
+    app: true,
+    perUser: true,
+    repoToken: 'host-repository-token',
+    ok: false,
+    detail:
+      source === 'gh'
+        ? 'connect it with'
+        : 'credential environment GH_TOKEN or GITHUB_TOKEN is empty',
+  })),
   {
     name: 'workflow login directory',
     source: 'forge',
@@ -120,6 +133,9 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
     SystemRoot: process.env.SystemRoot,
     OPENAI_API_KEY: 'fixture-openai-key',
+    ...('perUser' in setup
+      ? { TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32), ARCHON_USER_ID: 'fixture-user' }
+      : {}),
   };
   for (const args of [
     ['init'],
@@ -235,7 +251,10 @@ test.skipIf(skip).each(setups)('$name: doctor and run preflight agree', async se
       await host.records.codebases.createCodebase({name:'fixture',kind:'repo',default_cwd:await canonicalizeProjectPath(process.cwd()),repository_url:'https://github.com/example/repo.git'});
     }
     const { codebase } = await resolveCodebaseForPath(process.cwd(), host.records.codebases);
-    const github = await resolveWorkflowGithubEnvironment(host.deps, codebase?.id, undefined, config);
+    const user = ${'perUser' in setup}
+      ? await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'fixture-user', 'fixture-user')
+      : undefined;
+    const github = await resolveWorkflowGithubEnvironment(host.deps, codebase?.id, user?.id, config);
     const run = await host.deps.store.createWorkflowRun({ workflow_name: 'forge-parity', user_message: '' });
     const child = Bun.spawn([${JSON.stringify(process.execPath)}, '--no-env-file', ${JSON.stringify(preflight)}], {
       env: {...process.env, ...github.envVars, WORKFLOW_ID: run.id, ARCHON_CLI_COMMAND: ${JSON.stringify(JSON.stringify([process.execPath, '--no-env-file', cli]))}},

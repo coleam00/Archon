@@ -4,7 +4,7 @@ import { loadArchonEnv } from '@archon/paths/env-loader';
  * Load ~/.archon/.env and <cwd>/.archon/.env into the supplied environment, and
  * return the environment forge plugin processes run with.
  *
- * Inside a run, a GitHub key the engine set (a token, or '' to scrub it) is the run's
+ * Inside a run, a token or stored-login redirect the engine set carries the run's
  * identity; neither Archon env file may replace or restore it. An absent key is no
  * opinion, so the env files still supply it (see github-token-policy). Imported only
  * for a workflow identity: CLI startup must not load workflow modules otherwise
@@ -17,12 +17,12 @@ export async function loadCliEnv(
   const env = options.env ?? process.env;
   const runGithubCredentials =
     (options.preserveGithubCredentials ?? Boolean(env.WORKFLOW_ID))
-      ? (await import('@archon/workflows/utils/github-token-policy')).GITHUB_TOKEN_KEYS.flatMap(
-          key => {
-            const value = env[key];
-            return value === undefined ? [] : [[key, value] as const];
-          }
-        )
+      ? (
+          await import('@archon/workflows/utils/github-token-policy')
+        ).RUN_GITHUB_IDENTITY_KEYS.flatMap(key => {
+          const value = env[key];
+          return value === undefined ? [] : [[key, value] as const];
+        })
       : [];
   let forgeTrustedEnv: NodeJS.ProcessEnv = {};
   loadArchonEnv(cwd, {

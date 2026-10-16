@@ -57,7 +57,7 @@ Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non
 ## Quick Start
 
 ```bash
-# List available workflows (requires a git repo, a registered folder project, or --folder on first use)
+# List available workflows (requires a git repo or an already registered folder project)
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
@@ -80,7 +80,7 @@ Start workflows from deployment bindings and inspect durable resource admission.
 
 | Command | Behavior |
 | --- | --- |
-| `trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]` | Record a receipt and drain its retained binding host. A delivery key deduplicates event inputs within the source. |
+| `trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]` | Record a receipt and drain its retained binding host. A delivery key deduplicates event inputs within the source. When a binding fails launch preparation, the command exits nonzero and prints the refusal (with `--json`, in `error`); the stored receipt keeps only the failed stage, for example `launch_preparation_failed`. |
 | `trigger drain --host <host-id>` | Prepare persisted starts and admit eligible queued work. |
 | `trigger list [--limit <1-1000>]` | List recent safe receipt summaries (default 50). |
 | `trigger inspect <receipt-or-request-id>` | Show source identity, current disposition, blockers, and recovery guidance. |
@@ -1091,6 +1091,10 @@ archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
 ```
 
+When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
+`workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
+gate on the exit status.
+
 Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
 and a database transition cannot prove that host work stopped. After verifying that the
 owner process is gone, use `workflow abandon <run-id>`.
@@ -1524,14 +1528,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, open-PR, and unmerged/unpushed-commit checks; ownership checks still apply |
 
 Without `--force`, completion refuses an environment a workflow run can still claim, the
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
@@ -1548,8 +1552,11 @@ git fetch --prune origin # replace origin with the configured remote when needed
 archon complete feature-auth
 ```
 
-Completion verifies its patches are already on the configured or detected remote default branch
-before removing it. Accepts multiple branch names in one call.
+Without `--force`, completion checks for unique and unpushed commits before deletion. If the
+branch's remote-tracking ref is missing, it verifies that any unique commits are patch-equivalent
+to the configured base branch or detected remote default branch. With `--force`, these checks
+are skipped, so deletion can discard the only reachable copy of commits. Accepts multiple
+branch names in one call.
 
 ### `serve`
 
