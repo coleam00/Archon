@@ -43630,11 +43630,9 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
   });
 });
 
-// A loop predicate could not declare a time budget: every `until_bash` execution path passed a
-// bare SUBPROCESS_DEFAULT_TIMEOUT while the ordinary bash/script paths already resolved
-// `node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT`. Nodes are built through the real schema, so
-// each test proves the whole chain (schema -> transform -> executor), not just the
-// executor's fallback expression.
+// Every `until_bash` execution path passes the node's own timeout, and only that. Nodes are
+// built through the real schema, so each test proves the whole chain (schema -> transform ->
+// executor).
 describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
   let testDir: string;
 
@@ -43651,15 +43649,15 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
     await removeTempTree(testDir);
   });
 
-  // runSubprocess is local/unexported — spy on the module boundary it actually calls
-  // (@archon/git's execFileAsync), the same way the script-injection tests above do.
+  // Spy on the module boundary runSubprocess calls (@archon/git's execFileAsync), the same
+  // way the script-injection tests above do.
   function spyOnExec() {
     return spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
   }
 
   function untilBashTimeout(execSpy: ReturnType<typeof spyOnExec>): number | undefined {
     const call = execSpy.mock.calls.find(c => (c[1] as string[])[0] === '-c') as
-      | [string, string[], { timeout: number }]
+      | [string, string[], { timeout?: number }]
       | undefined;
     expect(call).toBeDefined();
     return call?.[2]?.timeout;
@@ -43695,11 +43693,7 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
     }
   });
 
-  // Pins the `??` fallback the fix depends on: a loop node with NO declared timeout must
-  // still get SUBPROCESS_DEFAULT_TIMEOUT (120000). Guards against a future edit that
-  // replaces the resolution with a bare `node.timeout`, which would silently break every
-  // undeclared-timeout loop in every workflow.
-  it('falls back to the 120s default when a loop node declares no timeout', async () => {
+  it('passes no deadline when a loop node declares no timeout', async () => {
     const node = dagNodeSchema.parse({
       id: 'my-loop-no-timeout',
       loop: { prompt: 'Do a task.', until: 'NEVER_EMITTED', until_bash: 'true', max_iterations: 1 },
@@ -43722,7 +43716,7 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
         })
       );
 
-      expect(untilBashTimeout(execSpy)).toBe(120_000);
+      expect(untilBashTimeout(execSpy)).toBeUndefined();
     } finally {
       execSpy.mockRestore();
     }

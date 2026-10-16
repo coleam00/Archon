@@ -250,14 +250,14 @@ loop:
 ended, so a loop declaring more than one never pays for a redundant check.
 
 The check uses the node's `timeout`: a positive, finite number of milliseconds,
-with a default of 120000. This applies to `loop:` and `loop_group:`, including the
+with no limit when omitted. This applies to `loop:` and `loop_group:`, including the
 completion recheck after a group continues past a terminal pause. It limits each check,
-not the AI iteration or the group's body nodes. For a longer test suite, declare
-the budget on the node:
+not the AI iteration or the group's body nodes. To bound a check, declare the budget on
+the node:
 
 ```yaml
 - id: fix-tests
-  timeout: 900000             # The suite takes ~4 min; 120 s would kill the check.
+  timeout: 900000             # The suite takes ~4 min; a hung check fails after 15.
   loop:
     prompt: "Fix the failing tests"
     max_iterations: 5
