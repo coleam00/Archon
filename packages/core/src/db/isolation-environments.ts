@@ -400,10 +400,13 @@ export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays:
  *
  * Run metadata, conversation links, and same-codebase checkout paths all pin
  * estate. Creation proof governs deletion, while any claimable user blocks it.
+ * `excludeRunId` leaves out a run that is still claimable while it decides about
+ * its own environment.
  */
 export async function getLiveRunOwningEnv(
   envId: string,
-  release?: FailedRunRelease
+  release?: FailedRunRelease,
+  excludeRunId?: string
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
@@ -433,6 +436,10 @@ export async function getLiveRunOwningEnv(
       releaseFilter = `AND (r.status NOT IN (${settleable}) OR ${lastActive} IS NULL OR ${lastActive} >= ${threshold})`;
     }
   }
+  const exclusion =
+    excludeRunId === undefined
+      ? ''
+      : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
   const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
@@ -440,6 +447,7 @@ export async function getLiveRunOwningEnv(
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
      WHERE (r.status NOT IN (${unclaimable}))
        ${releaseFilter}
+       ${exclusion}
        AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
          OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
            WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))

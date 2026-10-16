@@ -48,6 +48,7 @@ Archon ships the `sdlc` workflow pack, which covers the software development lif
 | `archon-build-queue` | Work triaged issues to reviewed PRs, asking a person only what the issue and policy don't answer. Started by a trigger binding |
 | `archon-merge-queue` | Merge the PRs the build queue finished once each is reviewed Ready and green at its head, asking a person about the ones policy doesn't clear. Started by a trigger binding |
 | `archon-discoveries` | Drain what finished runs discovered outside their scope into issues, evidence comments, recorded drops or questions for a maintainer |
+| `archon-worktree-cleanup` | Remove worktrees whose pull request merged, across every registered project. Started by hand or by a schedule binding |
 | `archon-investigate` | Prove the root cause of a bug or open question |
 | `archon-plan` | Turn decided intent into an implementable plan |
 | `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |

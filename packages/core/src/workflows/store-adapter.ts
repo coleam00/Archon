@@ -27,8 +27,10 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
+import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
@@ -243,6 +245,55 @@ export function initializeWorkflowGitHubAppAuth(
   return provider;
 }
 
+export interface CompletedRunWorktreeTools {
+  cleanup: typeof import('../services/cleanup-service');
+  store: IIsolationStore;
+  readers: WorktreeOwnershipReaders;
+}
+
+/**
+ * Wire a host's completed-run worktree release. A failed load is reported as a
+ * `check_failed` retention like any other failed check: it runs before the assessment's
+ * own catch, and `assess` must not throw.
+ */
+export function completedRunWorktreeDeps(
+  load: () => Promise<CompletedRunWorktreeTools>
+): NonNullable<WorkflowDeps['completedRunWorktree']> {
+  return {
+    assess: async run => {
+      let tools: CompletedRunWorktreeTools;
+      try {
+        tools = await load();
+      } catch (err) {
+        getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_load_failed');
+        return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
+      }
+      return tools.cleanup.assessCompletedRunWorktree(run, tools.store, tools.readers);
+    },
+    release: async run => {
+      const { cleanup, store, readers } = await load();
+      await cleanup.releaseCompletedRunWorktree(run, store, readers);
+    },
+  };
+}
+
+// Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
+// the isolation provider and repo config.
+const sqlCompletedRunWorktree = completedRunWorktreeDeps(async () => {
+  const [cleanup, isolationDb] = await Promise.all([
+    import('../services/cleanup-service'),
+    import('../db/isolation-environments'),
+  ]);
+  return {
+    cleanup,
+    store: isolationDb.createIsolationStore(),
+    readers: {
+      getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+    },
+  };
+});
+
 /**
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
@@ -277,6 +328,7 @@ export function createWorkflowDeps(
     // on read), or scrub the org/bot token when they haven't connected.
     ...(credentialStore === 'database'
       ? {
+          completedRunWorktree: sqlCompletedRunWorktree,
           isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
           getUserGithubAuthor,
           getUserGithubToken: async (userId: string): Promise<string | undefined> => {
