@@ -458,6 +458,107 @@ describe('installed packs in the catalog', () => {
     }
   }
 
+  for (const reference of [
+    'include',
+    'workflow',
+    'fan-out include',
+    'fan-out workflow',
+    'loop include',
+  ] as const) {
+    const field = reference.includes('workflow') ? 'workflow' : 'include';
+    const callerNodes = (target: string): string => {
+      if (reference === 'loop include') {
+        return `  - id: group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 1
+      nodes:
+        - id: child
+          include: ${target}
+`;
+      }
+      return `  - id: child
+    ${field}: ${target}
+${reference.startsWith('fan-out') ? `    fan_out:\n      items: '["a"]'\n      as: item\n` : ''}`;
+    };
+
+    for (const entrypoint of [false, true]) {
+      test(`ambiguous qualified ${reference} rejects only its caller (${entrypoint ? 'entrypoint/support' : 'two supports'})`, async () => {
+        const requested = 'ACME/review-kit:HeLpEr';
+        await install({
+          id: ID,
+          name: 'review-kit',
+          commit: COMMIT_A,
+          entrypoints: {
+            review: 'review/workflow.yaml',
+            healthy: 'healthy/workflow.yaml',
+            ...(entrypoint ? { helper: 'first/workflow.yaml' } : {}),
+          },
+          files: {
+            'review/workflow.yaml': `name: review\ndescription: Caller\nnodes:\n${callerNodes(requested)}`,
+            'healthy/workflow.yaml':
+              'name: healthy\ndescription: Healthy\nnodes:\n  - id: done\n    bash: echo healthy\n',
+            'first/workflow.yaml':
+              'name: helper\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+            'second/workflow.yaml':
+              'name: HELPER\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
+          },
+        });
+        const catalog = await discover();
+        const errors = catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatchObject({
+          filename: 'acme/review-kit/review/workflow.yaml',
+          errorType: 'validation_error',
+        });
+        expect(errors[0].error).toContain(`Ambiguous workflow '${requested}'`);
+        expect(errors[0].error).toContain('acme/review-kit:helper');
+        expect(errors[0].error).toContain('acme/review-kit:HELPER');
+        expect(names(catalog.workflows)).not.toContain(REVIEW);
+        expect(names(catalog.workflows)).toContain('acme/review-kit:healthy');
+        await expect(
+          resolveFanOutChildDefinition(
+            { ...deps, providers: providerRegistry },
+            project,
+            'acme/review-kit:healthy'
+          )
+        ).resolves.toMatchObject({ definition: { nodes: [{ script: 'echo healthy' }] } });
+      });
+    }
+
+    test(`missing qualified ${reference} cannot select an authored alias`, async () => {
+      const requested = 'absent/pack:target';
+      await install({
+        id: ID,
+        name: 'review-kit',
+        commit: COMMIT_A,
+        entrypoints: {
+          review: 'review/workflow.yaml',
+          ...(field === 'workflow' ? { redirect: 'redirect/workflow.yaml' } : {}),
+        },
+        files: {
+          'review/workflow.yaml': `name: review\ndescription: Caller\nnodes:\n${callerNodes(requested)}`,
+          'redirect/workflow.yaml': `name: ${requested}\ndescription: Alias\nnodes:\n  - id: wrong\n    bash: echo wrong\n`,
+        },
+      });
+      const catalog = await discover();
+      if (field === 'include') {
+        expect(names(catalog.workflows)).not.toContain(REVIEW);
+        expect(
+          catalog.errors.find(error => workflowLoadErrorName(error) === REVIEW)?.error
+        ).toContain(`include target '${requested}' not found`);
+      } else {
+        expect(catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW)).toEqual([]);
+        expect(
+          catalog.workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.nodes[0]
+        ).toMatchObject({ workflow: requested });
+        await expect(
+          resolveFanOutChildDefinition({ ...deps, providers: providerRegistry }, project, requested)
+        ).resolves.toEqual({ unresolved: `no workflow named '${requested}' was found` });
+      }
+    });
+  }
+
   for (const fanOut of [false, true]) {
     for (const failed of [false, true]) {
       test(`qualified cross-pack child keeps its public target (${fanOut ? 'fan-out' : 'plain'}, ${failed ? 'failed' : 'loaded'})`, async () => {

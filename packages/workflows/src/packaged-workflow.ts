@@ -147,8 +147,7 @@ export function qualifyPackReferences(
   const publicWorkflows = [...publicNames].map(name => ({ name }));
   const resolve = (name: string): string | undefined => {
     if (name.includes(':')) {
-      const publicTarget = resolveWorkflowName(name, publicWorkflows);
-      if (publicTarget !== undefined) return publicTarget.name;
+      return resolveWorkflowName(name, publicWorkflows)?.name;
     }
     const targets = qualifiedByName.get(name);
     if (targets !== undefined && targets.length > 1) {

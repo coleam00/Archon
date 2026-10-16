@@ -1097,12 +1097,25 @@ export async function discoverWorkflows(
         const filename = `${label}/${file.folder}/${file.filename}`;
         const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
         const qualified = installedWorkflowName(pack, entry ?? workflow.name);
-        const { supportChildren, ambiguousReferences } = qualifyPackReferences(
-          workflow,
-          qualifiedByName,
-          catalogEntrypoints,
-          publicNames
-        );
+        let references: ReturnType<typeof qualifyPackReferences>;
+        try {
+          references = qualifyPackReferences(
+            workflow,
+            qualifiedByName,
+            catalogEntrypoints,
+            publicNames
+          );
+        } catch (error) {
+          allErrors.push({
+            filename,
+            workflowName: qualified,
+            error: error instanceof Error ? error.message : String(error),
+            errorType: 'validation_error',
+            cause: error,
+          });
+          continue;
+        }
+        const { supportChildren, ambiguousReferences } = references;
         if (ambiguousReferences.length > 0) {
           allErrors.push({
             filename,
