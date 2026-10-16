@@ -247,6 +247,31 @@ export function initializeWorkflowGitHubAppAuth(
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
+// Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
+// the isolation provider and repo config.
+const sqlCompletedRunWorktree: NonNullable<WorkflowDeps['completedRunWorktree']> = {
+  assess: async run => {
+    const [cleanup, isolationDb] = await Promise.all([
+      import('../services/cleanup-service'),
+      import('../db/isolation-environments'),
+    ]);
+    return cleanup.assessCompletedRunWorktree(run, isolationDb.createIsolationStore(), {
+      getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+    });
+  },
+  release: async run => {
+    const [cleanup, isolationDb] = await Promise.all([
+      import('../services/cleanup-service'),
+      import('../db/isolation-environments'),
+    ]);
+    await cleanup.releaseCompletedRunWorktree(run, isolationDb.createIsolationStore(), {
+      getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+    });
+  },
+};
+
 export function createWorkflowDeps(
   store: IWorkflowStore = createWorkflowStore(),
   credentialStore: WorkflowStoreKind = 'database'
@@ -277,6 +302,7 @@ export function createWorkflowDeps(
     // on read), or scrub the org/bot token when they haven't connected.
     ...(credentialStore === 'database'
       ? {
+          completedRunWorktree: sqlCompletedRunWorktree,
           isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
           getUserGithubAuthor,
           getUserGithubToken: async (userId: string): Promise<string | undefined> => {

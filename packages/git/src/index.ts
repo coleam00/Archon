@@ -52,6 +52,7 @@ export {
   getCurrentBranch,
   getCurrentBranchStrict,
   localBranchExists,
+  remoteTrackingBranchExists,
   countCommitsAhead,
   countCommitsMissingFromRemotes,
   checkout,

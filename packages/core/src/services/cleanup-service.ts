@@ -3,7 +3,12 @@
  * Handles removal triggered by events, schedule, or commands
  */
 import { lstat } from 'node:fs/promises';
-import { readOwnedWorktree, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  readOwnedWorktree,
+  type OwnedWorktree,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
+import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
 import {
   readWorktreeBranchCreated,
   readWorktreeCreationId,
@@ -32,6 +37,7 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
+  remoteTrackingBranchExists,
   isRevCoveredBy,
   countCommitsMissingFromRemotes,
   getLastCommitDate,
@@ -69,13 +75,17 @@ interface RepoGitContext {
 // provider cannot honour, which cleanup surfaces rather than working around.
 async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<RepoGitContext> {
   const repoConfig = await loadRepoConfig(cwd);
-  const remote = repoConfig.worktree?.remote?.trim() || 'origin';
+  const remote = configuredRemote(repoConfig);
   const configured = repoConfig.worktree?.baseBranch?.trim();
   if (configured) {
     return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
   }
   const branch = await getDefaultBranch(repoPath, remote);
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
+}
+
+function configuredRemote(repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>): string {
+  return repoConfig.worktree?.remote?.trim() || 'origin';
 }
 
 function readPositiveIntegerEnv(
@@ -442,15 +452,14 @@ export async function removeEnvironment(
 
   // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
-  let configuredRemote: string | undefined;
+  let remote: string | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
     // Resolve the configured remote only when remote-branch deletion is requested —
     // that's the one destroy path that pushes to a remote.
     if (options?.deleteRemoteBranch && codebase?.default_cwd) {
-      const repoConfig = await loadRepoConfig(codebase.default_cwd);
-      configuredRemote = repoConfig.worktree?.remote?.trim() || 'origin';
+      remote = configuredRemote(await loadRepoConfig(codebase.default_cwd));
     }
   }
 
@@ -481,7 +490,7 @@ export async function removeEnvironment(
       ...(deleteBranch ? { branchName: toBranchName(env.branch_name) } : {}),
       canonicalRepoPath,
       deleteRemoteBranch: options?.deleteRemoteBranch,
-      remote: configuredRemote,
+      remote,
     });
 
     // Log warnings from partial failures
@@ -574,7 +583,7 @@ export type CleanupRunLock =
   | { kind: 'free' }
   | { kind: 'locked'; blocker: LiveRunBlocker }
   | ({ kind: 'released' } & ReleasedFailedRun)
-  | { kind: 'unpushed'; runId: string; commits: number };
+  | { kind: 'unpushed'; runId: string | null; commits: number; display: string };
 
 const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason> = {
   merged: 'merged',
@@ -588,9 +597,10 @@ const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason>
  * a merged or closed PR, or inactivity past the stale window. The run row is left
  * as it is.
  *
- * Removal force-deletes a branch Archon created, so a stale release also requires
- * every commit on the worktree HEAD and the branch to be on a remote. The merged
- * verdict already proved the PR head or the base covers both.
+ * Removal force-deletes a branch Archon created, so age alone never removes an
+ * environment whose worktree HEAD or branch holds a commit on no remote, whether
+ * or not a run owns it: that work stays until an operator removes it explicitly.
+ * The merged verdict already proved the PR head or the base covers both.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },
@@ -598,20 +608,39 @@ export async function getCleanupRunLock(
   settlement: CleanupSettlement
 ): Promise<CleanupRunLock> {
   const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-  if (!owner) return { kind: 'free' };
-  if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
-    return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
+  if (owner) {
+    if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
+      return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
+    }
+    const lock = await isolationEnvDb.getLiveRunOwningEnv(
+      env.id,
+      settlement.kind === 'stale' ? settlement : { kind: 'settled' }
+    );
+    if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   }
-  const lock = await isolationEnvDb.getLiveRunOwningEnv(
-    env.id,
-    settlement.kind === 'stale' ? settlement : { kind: 'settled' }
-  );
-  if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   if (settlement.kind === 'stale') {
     const commits = await countUnpushedCommits(env, repoPath);
-    if (commits > 0) return { kind: 'unpushed', runId: owner.id, commits };
+    if (commits > 0) return toUnpushedLock(env, owner?.id ?? null, commits);
   }
-  return { kind: 'released', runId: owner.id, reason: RELEASE_REASONS[settlement.kind] };
+  return owner
+    ? { kind: 'released', runId: owner.id, reason: RELEASE_REASONS[settlement.kind] }
+    : { kind: 'free' };
+}
+
+function toUnpushedLock(
+  env: { branch_name: string | null },
+  runId: string | null,
+  commits: number
+): Extract<CleanupRunLock, { kind: 'unpushed' }> {
+  const count = `${String(commits)} unpushed commit(s)`;
+  return {
+    kind: 'unpushed',
+    runId,
+    commits,
+    display: runId
+      ? `failed run ${runId.slice(0, 8)} has ${count}`
+      : `${count}; remove it explicitly with archon complete ${env.branch_name ?? '<branch>'} --force`,
+  };
 }
 
 async function countUnpushedCommits(
@@ -633,7 +662,7 @@ async function countUnpushedCommits(
 type RemovalBlocker =
   | { reason: 'uncommitted_changes'; display: string }
   | LiveRunBlocker
-  | { reason: 'unpushed_commits'; display: string; runId: string };
+  | { reason: 'unpushed_commits'; display: string; runId: string | null };
 
 type RemovalCheck =
   | { blocker: RemovalBlocker }
@@ -665,7 +694,7 @@ async function checkRemoval(
       return {
         blocker: {
           reason: 'unpushed_commits',
-          display: `failed run ${lock.runId.slice(0, 8)} has ${String(lock.commits)} unpushed commit(s)`,
+          display: lock.display,
           runId: lock.runId,
         },
       };
@@ -827,7 +856,18 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             continue;
           }
           if (!liveRun) {
-            // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
+            // Removal deletes a branch this environment created, so a branch holding
+            // commits on no remote stays, as it does in the stale sweep below.
+            const commits = readWorktreeBranchCreated(env.metadata)
+              ? await countUnpushedCommits(env, toRepoPath(env.codebase_default_cwd))
+              : 0;
+            if (commits > 0) {
+              report.skipped.push({
+                id: env.id,
+                reason: `path missing but ${toUnpushedLock(env, null, commits).display}`,
+              });
+              continue;
+            }
             const removeResult = await removeEnvironment(env.id, { force: false });
             if (removeResult.skippedReason) {
               report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
@@ -1289,13 +1329,122 @@ export interface RunWorktreeRelease {
   warnings: string[];
 }
 
+export interface WorktreeOwnershipReaders {
+  getCodebase: typeof codebaseDb.getCodebase;
+  getLiveRunOwningEnv: typeof isolationEnvDb.getLiveRunOwningEnv;
+}
+
+/** The isolation record and repository behind a run's creation proof; throws when they disagree. */
+async function resolveOwnedWorktree(
+  run: WorkflowRun,
+  proof: OwnedWorktree,
+  store: IIsolationStore,
+  getCodebase: WorktreeOwnershipReaders['getCodebase']
+): Promise<{ env: IsolationEnvironmentRow; repo: RepoPath }> {
+  const env = await store.getById(proof.envId);
+  if (
+    env?.provider !== 'worktree' ||
+    env.codebase_id !== run.codebase_id ||
+    env.working_path !== run.working_path ||
+    readWorktreeCreationId(env.metadata) !== proof.creationId
+  ) {
+    throw new Error('creation proof does not match its isolation record');
+  }
+  const reason = unknownPlatformReason(env.created_by_platform);
+  if (reason) throw new Error(reason);
+  const codebase = run.codebase_id ? await getCodebase(run.codebase_id) : null;
+  if (!codebase) throw new Error('canonical repository is unavailable');
+  return { env, repo: toRepoPath(codebase.default_cwd) };
+}
+
+/**
+ * Whether a completed run's worktree can go without losing work: clean, every commit
+ * on a remote, and the branch never published. A published branch waits for the merged
+ * sweep, which also deletes it; releasing it here would destroy the record that sweep reads.
+ */
+async function judgeCompletedWorktree(
+  env: IsolationEnvironmentRow,
+  repo: RepoPath
+): Promise<WorktreeDisposition> {
+  const path = toWorktreePath(env.working_path);
+  if ((await worktreeExists(path)) && (await hasUncommittedChangesStrict(path))) {
+    return { disposition: 'retained', reason: 'uncommitted_changes' };
+  }
+  const commits = await countUnpushedCommits(env, repo);
+  if (commits > 0) {
+    return {
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: `${String(commits)} commit(s) on no remote`,
+    };
+  }
+  const remote = configuredRemote(await loadRepoConfig(repo));
+  if (await remoteTrackingBranchExists(repo, remote, toBranchName(env.branch_name))) {
+    return { disposition: 'retained', reason: 'published_branch' };
+  }
+  return { disposition: 'release' };
+}
+
+/**
+ * Decide what happens to the worktree a completed run created. Null when the run has
+ * no creation proof; a failed check is reported as a retention, never thrown.
+ */
+export async function assessCompletedRunWorktree(
+  run: WorkflowRun,
+  store: IIsolationStore,
+  readers: WorktreeOwnershipReaders
+): Promise<WorktreeDisposition | null> {
+  const proof = readOwnedWorktree(run.metadata);
+  if (!proof || run.metadata?.isolation === 'container') return null;
+  try {
+    const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
+    if (retainsWorkspace(env.created_by_platform)) {
+      return { disposition: 'retained', reason: 'workspace_retained' };
+    }
+    // The completing run is still claimable here; release refuses any other claimant.
+    const user = await readers.getLiveRunOwningEnv(env.id, undefined, run.id);
+    if (user) {
+      return {
+        disposition: 'retained',
+        reason: 'in_use',
+        detail: `run ${user.id} (${user.status})`,
+      };
+    }
+    return await judgeCompletedWorktree(env, repo);
+  } catch (err) {
+    getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
+    return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
+  }
+}
+
+/**
+ * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
+ * Re-judges under the worktree lock and refuses when work appeared since the assessment.
+ */
+export async function releaseCompletedRunWorktree(
+  run: WorkflowRun,
+  store: IIsolationStore,
+  readers: WorktreeOwnershipReaders
+): Promise<void> {
+  const result = await reclaimOwnedWorktree(run, store, readers, async (env, repo) => {
+    const disposition = await judgeCompletedWorktree(env, repo);
+    if (disposition.disposition !== 'release') {
+      throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
+    }
+  });
+  if (result.warnings.length > 0) {
+    getLog().warn(
+      { workflowRunId: run.id, warnings: result.warnings },
+      'completed_worktree_release_warnings'
+    );
+  }
+}
+
 async function reclaimOwnedWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
-  readers: {
-    getCodebase: typeof codebaseDb.getCodebase;
-    getLiveRunOwningEnv: typeof isolationEnvDb.getLiveRunOwningEnv;
-  }
+  readers: WorktreeOwnershipReaders,
+  verify?: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>
 ): Promise<RunWorktreeRelease> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof) {
@@ -1313,20 +1462,7 @@ async function reclaimOwnedWorktree(
   const refuse = (reason: string): never => {
     throw new Error(reason);
   };
-  const env = await store.getById(proof.envId);
-  if (
-    env?.provider !== 'worktree' ||
-    env.codebase_id !== run.codebase_id ||
-    env.working_path !== run.working_path ||
-    readWorktreeCreationId(env.metadata) !== proof.creationId
-  ) {
-    return refuse('creation proof does not match its isolation record');
-  }
-  const reason = unknownPlatformReason(env.created_by_platform);
-  if (reason) return refuse(reason);
-  const codebase = run.codebase_id ? await readers.getCodebase(run.codebase_id) : null;
-  if (!codebase) return refuse('canonical repository is unavailable');
-  const repo = toRepoPath(codebase.default_cwd);
+  const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
   const path = toWorktreePath(env.working_path);
   const pathExists = async (): Promise<boolean> => {
     try {
@@ -1355,6 +1491,7 @@ async function reclaimOwnedWorktree(
         // reused it after this point fails claimPendingWorkflowRun instead of
         // starting in a checkout that is about to disappear.
         beforeRemove: async () => {
+          await verify?.(env, repo);
           await store.markWorktreeDestroyed(env);
           marked = true;
           const user = await readers.getLiveRunOwningEnv(env.id);
@@ -1392,7 +1529,7 @@ async function reclaimOwnedWorktree(
 export async function reclaimRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
-  readers = {
+  readers: WorktreeOwnershipReaders = {
     getCodebase: codebaseDb.getCodebase,
     getLiveRunOwningEnv: isolationEnvDb.getLiveRunOwningEnv,
   }

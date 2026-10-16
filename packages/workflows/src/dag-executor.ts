@@ -204,6 +204,7 @@ import {
   type ProviderEventHandler,
 } from './provider-events';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import { WORKTREE_DISPOSITION_METADATA_KEY } from './schemas/terminal-record';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { evaluateCondition } from './condition-evaluator';
@@ -12761,6 +12762,13 @@ export async function executeDagWorkflow(
   });
   emitter.unregisterRun(workflowRun.id);
 
+  // Read fresh: a pre-created run's `owned_worktree` proof is stamped on the row after
+  // this object was loaded.
+  const completedRun = deps.completedRunWorktree
+    ? ((await deps.store.getWorkflowRun(workflowRun.id)) ?? workflowRun)
+    : workflowRun;
+  const worktreeDisposition = await deps.completedRunWorktree?.assess(completedRun);
+
   await requireTerminalStatusWrite(
     deps.store.completeWorkflowRun(
       workflowRun.id,
@@ -12791,10 +12799,27 @@ export async function executeDagWorkflow(
               ),
             }
           : {}),
+        ...(worktreeDisposition
+          ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
+          : {}),
       }
     ),
     { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
   );
+
+  // The terminal record already carries the decision. Removing the checkout is cleanup
+  // of terminal data, so a refusal or failure leaves it in place and the run completed.
+  if (worktreeDisposition?.disposition === 'release') {
+    try {
+      await deps.completedRunWorktree?.release(completedRun);
+      getLog().info({ workflowRunId: workflowRun.id }, 'workflow.completed_worktree_released');
+    } catch (err) {
+      getLog().warn(
+        { err, workflowRunId: workflowRun.id },
+        'workflow.completed_worktree_release_failed'
+      );
+    }
+  }
 
   // terminalOutput (computed above, before the completion write) is the run's
   // summary for the parent conversation and the `workflow:` re-entry path.
