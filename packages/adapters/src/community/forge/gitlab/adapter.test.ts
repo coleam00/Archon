@@ -5,6 +5,9 @@
  */
 import { describe, test, expect, mock, spyOn, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
@@ -130,10 +133,15 @@ mock.module('@archon/core', () => ({
 const registrationRemote = await import('@archon/core/services/registration-remote');
 spyOn(registrationRemote, 'assertCheckoutRemote').mockResolvedValue(undefined);
 
+const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+  ok: true,
+  value: undefined,
+}));
+
 // Mock @archon/git
 mock.module('@archon/git', () => ({
   ...git,
-  cloneRepository: mock(async () => ({ ok: true })),
+  cloneRepository: mockCloneRepository,
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),
   toRepoPath: mock((p: string) => p),
@@ -293,6 +301,38 @@ describe('GitLabAdapter', () => {
     expect(existing.default_cwd).toBe('/tmp/test-workspaces/group/subgroup/repo/worktrees/old');
     expect(existing.name).toBe('group/subgroup/repo');
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('webhook clones an absent saved checkout before dispatch', async () => {
+    const adapter = createAdapter();
+    const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'saved-project',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: 'https://gitlab.example.com/mygroup/myproject',
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-saved',
+      codebase_id: 'saved-project',
+      cwd: path,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockHandleMessage.mockClear();
+    mockCloneRepository.mockClear();
+    mockCloneRepository.mockImplementationOnce(async () => {
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      return { ok: true, value: undefined };
+    });
+
+    await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+    expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+    expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+      'https://gitlab.example.com/mygroup/myproject.git',
+      path,
+    ]);
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
   });
 
   test('allocated checkout path reaches preparation and conversation storage', async () => {

@@ -6,7 +6,9 @@
  */
 import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 // Mock @archon/paths to suppress noisy logger output during tests
@@ -459,6 +461,41 @@ describe('GiteaAdapter', () => {
         expect.objectContaining({ id: 'allocated' }),
         { default_cwd: result.repoPath }
       );
+    });
+
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: 'saved-project',
+        cwd: path,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#1',
+      });
+      mockHandleMessage.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      await adapter.handleWebhook(
+        utf8(createCommentPayload('@archon help', 'user123')),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://gitea.example.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
     });
 
     test('allocated checkout path reaches preparation and conversation storage', async () => {

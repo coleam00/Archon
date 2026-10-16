@@ -939,7 +939,7 @@ export class GitHubAdapter implements IPlatformAdapter {
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        if (existsSync(join(canonicalPath, '.git'))) {
+        if (existsSync(canonicalPath)) {
           await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
         }
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });

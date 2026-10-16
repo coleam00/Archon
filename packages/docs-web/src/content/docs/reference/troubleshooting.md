@@ -363,7 +363,7 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 
 **Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. Removing a worktree or changing the branch name does not resolve a registration refusal.
 
-If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs.
+If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs. For legacy nested GitLab projects, follow the [storage recovery steps below](#legacy-nested-gitlab-storage-recovery) before changing the path.
 
 **Ownership errors:** Older registrations or manually changed worktrees can still produce the ownership errors above. Inspect `git worktree list` from the registered checkout and the checkout named in the error. Preserve in-progress work and use the registered checkout's worktree. Only remove an obsolete worktree from its owning checkout after confirming it is no longer needed. Archon refuses to adopt worktrees from another clone.
 
@@ -372,6 +372,14 @@ If this checkout replaces a moved or retired checkout, use `/update-project "<na
 - `path contains a full git checkout, not a worktree`: something non-Archon created a full git repo at the worktree path. Remove or move it.
 - `.git pointer is not a git-worktree reference`: the `.git` file at that path points somewhere unexpected (submodule, malformed). Inspect it with `cat <path>/.git` and clean up manually.
 - `Cannot verify worktree ownership`: filesystem permission or I/O error reading `<path>/.git`. Check `ls -la <path>` and file permissions on `~/.archon/workspaces`.
+
+### Legacy nested GitLab storage recovery
+
+A legacy GitLab project whose registered name has more than two segments (for example `group/subgroup/api`) derives its storage root from the basename of its registered checkout path, rather than from its name. Its root is `$ARCHON_HOME/workspaces/_local/<checkout-basename>` (`ARCHON_HOME` defaults to `~/.archon`). This also applies when the saved checkout is an old worktree: a path ending in `worktrees/old-api` uses `_local/old-api`.
+
+Restoring the original checkout at its saved path preserves that storage root. Archon refuses automatic repair when it cannot preserve the root.
+
+If you must move the checkout, identify and back up the existing storage root **before** using `/update-project`. Work out the destination root from the new checkout's basename and migrate the existing state, artifacts and logs there as part of the move. Do not overwrite another project's storage at that destination. A path update alone does not move storage: changing the basename can hide the existing state or select a root already used by another project. Keep the original storage until you have verified the recovered project can see its state and history.
 
 ## Chat Says the Working Directory No Longer Exists
 

@@ -125,7 +125,7 @@ for (const forge of forges) {
 }
 
 for (const forge of forges) {
-  test.each(['matching', 'foreign', 'missing'] as const)(
+  test.each(['matching', 'foreign', 'nonrepository', 'missing'] as const)(
     `${forge.name} verifies canonical repair targets: %s`,
     async state => {
       const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-repair-owner-')));
@@ -135,15 +135,17 @@ for (const forge of forges) {
         const path = getProjectSourcePath('acme', 'api');
         if (state !== 'missing') {
           await mkdir(path, { recursive: true });
-          execFileSync('git', ['-C', path, 'init', '-q']);
-          execFileSync('git', [
-            '-C',
-            path,
-            'remote',
-            'add',
-            'origin',
-            `https://${forge.host}/${state === 'foreign' ? 'other/repo' : 'acme/api'}`,
-          ]);
+          if (state !== 'nonrepository') {
+            execFileSync('git', ['-C', path, 'init', '-q']);
+            execFileSync('git', [
+              '-C',
+              path,
+              'remote',
+              'add',
+              'origin',
+              `https://${forge.host}/${state === 'foreign' ? 'other/repo' : 'acme/api'}`,
+            ]);
+          }
         }
         const stale = join(root, 'workspaces', 'acme', 'api', 'worktrees', 'old');
         const existing = codebaseRowSchema.parse({
@@ -159,7 +161,7 @@ for (const forge of forges) {
           updated_at: new Date(),
         });
         findCodebase.mockResolvedValue(existing);
-        if (state === 'foreign') {
+        if (state === 'foreign' || state === 'nonrepository') {
           await expect(forge.route()).rejects.toThrow('/update-project');
           expect(existing.default_cwd).toBe(stale);
           expect(updateCodebase).not.toHaveBeenCalled();

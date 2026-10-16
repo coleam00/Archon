@@ -895,6 +895,40 @@ describe('GitHubAdapter', () => {
       );
     });
 
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = unclonedPath();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://github.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: null,
+        cwd: null,
+        isolation_env_id: null,
+      });
+      handleMessageSpy.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+
+      await adapter.handleWebhook(
+        createCommentPayload('@archon help', 'user123'),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://github.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+    });
+
     test('allocated checkout path reaches preparation and conversation storage', async () => {
       const adapter = createSelfFilterAdapter();
       const path = '/tmp/test-workspaces/testuser/testrepo-2/source';

@@ -499,7 +499,7 @@ The CLI is standalone, but if you also want to interact via Telegram, Slack, Dis
 
 If the error says a project is already registered at another path, Archon has found another clone of that remote. Run from the registered checkout and use worktrees for parallel checkouts. A second clone cannot be registered as a separate project.
 
-If you moved or renamed the registered checkout, repair its path with `/update-project "<project-name>" <new-absolute-path>`. Do not delete `~/.archon/workspaces/<owner>/<repo>`: it holds the project's state, artifacts and logs, and deleting it does not repair the registration.
+If you moved or renamed the registered checkout, repair its path with `/update-project "<project-name>" <new-absolute-path>`. Do not delete `~/.archon/workspaces/<owner>/<repo>`: it holds the project's state, artifacts and logs, and deleting it does not repair the registration. Legacy nested GitLab projects use a checkout-dependent storage root; follow [legacy nested GitLab storage recovery](/reference/troubleshooting/#legacy-nested-gitlab-storage-recovery) before updating their path.
 
 A source-symlink error without an existing registered remote can instead mean an abandoned workspace entry. Inspect its `source` link and contents first. Preserve any state, logs and artifacts; only remove an obsolete source link after confirming no registered project uses it, then retry registration.
 

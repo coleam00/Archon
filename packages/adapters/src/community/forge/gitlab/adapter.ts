@@ -569,11 +569,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         if (!identity) {
           throw new Error(
             `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd} without changing its storage location. ` +
-              'Restore its original checkout or use /update-project to set its path explicitly.'
+              'Restore its original checkout to preserve storage. Before using /update-project to move it, identify and migrate its existing storage root; see the legacy nested GitLab recovery guidance in Troubleshooting.'
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        if (existsSync(join(canonicalPath, '.git'))) {
+        if (existsSync(canonicalPath)) {
           await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
         }
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
