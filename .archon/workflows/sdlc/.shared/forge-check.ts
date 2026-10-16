@@ -93,6 +93,13 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
     );
 }
 
+/** The env vars gh reads a token from for `host`: github.com and GHE.com, or Enterprise Server. */
+export function ghTokenNames(host: string): readonly string[] {
+  return host === 'github.com' || host.endsWith('.ghe.com')
+    ? ['GH_TOKEN', 'GITHUB_TOKEN']
+    : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+}
+
 async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
   const repos = remoteRepos();
   if (repos.length === 0) {
@@ -102,10 +109,7 @@ async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
   const answered: string[] = [];
   for (const { host, path } of repos) {
     const name = `${host}/${path}`;
-    const tokenNames =
-      host === 'github.com' || host.endsWith('.ghe.com')
-        ? ['GH_TOKEN', 'GITHUB_TOKEN']
-        : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+    const tokenNames = ghTokenNames(host);
     // Empty host-specific credentials mark a scrubbed identity. gh otherwise
     // treats them as unset and falls back to the host's stored login.
     if (tokenNames.some(name => env[name] === '') && !tokenNames.some(name => env[name])) {

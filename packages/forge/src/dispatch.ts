@@ -21,6 +21,7 @@ import { discoverPlugins, PluginDiscoveryError, type PluginDiscovery } from './d
 import { normalizeHost, type ForgePluginConfig } from './plugin-config';
 import { runPluginProcess } from './plugin-process';
 import { selectCredential } from './credentials';
+import { GH_DOTCOM_TOKEN_KEYS } from '@archon/paths/github-token-env';
 
 export type ForgeOperationAudit = z.infer<typeof forgeOperationAuditSchema>;
 export interface ForgeDispatchResult {
@@ -492,11 +493,11 @@ export async function dispatchForge(
           plugin.metadata.forge === 'github' &&
           !override &&
           plugin.metadata.token_env.length > 0 &&
-          plugin.metadata.token_env.every(name => name === 'GH_TOKEN' || name === 'GITHUB_TOKEN');
+          plugin.metadata.token_env.every(name => GH_DOTCOM_TOKEN_KEYS.some(key => key === name));
         const names = override
           ? [override]
           : github
-            ? ['GH_TOKEN', 'GITHUB_TOKEN']
+            ? GH_DOTCOM_TOKEN_KEYS
             : plugin.metadata.token_env;
         const credential =
           request.op === 'resolve'

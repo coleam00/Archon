@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { GH_DOTCOM_TOKEN_KEYS, GH_ENTERPRISE_TOKEN_KEYS } from '@archon/paths/github-token-env';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,10 +38,10 @@ export async function selectCredential(
         env: {
           ...hostEnv,
           PATH: hostEnv.PATH ?? '',
-          GH_TOKEN: refreshApp ? credentialEnv.GH_TOKEN : '',
-          GITHUB_TOKEN: refreshApp ? credentialEnv.GITHUB_TOKEN : '',
-          GH_ENTERPRISE_TOKEN: '',
-          GITHUB_ENTERPRISE_TOKEN: '',
+          ...Object.fromEntries(GH_ENTERPRISE_TOKEN_KEYS.map(key => [key, ''])),
+          ...Object.fromEntries(
+            GH_DOTCOM_TOKEN_KEYS.map(key => [key, refreshApp ? credentialEnv[key] : ''])
+          ),
         },
         timeout: 30_000,
         maxBuffer: 1024 * 1024,

@@ -11,7 +11,8 @@ import {
   type ScriptOptions,
 } from './deliver-checks-harness';
 import { cliForgeMetadataRequestSchema } from '../../../packages/forge/src/cli-response';
-import { REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
+import { ghTokenKeysForHost } from '@archon/paths/github-token-env';
+import { ghTokenNames, REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -71,6 +72,12 @@ function check(
     inputs: { ARCHON_HOME, ...rest.inputs },
   });
 }
+
+// The pack runs outside this repository, so it restates the owner's host split.
+it('names the token env vars @archon/paths assigns to each gh host', () => {
+  for (const host of ['github.com', 'acme.ghe.com', 'git.example.com'])
+    expect(ghTokenNames(host)).toEqual(ghTokenKeysForHost(host));
+});
 
 describe('forge-check refuses a run whose forge source cannot act', () => {
   it('uses gh when no source is selected', () => {
