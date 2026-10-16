@@ -26,6 +26,37 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * Fetch is repeatable, but Git has no distinct ref-contention exit status.
+ * Bound recovery for exited subprocess failures without guessing their cause
+ * from stderr. Known failures and spawn/termination errors propagate immediately.
+ */
+export async function fetchWithRetry(
+  repoPath: RepoPath,
+  fetchArgs: string[],
+  options: { timeout: number }
+): Promise<void> {
+  let firstFailure: GitFailure | undefined;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'fetch', ...fetchArgs], options);
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof GitFailure) ||
+        error.kind !== 'unclassified' ||
+        typeof error.code !== 'number' ||
+        error.code <= 0
+      )
+        throw error;
+      firstFailure ??= error;
+      if (attempt === 2) throw firstFailure;
+      getLog().warn({ err: error, repoPath, attempt: attempt + 1 }, 'git.fetch_retry');
+      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+}
+
+/**
  * Find the root of the git repository containing the given path
  * Returns null if not in a git repository
  */
@@ -174,7 +205,7 @@ export async function syncWorkspace(
 
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
+    await fetchWithRetry(workspacePath, [remote, branchToSync], {
       timeout: 60000,
     });
   } catch (error) {
@@ -517,7 +548,7 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await execFileAsync('git', ['-C', repoPath, 'fetch', remote], { timeout: 60000 });
+    await fetchWithRetry(repoPath, [remote], { timeout: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_fetch_failed');

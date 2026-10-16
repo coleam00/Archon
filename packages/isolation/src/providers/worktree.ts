@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  fetchWithRetry,
   GitFailure,
   hasUncommittedChangesStrict,
   addSafeDirectory,
@@ -1693,9 +1694,9 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       );
     } else {
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head:${reviewBranch}`],
+      await fetchWithRetry(
+        toRepoPath(repoPath),
+        [remote, `pull/${prNumber}/head:${reviewBranch}`],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
 
@@ -1807,11 +1808,9 @@ export class WorktreeProvider implements IIsolationProvider {
     const remoteRefName = `refs/remotes/${remoteRef}`;
     let source: 'local' | 'remote' | 'fast_forwarded' = 'local';
     if (remoteExists) {
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'fetch', remote, `+${localRefName}:${remoteRefName}`],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      );
+      await fetchWithRetry(toRepoPath(repoPath), [remote, `+${localRefName}:${remoteRefName}`], {
+        timeout: GIT_OPERATION_TIMEOUT_MS,
+      });
       if (!localExists) {
         source = 'remote';
       } else {

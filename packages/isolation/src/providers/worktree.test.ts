@@ -1458,7 +1458,7 @@ describe('WorktreeProvider', () => {
     });
 
     test.each(['already exists', 'cannot lock ref: unable to update local ref'])(
-      'a fork fetch failure containing %s never deletes or retries a branch',
+      'a fork fetch failure containing %s never deletes a branch and has bounded retries',
       async text => {
         const request: IsolationRequest = {
           ...baseRequest,
@@ -1481,7 +1481,7 @@ describe('WorktreeProvider', () => {
           return { stdout: '', stderr: '' };
         });
         await expect(provider.create(request)).rejects.toThrow(text);
-        expect(fetches).toBe(1);
+        expect(fetches).toBe(3);
         expect(execSpy.mock.calls.some(([, args]) => args.includes('-D'))).toBe(false);
       }
     );
@@ -1842,7 +1842,7 @@ describe('WorktreeProvider', () => {
       expect(findWorktreeByBranchSpy).not.toHaveBeenCalled();
     });
 
-    test('does not retry a fork-PR fetch lock failure or create a checkout', async () => {
+    test('does not infer fork-PR fetch retry from lock prose without an exit status', async () => {
       const request: IsolationRequest = {
         ...baseRequest,
         workflowType: 'pr',
@@ -1879,7 +1879,7 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
-    test('does not retry non-race fork-PR fetch errors', async () => {
+    test('does not retry fork-PR fetch errors without a numeric exit status', async () => {
       const request: IsolationRequest = {
         ...baseRequest,
         workflowType: 'pr',

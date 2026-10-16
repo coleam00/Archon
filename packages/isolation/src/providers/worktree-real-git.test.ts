@@ -5,7 +5,16 @@
  * process, so this file gets its own `testGroups` entry. Real Git is needed to
  * prove failed-add ownership, cleanup, and preservation of hidden changes.
  */
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  spyOn,
+} from 'bun:test';
 import { existsSync } from 'node:fs';
 import {
   cp,
@@ -31,6 +40,8 @@ import {
 } from '@archon/git';
 import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
+
+import * as gitModule from '@archon/git';
 
 import { WorktreeProvider } from './worktree';
 import { IsolationResolver } from '../resolver';
@@ -246,6 +257,70 @@ describe('WorktreeProvider against real git', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  test.each(['workspace sync', 'repository sync', 'fork PR', 'remote refresh'] as const)(
+    'recovers %s after real Git ref contention clears',
+    async operation => {
+      const remotePath = join(root, 'remote');
+      await cp(templateRepo, remotePath, { recursive: true });
+      await git(repoPath, 'remote', 'add', 'origin', remotePath);
+      await git(remotePath, 'update-ref', 'refs/pull/42/head', 'HEAD');
+      const ref =
+        operation === 'fork PR'
+          ? 'heads/pr-42-review'
+          : `remotes/origin/${operation === 'remote refresh' ? TASK_BRANCH : 'main'}`;
+      const lock = join(repoPath, '.git', 'refs', `${ref}.lock`);
+      await mkdir(join(lock, '..'), { recursive: true });
+      await writeFile(lock, '');
+      const exec = gitModule.execFileAsync;
+      let collisions = 0;
+      const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (cmd, args, options) => {
+          try {
+            return await exec(cmd, args, options);
+          } catch (error) {
+            if (args.includes('fetch') && existsSync(lock)) {
+              collisions++;
+              await rm(lock);
+            }
+            throw error;
+          }
+        }
+      );
+      try {
+        if (operation === 'workspace sync') {
+          await gitModule.syncWorkspace(toRepoPath(repoPath), toBranchName('main'), {
+            mode: 'fetch-only',
+          });
+        } else if (operation === 'repository sync') {
+          expect(
+            await gitModule.syncRepository(toRepoPath(repoPath), toBranchName('main'))
+          ).toEqual({ ok: true, value: undefined });
+        } else {
+          await provider.create(
+            operation === 'fork PR'
+              ? {
+                  ...request,
+                  workflowType: 'pr',
+                  identifier: '42',
+                  prBranch: toBranchName(TASK_BRANCH),
+                  isForkPR: true,
+                }
+              : {
+                  ...request,
+                  workflowType: 'task',
+                  baseBranch: toBranchName('main'),
+                  taskBranch: { kind: 'new', branch: toBranchName(TASK_BRANCH) },
+                }
+          );
+        }
+        expect(collisions).toBe(1);
+        expect((await git(repoPath, 'show-ref', '--verify', `refs/${ref}`)).trim()).not.toBe('');
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
 
   test.each(['existing task', 'same-repository PR', 'fork PR'])(
     'wrong-branch adoption blocks %s without changing its checkout',

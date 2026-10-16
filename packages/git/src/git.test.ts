@@ -2932,6 +2932,56 @@ branch refs/heads/feature/auth
       ).rejects.toThrow('Sync fetch from mar/main failed');
     });
 
+    test.each([1, 128])(
+      'bounds fetch retries for exit %s and preserves the first failure',
+      async code => {
+        const failures: git.GitFailure[] = [];
+        execSpy.mockImplementation(async (_cmd, args) => {
+          if (args.includes('ls-remote'))
+            return { stdout: 'abc123\trefs/heads/main\n', stderr: '' };
+          if (!args.includes('fetch')) return { stdout: '', stderr: '' };
+          const failure = new git.GitFailure(
+            'unclassified',
+            'fetch failed',
+            Object.assign(new Error('arbitrary vendor wording'), {
+              code,
+              stderr: `evidence ${failures.length}`,
+            })
+          );
+          failures.push(failure);
+          throw failure;
+        });
+        const error = await git
+          .syncWorkspace(repo('/workspace/repo'), branch('main'))
+          .catch((error: unknown) => error);
+        expect(failures).toHaveLength(3);
+        expect(error).toBeInstanceOf(Error);
+        if (!(error instanceof Error)) throw error;
+        expect(error.cause).toBe(failures[0]);
+        expect(error.message).toContain('evidence 0');
+        expect(error.message).toContain(`exit code ${code}`);
+      }
+    );
+
+    test('does not retry a classified timeout even with a numeric exit status', async () => {
+      const failure = new git.GitFailure(
+        'timeout',
+        'fetch timed out',
+        Object.assign(new Error('exit'), { code: 128 })
+      );
+      let fetches = 0;
+      execSpy.mockImplementation(async (_cmd, args) => {
+        if (args.includes('ls-remote')) return { stdout: 'abc123\trefs/heads/main\n', stderr: '' };
+        if (!args.includes('fetch')) return { stdout: '', stderr: '' };
+        fetches++;
+        throw failure;
+      });
+      await expect(
+        git.syncWorkspace(repo('/workspace/repo'), branch('main'))
+      ).rejects.toMatchObject({ cause: failure });
+      expect(fetches).toBe(1);
+    });
+
     test('preserves an unclassified fetch failure without retrying', async () => {
       const raceError = new Error(
         "error: cannot lock ref 'refs/remotes/origin/dev': is at de581e24 but expected 8eaa8d42\n" +
@@ -2956,7 +3006,7 @@ branch refs/heads/feature/auth
       expect(fetchCalls).toBe(1);
     });
 
-    test('does not retry non-race fetch errors', async () => {
+    test('does not retry fetch failures without a numeric exit status', async () => {
       let fetchCalls = 0;
 
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {

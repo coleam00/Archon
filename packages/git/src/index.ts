@@ -76,6 +76,7 @@ export {
   getRemoteUrl,
   listChildRepos,
   syncWorkspace,
+  fetchWithRetry,
   cloneRepository,
   validateCloneUrl,
   syncRepository,
