@@ -52,8 +52,11 @@ const workflow = makeTestResolvedWorkflow({
   nodes: [{ id: 'implement', prompt: 'Implement it' }],
 });
 
-/** A provider whose turns play `turns` in order: a usage limit with a reset, or success. */
-function harness(turns: ({ resetAt?: string } | 'ok')[]): {
+/**
+ * A provider whose turns play `turns` in order: a usage limit with a reset, a rate limit
+ * (with a reset when one is given), or success.
+ */
+function harness(turns: ({ resetAt?: string; rateLimited?: true } | 'ok')[]): {
   engine: InProcessWorkflowEngine;
   store: WorkflowDeps['store'];
   calls: () => number;
@@ -78,8 +81,9 @@ function harness(turns: ({ resetAt?: string } | 'ok')[]): {
             isError: true,
             sessionId: `session-${String(calls)}`,
             failure: {
-              class: 'quota_exhausted',
-              evidence: "You've hit your session limit",
+              ...(turn?.rateLimited
+                ? { class: 'rate_limited' as const, evidence: 'HTTP 429' }
+                : { class: 'quota_exhausted' as const, evidence: "You've hit your session limit" }),
               ...(turn?.resetAt !== undefined ? { resetAt: turn.resetAt } : {}),
             },
           };
@@ -99,14 +103,17 @@ function harness(turns: ({ resetAt?: string } | 'ok')[]): {
   return { engine: new InProcessWorkflowEngine(deps), store, calls: () => calls };
 }
 
-async function submit(engine: InProcessWorkflowEngine): Promise<string> {
+async function submit(
+  engine: InProcessWorkflowEngine,
+  submitted: typeof workflow = workflow
+): Promise<string> {
   const result = await engine.submit({
     platform,
     conversationId,
     origin: { conversationId },
     cwd: root,
     userMessage: 'goal',
-    workflow,
+    workflow: submitted,
   });
   if (!result.workflowRunId) throw new Error('submit created no run');
   return result.workflowRunId;
@@ -116,7 +123,8 @@ async function submit(engine: InProcessWorkflowEngine): Promise<string> {
 async function wake(
   engine: InProcessWorkflowEngine,
   store: WorkflowDeps['store'],
-  now: Date
+  now: Date,
+  continued: typeof workflow = workflow
 ): Promise<string[]> {
   const settled: Promise<unknown>[] = [];
   const outcomes = await wakeDueWorkflowContinuations(store, now, async (run, cursor) => {
@@ -126,7 +134,7 @@ async function wake(
       conversationId,
       cwd: root,
       userMessage: run.user_message,
-      legacyWorkflow: workflow,
+      legacyWorkflow: continued,
       cursor,
     });
     if (!admission.accepted) return { kind: 'not-accepted' };
@@ -209,4 +217,82 @@ test('a rejected quota pause write fails the run without leaving a durable wait'
   } finally {
     pause.mockRestore();
   }
+});
+
+const setupThenImplement = makeTestResolvedWorkflow({
+  name: 'rate-limit',
+  nodes: [
+    { id: 'setup', prompt: 'Set it up' },
+    { id: 'implement', prompt: 'Implement it', depends_on: ['setup'] },
+  ],
+});
+
+/** Submit with the rate-limit retry delays shortened, so the retries run at once. */
+async function submitThroughRetries(engine: InProcessWorkflowEngine): Promise<string> {
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+  try {
+    return await submit(engine, setupThenImplement);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+}
+
+/** `setup` succeeds, then `implement` is rate limited on its first attempt and every retry. */
+function rateLimitedTurns(resetAt: string): ({ resetAt: string; rateLimited: true } | 'ok')[] {
+  return ['ok', ...Array.from({ length: 6 }, () => ({ resetAt, rateLimited: true as const }))];
+}
+
+test('a rate limit that outlasts its retries pauses, then the continuation host continues from the limited node', async () => {
+  const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+  const { engine, store, calls } = harness([...rateLimitedTurns(resetAt), 'ok']);
+
+  const runId = await submitThroughRetries(engine);
+  const waiting = await store.getWorkflowRun(runId);
+  expect(waiting?.status).toBe('paused');
+  expect(waiting?.metadata.wait).toMatchObject({
+    kind: 'quota',
+    nodeId: 'implement',
+    resumeAt: resetAt,
+  });
+  expect(calls()).toBe(7);
+
+  expect(
+    await wake(engine, store, new Date(Date.parse(resetAt) - 1000), setupThenImplement)
+  ).toEqual([]);
+  expect(
+    await wake(engine, store, new Date(Date.parse(resetAt) + 1000), setupThenImplement)
+  ).toEqual([runId]);
+  const finished = await store.getWorkflowRun(runId);
+  expect(finished?.status).toBe('completed');
+  expect(finished?.metadata.wait).toBeUndefined();
+  // `setup` ran once: the continuation started at `implement`.
+  expect(calls()).toBe(8);
+});
+
+test('a rate-limit pause resumed by hand continues before its deadline', async () => {
+  const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+  const { engine, store, calls } = harness([...rateLimitedTurns(resetAt), 'ok']);
+
+  const runId = await submitThroughRetries(engine);
+  const run = await store.getWorkflowRun(runId);
+  if (run === null) throw new Error('run missing');
+  expect(run.status).toBe('paused');
+
+  // No cursor: the path `archon workflow resume` and the resume API take.
+  const admission = await engine.resume({
+    run,
+    platform,
+    conversationId,
+    cwd: root,
+    userMessage: run.user_message,
+    legacyWorkflow: setupThenImplement,
+  });
+  if (!admission.accepted) throw new Error('resume not accepted');
+  await admission.settled;
+
+  const finished = await store.getWorkflowRun(runId);
+  expect(finished?.status).toBe('completed');
+  expect(finished?.metadata.wait).toBeUndefined();
+  expect(calls()).toBe(8);
 });

@@ -112,8 +112,8 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
         ) : run.attention?.kind === 'usage_limit' ? (
           <>
             <p className="mt-3 text-sm text-text-primary">
-              Node <span className="font-mono">{run.attention.nodeId}</span> hit a provider usage
-              limit. The run continues by itself at{' '}
+              Node <span className="font-mono">{run.attention.nodeId}</span> hit a provider usage or
+              rate limit. The run continues by itself at{' '}
               {new Date(run.attention.resumeAt).toLocaleString()}.
             </p>
             <RunActionBar run={run} />

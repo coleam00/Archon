@@ -444,7 +444,7 @@ describe('toRun — durable wait', () => {
         waitingSince,
         resumeAt,
       },
-      label: 'Waiting for usage limit reset',
+      label: 'Waiting for provider limit',
     },
     {
       name: 'loop-group time',

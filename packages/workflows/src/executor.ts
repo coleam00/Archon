@@ -2627,7 +2627,7 @@ export async function executeWorkflow(
               wait.kind === 'event'
                 ? `for event \`${wait.event}\` until`
                 : wait.kind === 'quota'
-                  ? 'for a provider usage limit to reset at'
+                  ? 'for a provider usage or rate limit to clear at'
                   : 'until';
             stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
             actionLines =

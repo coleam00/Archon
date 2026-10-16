@@ -31,7 +31,7 @@ import * as git from '@archon/git';
 import * as pluginProcess from '@archon/paths/plugin-process';
 import * as subprocess from './subprocess';
 import { recordNodeProcessTrees } from './subprocess';
-import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
+import { RATE_LIMIT_MAX_RETRIES, RATE_LIMIT_PAUSE_DELAY_MS } from './executor-shared';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -9393,7 +9393,19 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
             expect(waitRequests).toEqual([[]]);
             expect(store.completeWorkflowRun).toHaveBeenCalled();
           } else {
-            expect(store.failWorkflowRun).toHaveBeenCalled();
+            // Only a rate limit that outlasts its retries pauses on the provider-limit wait;
+            // every other class still fails the run.
+            if (failureClass === 'rate_limited') {
+              expect(store.failWorkflowRun).not.toHaveBeenCalled();
+              expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+                'loop-retry-policy-run',
+                expect.objectContaining({ kind: 'quota', nodeId: 'my-loop' }),
+                { kind: 'started', stepName: 'my-loop' }
+              );
+            } else {
+              expect(store.failWorkflowRun).toHaveBeenCalled();
+              expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+            }
             const failed = store.persistWorkflowEvent.mock.calls
               .map(([event]) => event)
               .find(event => event.event_type === 'node_failed');
@@ -17806,6 +17818,169 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
   });
+
+  /** A provider turn that ends in a typed rate limit, on every attempt. */
+  function rateLimitedQuery(
+    resetAt?: string
+  ): Mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']> {
+    return mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        sessionId: 'dag-session-rate',
+        failure: {
+          class: 'rate_limited',
+          evidence: 'HTTP 429',
+          ...(resetAt !== undefined ? { resetAt } : {}),
+        },
+      };
+    });
+  }
+
+  /** Run with the rate-limit retry delays shortened to a millisecond. */
+  async function withShortRetryDelays(run: () => Promise<unknown>): Promise<void> {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      await run();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }
+
+  it(
+    'waits a jittered backoff when a rate limit outlasts its retries, instead of failing',
+    async () => {
+      const sendQuery = rateLimitedQuery();
+      useQuery(sendQuery);
+      const store = createMockStore();
+      const before = Date.now();
+
+      await withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-rate',
+            cwd: testDir,
+            workflow: investigateWorkflow,
+            workflowRun: makeWorkflowRun('rate-wait-run'),
+            config: quotaConfig(),
+          })
+        )
+      );
+
+      expect(sendQuery).toHaveBeenCalledTimes(1 + RATE_LIMIT_MAX_RETRIES);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'rate-wait-run',
+        expect.objectContaining({ owner: 'node', nodeId: 'investigate', kind: 'quota' }),
+        { kind: 'started', stepName: 'investigate' }
+      );
+      const wait = store.pauseWorkflowRunForWait.mock.calls[0]?.[1];
+      const resumeAt = Date.parse(wait?.kind === 'quota' ? wait.resumeAt : '');
+      expect(resumeAt).toBeGreaterThanOrEqual(before + RATE_LIMIT_PAUSE_DELAY_MS / 2);
+      expect(resumeAt).toBeLessThanOrEqual(Date.now() + (RATE_LIMIT_PAUSE_DELAY_MS * 3) / 2);
+      const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+      expect(failed?.data?.provider_failure).toEqual({
+        class: 'rate_limited',
+        evidence: 'HTTP 429',
+      });
+    },
+    testTimeout(10_000)
+  );
+
+  it(
+    'waits until the reset a rate-limited failure reports',
+    async () => {
+      const resetAt = new Date(Date.now() + 60 * 60_000).toISOString();
+      useQuery(rateLimitedQuery(resetAt));
+      const store = createMockStore();
+
+      await withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-rate',
+            cwd: testDir,
+            workflow: investigateWorkflow,
+            workflowRun: makeWorkflowRun('rate-reset-run'),
+            config: quotaConfig(),
+          })
+        )
+      );
+
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'rate-reset-run',
+        expect.objectContaining({ kind: 'quota', nodeId: 'investigate', resumeAt: resetAt }),
+        { kind: 'started', stepName: 'investigate' }
+      );
+    },
+    testTimeout(10_000)
+  );
+
+  it(
+    'fails an exhausted rate limit when the operator turned the wait off',
+    async () => {
+      useQuery(rateLimitedQuery());
+      const store = createMockStore();
+
+      await withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-rate',
+            cwd: testDir,
+            workflow: investigateWorkflow,
+            workflowRun: makeWorkflowRun('rate-disabled-run'),
+            config: quotaConfig(false),
+          })
+        )
+      );
+
+      expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'quota_resume_skipped',
+          step_name: 'investigate',
+          data: { reason: 'disabled' },
+        })
+      );
+    },
+    testTimeout(10_000)
+  );
+
+  it(
+    'fails when a node beside an exhausted rate limit failed for another reason',
+    async () => {
+      useQuery(rateLimitedQuery());
+      const store = createMockStore();
+
+      await withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-rate',
+            cwd: testDir,
+            workflow: {
+              name: 'rate-mixed-test',
+              nodes: [
+                ...investigateWorkflow.nodes,
+                { id: 'broken', kind: 'exec', runtime: 'sh', script: 'exit 3' },
+              ] as DagNode[],
+            },
+            workflowRun: makeWorkflowRun('rate-mixed-run'),
+            config: quotaConfig(),
+          })
+        )
+      );
+
+      expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    },
+    testTimeout(10_000)
+  );
 
   it('does not wait for a container run, which the continuation host cannot continue', async () => {
     useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));

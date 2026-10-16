@@ -268,6 +268,7 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   effectiveRetryMaxRetries,
+  rateLimitResumeAt,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -12185,14 +12186,18 @@ export async function executeDagWorkflow(
   };
 
   /**
-   * The wait a failed pass takes instead of failing, when every failed node hit a provider
-   * usage limit whose reset the provider reported and that is still ahead. The run then
-   * cannot progress before the last of those resets, so it waits for it. Any other failure,
-   * a limit without a reported reset, or a container run (the continuation host does not
-   * continue one) leaves the run to fail. Only the typed class says a limit is spent; the
+   * The wait a failed pass takes instead of failing, when every failed node either hit a
+   * provider usage limit whose reset the provider reported and that is still ahead, or hit a
+   * rate limit that outlasted its retries (deadline: its reported reset when still ahead,
+   * else a jittered backoff). The run cannot progress before the last of those deadlines, so
+   * it waits for it. Any other failure, a usage limit without a reported reset,
+   * `autoResumeOnQuotaReset: false`, or a container run (the continuation host does not
+   * continue one) leaves the run to fail. Only the typed class says a limit is hit; the
    * error text never does.
    */
-  const usageLimitWait = async (): Promise<WorkflowUsageLimitWaitContext | undefined> => {
+  const usageLimitWait = async (): Promise<
+    { wait: WorkflowUsageLimitWaitContext; cause: 'quota_exhausted' | 'rate_limited' } | undefined
+  > => {
     const skip = async (
       nodeId: string,
       reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'
@@ -12205,34 +12210,47 @@ export async function executeDagWorkflow(
       });
       return undefined;
     };
-    let latest: { nodeId: string; resetAt: number } | undefined;
+    const now = Date.now();
+    let latest:
+      | { nodeId: string; resumeAt: number; cause: 'quota_exhausted' | 'rate_limited' }
+      | undefined;
     for (const [nodeId, output] of runCtx.nodeOutputs) {
       if (output.state !== 'failed') continue;
-      if (output.providerFailure?.class !== 'quota_exhausted') return undefined;
-      const resetAt = output.providerFailure.resetAt;
-      if (resetAt === undefined) return skip(nodeId, 'reset_unavailable');
-      if (latest === undefined || Date.parse(resetAt) > latest.resetAt)
-        latest = { nodeId, resetAt: Date.parse(resetAt) };
+      const failure = output.providerFailure;
+      let resumeAt: number;
+      if (failure?.class === 'rate_limited') {
+        resumeAt = rateLimitResumeAt(failure, now);
+      } else if (failure?.class === 'quota_exhausted') {
+        if (failure.resetAt === undefined) return skip(nodeId, 'reset_unavailable');
+        resumeAt = Date.parse(failure.resetAt);
+      } else {
+        return undefined;
+      }
+      if (latest === undefined || resumeAt > latest.resumeAt)
+        latest = { nodeId, resumeAt, cause: failure.class };
     }
     if (latest === undefined) return undefined;
     if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
-    const now = Date.now();
-    if (latest.resetAt <= now) return skip(latest.nodeId, 'reset_passed');
+    if (latest.resumeAt <= now) return skip(latest.nodeId, 'reset_passed');
     if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
     return {
-      owner: 'node',
-      nodeId: latest.nodeId,
-      kind: 'quota',
-      pauseId: randomUUID(),
-      waitingSince: new Date(now).toISOString(),
-      resumeAt: new Date(latest.resetAt).toISOString(),
+      wait: {
+        owner: 'node',
+        nodeId: latest.nodeId,
+        kind: 'quota',
+        pauseId: randomUUID(),
+        waitingSince: new Date(now).toISOString(),
+        resumeAt: new Date(latest.resumeAt).toISOString(),
+      },
+      cause: latest.cause,
     };
   };
 
-  /** Pause the run on a usage-limit wait. False when the pass must fail instead. */
+  /** Pause the run on a provider-limit wait. False when the pass must fail instead. */
   const pauseForUsageLimit = async (): Promise<boolean> => {
-    const wait = await usageLimitWait();
-    if (wait === undefined) return false;
+    const limit = await usageLimitWait();
+    if (limit === undefined) return false;
+    const { wait, cause } = limit;
     try {
       await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
         kind: 'started',
@@ -12246,14 +12264,18 @@ export async function executeDagWorkflow(
       return true;
     }
     getLog().info(
-      { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt },
+      { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt, cause },
       'dag.usage_limit_wait_started'
     );
     await safeSendMessage(
       platform,
       conversationId,
-      `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
-        `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
+      cause === 'rate_limited'
+        ? `⏸️ Workflow '${workflow.name}' hit a provider rate limit at node '${wait.nodeId}' ` +
+            `and ran out of retries. It tries again at ${wait.resumeAt}; resume it to try ` +
+            'sooner, or abandon it to stop it.'
+        : `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
+            `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
       { workflowId: workflowRun.id }
     );
     return true;

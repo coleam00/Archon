@@ -54,6 +54,24 @@ const OVERLOAD_MAX_DELAY_MS = 300_000;
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
+/**
+ * Center of the wait after a rate limit outlasts its retries and the provider gave no reset;
+ * jitter widens it to ±50% in {@link rateLimitResumeAt}.
+ */
+export const RATE_LIMIT_PAUSE_DELAY_MS = 10 * 60_000;
+
+/**
+ * When a run paused by a rate limit that outlasted its retries tries again, in epoch ms:
+ * the provider's reported reset while it is still ahead, otherwise a jittered backoff so
+ * runs limited together do not wake in lockstep. `retryAfterMs` belongs to the retry loop,
+ * not to this wait.
+ */
+export function rateLimitResumeAt(failure: ProviderFailure, now: number): number {
+  const reportedReset = failure.resetAt === undefined ? Number.NaN : Date.parse(failure.resetAt);
+  if (reportedReset > now) return reportedReset;
+  return now + Math.round(RATE_LIMIT_PAUSE_DELAY_MS * (0.5 + Math.random()));
+}
+
 export function effectiveRetryMaxRetries(
   configuredMaxRetries: number,
   retryClass: RetryClass | undefined,
