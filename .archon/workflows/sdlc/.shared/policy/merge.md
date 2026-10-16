@@ -14,7 +14,10 @@ whatever this document says.
 - A bug fix whose change stays inside the defect it fixes and the tests that prove it.
 - A small feature: one coherent behavior, a few files, with its tests and docs.
 - Tests, documentation and comments.
-- A pull request a maintainer approved for merge at its current head.
+- A pull request a maintainer approved for merge at its current head, or at an earlier
+  head when every commit since is a merge of the default branch with no conflict to
+  resolve. Its delta review must still say Ready at the current head. A conflict
+  resolution is new work the maintainer has not seen, so it is asked again.
 
 ## Unclear: the queue asks
 

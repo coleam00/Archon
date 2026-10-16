@@ -13,7 +13,7 @@ Every forge command names the repository with `--repo <host>/<path>`. Run the ga
 
 ## Decide
 
-Read each pull request's diff (`gh pr diff`) and its facts, and class it `clear` or `unclear` by the policy. A maintainer's approval in its record at its current head makes it clear. Then order them: the default branch's CI first (while it is red, merge nothing and say so in each reason), then clear pull requests, least risk first, with pull requests that touch the same files next to each other and the one the others build on first.
+Read each pull request's diff (`gh pr diff`) and its facts, and class it `clear` or `unclear` by the policy. A maintainer's approval in its record makes it clear where the policy says it does. Then order them: the default branch's CI first (while it is red, merge nothing and say so in each reason), then clear pull requests, least risk first, with pull requests that touch the same files next to each other and the one the others build on first.
 
 Work through them one at a time, in that order:
 

@@ -115,6 +115,7 @@ import {
   getSourceWebDistDir,
 } from '@archon/paths';
 import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { resolveGitHubTokenFromEnv } from '@archon/core/github-auth/config';
 import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
@@ -443,7 +444,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       activePlatforms.push('GitHub (App)');
       getLog().info({ slug: githubAppAuthProvider.slug }, 'github.adapter_mode_app');
     } else if (ghAuthMode.kind === 'pat') {
-      const patToken = process.env.GITHUB_TOKEN;
+      const patToken = resolveGitHubTokenFromEnv();
       const webhookSecret = process.env.WEBHOOK_SECRET;
       if (!patToken || !webhookSecret) {
         throw new Error('GitHub PAT mode misconfigured: GITHUB_TOKEN and WEBHOOK_SECRET required');

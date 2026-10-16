@@ -7,7 +7,7 @@ export const GITHUB_APP_CREDENTIAL_KEYS = [
   ...GITHUB_APP_PRIVATE_KEY_KEYS,
 ] as const;
 
-export const GITHUB_PAT_KEYS = ['GITHUB_TOKEN', 'GH_TOKEN'] as const;
+export { GH_DOTCOM_TOKEN_KEYS as GITHUB_PAT_KEYS } from '@archon/paths/github-token-env';
 
 export type GitHubAuthModeDecision =
   | { kind: 'app' }

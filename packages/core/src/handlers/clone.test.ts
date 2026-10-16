@@ -11,7 +11,7 @@
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { join, resolve } from 'path';
 import { tmpdir } from 'node:os';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import * as registrationRemote from '../services/registration-remote';
@@ -854,21 +854,30 @@ describe('cloneRepository', () => {
       delete process.env.GH_TOKEN;
     });
 
-    test('passes GH_TOKEN as request-scoped clone credentials', async () => {
+    test('prefers GH_TOKEN over GITHUB_TOKEN as request-scoped clone credentials', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_other_identity';
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
-      await cloneRepository('https://github.com/owner/private-repo');
+      const logOutput = captureStubLogOutput(mockLogger);
+      try {
+        await cloneRepository('https://github.com/owner/private-repo');
+      } finally {
+        logOutput.restore();
+      }
 
       const cloneCall = getGitCloneCall();
       expect(cloneCall?.[0]).toBe('https://github.com/owner/private-repo');
       expect(cloneCall?.[2]).toEqual({
         credentials: { username: 'x-access-token', password: 'ghp_testtoken123' },
       });
+      expect(logOutput.output()).not.toBe('');
+      expect(logOutput.output()).not.toContain('ghp_testtoken123');
+      expect(logOutput.output()).not.toContain('ghp_other_identity');
     });
 
-    test('passes GITHUB_TOKEN as request-scoped clone credentials', async () => {
+    test('falls back to GITHUB_TOKEN when GH_TOKEN is empty', async () => {
       process.env.GITHUB_TOKEN = 'ghp_github_token_456';
-      delete process.env.GH_TOKEN;
+      process.env.GH_TOKEN = '';
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       await cloneRepository('https://github.com/owner/private-repo');
@@ -878,6 +887,16 @@ describe('cloneRepository', () => {
         gitUtils.toRepoPath('/home/test/.archon/workspaces/owner/private-repo/source'),
         { credentials: { username: 'x-access-token', password: 'ghp_github_token_456' } },
       ]);
+    });
+
+    test('scrubbed tokens supply no clone credentials', async () => {
+      process.env.GH_TOKEN = '';
+      process.env.GITHUB_TOKEN = '';
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase());
+
+      await cloneRepository('https://github.com/owner/private-repo');
+
+      expect(getGitCloneCall()?.[2]).toBeUndefined();
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
