@@ -9314,34 +9314,48 @@ async function executeComposeFanOutNode(
         // Without a terminal record the resumed fan-out would find this instance started
         // and never finished, and refuse to replay it.
         if (error instanceof RunSourceUnreadableError) {
-          const rows = await deps.store.listWorkflowEvents(parentRun.id);
-          let start = rows.length - 1;
-          while (
-            start >= 0 &&
-            !(
-              rows[start].step_name === instanceScopeName &&
-              rows[start].event_type === 'node_started'
-            )
-          ) {
-            start--;
-          }
-          const usage = await foldDagResumeSnapshot(
-            rows.slice(start + 1).filter(row => row.step_name?.startsWith(instanceStepNamePrefix)),
-            parentRun.id
-          );
-          const releasedRecord = finishNodeExecution(
-            instanceExecution,
-            { status: 'failed', error: error.message, failureKind: 'child_failed' },
-            {
-              costUsd: usage.costUsd,
-              tokens: usage.tokens,
-              tokensUnknown: usage.tokensUnknown,
-              output: { text: '' },
-              diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
+          try {
+            const rows = await deps.store.listWorkflowEvents(parentRun.id);
+            let start = rows.length - 1;
+            while (
+              start >= 0 &&
+              !(
+                rows[start].step_name === instanceScopeName &&
+                rows[start].event_type === 'node_started'
+              )
+            ) {
+              start--;
             }
-          );
-          await deps.store.persistWorkflowEvent(serializeNodeStateRecord(releasedRecord));
-          await deriveInstanceSinks(releasedRecord);
+            const usage = await foldDagResumeSnapshot(
+              rows
+                .slice(start + 1)
+                .filter(row => row.step_name?.startsWith(instanceStepNamePrefix)),
+              parentRun.id
+            );
+            const releasedRecord = finishNodeExecution(
+              instanceExecution,
+              { status: 'failed', error: error.message, failureKind: 'child_failed' },
+              {
+                costUsd: usage.costUsd,
+                tokens: usage.tokens,
+                tokensUnknown: usage.tokensUnknown,
+                output: { text: '' },
+                diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
+              }
+            );
+            await deps.store.persistWorkflowEvent(serializeNodeStateRecord(releasedRecord));
+            await deriveInstanceSinks(releasedRecord);
+          } catch (cleanupError) {
+            if (
+              cleanupError instanceof NodeEventWriteError ||
+              cleanupError instanceof TerminalStatusWriteError
+            )
+              throw cleanupError;
+            getLog().error(
+              { err: cleanupError, parentRunId: parentRun.id, instance: instanceScopeName },
+              'workflow.compose_fan_out_release_record_failed'
+            );
+          }
         }
         throw error;
       }

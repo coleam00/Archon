@@ -22393,98 +22393,150 @@ describe('executeDagWorkflow -- script nodes', () => {
         expectReleased(mockDeps.store, 'fan');
       });
 
-      it('a run released inside a composed instance completes on a later pass', async () => {
-        const mockDeps = createMockDeps();
-        const scriptsDir = join(testDir, '.archon', 'scripts');
-        const marker = join(testDir, 'ran');
-        await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
-        await mkdir(scriptsDir, { recursive: true });
-        await writeFile(
-          join(scriptsDir, 'check.ts'),
-          `await Bun.write(${JSON.stringify(marker)}, "ran")`
-        );
-        // The instance's first node makes the scripts unreadable before its script node reads them.
-        await writeFile(
-          join(testDir, '.archon', 'workflows', 'compose-blk.yaml'),
-          [
-            'name: compose-blk',
-            'description: b',
-            'nodes:',
-            '  - id: lock',
-            '    prompt: Lock scripts.',
-            '  - id: work',
-            '    script: check',
-            '    runtime: bun',
-            '    depends_on: [lock]',
-          ].join('\n')
-        );
-        mockSendQueryDag.mockImplementation(async function* () {
-          await chmod(scriptsDir, 0o000);
-          yield { type: 'agent_message_chunk', text: 'locked' };
-          yield {
-            type: 'result',
-            sessionId: 'paid-lock',
-            cost: 0.25,
+      for (const cleanupFault of [
+        'none',
+        'read',
+        'write',
+        'node-write',
+        'terminal-write',
+      ] as const) {
+        it(`a composed instance preserves source release or durable recovery on cleanup ${cleanupFault}`, async () => {
+          const mockDeps = createMockDeps();
+          const scriptsDir = join(testDir, '.archon', 'scripts');
+          const marker = join(testDir, 'ran');
+          await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+          await mkdir(scriptsDir, { recursive: true });
+          await writeFile(
+            join(scriptsDir, 'check.ts'),
+            `await Bun.write(${JSON.stringify(marker)}, "ran")`
+          );
+          // The instance's first node makes the scripts unreadable before its script node reads them.
+          await writeFile(
+            join(testDir, '.archon', 'workflows', 'compose-blk.yaml'),
+            [
+              'name: compose-blk',
+              'description: b',
+              'nodes:',
+              '  - id: lock',
+              '    prompt: Lock scripts.',
+              '  - id: work',
+              '    script: check',
+              '    runtime: bun',
+              '    depends_on: [lock]',
+            ].join('\n')
+          );
+          mockSendQueryDag.mockImplementation(async function* () {
+            await chmod(scriptsDir, 0o000);
+            yield { type: 'agent_message_chunk', text: 'locked' };
+            yield {
+              type: 'result',
+              sessionId: 'paid-lock',
+              cost: 0.25,
+              tokens: { input: 10, output: 5 },
+            };
+          });
+          mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+          );
+          mockDeps.store.listWorkflowEvents.mockImplementation(async () =>
+            persistedEvents(mockDeps.store).map((event, index) => ({
+              ...event,
+              id: String(index),
+              created_at: new Date().toISOString(),
+              step_name: event.step_name ?? null,
+              step_index: event.step_index ?? null,
+              data: event.data ?? {},
+            }))
+          );
+          const workflowRunId = 'compose-instance-released-run';
+          const options = dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflow: {
+              name: 'compose-instance-released',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'compose-blk',
+                  fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun(workflowRunId),
+          });
+          const storeFault = new Error('cleanup store unavailable');
+          const durableFault =
+            cleanupFault === 'node-write'
+              ? new NodeEventWriteError(
+                  {
+                    workflow_run_id: workflowRunId,
+                    event_type: 'node_failed',
+                    step_name: 'fan__instance',
+                    data: {},
+                  },
+                  storeFault
+                )
+              : cleanupFault === 'terminal-write'
+                ? new TerminalStatusWriteError(storeFault)
+                : undefined;
+          if (cleanupFault === 'read') {
+            mockDeps.store.listWorkflowEvents.mockRejectedValueOnce(storeFault);
+          } else if (cleanupFault !== 'none') {
+            mockDeps.store.persistWorkflowEvent.mockImplementation(async event => {
+              if (
+                event.event_type === 'node_failed' &&
+                readNodeRecordEvent({ ...event, data: event.data ?? {} })?.data.node?.kind ===
+                  'compose_fan_out_instance'
+              ) {
+                throw durableFault ?? storeFault;
+              }
+              await mockDeps.store.createWorkflowEvent(event);
+            });
+          }
+          try {
+            if (durableFault) {
+              await expect(executeDagWorkflow(options)).rejects.toBe(durableFault);
+            } else {
+              await executeDagWorkflow(options);
+            }
+          } finally {
+            await chmod(scriptsDir, 0o755);
+          }
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          if (durableFault) {
+            expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+            return;
+          }
+          expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+          if (cleanupFault !== 'none') {
+            expect(mockLogFn).toHaveBeenCalledWith(
+              expect.objectContaining({ err: storeFault, parentRunId: workflowRunId }),
+              'workflow.compose_fan_out_release_record_failed'
+            );
+            return;
+          }
+          expect(await mockDeps.store.getDagResumeSnapshot(workflowRunId)).toMatchObject({
+            costUsd: 0.25,
             tokens: { input: 10, output: 5 },
-          };
-        });
-        mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
-          foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
-        );
-        mockDeps.store.listWorkflowEvents.mockImplementation(async () =>
-          persistedEvents(mockDeps.store).map((event, index) => ({
-            ...event,
-            id: String(index),
-            created_at: new Date().toISOString(),
-            step_name: event.step_name ?? null,
-            step_index: event.step_index ?? null,
-            data: event.data ?? {},
-          }))
-        );
-        const workflowRunId = 'compose-instance-released-run';
-        const options = dagOptions({
-          deps: mockDeps,
-          cwd: testDir,
-          workflow: {
-            name: 'compose-instance-released',
-            nodes: [
-              {
-                id: 'fan',
-                kind: 'compose_fan_out',
-                include: 'compose-blk',
-                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun(workflowRunId),
-        });
-        try {
+          });
+
+          mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
+          );
           await executeDagWorkflow(options);
-        } finally {
-          await chmod(scriptsDir, 0o755);
-        }
-        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
-        expect(await mockDeps.store.getDagResumeSnapshot(workflowRunId)).toMatchObject({
-          costUsd: 0.25,
-          tokens: { input: 10, output: 5 },
-        });
 
-        mockDeps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
-        mockDeps.store.getDagResumeSnapshot.mockImplementation(async id =>
-          foldDagResumeSnapshot(persistedEvents(mockDeps.store), id)
-        );
-        await executeDagWorkflow(options);
-
-        expect(await readFile(marker, 'utf-8')).toBe('ran');
-        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-        expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-        expect(await mockDeps.store.getDagResumeSnapshot(workflowRunId)).toMatchObject({
-          costUsd: 0.25,
-          tokens: { input: 10, output: 5 },
+          expect(await readFile(marker, 'utf-8')).toBe('ran');
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+          expect(await mockDeps.store.getDagResumeSnapshot(workflowRunId)).toMatchObject({
+            costUsd: 0.25,
+            tokens: { input: 10, output: 5 },
+          });
         });
-      });
+      }
 
       it('preserves a paid sibling and its usage when source release unwinds the layer', async () => {
         const mockDeps = createMockDeps();
